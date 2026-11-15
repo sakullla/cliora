@@ -35,3 +35,11 @@ CREATE TABLE session_state (
 
 INSERT INTO session_state (id, body)
 VALUES ('session-1', 'session-body-must-not-be-read');
+
+CREATE TABLE token_usage (
+  provider TEXT NOT NULL,
+  token INTEGER NOT NULL
+);
+
+INSERT INTO token_usage (provider, token)
+VALUES ('openai-codex', 42);

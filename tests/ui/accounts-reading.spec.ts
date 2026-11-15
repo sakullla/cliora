@@ -206,7 +206,7 @@ test('OMP accounts stay read-only with visible reasons and no managed actions', 
           probe: { tool: 'omp', selectedPath: 'C:/omp.exe', installations: [{ path: 'C:/omp.exe', version: '18.20.2', status: 'available', source: 'native', detail: null }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '', installCommand: null, upgradeCommand: null, nativeInstallCommand: null },
           profiles: [], effectiveContextId: null, binding: null, snapshots: [], common: null, customPath: null, recoveryNeeded: [],
         };
-        if (command === 'list_accounts') return [];
+        if (command === 'list_accounts') return [{ id: 'omp-blocked', toolId: 'omp', provider: 'openai-codex', label: 'OMP blocker', version: 1, state: 'error', identity: null, context: null, retiredContexts: [], pendingLogin: null, checkedAt: null, detail: '认证存储在混存数据库中，未导出整库。' }];
         if (command === 'account_capabilities') return [{ toolId: 'omp', provider: 'omp-native', version: '1.0.0', managedLogin: false, importNative: false, methods: [], reason: 'OMP 账号仅只读发现：agent.db 混存认证与其他状态，且没有 provider 完成真实身份、隔离、登录、取消、refresh 与退出验证。', identitySource: 'agent.db 脱敏元数据', identityRequired: true, refreshOwner: 'native_cli', acceptance: '仅合成 fixture' }];
         if (command === 'discover_native_logins') return { toolId: args.toolId, checkedAt: 0, logins: [
           { provider: 'openai-codex', authKind: 'oauth', state: 'signed_in', identity: { subject: 'acct_codex_1', email: 'ops@example.test', plan: 'plus', source: 'native_agent_db' }, detail: '只读发现 agent.db 原生 OAuth；未在线核验。另有 1 行损坏、字段不完整或二进制材料已跳过。', managedAccountId: null },
@@ -236,4 +236,9 @@ test('OMP accounts stay read-only with visible reasons and no managed actions', 
   await expect(page.getByRole('button', { name: '退出此账号', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '重新认证', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '检查状态', exact: true })).toHaveCount(0);
+  // A shared-database blocker row is read-only: state and reason, no managed actions.
+  const blocked = page.getByRole('listitem').filter({ hasText: 'OMP blocker' });
+  await expect(blocked).toContainText('认证异常');
+  await expect(blocked).toContainText('混存数据库');
+  await expect(blocked.getByRole('button')).toHaveCount(0);
 });

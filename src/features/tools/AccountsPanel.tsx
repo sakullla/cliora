@@ -230,6 +230,9 @@ function AccountRow({ account, run, isCurrent, busy, capability, method, remote,
   const identityText = identity ?? t('tools.accounts.noIdentity');
   const plan = account.identity?.plan ? ` · ${account.identity.plan}` : '';
   const signIn = !remote && !!capability?.managedLogin && !!capability.methods.length;
+  const readOnlyCapability = !!capability && !capability.managedLogin;
+  const managed = !remote && !readOnlyCapability;
+  const canManage = managed || remote;
   const methods = capability?.methods ?? [];
   const loginMethod = methods.includes(method) ? method : methods[0];
   const manageId = `account-management-${account.id}`;
@@ -250,7 +253,7 @@ function AccountRow({ account, run, isCurrent, busy, capability, method, remote,
         <Badge tone={accountTone(account.state)} dot={account.state === 'signed_in'} data-state={account.state}>{accountStateLabel(account.state)}</Badge>
       </div>
     </div>
-    {!remote && renaming && <div className={accountStyles.renameForm}>
+    {canManage && renaming && <div className={accountStyles.renameForm}>
       <label>{t('tools.accounts.newName')}<input ref={renameInput} value={renameValue} onChange={event => setRenameValue(event.target.value)} onKeyDown={event => {
         if (event.key === 'Enter' && !event.nativeEvent.isComposing && !busy && renameValue.trim()) { event.preventDefault(); void run(async () => { await native.renameAccount(account.id, account.version, renameValue.trim()); if (isCurrent()) setRenaming(false); }, t('tools.accounts.renamed')); }
         else if (event.key === 'Escape' && !busy) { event.preventDefault(); event.stopPropagation(); setRenaming(false); }
@@ -267,12 +270,13 @@ function AccountRow({ account, run, isCurrent, busy, capability, method, remote,
     </div>}
     <div className={accountStyles.rowActions}>
       {!pending && signIn && <Button size="sm" disabled={busy} onClick={() => void run(() => native.startAccountLogin(account.id, account.version, loginMethod!), account.state === 'signed_in' ? t('tools.accounts.reauthRequested') : t('tools.accounts.loginRequested'))}>{account.state === 'signed_in' ? t('tools.accounts.reauthenticate') : t('tools.accounts.login')}</Button>}
-      {!pending && !remote && <Button variant={signIn ? 'ghost' : 'secondary'} size="sm" disabled={busy} onClick={() => void run(() => native.checkAccount(account.id), t('tools.accounts.checkedNotice'))}>{t('tools.accounts.checkStatus')}</Button>}
-      {!pending && !remote && <Button ref={renameButton} variant="ghost" size="sm" disabled={busy} onClick={() => { setRenameValue(account.label); setRenaming(true); }}>{t('tools.accounts.rename')}</Button>}
-      {account.retiredContexts.length > 0 && !managing && <Button variant="ghost" size="sm" onClick={() => setManaging(true)}>{t('tools.accounts.viewRetired')}</Button>}
-      <Button ref={manageButton} variant="ghost" size="sm" aria-expanded={managing} aria-controls={manageId} onClick={() => setManaging(value => !value)}>{t('tools.accounts.manageSummary')}</Button>
+      {!pending && managed && <Button variant={signIn ? 'ghost' : 'secondary'} size="sm" disabled={busy} onClick={() => void run(() => native.checkAccount(account.id), t('tools.accounts.checkedNotice'))}>{t('tools.accounts.checkStatus')}</Button>}
+      {!pending && managed && <Button ref={renameButton} variant="ghost" size="sm" disabled={busy} onClick={() => { setRenameValue(account.label); setRenaming(true); }}>{t('tools.accounts.rename')}</Button>}
+      {account.retiredContexts.length > 0 && canManage && !managing && <Button variant="ghost" size="sm" onClick={() => setManaging(true)}>{t('tools.accounts.viewRetired')}</Button>}
+      {canManage && <Button ref={manageButton} variant="ghost" size="sm" aria-expanded={managing} aria-controls={manageId} onClick={() => setManaging(value => !value)}>{t('tools.accounts.manageSummary')}</Button>}
     </div>
-    {managing && <div className={accountStyles.management} id={manageId} role="region" aria-label={t('tools.accounts.managementAria', { label: account.label })}>
+    {!managed && !remote && readOnlyCapability && account.detail && <p className={accountStyles.readOnlyDetail}>{account.detail}</p>}
+    {canManage && managing && <div className={accountStyles.management} id={manageId} role="region" aria-label={t('tools.accounts.managementAria', { label: account.label })}>
       {account.detail && <p>{account.detail}</p>}
       <AccountImpactView account={account} controller={impact} remote={remote} onOpenProfile={onOpenProfile} onOpenUsage={onOpenUsage} />
       <section className={accountStyles.danger} aria-label={t('tools.accounts.dangerTitle')}>
@@ -280,7 +284,7 @@ function AccountRow({ account, run, isCurrent, busy, capability, method, remote,
         <p>{t('tools.accounts.dangerNote')}</p>
         {impact.impact && <p>{t('tools.accounts.dangerImpact', { profiles: impact.impact.profiles.length, scopes: impact.impact.scopes.length, usage: impact.impact.usageReferences.length })}</p>}
         {impact.error && <p>{t('tools.accounts.dangerImpactFailed')}</p>}
-        {!remote && <div className={accountStyles.dangerActions}>
+        {managed && <div className={accountStyles.dangerActions}>
           <Button size="sm" disabled={busy || !!pending || account.state === 'signed_out'} onClick={event => { const opener = event.currentTarget; void run(async () => {
             const fresh = guard(await native.accountImpact(account.id));
             if (!isCurrent()) return false;

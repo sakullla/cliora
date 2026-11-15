@@ -10,7 +10,7 @@
 //! blocker instead of treating the database as an auth file.
 
 use std::collections::BTreeMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use rusqlite::types::ValueRef;
 use rusqlite::Connection;
@@ -143,44 +143,12 @@ impl AccountAdapter for super::Omp {
     }
 }
 
-fn absolute_path(value: &str, key: &str) -> Result<PathBuf, String> {
-    let path = PathBuf::from(value);
-    if !path.is_absolute()
-        || path
-            .components()
-            .any(|part| matches!(part, Component::ParentDir))
-    {
-        return Err(format!("{key} 必须是绝对路径且不能包含上级目录"));
-    }
-    Ok(path)
-}
-
-fn validate_profile(value: &str) -> Result<(), String> {
-    if value.is_empty()
-        || value.len() > 120
-        || value == "."
-        || value == ".."
-        || value.contains("..")
-        || value
-            .chars()
-            .any(|character| character.is_control() || matches!(character, '/' | '\\' | ':'))
-    {
-        return Err("OMP Profile 名称无效；未读取任何原生账号目录".into());
-    }
-    Ok(())
-}
-
-/// Default or named Profile agent directory. `PI_CONFIG_DIR` moves the config
-/// root, `OMP_PROFILE`/`PI_PROFILE` select a named Profile and
-/// `PI_CODING_AGENT_DIR` only relocates the default Profile.
+/// Default or named Profile agent directory. This delegates to the same
+/// resolver as the configuration editor and MCP/Agents/Skills: `PI_CONFIG_DIR`
+/// is a home-relative directory (not an absolute root), `OMP_PROFILE` /
+/// `PI_PROFILE` select a named Profile and `PI_CODING_AGENT_DIR` only relocates
+/// the default Profile.
 fn native_root(home: &Path, environment: &BTreeMap<String, String>) -> Result<PathBuf, String> {
-    let config_root = match environment
-        .get("PI_CONFIG_DIR")
-        .filter(|value| !value.is_empty())
-    {
-        Some(value) => absolute_path(value, "PI_CONFIG_DIR")?,
-        None => home.join(".omp"),
-    };
     let profile = environment
         .get("OMP_PROFILE")
         .filter(|value| !value.is_empty())
@@ -189,17 +157,21 @@ fn native_root(home: &Path, environment: &BTreeMap<String, String>) -> Result<Pa
                 .get("PI_PROFILE")
                 .filter(|value| !value.is_empty())
         });
-    if let Some(profile) = profile {
-        validate_profile(profile)?;
-        return Ok(config_root.join("profiles").join(profile).join("agent"));
-    }
-    match environment
+    let config_dir = environment
+        .get("PI_CONFIG_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let coding_agent_dir = environment
         .get("PI_CODING_AGENT_DIR")
         .filter(|value| !value.is_empty())
-    {
-        Some(value) => absolute_path(value, "PI_CODING_AGENT_DIR"),
-        None => Ok(config_root.join("agent")),
-    }
+        .map(PathBuf::from);
+    super::configuration::resolve_root(&super::configuration::ResolutionInput {
+        home,
+        profile: profile.map(String::as_str),
+        config_dir: config_dir.as_deref(),
+        coding_agent_dir: coding_agent_dir.as_deref(),
+    })
+    .map(|resolved| resolved.root)
 }
 
 pub(crate) fn native_context(
@@ -235,7 +207,7 @@ fn broker_configured() -> bool {
 
 fn sidecar_note(sidecars: Sidecars) -> &'static str {
     if sidecars.present() {
-        "读取时存在 agent.db-wal/-shm，可能有 OMP 正在运行；本次仅只读快照，其他 OMP 状态未被读取或导出。"
+        "读取时存在 agent.db-wal/-shm（可能是活动 WAL，也可能是残留 sidecar）；本次按只读快照读取，未据此判定 OMP 进程状态，其他 OMP 状态未被读取或导出。"
     } else {
         ""
     }
@@ -244,13 +216,15 @@ fn sidecar_note(sidecars: Sidecars) -> &'static str {
 fn open_error(failure: OpenFailure) -> String {
     match failure {
         OpenFailure::Busy(sidecars) if sidecars.present() => {
-            "检测到 agent.db-wal/-shm 且只读打开被拒绝，可能有 OMP 正在运行；请关闭 OMP 后重试，未读取或复制数据库".into()
+            "只读打开被拒绝；检测到 agent.db-wal/-shm，但 sidecar 存在不能证明 OMP 正在运行。请关闭所有 OMP 实例后重试；若仍失败，在 OMP 原生终端执行一次登录或退出/重启后再试。Cliora 不会删除或修改 agent.db、-wal 或 -shm。".into()
         }
         OpenFailure::Busy(_) => {
-            "无法只读打开 OMP agent.db（可能被占用或权限不足）；未读取其他状态数据".into()
+            "无法只读打开 OMP agent.db（可能被其他进程占用或权限不足）；请关闭占用进程后重试，仍失败时在 OMP 原生终端检查登录状态。未修改或删除任何原生文件。".into()
         }
         OpenFailure::NotADatabase => "agent.db 不是有效的 SQLite 数据库；未读取内容".into(),
-        OpenFailure::Unavailable => "无法只读打开 OMP agent.db；未修改原生文件".into(),
+        OpenFailure::Unavailable => {
+            "无法只读打开 OMP agent.db；请关闭其他 OMP 进程后重试。未修改或删除任何原生文件。".into()
+        }
     }
 }
 
@@ -330,19 +304,17 @@ struct Candidate {
     plan: Option<String>,
 }
 
-fn looks_auth_table(name: &str) -> bool {
+/// Strong auth-store markers. A runtime table that merely has a `provider` and
+/// a generic `token` column (for example token usage) must not become a login.
+fn strong_auth_table(name: &str) -> bool {
     let name = normalize(name);
-    [
-        "auth",
-        "credential",
-        "oauth",
-        "login",
-        "token",
-        "account",
-        "secret",
-    ]
-    .iter()
-    .any(|needle| name.contains(needle))
+    ["auth", "credential", "oauth", "login", "secret"]
+        .iter()
+        .any(|needle| name.contains(needle))
+}
+
+fn looks_auth_table(name: &str) -> bool {
+    strong_auth_table(name)
 }
 
 fn pick(columns: &[Column], names: &[&str], used: &mut Vec<String>) -> Option<String> {
@@ -381,7 +353,14 @@ fn candidate(table: &str, columns: &[Column]) -> Option<Candidate> {
     let refresh = pick(columns, REFRESH_NAMES, &mut used);
     let api_key = pick(columns, API_KEY_NAMES, &mut used);
     let data = pick(columns, DATA_NAMES, &mut used);
-    if access.is_none() && refresh.is_none() && api_key.is_none() && data.is_none() {
+    // A single generic token column is not an authentication store on its own.
+    // Require a paired OAuth structure, a typed credential, an API key or a
+    // strongly auth-named JSON credential column.
+    let structured = (access.is_some() && refresh.is_some())
+        || (kind.is_some() && (access.is_some() || refresh.is_some() || api_key.is_some()))
+        || api_key.is_some()
+        || (data.is_some() && strong_auth_table(table));
+    if !structured {
         return None;
     }
     Some(Candidate {
@@ -576,12 +555,14 @@ fn read_candidate(
             }
         }
         let kind_text = kind.as_deref().map(normalize).unwrap_or_default();
-        let oauth = access.is_some() || refresh.is_some();
+        let kind_oauth = kind_text.contains("oauth");
+        let kind_api = kind_text.contains("api") || kind_text == "key";
+        let paired_oauth = access.is_some() && refresh.is_some();
         let api = api_key.is_some();
         let auth_kind = match () {
-            _ if kind_text.contains("oauth") && oauth => "oauth",
-            _ if (kind_text.contains("api") || kind_text == "key") && api => "api_key",
-            _ if oauth => "oauth",
+            _ if kind_oauth && (access.is_some() || refresh.is_some()) => "oauth",
+            _ if kind_api && api => "api_key",
+            _ if paired_oauth => "oauth",
             _ if api => "api_key",
             _ => {
                 skipped += 1;
@@ -819,6 +800,8 @@ mod tests {
 
     const FIXTURE: &str =
         include_str!("../../../../tests/fixtures/omp/accounts/sanitized-agent.db.sql");
+    const NON_AUTH_FIXTURE: &str =
+        include_str!("../../../../tests/fixtures/omp/accounts/non-auth-usage.db.sql");
 
     fn fixture_database(root: &Path) -> PathBuf {
         fs::create_dir_all(root).unwrap();
@@ -887,6 +870,22 @@ mod tests {
     }
 
     #[test]
+    fn usage_and_bare_token_tables_are_not_rendered_as_oauth_logins() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("agent.db");
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch(NON_AUTH_FIXTURE).unwrap();
+        drop(connection);
+        let error = discover_with_broker(&fixture_context(temp.path()), false).unwrap_err();
+        assert!(
+            error.contains("未找到可识别的认证表"),
+            "非认证表必须降级为不可解析提示，而不是 OAuth 登录: {error}"
+        );
+        assert!(!error.contains("openai-codex"));
+        assert!(!error.contains("anthropic"));
+    }
+
+    #[test]
     fn unknown_schema_and_corrupt_file_are_reported_without_reading_other_state() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("agent.db");
@@ -940,25 +939,76 @@ mod tests {
     }
 
     #[test]
-    fn named_profile_and_environment_roots_stay_inside_their_declared_paths() {
+    fn relative_config_dir_matches_omp_and_account_discovery_stays_read_only() {
         let temp = tempfile::tempdir().unwrap();
-        let config = temp.path().join("config");
-        let environment = BTreeMap::from([
-            ("PI_CONFIG_DIR".to_string(), config.display().to_string()),
+        let relative = BTreeMap::from([
+            ("PI_CONFIG_DIR".to_string(), "custom-config".to_string()),
             ("OMP_PROFILE".to_string(), "work".to_string()),
         ]);
-        let context = native_context(temp.path(), &environment).unwrap();
+        let context = native_context(temp.path(), &relative).unwrap();
         assert_eq!(
             context.root,
-            config.join("profiles").join("work").join("agent")
+            temp.path()
+                .join("custom-config")
+                .join("profiles")
+                .join("work")
+                .join("agent")
         );
         assert_eq!(context.auth_files, vec![context.root.join("agent.db")]);
 
-        let default = native_context(temp.path(), &BTreeMap::new()).unwrap();
-        assert_eq!(default.root, temp.path().join(".omp").join("agent"));
+        let default_env =
+            BTreeMap::from([("PI_CONFIG_DIR".to_string(), "custom-config".to_string())]);
+        let default = native_context(temp.path(), &default_env).unwrap();
+        assert_eq!(
+            default.root,
+            temp.path().join("custom-config").join("agent")
+        );
+        assert_eq!(
+            native_context(temp.path(), &BTreeMap::new()).unwrap().root,
+            temp.path().join(".omp").join("agent")
+        );
 
-        let traversal = BTreeMap::from([("OMP_PROFILE".to_string(), "../escape".to_string())]);
+        let absolute = BTreeMap::from([(
+            "PI_CONFIG_DIR".to_string(),
+            temp.path().join("absolute-config").display().to_string(),
+        )]);
+        let error = native_context(temp.path(), &absolute).unwrap_err();
+        assert!(
+            error.contains("PI_CONFIG_DIR 必须是 home 下的相对目录"),
+            "{error}"
+        );
+        let traversal = BTreeMap::from([("PI_CONFIG_DIR".to_string(), "../escape".to_string())]);
         assert!(native_context(temp.path(), &traversal).is_err());
+        let invalid_profile =
+            BTreeMap::from([("OMP_PROFILE".to_string(), "../escape".to_string())]);
+        assert!(native_context(temp.path(), &invalid_profile).is_err());
+
+        // PI_CODING_AGENT_DIR relocates only the default profile, as in the
+        // configuration resolver.
+        let relocated = temp.path().join("relocated-agent");
+        let coding = BTreeMap::from([(
+            "PI_CODING_AGENT_DIR".to_string(),
+            relocated.display().to_string(),
+        )]);
+        assert_eq!(
+            native_context(temp.path(), &coding).unwrap().root,
+            relocated
+        );
+
+        // A legal relative root must show the read-only empty state, not an
+        // adapter error.
+        let database = crate::database::Database::open(&temp.path().join("cliora.db")).unwrap();
+        let snapshot = crate::accounts::discovery::discover_with(
+            &database,
+            temp.path(),
+            "omp",
+            port().unwrap(),
+            &default_env,
+        )
+        .unwrap();
+        assert_eq!(snapshot.logins.len(), 1);
+        assert_eq!(snapshot.logins[0].state, AccountState::SignedOut);
+        assert!(snapshot.logins[0].managed_account_id.is_none());
     }
 
     #[test]
@@ -973,7 +1023,7 @@ mod tests {
     }
 
     #[test]
-    fn live_writer_in_wal_mode_is_read_as_a_snapshot_or_reported_as_busy() {
+    fn live_writer_in_wal_mode_is_read_as_a_read_only_snapshot() {
         let temp = tempfile::tempdir().unwrap();
         let path = fixture_database(temp.path());
         let writer = Connection::open(&path).unwrap();
@@ -985,25 +1035,31 @@ mod tests {
             )
             .unwrap();
         assert!(Sidecars::detect(&path).present());
-        match discover_with_broker(&fixture_context(temp.path()), false) {
-            Ok(logins) => {
-                assert!(logins.iter().any(|login| login.provider == "openai-codex"));
-                assert!(logins.iter().any(|login| {
-                    login
-                        .detail
-                        .as_deref()
-                        .is_some_and(|detail| detail.contains("agent.db-wal/-shm"))
-                }));
-            }
-            Err(error) => {
-                assert!(
-                    error.contains("只读打开被拒绝") || error.contains("无法只读打开"),
-                    "{error}"
-                );
-                assert!(!error.contains("session-body-must-not-be-read"));
-            }
-        }
+        let logins = discover_with_broker(&fixture_context(temp.path()), false)
+            .expect("active WAL writer should be readable as a read-only snapshot; a busy rejection must be investigated, not accepted silently");
+        assert!(logins.iter().any(|login| login.provider == "openai-codex"));
+        assert!(logins.iter().any(|login| {
+            login
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("只读快照"))
+        }));
         drop(writer);
+    }
+
+    #[test]
+    fn busy_open_failure_offers_retry_without_deleting_sidecars() {
+        let with_sidecars = open_error(OpenFailure::Busy(Sidecars {
+            wal: true,
+            shm: true,
+        }));
+        assert!(with_sidecars.contains("重试"));
+        assert!(with_sidecars.contains("不能证明"));
+        assert!(with_sidecars.contains("不会删除或修改"));
+        assert!(!with_sidecars.contains("可能有 OMP 正在运行"));
+        let without_sidecars = open_error(OpenFailure::Busy(Sidecars::default()));
+        assert!(without_sidecars.contains("重试"));
+        assert!(without_sidecars.contains("未修改或删除"));
     }
 
     #[test]
