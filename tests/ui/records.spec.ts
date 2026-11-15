@@ -1474,3 +1474,45 @@ test('the resume button names the terminal chosen in settings', async ({ page })
   await expect(page.getByRole('button', { name: '在外部终端继续' })).toBeVisible();
   await expect(page.getByRole('button', { name: '在工作台继续' })).toHaveCount(0);
 });
+
+test('an OMP session keeps its native --resume command and shows only local usage', async ({ page }) => {
+  const nativeId = '0190f4a2-0000-7000-8000-000000000001';
+  await page.addInitScript(({ id }) => {
+    const usage = { id: 'usage-1', requestCount: 1, attributions: [], model: 'fixture/fixture-model', timestamp: 1794700816828, input: 1000, output: 340, cacheRead: 200, cacheWrite: 0, inputIncludesCache: false };
+    const session = { id: 'omp-record', toolId: 'omp', nativeId: id, title: 'Explain the fixture project in one sentence.', cwd: 'C:/fixture/project', model: 'fixture/fixture-model', projectId: 'project-a', startedAt: 1794700800000, updatedAt: 1794700817000, favorite: false, partial: false, stale: false, messageCount: 2, usageCount: 1 };
+    const report = { generatedAt: 1794700817000, from: null, to: null, bucket: 'day', currency: 'USD', totals: { requests: 1, usageRecords: 1, unknownRequestRecords: 0, sessions: 1, input: 1000, cacheRead: 200, cacheWrite: 0, output: 340, total: 1540, cost: null, unpricedTokens: 1540 }, previous: null, timeline: [], byModel: [], byTool: [], byProject: [], topSessions: [], models: [], untimedRequests: 0, duplicateRequests: 0, partialSessions: 0, staleSessions: 0, mixedCurrency: false, latestEventAt: 1794700816828, priceSources: [], scans: [] };
+    Object.assign(window, {
+      isTauri: true, __ompResume: null,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, unknown> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['omp'], theme: 'system' }, tools: [{ id: 'omp', name: 'oh-my-pi (OMP)' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'omp', name: 'oh-my-pi (OMP)', launchForm: 'terminal', yoloAvailable: false, officialUsage: null, history: { state: 'available', reason: '' } }], managedIds: ['omp'], preservedUnknown: [] };
+        if (command === 'list_projects') return [{ id: 'project-a', name: 'Fixture', path: 'C:/fixture/project', available: true, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {} }];
+        if (command === 'list_history_prices' || command === 'list_history_scans' || command === 'refresh_history') return [];
+        if (command === 'list_history_sessions') return [session];
+        if (command === 'get_history_session') return { session, messages: [
+          { id: 'm1', role: 'user', text: 'Explain the fixture project in one sentence.', timestamp: 1794700816741 },
+          { id: 'm2', role: 'assistant', text: 'Fixture reply from the local test endpoint.', timestamp: 1794700816828 },
+        ], usage: [usage], resumeReason: null, totals: report.totals };
+        if (command === 'copy_history_resume_command') { (window as unknown as { __ompResume: unknown }).__ompResume = { args, command: `omp --resume ${id}` }; return `omp --resume ${id}`; }
+        if (command === 'get_usage_report') return report;
+        if (command === 'get_launch_settings') return { selected: 'power_shell', terminals: [{ id: 'power_shell', label: 'PowerShell', available: true }], cliMode: 'normal', projectMode: 'normal' };
+        if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        return null;
+      } },
+    });
+  }, { id: nativeId });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
+  await expect(page.getByRole('button', { name: /Explain the fixture project/ })).toBeVisible();
+  await expect(page.getByLabel('会话正文')).toContainText('Fixture reply from the local test endpoint.');
+  await expect(page.getByRole('button', { name: '在外部终端继续' })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).__ompResume?.args?.id)).toBe('omp-record');
+  await expect.poll(() => page.evaluate(() => (window as any).__ompResume?.command)).toBe(`omp --resume ${nativeId}`);
+  await page.getByRole('tab', { name: '用量', exact: true }).click();
+  await expect(page.getByText('查看本机记录中的 Token、费用与调用次数。')).toBeVisible();
+  await expect(page.getByText('无限', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('零余额', { exact: false })).toHaveCount(0);
+  await expect(page.getByText('订阅', { exact: false })).toHaveCount(0);
+});

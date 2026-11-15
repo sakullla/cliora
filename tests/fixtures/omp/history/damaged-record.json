@@ -1,0 +1,20 @@
+{
+  "capability": "history",
+  "name": "one damaged JSONL record marks the session partial and keeps the other history",
+  "case": {
+    "action": "session",
+    "fixture": "omp-v3-damaged.jsonl",
+    "expect": {
+      "title": "Before the damaged record",
+      "nativeId": "0190f4a2-0000-7000-8000-000000000003",
+      "partial": true,
+      "messages": [
+        "Before the damaged record",
+        "After the damaged record."
+      ],
+      "usageCount": 1,
+      "input": 10,
+      "output": 5
+    }
+  }
+}

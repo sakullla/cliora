@@ -1,0 +1,26 @@
+{
+  "capability": "history",
+  "name": "real OMP 18.20.2 session v3 parses the title slot, turns and local usage",
+  "case": {
+    "action": "session",
+    "fixture": "omp-18.20.2-v3.jsonl",
+    "expect": {
+      "title": "Explain the fixture project in one sentence.",
+      "nativeId": "0190f4a2-0000-7000-8000-000000000001",
+      "cwd": "/fixture/project",
+      "partial": false,
+      "messages": [
+        "Explain the fixture project in one sentence.",
+        "Fixture reply from the local test endpoint.",
+        "Second fixture turn.",
+        "Fixture reply from the local test endpoint."
+      ],
+      "usageCount": 2,
+      "input": 2000,
+      "output": 680,
+      "cacheRead": 400,
+      "cacheWrite": 0,
+      "models": ["fixture/fixture-model"]
+    }
+  }
+}
