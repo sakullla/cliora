@@ -23,16 +23,61 @@
 .searchBox > input { width: 100%; }
 .skillToolbar { display: grid; gap: var(--space-2); }
 .skillToolbar .searchBox { width: 100%; }
-/* The result line holds the page's one count plus where these items live. */
-.resultBar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5) var(--space-2_5); min-width: 0; }
-.resultNote { min-width: 0; color: var(--text-3); font-size: var(--fs-caption); }
+/* The result line holds the page's one count plus active filter chips and where these items live. */
+.resultBar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5) var(--space-2); min-width: 0; }
+.resultNote { margin-left: auto; min-width: 0; color: var(--text-3); font-size: var(--fs-caption); }
+.quickTag,
+.quickTag:hover:not(:disabled) {
+  display: inline-flex;
+  align-items: center;
+  max-width: 140px;
+  min-height: 22px;
+  padding: 0 var(--space-2);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  box-shadow: none;
+  transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.quickTag:hover:not(:disabled) {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.filterChip,
+.filterChip:hover:not(:disabled) {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 220px;
+  min-height: 22px;
+  padding: 0 var(--space-1_5) 0 var(--space-2);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-medium);
+  box-shadow: none;
+}
+.filterChip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filterChip > svg { flex: none; opacity: .72; }
+.filterChip:hover:not(:disabled) { border-color: var(--accent); }
+.filterChip:hover:not(:disabled) > svg { opacity: 1; }
+.clearFiltersInline { min-height: 24px; padding: 0 var(--space-2); font-size: var(--fs-caption); }
 
 /* Resource rows: one column, like the MCP list, so a long title keeps its line and
    tags wrap underneath instead of squeezing the card. */
-.sectionContext { display: flex; align-items: center; gap: var(--space-2_5); min-width: 0; padding: var(--space-2) var(--space-3); border-left: 2px solid var(--accent); background: var(--surface-2); }
-.sectionContextIcon { display: grid; place-items: center; flex: none; color: var(--accent); }
-.sectionContextCopy { display: grid; flex: 1; gap: 1px; min-width: 0; }
-.sectionContextCopy strong { font-size: var(--fs-control); font-weight: var(--fw-semibold); }
+.sectionContext { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; margin-top: calc(var(--space-2) * -1); padding: 0 var(--space-0_5); border: 0; background: transparent; }
+.sectionContextIcon { display: grid; place-items: center; flex: none; width: 22px; height: 22px; border-radius: var(--radius-xs); background: var(--accent-soft); color: var(--accent); }
+.sectionContextCopy { display: flex; flex: 1 1 240px; flex-wrap: wrap; align-items: baseline; gap: var(--space-0_5) var(--space-2); min-width: 0; }
+.sectionContextCopy strong { color: var(--text); font-size: var(--fs-control); font-weight: var(--fw-semibold); }
 .sectionContextCopy small { color: var(--text-3); font-size: var(--fs-caption); line-height: 1.45; overflow-wrap: anywhere; }
 .layout { display: grid; align-content: start; gap: var(--space-3); min-width: 0; }
 .list { display: grid; align-content: start; gap: 0; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }

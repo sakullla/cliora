@@ -1613,7 +1613,11 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .emptyGlyphBar i:nth-child(3) { background: var(--wb-glyph-green); opacity: .75; }
 .emptyGlyphLine { display: flex; align-items: center; gap: var(--space-1); padding: 0 var(--space-3); color: var(--wb-glyph-ink); font-family: var(--font-mono); font-size: 22px; }
 .emptyGlyphLine b { font-weight: var(--fw-semibold); }
-.emptyGlyphCursor { width: 10px; height: 18px; border-radius: 0; background: currentColor; opacity: .85; }
+.emptyGlyphCursor { width: 10px; height: 18px; border-radius: 0; background: currentColor; opacity: .85; animation: wbCursorPulse 1.25s steps(2, end) infinite; }
+@keyframes wbCursorPulse { 0%, 49% { opacity: .85; } 50%, 100% { opacity: .28; } }
+@media (prefers-reduced-motion: reduce) {
+  .emptyGlyphCursor { animation: none; }
+}
 .emptyHero h2 { margin: var(--space-5) 0 0; color: var(--text); font-family: var(--font-display); font-size: clamp(26px, 2.6vw, 34px); font-weight: var(--fw-bold); letter-spacing: -.8px; line-height: 1.2; text-wrap: balance; }
 .emptyHero > p { max-width: min(640px, 100%); margin: var(--space-2_5) 0 0; color: var(--text-2); font-size: var(--fs-body); line-height: 1.7; text-wrap: pretty; }
 .emptyActions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--space-2_5); margin-top: var(--space-3); }
@@ -1679,7 +1683,9 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .toolChipName strong { overflow: hidden; font-size: var(--fs-control); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
 .toolChipName small { overflow: hidden; color: var(--text-3); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
 .toolChipAction { position: absolute; top: 50%; right: 10px; display: grid; place-items: center; width: 26px; height: 26px; margin-top: calc(var(--space-3) * -1); border-radius: var(--radius-sm); color: var(--text-3); opacity: 0; transform: translateX(-4px); transition: opacity var(--fast) var(--ease), transform var(--fast) var(--ease), background-color var(--fast) var(--ease); }
-.toolChip:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); box-shadow: none; }
+.toolChip:hover:not(:disabled),
+.toolChip:focus-visible { border-color: var(--accent-line); background: var(--accent-soft); box-shadow: none; }
+.toolChip:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
 .toolChip:hover:not(:disabled) .toolChipAction,
 .toolChip:focus-visible .toolChipAction { background: var(--accent); color: var(--on-accent); opacity: 1; transform: none; }
 .toolChip[data-more] { border-style: dashed; background: transparent; box-shadow: none; color: var(--text-2); }
@@ -1687,14 +1693,17 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .toolChip[data-more] .toolChipAction { display: none; }
 .recentsGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2_5); }
 .recentCard { display: flex; align-items: center; gap: var(--space-3); min-width: 0; min-height: 56px; padding: var(--space-2) var(--space-3) var(--space-2) var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); text-align: left; white-space: normal; box-shadow: none; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease); }
-.recentCard:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); box-shadow: none; }
+.recentCard:hover:not(:disabled),
+.recentCard:focus-visible { border-color: var(--accent-line); background: var(--accent-soft); box-shadow: none; }
+.recentCard:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
 .recentIcon { display: grid; flex: none; place-items: center; width: 38px; height: 38px; border-radius: var(--radius-lg); background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-line); }
 .recentCopy { display: grid; flex: 1 1 auto; gap: 1px; min-width: 0; }
 .recentCopy strong { overflow: hidden; font-size: var(--fs-control); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
 .recentCopy small { overflow: hidden; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
 .recentTool { display: grid; flex: none; place-items: center; width: 28px; height: 28px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
 .recentAction { display: grid; flex: none; color: var(--text-3); transition: color var(--fast) var(--ease), transform var(--fast) var(--ease); }
-.recentCard:hover .recentAction { color: var(--accent); transform: translateX(2px); }
+.recentCard:hover .recentAction,
+.recentCard:focus-visible .recentAction { color: var(--accent); transform: translateX(2px); }
 .emptyFoot { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--space-2) var(--space-4); padding-top: var(--space-1); }
 .shortcutsHint { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-0_5); color: var(--text-3); font-size: var(--fs-micro); }
 .shortcutsHint > span:not(.shortcutSep) { margin-right: var(--space-1); }

@@ -540,6 +540,12 @@ test('library keyword matches titles and bodies and combines with the project an
   await library.getByRole('button', { name: '清除筛选' }).click();
   await expect(library.getByText('命中 3 / 共 3')).toBeVisible();
   await expect(card('发布检查')).toBeVisible();
+  // Quick tag chips in the result bar filter in one click and expose a removable active filter chip.
+  await library.getByRole('button', { name: '按标签「测试」筛选' }).click();
+  await expect(library.getByText('命中 2 / 共 3')).toBeVisible();
+  await expect(library.getByRole('button', { name: '标签：测试' })).toBeVisible();
+  await library.getByRole('button', { name: '标签：测试' }).click();
+  await expect(library.getByText('命中 3 / 共 3')).toBeVisible();
 });
 
 test('library filters and the search clear work from the keyboard alone', async ({ page }) => {

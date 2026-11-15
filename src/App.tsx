@@ -212,7 +212,7 @@ export default function App() {
   const [paletteReload, setPaletteReload] = useState(0);
   const [spotlight, setSpotlight] = useState<Spotlight | null>(null);
   const [librarySectionIntent, setLibrarySectionIntent] = useState<{ section: 'mcp' | 'skill'; token: number } | null>(null);
-  const [recordsTabIntent, setRecordsTabIntent] = useState<{ tab: 'sessions' | 'usage'; token: number } | null>(null);
+  const [recordsTabIntent, setRecordsTabIntent] = useState<{ tab: 'sessions' | 'usage'; sessionId?: string; token: number } | null>(null);
   const [trayRepair, setTrayRepair] = useState<TrayRepairTarget | null>(null);
   const [remoteWorkbenchIntent, setRemoteWorkbenchIntent] = useState<RemoteWorkbenchIntent | null>(null);
   const [workbenchFocus, setWorkbenchFocus] = useState<string | null>(null);
@@ -828,6 +828,7 @@ export default function App() {
     id: `project-${project.id}`,
     group: t('common.palette.groupProjects'),
     label: project.name,
+    subtitle: project.path ? shortPath(displayPath(project.path)) : undefined,
     hint: project.available ? t('common.palette.hintLocateProject') : t('common.palette.hintRebindProject'),
     keywords: project.path ?? '',
     icon: 'folder' as const,
@@ -849,19 +850,23 @@ export default function App() {
       run: () => openWorkbenchSession(session.id),
     };
   });
-  const sessionCommands: CommandItem[] = paletteSessions.map((session, index) => ({
-    id: `session-${session.id}`,
-    group: t('common.palette.groupSessions'),
-    label: session.title.trim() || t('common.palette.untitledSession'),
-    hint: t('common.palette.hintResumeSession'),
-    keywords: `${session.toolId} ${session.cwd ?? ''} ${session.model ?? ''}`,
-    toolId: session.toolId,
-    contextBoost: session.toolId === selectedTool ? 6 : 4,
-    searchOnly: index >= 5,
-    run: () => { void resumePaletteSession(session.id); },
-    secondaryLabel: t('common.palette.hintOpenRecords'),
-    onSecondary: () => { setRecordsTabIntent({ tab: 'sessions', token: Date.now() }); void go('records'); },
-  }));
+  const sessionCommands: CommandItem[] = paletteSessions.map((session, index) => {
+    const sessionPlace = session.cwd ? shortPath(displayPath(session.cwd)) : '';
+    return {
+      id: `session-${session.id}`,
+      group: t('common.palette.groupSessions'),
+      label: session.title.trim() || t('common.palette.untitledSession'),
+      subtitle: [sessionPlace, session.model].filter(Boolean).join(' · ') || undefined,
+      hint: t('common.palette.hintResumeSession'),
+      keywords: `${session.toolId} ${session.cwd ?? ''} ${session.model ?? ''}`,
+      toolId: session.toolId,
+      contextBoost: session.toolId === selectedTool ? 6 : 4,
+      searchOnly: index >= 5,
+      run: () => { void resumePaletteSession(session.id); },
+      secondaryLabel: t('common.palette.hintOpenRecords'),
+      onSecondary: () => { setRecordsTabIntent({ tab: 'sessions', sessionId: session.id, token: Date.now() }); void go('records'); },
+    };
+  });
   const pageCommands: CommandItem[] = [
     ...pages.map((item) => {
       const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id);
@@ -937,17 +942,21 @@ export default function App() {
       run: () => { setLibrarySectionIntent({ section: 'skill', token: Date.now() }); void go('library'); },
     },
   ];
-  const libraryCommands: CommandItem[] = paletteLibrary.map(({ item, searchOnly }) => ({
-    id: `library-${item.id}`,
-    group: t('common.palette.groupLibrary'),
-    label: item.title,
-    hint: t('common.palette.hintOpenItem'),
-    keywords: `${libraryKindLabel(item.kind)} ${item.category ?? ''}`,
-    icon: 'library' as const,
-    contextBoost: page === 'library' ? 5 : 2,
-    searchOnly,
-    run: () => { void revealLibraryItem(item.kind, item.id); },
-  }));
+  const libraryCommands: CommandItem[] = paletteLibrary.map(({ item, searchOnly }) => {
+    const tags = (item.category ?? '').split(/[,，]/).map((tag) => tag.trim()).filter(Boolean).slice(0, 2).join(' · ');
+    return {
+      id: `library-${item.id}`,
+      group: t('common.palette.groupLibrary'),
+      label: item.title,
+      subtitle: [libraryKindLabel(item.kind), tags].filter(Boolean).join(' · '),
+      hint: t('common.palette.hintOpenItem'),
+      keywords: `${libraryKindLabel(item.kind)} ${item.category ?? ''}`,
+      icon: 'library' as const,
+      contextBoost: page === 'library' ? 5 : 2,
+      searchOnly,
+      run: () => { void revealLibraryItem(item.kind, item.id); },
+    };
+  });
   const toolCommands: CommandItem[] = visible.map((item) => {
     const canWorkbench = nativeAvailable && (!('launchForm' in item) || item.launchForm !== 'desktop');
     return {
@@ -1120,7 +1129,7 @@ export default function App() {
           onClose={closeOnboarding}
         />}
         {page === 'home' && <div className="home-band">
-          {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} projectQuery={projectQueries[remoteIdentity] ?? ''} onQueryChange={query => setProjectQueries(old => ({ ...old, [remoteIdentity]: query }))} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} repair={trayRepair?.page === 'home' ? trayRepair : null} spotlight={page === 'home' && spotlight?.target === 'project' ? spotlight : null} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /> : <section className="home-secondary"><div className="section-heading"><h2>{t('home.projects.title')}</h2></div><div className="subtle-panel"><span className="empty-symbol" aria-hidden="true"><Icon name="folder" size={20} /></span><strong>{t('home.projects.panelTitle')}</strong><p>{t('home.projects.panelDetail')}</p></div></section>}          {nativeAvailable && remoteTargetId === 'local' && <RecentSessions tools={visibleDescriptors} active={page === 'home'} onResume={(session) => resumePaletteSession(session.id, session.toolId)} onOpenRecords={() => { void go('records'); }} />}
+          {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} projectQuery={projectQueries[remoteIdentity] ?? ''} onQueryChange={query => setProjectQueries(old => ({ ...old, [remoteIdentity]: query }))} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} repair={trayRepair?.page === 'home' ? trayRepair : null} spotlight={page === 'home' && spotlight?.target === 'project' ? spotlight : null} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /> : <section className="home-secondary"><div className="section-heading"><h2>{t('home.projects.title')}</h2></div><div className="subtle-panel"><span className="empty-symbol" aria-hidden="true"><Icon name="folder" size={20} /></span><strong>{t('home.projects.panelTitle')}</strong><p>{t('home.projects.panelDetail')}</p></div></section>}          {nativeAvailable && remoteTargetId === 'local' && <RecentSessions tools={visibleDescriptors} active={page === 'home'} onResume={(session) => resumePaletteSession(session.id, session.toolId)} onOpenSession={(session) => { setRecordsTabIntent({ tab: 'sessions', sessionId: session.id, token: Date.now() }); void go('records'); }} onOpenRecords={() => { void go('records'); }} />}
           <section className="home-tools" data-home-section="tools">
             <div className="section-heading"><h2 id="home-tools-title">{t('home.managed.title')}<Badge className="heading-count" aria-hidden="true">{visible.length}</Badge></h2><Button variant="ghost" size="sm" onClick={() => openSettings({ tab: 'tools', anchor: 'settings-managed' })}>{t('home.managed.adjust')} <span aria-hidden="true">→</span></Button></div>
             <p className="home-section-hint">{t('home.managed.hint')}</p>

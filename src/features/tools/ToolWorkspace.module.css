@@ -16,10 +16,10 @@
   background: var(--bg);
   box-shadow: none;
 }
-.contextTrail { display: flex; align-items: center; gap: var(--space-1_5); min-width: 0; min-height: 30px; padding: 0 var(--space-3); color: var(--text-3); font-size: var(--fs-caption); }
+.contextTrail { display: flex; align-items: center; gap: var(--space-1_5); min-width: 0; min-height: 24px; padding: var(--space-1) var(--space-3) 0; color: var(--text-3); font-size: var(--fs-caption); }
 .contextTrail > svg { flex: none; }
 .contextTrail > strong { min-width: 0; overflow: hidden; color: var(--text-2); font-weight: var(--fw-medium); text-overflow: ellipsis; white-space: nowrap; }
-.chromeTitle { display: flex; align-items: center; gap: var(--space-2_5); min-width: 0; min-height: 48px; margin: 0; padding: var(--space-2) var(--space-3) var(--space-1_5); font-family: var(--font-display); font-size: var(--fs-heading); font-weight: var(--fw-semibold); letter-spacing: -.1px; line-height: 1.3; }
+.chromeTitle { display: flex; align-items: center; gap: var(--space-2_5); min-width: 0; min-height: 44px; margin: 0; padding: var(--space-1) var(--space-3) var(--space-1_5); font-family: var(--font-display); font-size: var(--fs-heading); font-weight: var(--fw-semibold); letter-spacing: -.1px; line-height: 1.3; }
 .chromeTitle > strong { min-width: 0; overflow: hidden; font: inherit; text-overflow: ellipsis; white-space: nowrap; }
 /* The CLI header: the h2 switcher, then the install summary on the same row. The install
    <details> is display:contents so its summary and its expanded body are grid items of the
@@ -326,16 +326,21 @@ div > .feedback { margin-bottom: var(--space-3); }
 .profileMeta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1) var(--space-2); min-width: 0; max-width: 100%; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .profileMeta > span { min-width: 0; overflow-wrap: anywhere; }
 .profileMeta > .profileModel { max-width: min(320px, 100%); font-family: var(--font-mono); }
-  /* The quota readout belongs to its row rather than to a card inside the card: one
-     hairline plus inset padding keeps a single border per profile. */
+  /* The quota readout nests inside its parent profile as a quiet inset well so multiple
+     queries clearly belong to the profile above rather than reading as sibling rows. */
   .profileRow > section:not([data-empty="true"]) {
     width: auto;
-    margin: 0;
-    padding: var(--space-2) var(--space-4) var(--space-3);
-    border: 0;
-    border-top: 1px solid var(--line);
-    border-radius: 0;
-    background: transparent;
+    margin: 0 var(--space-3) var(--space-3) var(--space-4);
+    padding: var(--space-2_5) var(--space-3);
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--accent-line);
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--surface-2) 56%, transparent);
+  }
+  .profileRow[data-active="true"] > section:not([data-empty="true"]) {
+    border-color: color-mix(in srgb, var(--accent-line) 72%, var(--line));
+    border-left-color: var(--accent);
+    background: color-mix(in srgb, var(--surface) 74%, transparent);
   }
 
 .liveStrip { display: flex; align-items: center; gap: var(--space-2); min-width: 0; margin: var(--space-2_5) var(--space-3) 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-2); font-size: var(--fs-caption); line-height: 1.4; }

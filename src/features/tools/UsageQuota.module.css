@@ -8,7 +8,7 @@
 .heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2); }
 .actions { display: flex; align-items: center; gap: var(--space-1_5); flex-wrap: wrap; }
 .query { min-width: 0; display: grid; gap: var(--space-2); }
-.query + .query { border-top: 1px solid var(--line); padding-top: var(--space-2); }
+.query + .query { margin-top: var(--space-0_5); border-top: 1px dashed var(--line); padding-top: var(--space-2_5); }
 .queryTitle { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5) var(--space-2); min-width: 0; }
 .queryTitle > span { color: var(--text-2); font-weight: var(--fw-semibold); overflow-wrap: anywhere; font-size: var(--fs-caption); }
 .queryTitle small { font-size: var(--fs-caption); font-weight: var(--fw-regular); color: var(--text-3); }
@@ -28,7 +28,7 @@
 .summaryMetric > div > strong { flex: none; white-space: nowrap; color: var(--text); font-size: var(--fs-control); font-variant-numeric: tabular-nums; font-weight: var(--fw-semibold); letter-spacing: 0; line-height: 1.4; }
 .summaryMetric progress {
   appearance: none;
-  width: 100%; height: 4px;
+  width: 100%; height: 5px;
   border: 0; border-radius: var(--radius-pill);
   overflow: hidden;
   background: var(--surface-3, var(--line));
