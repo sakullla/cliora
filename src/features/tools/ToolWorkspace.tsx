@@ -127,6 +127,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   const currentFrame = useRef(frame); currentFrame.current = frame;
   const allDirty = dirty || Object.values(resourceDirty).some(Boolean);
   const currentDirty = useRef(allDirty); currentDirty.current = allDirty;
+  const maintenanceRunning = useRef(false); maintenanceRunning.current = !!maintenance?.running;
   const appliedRepair = useRef(0);
   const appliedOpen = useRef(0);
   const appliedDiscard = useRef(0);
@@ -185,6 +186,16 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   useEffect(() => () => remoteLoad.current?.abort(), []);
   const reload = useCallback(async (nextTool: string, nextScope: Scope, nextProject: string, fresh = false) => {
     if (fresh) remoteReads.rebaseWriteAction();
+    // A project scope with no project has no target to read. Retire every in-flight read first,
+    // then publish the choose-project prompt instead of another context's configuration.
+    if (nextScope === 'project' && !nextProject) {
+      ++loadSequence.current;
+      remoteLoad.current?.abort();
+      setLoading(false);
+      setWorkspace(null);
+      setScopedContext({ key: JSON.stringify([nextTool, nextScope, nextProject]), value: { effectiveContextId: null, nativeContextError: null } });
+      return null;
+    }
     if (remoteTargetId !== 'local') {
       if (!nativeAvailable || !nextTool) { setLoading(false); setWorkspace(null); return null; }
       const previous = remoteLoad.current;
@@ -205,15 +216,6 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
         if (alive.current && request === loadSequence.current) { setError(errorText(failure)); }
         return null;
       } finally { if (alive.current && request === loadSequence.current) setLoading(false); }
-    }
-    if (nextScope === 'project' && !nextProject) {
-      // A previous CLI read may still be in flight. Retire it before publishing
-      // the choose-project prompt, or its completion overwrites this context.
-      ++loadSequence.current;
-      setLoading(false);
-      setWorkspace(null);
-      setScopedContext({ key: JSON.stringify([nextTool, nextScope, nextProject]), value: { effectiveContextId: null, nativeContextError: null } });
-      return null;
     }
     if (!nativeAvailable || !nextTool) { setLoading(false); setWorkspace(null); return null; }
     const request = ++loadSequence.current; setLoading(true); setError('');
@@ -239,7 +241,30 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     } catch (failure) { if (alive.current && request === loadSequence.current) setError(errorText(failure)); return null; }
     finally { completed = true; if (alive.current && request === loadSequence.current) setLoading(false); }
   }, [remoteTargetId, descriptor, toolId, native]);
-  useEffect(() => { setWorkspace(null); setFrame(null); setDirty(false); setComparison(null); setFilter(''); setFilterPinned(false); setNotice(''); epoch.current++; if (active) void reload(toolId, scope, projectPath); }, [toolId, scope, projectPath, remoteTargetId, remoteReads.identity]);
+  // A new target owns every piece of page state: list, filter, drafts, dialog, and the spinners
+  // an earlier target may still be holding. Nothing here may describe the previous CLI or scope.
+  useEffect(() => {
+    setWorkspace(null);
+    setFrame(null);
+    setDirty(false);
+    setComparison(null);
+    setCompareError('');
+    setFilter('');
+    setFilterPinned(false);
+    setNotice('');
+    setCustomPath('');
+    setResourceDirty({ mcp: false, skills: false, agents: false, memory: false });
+    setResourceEpoch(value => value + 1);
+    setResourceFocus(null);
+    setQuotaAddFor(null);
+    setAccountUsageQuery(null);
+    // A read of the retired context cannot resolve this spinner; clear it so the new target's
+    // row actions stay enabled. A running install/upgrade still owns `busy`.
+    setApplying(null);
+    if (!maintenanceRunning.current) setBusy(false);
+    epoch.current++;
+    if (active) void reload(toolId, scope, projectPath);
+  }, [toolId, scope, projectPath, remoteTargetId, remoteReads.identity]);
   useEffect(() => { if (active && !workspace) void reload(toolId, scope, projectPath); }, [active]);
   useEffect(() => {
     if (!nativeAvailable || !active) return;
@@ -498,7 +523,10 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     const binding = workspace?.binding;
     const { same, commonPending, trusted, applied } = configurationApplicationState(profile, binding, workspace?.common);
     const model = modelOf(profile);
-    const state = same ? applied ? 'active' : 'pending' : 'saved';
+    // Four row states: in effect, saved and pending apply, saved only, and a binding that points
+    // here but can no longer be confirmed (external edit, missing record, other revision).
+    // The last one is never shown as in effect and never reads as a plain pending apply.
+    const state = applied ? 'active' : !same ? 'saved' : trusted ? 'pending' : 'invalid';
     const frozen = same && trusted ? binding?.appliedSummary : null;
     const frozenSource = frozen?.authentication.kind === 'oauth' ? t('tools.workspace.sourceManaged') : frozen?.authentication.kind === 'api_key' ? t('tools.workspace.sourceApiKey') : t('tools.workspace.sourceCli');
     const authentication = profile.authentication;
@@ -506,14 +534,14 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     const versionNote = same && (binding!.profileVersion !== profile.version || commonPending) ? `${t('tools.workspace.versions', { used: binding!.profileVersion, saved: profile.version })}${commonPending ? t('tools.workspace.commonPending') : ''}` : '';
     const usedSummary = frozen ? [frozenSource, frozen.providerId, host(frozen.baseUrl ?? undefined), frozen.model].filter(Boolean).join(' · ') : '';
     const usedNote = usedSummary ? t('tools.workspace.lastUsed', { summary: usedSummary }) : '';
-    return <div className={styles.profileRow} role="listitem" data-profile-id={profile.id} data-active={applied || undefined} key={profile.id}>
+    return <div className={styles.profileRow} role="listitem" data-profile-id={profile.id} data-profile-state={state} data-active={applied || undefined} key={profile.id}>
       <div className={styles.profileHead} data-tools-row-head>
         <span className={styles.profileMain}>
-          <span className={styles.profileTitle}><button className={styles.profileName} title={profile.name} onClick={() => void openFrame('profile', profile)}>{profile.name}</button><StatusBadge className={styles.profileState} domain="profile" state={state} dot={applied} /></span>
-          <span className={styles.profileMeta}>{model && <Badge className={styles.profileModel} title={model}>{model}</Badge>}<span data-tone={authentication?.kind === 'rebind_required' ? 'warn' : undefined}>{t('tools.workspace.savedAs', { credential })}{host(profile.connection?.baseUrl) && ` · ${host(profile.connection?.baseUrl)}`}</span></span>
+          <span className={styles.profileTitle}><button className={styles.profileName} title={profile.name} onClick={() => void openFrame('profile', profile)}>{profile.name}</button>{state === 'invalid' ? <Badge className={styles.profileState} tone="warning" dot>{t('tools.workspace.stateInvalid')}</Badge> : <StatusBadge className={styles.profileState} domain="profile" state={state} dot={applied} />}</span>
+          <span className={styles.profileMeta}>{model && <Badge className={styles.profileModel} title={model}>{model}</Badge>}<span data-tone={authentication?.kind === 'rebind_required' ? 'warn' : undefined}>{t('tools.workspace.savedAs', { credential })}{host(profile.connection?.baseUrl) && ` · ${host(profile.connection?.baseUrl)}`}</span>{state === 'invalid' && <span data-tone="warn" title={t('tools.workspace.liveInvalidHint')}>{t('tools.workspace.rowBindingInvalid')}</span>}</span>
           {(versionNote || usedNote) && <details className={styles.profileDetails}><summary>{t('tools.workspace.detailsSummary')}</summary><span className={styles.profileHistory}>{versionNote && <span title={versionNote}>{versionNote}</span>}{usedNote && <span title={usedNote}>{usedNote}</span>}</span></details>}
         </span>
-        <span className={styles.profileActions} data-tools-row-actions>{!applied && <Button size="sm" disabled={busy || !!applying || workspace?.probe.nativeWrites.state !== 'supported'} onClick={() => void apply(profile)}>{applying === profile.id ? t('tools.workspace.applying') : same ? t('tools.workspace.useNew') : t('tools.workspace.use')}</Button>}<Button variant="ghost" size="sm" onClick={() => void openFrame('profile', profile)}>{t('tools.workspace.edit')}</Button><RowMenu label={t('tools.workspace.rowMenu', { name: profile.name })}><button role="menuitem" onClick={() => void duplicate(profile)}><Icon name="copy" size={14} /><span>{t('tools.workspace.duplicateConfig')}</span></button><button role="menuitem" onClick={() => setQuotaAddFor(profile.id)}><Icon name="plus" size={14} /><span>{t('tools.workspace.addQuota')}</span></button><button role="menuitem" data-danger="true" onClick={() => void remove(profile)}><Icon name="trash" size={14} /><span>{t('tools.workspace.deleteConfig')}</span></button></RowMenu></span>
+        <span className={styles.profileActions} data-tools-row-actions>{!applied && <Button size="sm" disabled={busy || !!applying || workspace?.probe.nativeWrites.state !== 'supported'} onClick={() => void apply(profile)}>{applying === profile.id ? t('tools.workspace.applying') : state === 'invalid' ? t('tools.workspace.liveReapply') : same ? t('tools.workspace.useNew') : t('tools.workspace.use')}</Button>}<Button variant="ghost" size="sm" onClick={() => void openFrame('profile', profile)}>{t('tools.workspace.edit')}</Button><RowMenu label={t('tools.workspace.rowMenu', { name: profile.name })}><button role="menuitem" onClick={() => void duplicate(profile)}><Icon name="copy" size={14} /><span>{t('tools.workspace.duplicateConfig')}</span></button><button role="menuitem" onClick={() => setQuotaAddFor(profile.id)}><Icon name="plus" size={14} /><span>{t('tools.workspace.addQuota')}</span></button><button role="menuitem" data-danger="true" onClick={() => void remove(profile)}><Icon name="trash" size={14} /><span>{t('tools.workspace.deleteConfig')}</span></button></RowMenu></span>
       </div>
       {!isRemote && <ProfileQuota profileId={profile.id} profileVersion={profile.version} toolId={toolId} profileAccountId={profile.authentication?.kind === 'oauth' ? profile.authentication.accountId : undefined} state={quota} addRequested={quotaAddFor === profile.id} onAddHandled={() => setQuotaAddFor(null)} />}
     </div>;
@@ -526,6 +554,8 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   useFillHeight(configBoard, 'minHeight', !!workspace && resource === 'config');
   if (!descriptor) return <p>{t('tools.workspace.noTools')}</p>;
   const contextProject = projects.find(project => project.path === projectPath);
+  // A project scope without a project is a question, not a failed read: it gets its own state.
+  const projectMissing = scope === 'project' && !projectPath;
   const contextScope = resource === 'memory' ? '' : scope === 'global' ? t('tools.workspace.scopeGlobal') : contextProject?.name ?? projectPath;
   const contextLabel = [t(`tools.workspace.view.${resource}`), contextScope].filter(Boolean).join(' · ');
   // The page header is the CLI switcher; picking routes through the app's open sequence so the
@@ -546,8 +576,10 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     <div id="tools-config-panel" role="tabpanel" aria-labelledby="tools-config-tab" hidden={resource !== 'config'}>
       {workspace?.nativeContextError && <div className={styles.feedback}><StatusBanner tone="error">{workspace.nativeContextError}</StatusBanner></div>}
       {workspace?.recoveryNeeded.length ? <div className={styles.feedback}><StatusBanner tone="error" action={<Button size="sm" onClick={() => { void native.recoverNativeTransactions().then(() => reload(toolId, scope, projectPath, true)).catch(failure => setError(errorText(failure))); }}>{t('tools.workspace.retryRecovery')}</Button>}>{t('tools.workspace.recoveryNeeded', { count: workspace.recoveryNeeded.length })}</StatusBanner></div> : null}
-      {!workspace ? (loading && nativeAvailable
-        ? <div className={styles.loadingList} role="status" aria-label={t('tools.workspace.loading')}><span className="skeleton-block short" /><span className="skeleton-block" /><span className="skeleton-block" /></div>
+      {!workspace ? (projectMissing
+        ? <div data-tools-project-required><EmptyState icon="folder" title={t('tools.workspace.projectMissingTitle')} detail={t('tools.workspace.projectMissingDetail')} action={<Button variant="primary" onClick={() => void pickProject()}>{t('tools.workspace.projectMissingPick')}</Button>} /></div>
+        : loading && nativeAvailable
+        ? <div className={styles.loadingList} role="status" aria-label={t(isRemote ? 'tools.workspace.loadingRemote' : 'tools.workspace.loading')}><p className={styles.loadingLabel}>{t(isRemote ? 'tools.workspace.loadingRemote' : 'tools.workspace.loading')}</p><span className="skeleton-block short" /><span className="skeleton-block" /><span className="skeleton-block" /></div>
         : <EmptyState icon={nativeAvailable ? 'alert' : 'monitor'} title={nativeAvailable ? t('tools.workspace.loadFailed') : t('tools.workspace.needDesktop')} detail={nativeAvailable ? t('tools.workspace.loadFailedHint') : t('tools.workspace.previewHint')} action={nativeAvailable ? <Button variant="primary" onClick={() => void reload(toolId, scope, projectPath)}>{t('tools.workspace.retryLoad')}</Button> : undefined} />)
       : <div ref={configBoard} className={styles.profileList} data-tools-board aria-label={t('tools.workspace.listAria')}>
         <Toolbar className={styles.listHeading} title={t('tools.workspace.profilesTitle')} titleAs="h3" count={workspace.profiles.length > 0 ? workspace.profiles.length : undefined} actions={<><Button variant="ghost" size="sm" icon={<Icon name="play" size={14} />} title={descriptor.launchForm === 'desktop' ? t('tools.workspace.launchTitleDesktop', { name: descriptor.name }) : t('tools.workspace.launchTitle', { name: descriptor.name })} disabled={launching || !workspace} onClick={() => void launch()} onContextMenu={(event) => { event.preventDefault(); void launch(); }}>{launching ? t('tools.workspace.launching') : t('home.tools.launch')}</Button><Button variant="ghost" size="sm" icon={<Icon name="settings" size={14} />} title={t('tools.workspace.commonTitle')} onClick={() => void openFrame('common')}>{t('tools.workspace.common')}</Button></>} primary={<Button variant="primary" size="sm" icon={<Icon name="plus" size={14} />} onClick={() => void createProfile()}>{t('tools.workspace.frameNew')}</Button>} />

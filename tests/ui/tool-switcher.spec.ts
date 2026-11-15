@@ -167,3 +167,57 @@ test('switching CLI with an unsaved draft asks once, and cancel keeps the CLI an
   await expect(cliSwitcher(page)).toHaveAccessibleName('Codex，切换 CLI');
   await expect(page.locator('dialog[open]')).toHaveCount(0);
 });
+
+test('an apply left in flight cannot disable or mislabel the next CLI', async ({ page }) => {
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await page.addInitScript(() => {
+    const catalog = [['codex', 'Codex'], ['kimi_code', 'Kimi Code']];
+    const profiles: Record<string, unknown[]> = {
+      codex: [{ id: 'a-config', tool: 'codex', name: '配置 A', version: 1, revision: 'a1', inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { providerId: 'p', interfaceFormat: 'openai_responses', baseUrl: 'https://a.example.test/v1', model: 'a-model', secretRef: null, authEnvVar: null } }],
+      kimi_code: [{ id: 'b-config', tool: 'kimi_code', name: '配置 B', version: 1, revision: 'b1', inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { providerId: 'p', interfaceFormat: 'openai_completions', baseUrl: 'https://b.example.test/v1', model: 'b-model', secretRef: null, authEnvVar: null } }],
+    };
+    Object.assign(window, {
+      applyCalls: [] as string[],
+      releaseApply: null as (() => void) | null,
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: catalog.map(item => item[0]), theme: 'system' }, tools: catalog.map(([id, name]) => ({ id, name })) };
+        if (command === 'list_cli_adapters') return { registered: catalog.map(([id, name]) => ({ id, name, interfaceFormats: ['openai_completions'], management: { accounts: false, mcp: false, skills: false, agents: false, plugins: false, projectPlugins: false } })), managedIds: catalog.map(item => item[0]), preservedUnknown: [] };
+        if (command === 'get_registered_tool_workspace') return { probe: { tool: args.toolId, selectedPath: `/fixture/${args.toolId}`, installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['openai_completions'], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' }, profiles: profiles[args.toolId] ?? [], binding: null, common: null, snapshots: [], recoveryNeeded: [], customPath: null };
+        if (command === 'apply_registered_native_profile') {
+          (window as any).applyCalls.push(args.profileId);
+          await new Promise<void>(resolve => { (window as any).releaseApply = resolve; });
+          return { transactionId: 'apply', changedFiles: [], status: 'written_for_next_session' };
+        }
+        if (['list_projects', 'list_accounts', 'list_usage_queries', 'list_usage_cache', 'usage_presets', 'list_mcp_definitions', 'list_skill_packages', 'list_library_items', 'list_history_sessions', 'list_portable_items', 'list_usage_samples'].includes(command)) return [];
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command.startsWith('plugin:event|')) return 1;
+        return null;
+      } },
+    });
+  });
+  await page.goto('/');
+  await openCli(page, 'Codex');
+  const codexRow = page.locator('[data-profile-id="a-config"]');
+  await expect(codexRow).toBeVisible();
+  await codexRow.getByRole('button', { name: '使用', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).applyCalls.length)).toBe(1);
+  await expect(codexRow.getByRole('button', { name: '使用中', exact: true })).toBeDisabled();
+
+  // Switching CLI while that write is still running must not carry its busy/applying state over.
+  await openCli(page, 'Kimi Code');
+  await expect(page.getByRole('heading', { name: 'Kimi Code', level: 2 })).toBeVisible();
+  const kimiRow = page.locator('[data-profile-id="b-config"]');
+  await expect(kimiRow).toBeVisible();
+  await expect(page.locator('[data-profile-id="a-config"]')).toHaveCount(0);
+  await expect(kimiRow).toContainText('配置 B');
+  await expect(kimiRow.getByRole('button', { name: '使用中', exact: true })).toHaveCount(0);
+  const use = kimiRow.getByRole('button', { name: '使用', exact: true });
+  await expect(use).toBeEnabled();
+  await page.evaluate(() => (window as any).releaseApply?.());
+  await expect(use).toBeEnabled();
+  // The next apply belongs to the CLI now on screen, not to the one that was left behind.
+  await use.click();
+  await expect.poll(() => page.evaluate(() => (window as any).applyCalls)).toEqual(['a-config', 'b-config']);
+});

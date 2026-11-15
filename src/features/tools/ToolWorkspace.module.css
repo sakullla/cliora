@@ -273,6 +273,7 @@ div > .feedback { margin-bottom: var(--space-3); }
 .profileHistory > span { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .profileMeta > [data-tone="warn"] { color: var(--text); font-weight: var(--fw-medium); }
 .loadingList { display: grid; gap: var(--space-2_5); padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-sm); }
+.loadingLabel { margin: 0; color: var(--text-2); font-size: var(--fs-body); }
 .loadingList > :global(.skeleton-block) { height: 58px; }
 .loadingList > :global(.skeleton-block.short) { height: 16px; }
 .profileName {

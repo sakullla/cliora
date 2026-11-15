@@ -11,7 +11,9 @@ async function setup(page: Page) {
       if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['supported', 'unsupported'], theme: 'system' }, tools: [{ id: 'supported', name: 'Supported CLI' }, { id: 'unsupported', name: 'Unsupported CLI' }] };
       if (command === 'list_cli_adapters') return { registered: [{ id: 'supported', name: 'Supported CLI', interfaceFormats: ['openai_responses'], management: full }, { id: 'unsupported', name: 'Unsupported CLI', interfaceFormats: ['openai_responses'], management: none }], managedIds: ['supported', 'unsupported'], preservedUnknown: [] };
       if (command === 'list_projects') return [{ id: 'project', name: '测试项目', path: '/fixture/project', available: true, selectedProfiles: {}, appliedProfiles: {} }];
-      if (command === 'get_registered_tool_workspace') return { probe: { tool: args.toolId, selectedPath: '/fixture/cli', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['openai_responses'], providerPresets: [], dependencies: [] }, profiles: [], binding: null, common: null, snapshots: [], recoveryNeeded: [], customPath: null };
+      // Each scope answers with its own saved profile so a stale row would be visible.
+      const scope = args.scope === 'project' ? 'project' : 'global';
+      if (command === 'get_registered_tool_workspace') return { probe: { tool: args.toolId, selectedPath: '/fixture/cli', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['openai_responses'], providerPresets: [], dependencies: [] }, profiles: [{ id: `${scope}-config`, tool: args.toolId, name: scope === 'project' ? '项目配置项' : '全局配置项', version: 1, revision: `${scope}-1`, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: null }], binding: null, common: null, snapshots: [], recoveryNeeded: [], customPath: null };
       if (command === 'account_capabilities') return [{ toolId: 'supported', managedLogin: true, methods: ['browser'], reason: 'fixture' }];
       if (command === 'scan_native_plugins') return { target: args.target, capability: { version: '1.0.0', sources: 'package', actions: ['install'], project: false, detail: '' }, entries: [], baseline: 'fixture', detail: '' };
       if (['list_accounts', 'list_usage_queries', 'list_usage_cache', 'usage_presets'].includes(command)) return [];
@@ -47,4 +49,48 @@ test('a global-only plugin capability disappears in project scope and returns in
   await page.getByRole('button', { name: '配置范围' }).click();
   await page.getByRole('option', { name: '全局配置' }).click();
   await expect(page.getByRole('tab', { name: '插件', exact: true })).toBeVisible();
+});
+
+test('a scope switch replaces the context, the list and the read target without leftovers', async ({ page }) => {
+  await setup(page);
+  const context = page.locator('[data-tools-context]');
+  const items = page.getByRole('list', { name: '配置项' });
+  await expect(context).toContainText('本机');
+  await expect(context).toContainText('配置 · 全局配置');
+  await expect(items.getByRole('listitem')).toHaveCount(1);
+  await expect(items).toContainText('全局配置项');
+
+  await page.getByRole('button', { name: '配置范围' }).click();
+  await page.getByRole('option', { name: '测试项目' }).click();
+  await expect(context).toContainText('配置 · 测试项目');
+  await expect(items).toContainText('项目配置项');
+  await expect(items).not.toContainText('全局配置项');
+  const scoped = await page.evaluate(() => (window as any).capabilitiesHarness.calls.filter((call: any) => call.command === 'get_registered_tool_workspace' && call.args?.scope === 'project'));
+  expect(scoped.length).toBeGreaterThan(0);
+  expect(scoped.every((call: any) => call.args.projectPath === '/fixture/project')).toBe(true);
+
+  await page.getByRole('button', { name: '配置范围' }).click();
+  await page.getByRole('option', { name: '全局配置' }).click();
+  await expect(context).toContainText('配置 · 全局配置');
+  await expect(items).toContainText('全局配置项');
+  await expect(items).not.toContainText('项目配置项');
+});
+
+test('capability tabs follow the keyboard and never land on a hidden capability', async ({ page }) => {
+  await setup(page);
+  const account = page.getByRole('tab', { name: '账号', exact: true });
+  const config = page.getByRole('tab', { name: '配置', exact: true });
+  await config.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(account).toHaveAttribute('aria-selected', 'true');
+  await expect(account).toBeFocused();
+  await page.keyboard.press('ArrowLeft');
+  await expect(config).toHaveAttribute('aria-selected', 'true');
+
+  await openCli(page, 'Unsupported CLI');
+  await config.focus();
+  await page.keyboard.press('ArrowRight');
+  // 配置 is the only capability here, so the move stays on it instead of selecting a hidden tab.
+  await expect(config).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('tab')).toHaveCount(1);
 });

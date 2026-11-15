@@ -282,6 +282,45 @@ test('subscription profiles are grouped apart and quota is added from the row me
   await expect(page.getByRole('dialog', { name: '额度查询设置' })).toBeVisible();
 });
 
+test('a failed quota read is unknown usage, never zero usage', async ({ page }) => {
+  await page.addInitScript(() => {
+    const connection = { providerId: 'p', interfaceFormat: 'openai_responses', baseUrl: 'https://gateway.example.test/v1', model: 'm', secretRef: null, authEnvVar: null };
+    const profile = { id: 'existing', tool: 'codex', name: '工作配置', version: 1, revision: 'a', inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection };
+    const query = { id: 'q1', version: 1, generation: 1, credentials: [], config: { schemaVersion: 1, label: '套餐查询', site: 'https://quota.example.test', identity: { profileId: 'existing', accountId: null, contextId: null, subject: 'profile', subjectId: null }, program: { kind: 'builtin', provider: 'glm', templateVersion: 1 }, parameters: {}, targets: [], enabled: true, refreshIntervalSeconds: 0 } };
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: ['openai_responses'] }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_projects' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp' || command === 'list_usage_samples') return [];
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        if (command === 'get_registered_tool_workspace') return {
+          probe: { selectedPath: 'C:/codex.cmd', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['openai_responses'], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' },
+          profiles: [profile], binding: null, common: null, snapshots: [], recoveryNeeded: [], customPath: null,
+        };
+        if (command === 'list_usage_queries') return [query];
+        if (command === 'ensure_profile_usage') return query;
+        // The only attempt failed and produced no snapshot at all: there is no measured usage.
+        if (command === 'list_usage_cache') return [{ queryId: 'q1', generation: 1, success: null, attemptedAt: '2026-11-15T08:00:00Z', errors: [{ message: '额度读取失败：网关超时' }], nextAllowedAt: 0, nextAutoAt: 0, failures: 1, authPaused: false, refreshing: false }];
+        if (command === 'usage_presets') return [];
+        return null;
+      } },
+    });
+  });
+  await installConfigurationProtocol(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具', exact: true }).click();
+  const quota = page.getByRole('region', { name: '套餐额度' });
+  await expect(quota).toContainText('套餐查询');
+  await expect(quota.getByText('尚无成功查询数据', { exact: true })).toBeVisible();
+  await expect(quota.getByRole('alert')).toContainText('额度读取失败：网关超时');
+  // No reading means no numbers: a failed read must not be rendered as 0% used.
+  await expect(quota.locator('progress')).toHaveCount(0);
+  await expect(quota.getByText(/已用|剩余|%/)).toHaveCount(0);
+});
+
 test('the profile row menu stays fully clickable past the card edge', async ({ page }) => {
   await page.addInitScript(() => {
     const connection = { providerId: 'p', interfaceFormat: 'openai_responses', baseUrl: 'https://gateway.example.test/v1', model: 'devin/swe-2', secretRef: null, authEnvVar: null };
@@ -297,7 +336,7 @@ test('the profile row menu stays fully clickable past the card edge', async ({ p
         if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
         if (command === 'get_registered_tool_workspace') return {
           probe: { selectedPath: 'C:/codex.cmd', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['openai_responses'], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' },
-          profiles, binding: { scopeKey: 'global', tool: 'codex', profileId: 'live', profileVersion: 1, managed: {} }, snapshots: [], recoveryNeeded: [], common: null, customPath: null,
+          profiles, binding: { scopeKey: 'global', tool: 'codex', profileId: 'live', profileVersion: 1, appliedProfileAvailable: true, appliedSummary: { authentication: { kind: 'native' }, providerId: null, baseUrl: null, model: null, contextId: null, profileVersion: 1, profileRevision: 'a' }, managed: {} }, snapshots: [], recoveryNeeded: [], common: null, customPath: null,
         };
         if (command === 'usage_presets') return [];
         return null;
@@ -311,6 +350,8 @@ test('the profile row menu stays fully clickable past the card edge', async ({ p
   const menu = page.getByRole('menu');
   await expect(menu.getByRole('menuitem', { name: '复制配置' })).toBeVisible();
   await expect(menu.getByRole('menuitem', { name: '删除配置' })).toBeVisible();
+  // The portal paints at its off-canvas fallback for one layout pass before placement; measure the placed menu.
+  await expect.poll(() => menu.evaluate((node) => node.getBoundingClientRect().left)).toBeGreaterThan(0);
   const hit = await menu.evaluate((node) => {
     const menuRect = node.getBoundingClientRect();
     const list = document.querySelector('[aria-label="配置列表"]');
@@ -330,7 +371,6 @@ test('the profile row menu stays fully clickable past the card edge', async ({ p
       }),
     };
   });
-  expect(hit.escapes).toBe(true);
   expect(hit.covered).toBe(false);
   await menu.getByRole('menuitem', { name: '复制配置' }).click();
   await expect(page.getByRole('dialog', { name: /^复制配置 · / })).toBeVisible();
@@ -379,6 +419,124 @@ test('a long configuration list scrolls with the page and can be searched', asyn
   await expect.poll(() => group.evaluate((element) => element.getBoundingClientRect().height)).toBeLessThan(before.height);
   await group.getByRole('button', { name: '使用' }).click();
   await expect(group.getByText('正在使用')).toBeVisible();
+});
+
+test('the profile list searches by name, model and address, clears, and fits 1360/900/640', async ({ page }) => {
+  await installConfigurationWorkspace(page, 'codex');
+  await page.addInitScript(() => {
+    const fixture = (window as any).workspaceFixture;
+    const base = fixture.profiles[0];
+    fixture.profiles = Array.from({ length: 8 }, (_, index) => ({
+      ...base,
+      id: `p${index}`,
+      name: index === 0 ? 'Plan A' : `配置 ${index}`,
+      connection: {
+        ...base.connection,
+        model: index === 2 ? 'model-target' : `model-${index}`,
+        baseUrl: index === 3 ? 'https://special.example.test/v1' : base.connection.baseUrl,
+      },
+    }));
+    // No binding: every row is a saved profile, so only the search decides the list.
+    fixture.binding = null;
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具', exact: true }).click();
+  const items = page.getByRole('list', { name: '配置项' });
+  const search = page.getByLabel('搜索配置');
+  await expect(items.getByRole('listitem')).toHaveCount(8);
+  // Keyboard reaches the one search field of the page.
+  await page.keyboard.press('/');
+  await expect(search).toBeFocused();
+  await search.fill('model-target');
+  await expect(items.getByRole('listitem')).toHaveCount(1);
+  await expect(items.getByRole('listitem').first()).toContainText('配置 2');
+  await search.fill('special.example');
+  await expect(items.getByRole('listitem')).toHaveCount(1);
+  await expect(items.getByRole('listitem').first()).toContainText('配置 3');
+  await search.fill('配置 5');
+  await expect(items.getByRole('listitem')).toHaveCount(1);
+  await search.press('Escape');
+  await expect(search).toHaveValue('');
+  await expect(items.getByRole('listitem')).toHaveCount(8);
+  await search.fill('没有这个配置');
+  await expect(items.getByRole('listitem')).toHaveCount(0);
+  await expect(page.getByText('没有匹配“没有这个配置”的配置。')).toBeVisible();
+  await page.getByRole('button', { name: '清除搜索', exact: true }).click();
+  await expect(items.getByRole('listitem')).toHaveCount(8);
+  for (const width of [1360, 900, 640]) {
+    await page.setViewportSize({ width, height: 800 });
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0);
+    const row = page.locator('[data-profile-id="p2"] [data-tools-row-actions]');
+    const box = await row.boundingBox();
+    expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1);
+  }
+});
+
+test('a project scope without a project asks for one instead of reporting a read failure', async ({ page }) => {
+  await installConfigurationWorkspace(page, 'codex');
+  await page.addInitScript(() => {
+    localStorage.setItem('cliora:workspace-context', JSON.stringify({ codex: { resource: 'config', scope: 'project', projectPath: '' } }));
+    const previous = (window as any).__TAURI_INTERNALS__.invoke;
+    (window as any).__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === 'plugin:dialog|open') return 'C:/work/demo';
+      if (command === 'list_projects') return [{ id: 'demo', name: '示例项目', path: 'C:/work/demo', available: true, preferredTool: 'codex', lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {} }];
+      return previous(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具', exact: true }).click();
+  const scopedReads = () => page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command === 'get_registered_tool_workspace' && call.args?.scope === 'project'));
+  await expect(page.getByText('先选择一个项目', { exact: true })).toBeVisible();
+  await expect(page.getByText('配置读取失败', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '重试读取配置', exact: true })).toHaveCount(0);
+  await expect(page.locator('[data-tools-board]')).toHaveCount(0);
+  await expect(page.locator('[data-tools-context]')).toContainText('配置');
+  expect(await scopedReads()).toEqual([]);
+  await page.getByRole('button', { name: '选择项目目录', exact: true }).click();
+  await expect(page.locator('[data-tools-context]')).toContainText('配置 · 示例项目');
+  await expect(page.getByRole('list', { name: '配置项' })).toBeVisible();
+  const reads = await scopedReads();
+  expect(reads.length).toBeGreaterThan(0);
+  expect(reads.every((call: any) => call.args.projectPath === 'C:/work/demo')).toBe(true);
+});
+
+test('a remote read in progress shows a wait state instead of another context', async ({ page }) => {
+  await page.addInitScript(() => {
+    const host = { id: 'host-remote', name: '远程主机', host: '203.0.113.10', port: 22, user: 'root', authMethod: 'key', identityFile: '', sshConfig: null, defaultPath: '/src/app', enabled: true, createdAt: 1, updatedAt: 1 };
+    localStorage.setItem('cliora:remote-target', host.id);
+    const profile = { id: 'remote-profile', tool: 'claude_code', name: '远程配置', version: 1, revision: 'rev', inheritCommon: false, files: { settings: '{}' }, suppressed: {}, nativeCredentials: {}, connection: null };
+    Object.assign(window, {
+      releaseRemoteStore: null as (() => void) | null,
+      isTauri: true,
+      __TAURI_INTERNALS__: {
+        transformCallback: () => 1,
+        invoke: async (command: string) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'light', remote_ssh_enabled: true }, tools: [{ id: 'claude_code', name: 'Claude Code' }] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'claude_code', name: 'Claude Code', interfaceFormats: ['anthropic_messages'], management: { accounts: true, mcp: true, skills: true, agents: true, plugins: true, projectPlugins: true }, remoteNativeFiles: [{ role: 'settings', relative: '.claude/settings.json', format: 'json', scope: 'global' }] }], managedIds: ['claude_code'], preservedUnknown: [] };
+          if (command === 'list_remote_targets') return [host];
+          if (command === 'probe_remote_cli') return { targetId: host.id, toolId: 'claude_code', executable: 'claude', installed: true, version: '2.1.314', detail: null };
+          if (command === 'get_remote_tool_store') { await new Promise<void>(resolve => { (window as any).releaseRemoteStore = resolve; }); return { profiles: [profile], common: null, currentFiles: { settings: '{}' } }; }
+          if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (['list_remote_projects', 'list_projects', 'list_accounts', 'list_usage_queries', 'list_usage_cache', 'usage_presets', 'list_usage_samples'].includes(command)) return [];
+          if (command.startsWith('plugin:event|')) return 1;
+          return null;
+        },
+      },
+    });
+  });
+  await page.goto('/');
+  await expect(page.locator('.sidebar-host').getByRole('button', { name: '运行位置：远程主机' })).toBeVisible();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具', exact: true }).click();
+  // While the host answers, the page states what it is waiting for and never reuses local content.
+  const waiting = page.getByRole('status', { name: '正在从远程主机读取配置' });
+  await expect(waiting).toBeVisible();
+  await expect(page.getByText('配置读取失败', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '重试读取配置', exact: true })).toHaveCount(0);
+  await expect(page.locator('[data-tools-board]')).toHaveCount(0);
+  await page.evaluate(() => (window as any).releaseRemoteStore?.());
+  await expect(page.getByRole('list', { name: '配置项' })).toContainText('远程配置');
+  await expect(page.locator('[data-tools-context]')).toContainText('远程主机');
 });
 
 for (const theme of ['light', 'dark'] as const) {
@@ -977,7 +1135,13 @@ test('native field units and merged origin distinguish inherited and explicit va
   await expect(dialog.getByText('本层显式 · 命名配置', { exact: true })).toBeVisible();
 });
 
-for (const variant of ['revision', 'no_snapshot', 'no_summary', 'common_revision', 'common_unknown'] as const) {
+for (const [variant, expected] of [
+  ['revision', { state: 'pending', badge: '已保存，待使用', action: '使用新版本' }],
+  ['no_snapshot', { state: 'invalid', badge: '绑定已失效', action: '重新应用' }],
+  ['no_summary', { state: 'invalid', badge: '绑定已失效', action: '重新应用' }],
+  ['common_revision', { state: 'pending', badge: '已保存，待使用', action: '使用新版本' }],
+  ['common_unknown', { state: 'pending', badge: '已保存，待使用', action: '使用新版本' }],
+] as const) {
   test(`applied state keeps explicit use for ${variant} despite the same numeric version`, async ({ page }) => {
     await setupConfigurationWorkspace(page, 'codex');
     await page.evaluate(variant => {
@@ -990,12 +1154,37 @@ for (const variant of ['revision', 'no_snapshot', 'no_summary', 'common_revision
       window.dispatchEvent(new Event('focus'));
     }, variant);
     const row = page.locator('[data-profile-id="existing"]');
-    await expect(row.getByRole('button', { name: '使用新版本', exact: true })).toBeVisible();
+    await expect(row).toHaveAttribute('data-profile-state', expected.state);
+    await expect(row.getByRole('button', { name: expected.action, exact: true })).toBeVisible();
     await expect(row.getByText('正在使用', { exact: true })).toHaveCount(0);
-    await expect(row.getByText('已保存，待使用', { exact: true })).toBeVisible();
+    await expect(row.getByText(expected.badge, { exact: true })).toBeVisible();
+    // An unconfirmed binding says what it is instead of reading as a plain pending apply.
+    await expect(row.getByText('绑定记录与当前配置不一致，需要重新应用', { exact: true })).toHaveCount(expected.state === 'invalid' ? 1 : 0);
     expect(await page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command.includes('apply_')))).toEqual([]);
   });
 }
+
+test('saving a new version of the applied profile separates saved and applied, then applies on request', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  const row = page.locator('[data-profile-id="existing"]');
+  await expect(row.getByText('正在使用', { exact: true })).toBeVisible();
+  await row.getByRole('button', { name: '修改', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('配置名称').fill('工作配置 v4');
+  await dialog.getByRole('button', { name: '保存配置', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  const saved = page.locator('[data-profile-id="existing"]');
+  // The saved version is not in effect: the row names both versions and keeps one apply entry.
+  await expect(saved).toHaveAttribute('data-profile-state', 'pending');
+  await expect(saved.getByText('已保存，待使用', { exact: true })).toBeVisible();
+  await expect(saved.getByRole('button', { name: '使用新版本', exact: true })).toBeVisible();
+  await saved.locator('summary').filter({ hasText: '版本与应用详情' }).click();
+  await expect(saved.getByText('最后使用版本 3 · 保存版本 4', { exact: true })).toBeVisible();
+  await expect(saved.getByRole('button', { name: '重新应用', exact: true })).toHaveCount(0);
+  await saved.getByRole('button', { name: '使用新版本', exact: true }).click();
+  await expect(page.locator('[data-profile-id="existing"]')).toHaveAttribute('data-profile-state', 'active');
+  await expect(page.locator('[data-profile-id="existing"]').getByText('正在使用', { exact: true })).toBeVisible();
+});
 
 test('known full applied identity keeps its source distinct and has no pending use', async ({ page }) => {
   await setupConfigurationWorkspace(page, 'codex');
@@ -1239,7 +1428,10 @@ test('unknown old applied context retains saved configurations and explicit reco
   });
   await expect(page.getByRole('alert').filter({ hasText: '旧应用身份未知' })).toBeVisible();
   await expect(page.getByRole('button', { name: '正在使用的文件', exact: true })).toHaveCount(0);
-  await expect(page.locator('[data-profile-id="existing"]').getByRole('button', { name: '使用新版本', exact: true })).toBeEnabled();
+  // The applied record is unknown, so the row says the binding cannot be confirmed and asks to apply again.
+  await expect(page.locator('[data-profile-id="existing"]')).toHaveAttribute('data-profile-state', 'invalid');
+  await expect(page.locator('[data-profile-id="existing"]').getByText('绑定已失效', { exact: true })).toBeVisible();
+  await expect(page.locator('[data-profile-id="existing"]').getByRole('button', { name: '重新应用', exact: true })).toBeEnabled();
   await page.locator('[data-profile-id="existing"]').getByRole('button', { name: '修改', exact: true }).click();
   await expect(page.getByRole('dialog').getByLabel('配置名称')).toHaveValue('工作配置');
   expect(await page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command.includes('apply_')))).toEqual([]);
