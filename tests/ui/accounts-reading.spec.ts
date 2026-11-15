@@ -194,3 +194,46 @@ test('managed account actions and the confirmation stay keyboard operable with a
   await expect(work.locator('[data-state="signed_in"]')).toHaveText('已登录');
   expect(await page.evaluate(() => (window as any).accountCommands.filter((command: string) => command === 'logout_account'))).toEqual([]);
 });
+
+test('OMP accounts stay read-only with visible reasons and no managed actions', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, unknown> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['omp'], theme: 'system' }, tools: [{ id: 'omp', name: 'oh-my-pi (OMP)' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'omp', name: 'oh-my-pi (OMP)', interfaceFormats: [], management: { accounts: true, mcp: false, skills: false, agents: false, plugins: false, projectPlugins: false } }], managedIds: ['omp'], preservedUnknown: [] };
+        if (command === 'get_registered_tool_workspace') return {
+          probe: { tool: 'omp', selectedPath: 'C:/omp.exe', installations: [{ path: 'C:/omp.exe', version: '18.20.2', status: 'available', source: 'native', detail: null }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '', installCommand: null, upgradeCommand: null, nativeInstallCommand: null },
+          profiles: [], effectiveContextId: null, binding: null, snapshots: [], common: null, customPath: null, recoveryNeeded: [],
+        };
+        if (command === 'list_accounts') return [];
+        if (command === 'account_capabilities') return [{ toolId: 'omp', provider: 'omp-native', version: '1.0.0', managedLogin: false, importNative: false, methods: [], reason: 'OMP 账号仅只读发现：agent.db 混存认证与其他状态，且没有 provider 完成真实身份、隔离、登录、取消、refresh 与退出验证。', identitySource: 'agent.db 脱敏元数据', identityRequired: true, refreshOwner: 'native_cli', acceptance: '仅合成 fixture' }];
+        if (command === 'discover_native_logins') return { toolId: args.toolId, checkedAt: 0, logins: [
+          { provider: 'openai-codex', authKind: 'oauth', state: 'signed_in', identity: { subject: 'acct_codex_1', email: 'ops@example.test', plan: 'plus', source: 'native_agent_db' }, detail: '只读发现 agent.db 原生 OAuth；未在线核验。另有 1 行损坏、字段不完整或二进制材料已跳过。', managedAccountId: null },
+          { provider: 'openai-codex', authKind: 'oauth', state: 'signed_in', identity: { subject: 'acct_codex_2', email: 'second@example.test', plan: 'plus', source: 'native_agent_db' }, detail: '同一 provider 的第二个账号；仍为只读发现。', managedAccountId: null },
+          { provider: 'anthropic', authKind: 'oauth', state: 'expired', identity: null, detail: '本地有效期已过；由 OMP 原生 CLI 刷新或重新登录。', managedAccountId: null },
+        ] };
+        if (['list_projects', 'list_usage_queries', 'list_usage_cache', 'usage_presets', 'list_mcp_definitions', 'list_skill_packages', 'list_skill_recovery_issues', 'scan_native_skills', 'list_native_mcp'].includes(command)) return [];
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command.startsWith('plugin:event|')) return 1;
+        return null;
+      } },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
+  await page.getByRole('tab', { name: '账号', exact: true }).click();
+  const native = page.getByLabel('CLI 原生登录');
+  await expect(native.getByText('只读快照', { exact: true })).toBeVisible();
+  const codex = native.locator('[data-native-login="openai-codex"]');
+  await expect(codex).toHaveCount(2);
+  await expect(codex.filter({ hasText: 'ops@example.test' })).toContainText('CLI 已登录');
+  await expect(codex.filter({ hasText: 'second@example.test' })).toContainText('CLI 已登录');
+  await expect(native.locator('[data-native-login="anthropic"]')).toContainText('认证失效');
+  await expect(page.getByText(/OMP 账号仅只读发现/).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: '添加', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '退出此账号', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '重新认证', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '检查状态', exact: true })).toHaveCount(0);
+});

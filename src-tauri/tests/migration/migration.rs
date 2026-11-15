@@ -1448,6 +1448,186 @@ fn schema3_snapshot_restores_login_material_paths_and_reports_each_cli_failure()
     );
 }
 
+#[test]
+fn omp_agent_database_is_held_as_a_blocker_and_never_exported_whole() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = database(&temp.path().join("source"));
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let agent_root = temp.path().join("omp-agent");
+    fs::create_dir_all(&agent_root).unwrap();
+    let agent_db = agent_root.join("agent.db");
+    let marker = "unrelated-omp-session-and-usage-state";
+    fs::write(&agent_db, format!("SQLite format 3\0{marker}")).unwrap();
+    let account = crate::accounts::AuthAccount {
+        id: "omp-acct".into(),
+        tool_id: "omp".into(),
+        provider: "openai-codex".into(),
+        label: "OMP account".into(),
+        version: 1,
+        state: crate::accounts::AccountState::SignedIn,
+        identity: Some(crate::accounts::AccountIdentity {
+            subject: "acct".into(),
+            email: Some("ops@example.test".into()),
+            plan: None,
+            source: "test".into(),
+        }),
+        context: Some(crate::accounts::NativeContext {
+            id: "omp-ctx".into(),
+            tool_id: "omp".into(),
+            root: agent_root.clone(),
+            config_root: agent_root.clone(),
+            auth_files: vec![agent_db.clone()],
+            history_roots: vec![agent_root.join("sessions")],
+            resource_root: agent_root,
+            environment: BTreeMap::new(),
+            remove_environment: Vec::new(),
+            cli_args: Vec::new(),
+        }),
+        retired_contexts: Vec::new(),
+        pending_login: None,
+        checked_at: None,
+        detail: None,
+    };
+    source
+        .with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO auth_accounts (id,tool,version,data) VALUES (?1,?2,1,?3)",
+                rusqlite::params![
+                    account.id,
+                    account.tool_id,
+                    serde_json::to_string(&account).unwrap()
+                ],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    let bundle = temp.path().join("omp.cliora");
+    export_bundle(
+        &source,
+        &credentials,
+        &registry,
+        "correct-password",
+        None,
+        &bundle,
+    )
+    .unwrap();
+    let snapshot = unlock_bundle(&bundle, "correct-password").unwrap();
+    let rendered = serde_json::to_string(&snapshot).unwrap();
+    assert!(!rendered.contains(marker));
+    assert!(!snapshot
+        .entities
+        .iter()
+        .any(|entity| entity.key() == "account:omp-acct"));
+    refresh_auth_read_blockers(&source).unwrap();
+    let blockers = load_blockers(&source).unwrap();
+    let blocker = blockers
+        .iter()
+        .find(|item| item.key == "account:omp-acct")
+        .unwrap_or_else(|| panic!("{blockers:?}"));
+    assert!(blocker.detail.contains("混存数据库"));
+    assert!(blocker.detail.contains("不能当作已导出"));
+    assert!(!blocker.detail.contains(marker));
+}
+
+#[test]
+fn imported_omp_account_cannot_write_a_whole_agent_database() {
+    let _roots = RestoreRootsGuard;
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(&temp.path().join("fresh"));
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let home = temp.path().join("home");
+    let base = temp.path().join("base");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&base).unwrap();
+    set_restore_roots_for_test(Some((home, base.clone())));
+    let marker = "whole-agent-db-marker";
+    let account = crate::accounts::AuthAccount {
+        id: "omp-acct".into(),
+        tool_id: "omp".into(),
+        provider: "openai-codex".into(),
+        label: "OMP account".into(),
+        version: 3,
+        state: crate::accounts::AccountState::SignedIn,
+        identity: None,
+        context: Some(crate::accounts::NativeContext {
+            id: "omp-ctx".into(),
+            tool_id: "omp".into(),
+            root: PathBuf::from("/source/omp-agent"),
+            config_root: PathBuf::from("/source/omp-agent"),
+            auth_files: vec![PathBuf::from("/source/omp-agent/agent.db")],
+            history_roots: Vec::new(),
+            resource_root: PathBuf::from("/source/omp-agent"),
+            environment: BTreeMap::new(),
+            remove_environment: Vec::new(),
+            cli_args: Vec::new(),
+        }),
+        retired_contexts: Vec::new(),
+        pending_login: None,
+        checked_at: None,
+        detail: None,
+    };
+    let snapshot = PortableSnapshot {
+        schema_version: SNAPSHOT_VERSION,
+        entities: vec![PortableEntity {
+            id: account.id.clone(),
+            payload: PortablePayload::Account(Box::new(PortableAccount {
+                account,
+                auth_files: vec![PortableAuthFile {
+                    context_id: "omp-ctx".into(),
+                    name: "agent.db".into(),
+                    relative: String::new(),
+                    contents: STANDARD.encode(marker),
+                }],
+            })),
+        }],
+    };
+    let draft = preview_import(&db, &store, &registry, snapshot).unwrap();
+    apply_import(
+        &db,
+        &store,
+        &registry,
+        &draft,
+        &BTreeSet::from(["account:omp-acct".into()]),
+    )
+    .unwrap();
+    assert!(!base
+        .join("accounts")
+        .join("omp-ctx")
+        .join("agent.db")
+        .exists());
+    assert!(!walk_contains(&base, marker));
+    let blockers = load_blockers(&db).unwrap();
+    assert!(
+        blockers.iter().any(|item| {
+            item.key == "account:omp-acct"
+                && item.action == "relogin"
+                && item.detail.contains("混存数据库")
+                && !item.detail.contains(marker)
+        }),
+        "{blockers:?}"
+    );
+    db.with_connection(|conn| {
+        let saved: String = conn
+            .query_row(
+                "SELECT data FROM auth_accounts WHERE id='omp-acct'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let account: crate::accounts::AuthAccount = serde_json::from_str(&saved).unwrap();
+        assert_eq!(account.state, crate::accounts::AccountState::Error);
+        assert!(account
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("混存数据库") && !detail.contains(marker)));
+        Ok(())
+    })
+    .unwrap();
+}
+
 fn walk_contains(root: &Path, needle: &str) -> bool {
     let mut pending = vec![root.to_path_buf()];
     while let Some(path) = pending.pop() {
