@@ -918,6 +918,11 @@
 .stageAttention:focus-visible { outline: 2px solid var(--term-accent); outline-offset: 1px; }
 /* Same jump as the rail, only while that rail button is off screen. It yields before the icon tools. */
 .stageTail:has(.stageAttention) { flex: 0 1 auto; min-width: 0; }
+/* The group yields its label to the narrow window, but never below the peek entry inside it: a
+   group squeezed past its content would paint that entry under the terminal's own tools. On a
+   tight stage the waiting group therefore holds its width and the identity gives way instead. */
+.stageTail > .terminalActions > .actionGroup:has(> .stageAttention) { flex: 0 1 auto; min-width: min-content; }
+.root[data-tight] .stageTail:has(.stageAttention) { flex: 0 1 auto; min-width: min-content; }
 .stageAttention {
   display: inline-flex;
   flex: 0 1 auto;
@@ -993,6 +998,21 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* A named session carries the CLI it runs as auxiliary identity: dimmer than the name and the
+   state, with the same hairline the stage uses between its identity and its context. */
+.peekTool {
+  position: relative;
+  flex: none;
+  max-width: 10rem;
+  overflow: hidden;
+  padding-left: var(--space-2);
+  color: var(--term-text-3);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.peekTool::before { content: ''; position: absolute; top: 50%; left: 0; width: 1px; height: 12px; background: var(--term-frame); transform: translateY(-50%); }
 .peekState { flex: none; color: var(--term-text-2); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
 .peekActions { display: flex; flex: none; align-items: center; gap: var(--space-1); }
 .peekBody { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; }

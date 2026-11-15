@@ -307,9 +307,9 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
         const data = btoa(String.fromCharCode(...bytes));
         bridge.handlers[bridge.listens['cliora:session-output']]?.({ payload: { sessionId, dataBase64: data } });
       },
-      __bell: () => {
+      __bell: (sessionId = 's4') => {
         const data = btoa('\u0007');
-        bridge.handlers[bridge.listens['cliora:session-output']]?.({ payload: { sessionId: 's4', dataBase64: data } });
+        bridge.handlers[bridge.listens['cliora:session-output']]?.({ payload: { sessionId, dataBase64: data } });
       },
     });
   }, { theme: initialTheme, transcripts: {
@@ -382,7 +382,7 @@ const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
 // Routine desktop review: one example of each distinct primary surface. The
 // exhaustive platform/error/large-list variants remain opt-in via --full/--only.
 const defaultScenes = ['workbench-active', 'workbench-worktrees', 'workbench-ended', 'workbench-appearance',
-  'workbench-composer', 'workbench-dialog', 'workbench-restore-mixed', 'workbench-remote-disconnected', 'workbench-empty'];
+  'workbench-composer', 'workbench-dialog', 'workbench-restore-mixed', 'workbench-remote-disconnected', 'workbench-peek', 'workbench-empty'];
 const defaultPatterns = defaultScenes.flatMap(scene => ['light', 'dark'].map(theme => `${scene}-${theme}-*`));
 if (process.argv.includes('--performance')) defaultPatterns.push('workbench-remote-stream-*');
 const onlyPatterns = option('--only', process.argv.includes('--full') ? '*' : defaultPatterns.join(',')).split(',').map((pattern) => new RegExp('^' + pattern.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$'));
@@ -922,6 +922,24 @@ for (const width of widths) {
   await shot('workbench-attention-' + theme + '-' + width, theme, width, async (page) => {
     await page.evaluate(() => window.__bell());
     await page.getByRole('tab', { name: /Claude Code/ }).click();
+  });
+  // The temporary look over a waiting session: the cover names the session, its CLI and its state.
+  // A docked, expanded rail repeats no waiting jump, so that layout opens the look from the row
+  // menu; the undocked strip keeps its row actions folded away and uses the stage entry.
+  await shot('workbench-peek-' + theme + '-' + width, theme, width, async (page) => {
+    const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });
+    await page.evaluate(() => window.__bell('s2'));
+    const stagePeek = stage.getByRole('toolbar', { name: copy('终端操作', 'Terminal actions') }).getByRole('button', { name: copy('临时查看', 'Peek'), exact: true });
+    // The stage entry appears with the waiting state, which arrives with the bell.
+    const stageEntry = await stagePeek.first().waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
+    if (stageEntry) await stagePeek.first().click();
+    else {
+      await page.locator('[data-drag-id="s2"]').hover();
+      await page.getByRole('button', { name: copy('Claude Code 会话操作', 'Claude Code session actions'), exact: true }).click();
+      await page.getByRole('menu', { name: copy('Claude Code 会话操作', 'Claude Code session actions'), exact: true })
+        .getByRole('menuitem', { name: copy('临时查看', 'Peek'), exact: true }).click();
+    }
+    await page.getByRole('dialog', { name: copy('临时查看', 'Peek') }).waitFor();
   });
   await shot('workbench-focus-' + theme + '-' + width, theme, width, async (page) => {
     await page.getByRole('region', { name: copy('当前会话', 'Current session') }).getByRole('button', { name: copy('专注模式（隐藏侧栏）', 'Focus mode (hide sidebar)') }).click();

@@ -591,7 +591,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
-      setPeekSessionId(null);
+      closePeek();
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
@@ -3224,10 +3224,21 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const stageAttentionTarget = stageAttention[0];
   const peekOffered = !listError && !split && railSessions.length > 1;
   const peekSession = peekSessionId ? scopedSessions.find((item) => item.id === peekSessionId) ?? null : null;
+  const peekTitle = peekSession ? taskTitle(peekSession) : '';
+  const peekTool = peekSession ? toolName(peekSession) : '';
   function openPeek(id: string) {
     if (!peekOffered || !id || id === selectedIdRef.current) return;
     if (!scopedSessions.some((item) => item.id === id)) return;
     setPeekSessionId(id);
+  }
+  // A deliberate close hands the keyboard back to the session the cover was hiding. Every other
+  // way the cover ends (a jump, split, or removal) leaves focus with that action instead.
+  function closePeek() {
+    setPeekSessionId(null);
+    requestAnimationFrame(() => {
+      const id = selectedIdRef.current;
+      if (id) handles.current.get(id)?.focus();
+    });
   }
   function selectSession(id: string, focusTerminal = true) {
     setPeekSessionId(null);
@@ -3396,12 +3407,16 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
               </div>
               <div className={styles.stageTail}>
                 <div className={styles.terminalActions} role="toolbar" aria-label={t('sessions.terminalMenu')}>
-                  {stageAttentionTarget && <button type="button" className={styles.stageAttention} title={stageAttention.map((item) => item.title || item.name).join('\n')} onClick={() => { if (stageAttentionTarget) selectSession(stageAttentionTarget.session.id); }}>
-                    <SessionActivityIcon tone="bell" slot="stage" className={styles.stageAttentionIcon} />
-                    <span>{t('sessions.attentionJump', { count: stageAttention.length })}</span>
-                    <Icon name="arrowRight" size={13} />
-                  </button>}
-                  {stageAttentionTarget && peekOffered && <button type="button" className={styles.stagePeek} onClick={() => openPeek(stageAttentionTarget.session.id)}>{t('sessions.peekSession')}</button>}
+                  {/* Waiting and the temporary look stay in their own group: both are about another
+                      session, while the groups after them act on the terminal in front of the user. */}
+                  {stageAttentionTarget && <span className={styles.actionGroup}>
+                    <button type="button" className={styles.stageAttention} title={stageAttention.map((item) => item.title || item.name).join('\n')} onClick={() => { if (stageAttentionTarget) selectSession(stageAttentionTarget.session.id); }}>
+                      <SessionActivityIcon tone="bell" slot="stage" className={styles.stageAttentionIcon} />
+                      <span>{t('sessions.attentionJump', { count: stageAttention.length })}</span>
+                      <Icon name="arrowRight" size={13} />
+                    </button>
+                    {peekOffered && <button type="button" className={styles.stagePeek} onClick={() => openPeek(stageAttentionTarget.session.id)}>{t('sessions.peekSession')}</button>}
+                  </span>}
                   <span className={`${styles.actionGroup} ${styles.runningActions}`} data-running={current.running || undefined} aria-hidden={current.running ? undefined : true}>
                     <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.composerTrigger}`} aria-label={t('sessions.composerShort')} aria-pressed={composerOpen} title={t('sessions.composerShort') + ` (${modLabel}+Shift+M)`} disabled={!current.running} onClick={() => toggleComposer()} icon={<Icon name="pencil" size={14} />}><span className={styles.toolLabel}>{t('sessions.composerShort')}</span></Button>
                     <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.interruptBtn}`} aria-label={t('sessions.sendInterrupt')} title={t('sessions.sendInterrupt')} disabled={!current.running} onClick={() => void sendToSession(current, '\x03')} icon={<Icon name="ban" size={14} />}><span className={styles.toolLabel}>{t('sessions.interruptShort')}</span></Button>
@@ -3485,11 +3500,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                 {peekSession && <div className={styles.peekOverlay} role="dialog" aria-label={t('sessions.peekSession')}>
                   <div className={styles.peekBar}>
                     <span className={styles.stageIcon} role="img" aria-label={toolName(peekSession)} data-tone={sessionTone(peekSession)} data-peek-icon=""><ToolIcon toolId={peekSession.toolId} size={18} /><SessionActivityIcon tone={sessionTone(peekSession)} slot="stage" className={styles.stageIconDot} /></span>
-                    <h2 className={styles.peekTitle}>{taskTitle(peekSession) ? <SessionTitle title={taskTitle(peekSession)} /> : toolName(peekSession)}</h2>
+                    <h2 className={styles.peekTitle} title={peekTitle ? peekTool + ' · ' + stableTitle(peekTitle) : peekTool}>{peekTitle ? <SessionTitle title={peekTitle} /> : peekTool}</h2>
+                    {/* The icon names the CLI for assistive tech; a session with its own title also
+                        says it visibly, so the cover names the same CLI the stage would. */}
+                    {peekTitle && <span className={styles.peekTool}>{peekTool}</span>}
                     <span className={styles.peekState}>{stateLabel(peekSession, sessionTone(peekSession))}</span>
                     <div className={styles.peekActions}>
                       <Button size="sm" variant="primary" onClick={() => selectSession(peekSession.id)}>{t('sessions.peekOpen')}</Button>
-                      <Button size="sm" onClick={() => setPeekSessionId(null)}>{t('sessions.peekClose')}</Button>
+                      <Button size="sm" onClick={() => closePeek()}>{t('sessions.peekClose')}</Button>
                     </div>
                   </div>
                   <div className={styles.peekBody} />

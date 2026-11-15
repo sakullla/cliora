@@ -4253,3 +4253,126 @@ test('other pages do not show the workbench waiting prompt or temporary look', a
     return !!root?.closest('[hidden]') && !!root.textContent?.includes('临时查看') && !!root.textContent?.includes('1 个会话等你处理');
   })).toBe(true);
 });
+
+test('the stage groups its waiting and peek entries and the cover names the CLI it shows', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, { __twoSessions: true });
+    localStorage.setItem('cliora:language', 'en');
+  });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openWorkbench(page, true);
+  const stage = page.getByRole('region', { name: 'Current session' });
+  const toolbar = stage.getByRole('toolbar', { name: 'Terminal actions' });
+  const dialog = page.getByRole('dialog', { name: 'Peek' });
+  const longTitle = 'Refactor the workbench stage toolbar and keep every session action reachable';
+  const emit = (text: string, sessionId: string) => page.evaluate(([value, id]) => {
+    (window as unknown as { __output: (text: string, sessionId?: string) => void }).__output(value, id);
+  }, [text, sessionId] as const);
+
+  await emit('\u001b]0;' + longTitle + '\u0007', 's2');
+  await emit('\u0007', 's2');
+  await expect(page.locator('[data-drag-id="s2"]')).toHaveAttribute('data-attention');
+  await stage.getByRole('button', { name: 'Focus mode (hide sidebar)' }).click();
+  const waiting = toolbar.getByRole('button', { name: '1 waiting for you' });
+  const peek = toolbar.getByRole('button', { name: 'Peek', exact: true });
+  await expect(waiting).toBeVisible();
+  await expect(peek).toBeVisible();
+
+  // Both entries share one group of their own inside the toolbar, not the toolbar itself.
+  expect(await toolbar.evaluate((node) => {
+    const buttons = [...node.querySelectorAll('button')];
+    const jump = buttons.find((button) => /waiting for you/.test(button.textContent ?? ''));
+    const look = buttons.find((button) => button.textContent?.trim() === 'Peek');
+    return !!jump && !!look && jump.parentElement === look.parentElement && jump.parentElement?.parentElement === node;
+  })).toBe(true);
+  // The hairline the toolbar draws between groups marks that boundary, and the terminal's own
+  // tools keep their room to the right of it.
+  expect(await waiting.evaluate((node) => {
+    const next = node.parentElement?.nextElementSibling;
+    const line = next ? getComputedStyle(next, '::before') : null;
+    return line ? [line.width, line.height, line.visibility] : null;
+  })).toEqual(['1px', '16px', 'visible']);
+  const peekBox = (await peek.boundingBox())!;
+  const findBox = (await toolbar.getByRole('button', { name: 'Find in output', exact: true }).boundingBox())!;
+  expect(findBox.x).toBeGreaterThan(peekBox.x + peekBox.width);
+
+  // Tab order follows the DOM: the temporary look comes right after the waiting jump.
+  await waiting.focus();
+  await page.keyboard.press('Tab');
+  expect(await page.evaluate(() => document.activeElement?.textContent?.trim())).toBe('Peek');
+  await page.keyboard.press('Enter');
+  await expect(dialog).toBeVisible();
+  const heading = dialog.getByRole('heading', { level: 2 });
+  await expect(heading).toHaveText(longTitle);
+  await expect(heading).toHaveAttribute('title', 'Claude Code · ' + longTitle);
+  // Name, CLI and the reported state are all visible beside the two actions.
+  await expect(dialog.getByText('Claude Code', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('Attention', { exact: true })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Open this session', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Close', exact: true })).toBeVisible();
+  await expect(stage.locator('header h2')).toHaveText('Codex');
+
+  // Closing the cover hands the keyboard back to the session that stayed selected.
+  await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('[data-pane-session="s1"] .xterm-helper-textarea')).toBeFocused();
+  await expect(stage.locator('header h2')).toHaveText('Codex');
+  await emit('\u0007', 's2');
+  await peek.click();
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('[data-pane-session="s1"] .xterm-helper-textarea')).toBeFocused();
+});
+
+test('a long covered session title truncates and the waiting entries still fit at 640px', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await page.setViewportSize({ width: 640, height: 860 });
+  await openWorkbench(page);
+  const stage = page.getByRole('region', { name: '当前会话' });
+  const toolbar = stage.getByRole('toolbar', { name: '终端操作' });
+  const dialog = page.getByRole('dialog', { name: '临时查看' });
+  const longTitle = '把工作台顶部待处理跳转与临时查看重新整理成不会挤压终端常用操作的紧凑分组';
+  const noSidewaysScroll = () => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
+  const barFits = () => stage.locator('header').first().evaluate((node) => node.scrollWidth <= node.clientWidth);
+
+  // Both the covered and the current session carry long names: the bar must still keep every
+  // action whole instead of letting them slide under each other.
+  await page.evaluate((title) => {
+    const emit = (window as unknown as { __output: (text: string, sessionId?: string) => void }).__output;
+    emit('\u001b]0;' + title + '\u0007', 's2');
+    emit('\u001b]0;' + title + '（当前）\u0007', 's1');
+  }, longTitle);
+  await expect(stage.locator('header h2')).toContainText('（当前）');
+  await page.evaluate(() => (window as unknown as { __output: (text: string, sessionId?: string) => void }).__output('\u0007', 's2'));
+  await expect(page.locator('[data-drag-id="s2"]')).toHaveAttribute('data-attention');
+  const jump = toolbar.getByRole('button', { name: '1 个会话等你处理' });
+  const peek = toolbar.getByRole('button', { name: '临时查看', exact: true });
+  await expect(jump).toBeVisible();
+  await expect(peek).toBeVisible();
+  expect(await noSidewaysScroll()).toBe(true);
+  expect(await barFits()).toBe(true);
+
+  await peek.click();
+  await expect(dialog).toBeVisible();
+  const heading = dialog.getByRole('heading', { level: 2 });
+  await expect(heading).toContainText(longTitle);
+  expect(await heading.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
+  await expect(dialog.getByText('Claude Code', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('待处理', { exact: true })).toBeVisible();
+  const open = dialog.getByRole('button', { name: '打开此会话', exact: true });
+  const close = dialog.getByRole('button', { name: '关闭', exact: true });
+  await expect(open).toBeVisible();
+  await expect(close).toBeEnabled();
+  const dialogBox = (await dialog.boundingBox())!;
+  for (const button of [open, close]) {
+    const box = (await button.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(dialogBox.x - 1);
+    expect(box.x + box.width).toBeLessThanOrEqual(dialogBox.x + dialogBox.width + 1);
+  }
+  expect(await noSidewaysScroll()).toBe(true);
+  await close.click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('[role="tab"][aria-selected="true"]')).toHaveAttribute('data-session-id', 's1');
+  expect(await noSidewaysScroll()).toBe(true);
+});
