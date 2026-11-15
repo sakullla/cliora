@@ -1,13 +1,13 @@
 import { useRemoteReads, RemoteReadStatus } from '../../lib/remoteReads';
 import { CodeEditor } from '../../components/CodeEditor';
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { confirmAction } from '../../lib/confirm';
 import type { Scope } from '../../types/native';
 import type { McpCommitResult, McpDefinition, McpDraft, McpDraftPreview, McpTargetRequest, NativeMcpEntry } from '../../types/resources';
 import { GuideDialog } from '../../components/GuideDialog';
 import { SearchField } from '../../components/SearchField';
-import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
+import { modLabel, saveShortcutHint, searchShortcutHint, withMod } from '../../lib/shortcut';
 import { Icon } from '../../components/Icon';
 import { StatusBanner } from '../../components/StatusBanner';
 import { useFeedback } from '../../lib/toast';
@@ -18,22 +18,19 @@ import { McpBatchImport, type McpBatchItem } from '../../components/mcp/McpBatch
 import { SkeletonRows } from '../../components/Skeleton';
 import { EmptyState } from '../../components/EmptyState';
 import i18n from '../../i18n';
+import { DocumentFoot, DocumentHeader, DocumentWorkspace, ModeSwitch, documentStyles as doc, type DocumentMode } from './DocumentWorkspace';
 import styles from './McpWorkspace.module.css';
 import { Badge, Button, IconButton } from '../../components/ui';
-import { RowMenu } from '../../components/RowMenu';
 import { ToolIcon } from '../../components/ToolIcon';
-
-type DocumentMode = 'read' | 'edit';
 
 function errorText(error: unknown) {
   return error && typeof error === 'object' && 'message' in error ? String(error.message) : i18n.t('common.operationFailed');
 }
-const SEARCH_THRESHOLD = 6;
 const emptyRows = () => editableRowsOf({});
 
 export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, projectPath, contextId, remoteTargetId = null, onDirtyChange, onOpenLibrary }: {
   toolId: string;
-  /** Shown in the dialogs as the one place a save writes to. */
+  /** Shown in the document as the one place a save writes to. */
   toolName?: string;
   scopeLabel?: string;
   scope: Scope;
@@ -47,21 +44,22 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
   const remoteReads = useRemoteReads(remoteTargetId, JSON.stringify([toolId, scope, projectPath]), true);
   const native = remoteReads.native;
   const id = useId();
+  const [entries, setEntries] = useState<NativeMcpEntry[]>([]);
   const [definitions, setDefinitions] = useState<McpDefinition[]>([]);
-  const [nativeEntries, setNativeEntries] = useState<NativeMcpEntry[]>([]);
   const [listLoading, setListLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [stale, setStale] = useState(false);
+  /** The saved entry the document shows; its working copy lives in the draft below. */
+  const [selected, setSelected] = useState<NativeMcpEntry | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [mode, setMode] = useState<DocumentMode>('read');
   const [draft, setDraft] = useState<McpDraft>(blankMcpDraft);
   const [envRows, setEnvRows] = useState<KeyValueRow[]>(emptyRows);
   const [headerRows, setHeaderRows] = useState<KeyValueRow[]>(emptyRows);
   const [savedFingerprint, setSavedFingerprint] = useState('');
-  const [nativeOrigin, setNativeOrigin] = useState<NativeMcpEntry | null>(null);
   const [enabled, setEnabled] = useState(true);
   const [syncLibrary, setSyncLibrary] = useState(false);
-  const [composing, setComposing] = useState(false);
   const [pasteFirst, setPasteFirst] = useState(false);
-  const [mode, setMode] = useState<DocumentMode>('read');
   const [showIssues, setShowIssues] = useState(false);
   const [formKey, setFormKey] = useState(0);
   const [preview, setPreview] = useState<McpDraftPreview | null>(null);
@@ -79,27 +77,27 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
   const feedback = useFeedback();
   const mounted = useRef(true);
   const loadSequence = useRef(0);
+  // The confirmation takes the keyboard, so Enter/S keeps confirming and cancelling stays one press away.
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (preview) confirmRef.current?.focus(); }, [preview]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; loadSequence.current++; }; }, []);
 
+  const opened = creating || !!selected;
   const currentFingerprint = JSON.stringify([draft, envRows, headerRows, enabled, syncLibrary]);
-  remoteReads.bindWriteDraft(composing || batchItems ? `mcp:${formKey}` : null);
-  const dirty = composing && currentFingerprint !== savedFingerprint;
+  remoteReads.bindWriteDraft(opened || batchItems ? `mcp:${formKey}` : null);
+  const dirty = opened && currentFingerprint !== savedFingerprint;
   useLayoutEffect(() => { onDirtyChange?.(dirty || !!batchItems); }, [dirty, batchItems, onDirtyChange]);
   useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
+  // Page-level notes belong to the toast; a document keeps its own error strip visible.
   useEffect(() => {
-    if (composing || batchItems) return;
-    if (error) { feedback.setError(error); setError(''); }
+    if (batchItems) return;
+    if (error && !opened) { feedback.setError(error); setError(''); }
     if (notice) { feedback.setNotice(notice); setNotice(''); }
-  }, [composing, batchItems, error, notice, feedback]);
-  useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(''), 5000);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
+  }, [opened, batchItems, error, notice, feedback]);
 
   const refreshNative = useCallback(async (fresh = true) => {
     remoteReads.rebaseWriteAction();
-    if (!toolId || (scope === 'project' && !project)) { setNativeEntries([]); setListLoading(false); return; }
+    if (!toolId || (scope === 'project' && !project)) { setEntries([]); setListLoading(false); return; }
     const request = ++loadSequence.current;
     setListLoading(true);
     try {
@@ -107,14 +105,14 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
         ? ((await native.getRemoteResourceStore(remoteTargetId, toolId, 'mcp', { fresh }) as { entries?: NativeMcpEntry[] }).entries ?? [])
         : await native.listNativeMcp(readTarget);
       if (!mounted.current || request !== loadSequence.current) return;
-      setNativeEntries(value); setLoadError(''); setStale(false);
+      setEntries(value); setLoadError(''); setStale(false);
     } catch (value) {
       if (!mounted.current || request !== loadSequence.current) return;
-      setLoadError(errorText(value)); setStale(nativeEntries.length > 0);
+      setLoadError(errorText(value)); setStale(entries.length > 0);
     } finally {
       if (mounted.current && request === loadSequence.current) setListLoading(false);
     }
-  }, [toolId, scope, project, readTarget, nativeEntries.length, remoteTargetId, native]);
+  }, [toolId, scope, project, readTarget, entries.length, remoteTargetId, native]);
   useEffect(() => { if (remoteReads.active) void refreshNative(false); }, [toolId, scope, project, contextId, remoteTargetId, refreshNative]);
   useEffect(() => {
     if (remoteTargetId) {
@@ -131,48 +129,62 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
   const linked = definitions.find(item => item.id === draft.id) ?? definitions.find(item => item.name === draft.name.trim());
   const linkedInLibrary = !!linked && linked.inLibrary !== false;
   const needle = search.trim().toLowerCase();
-  const shown = needle ? nativeEntries.filter(item => (item.name + ' ' + mcpSummary(item)).toLowerCase().includes(needle)) : nativeEntries;
+  const shown = needle ? entries.filter(item => (item.name + ' ' + mcpSummary(item)).toLowerCase().includes(needle)) : entries;
+  const openedLibrary = selected ? libraryFor(selected.name) : undefined;
 
   function resetForm(next: McpDraft, nextEnv: KeyValueRow[], nextHeaders: KeyValueRow[], nextEnabled: boolean, nextSync = false) {
     setDraft(next); setEnvRows(nextEnv); setHeaderRows(nextHeaders); setEnabled(nextEnabled); setSyncLibrary(nextSync);
     setSavedFingerprint(JSON.stringify([next, nextEnv, nextHeaders, nextEnabled, nextSync]));
     setShowIssues(false); setPreview(null); setAllowReplace(false); setCommitResults(null); setImportSource(''); setFormKey(value => value + 1);
   }
+  /** The one confirmation for leaving a draft: switching entries, closing or replacing it. */
   async function canReplace() {
     const started = currentFingerprint;
     const pending = dirty || !!batchItems || !!preview;
     return !pending || confirmAction(t('tools.mcp.confirmDiscard'), () => mounted.current && currentFingerprint === started, { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') });
   }
-  async function startNew(paste = false) {
-    if (!await canReplace()) return;
-    setPasteFirst(paste);
-    setNativeOrigin(null); setMode('edit'); resetForm(blankMcpDraft(), emptyRows(), emptyRows(), true);
-    setComposing(true); setError(''); setNotice('');
-  }
-  function editNative(item: NativeMcpEntry, edit = false) {
-    if (busy) return;
+  /** Shows a saved entry; a working copy that differs from it stays dirty in either mode. */
+  function loadEntry(item: NativeMcpEntry, edit = false) {
     const found = definitions.find(definition => definition.name === item.name);
     const next: McpDraft = { id: found?.id ?? null, name: item.name, transport: item.transport, command: item.command, args: item.args, cwd: item.cwd ?? '', url: item.url,
       env: item.env, headers: item.headers, inLibrary: found?.inLibrary === true, expectedVersion: found?.version ?? null };
     setPasteFirst(false);
-    setNativeOrigin(item); setMode(edit ? 'edit' : 'read'); resetForm(next, editableRowsOf(item.env), editableRowsOf(item.headers), item.enabled);
-    setComposing(true); setError(''); setNotice('');
+    setCreating(false); setSelected(item); setMode(edit ? 'edit' : 'read');
+    resetForm(next, editableRowsOf(item.env), editableRowsOf(item.headers), item.enabled);
+    setError(''); setNotice('');
+  }
+  function clearDocument() {
+    setCreating(false); setSelected(null); setMode('read');
+    resetForm(blankMcpDraft(), emptyRows(), emptyRows(), true);
+    setError('');
+  }
+  async function startNew(paste = false) {
+    if (!await canReplace()) return;
+    setPasteFirst(paste);
+    setCreating(true); setSelected(null); setMode('edit');
+    resetForm(blankMcpDraft(), emptyRows(), emptyRows(), true);
+    setError(''); setNotice('');
   }
   async function openEntry(item: NativeMcpEntry, edit = false) {
     if (busy) return;
-    if (composing && nativeOrigin?.name === item.name) { if (edit) setMode('edit'); return; }
+    if (!creating && selected?.name === item.name) { if (edit) setMode('edit'); return; }
     if (!await canReplace()) return;
-    editNative(item, edit);
+    loadEntry(item, edit);
   }
-  /** Leaves editing for the details of the same entry, asking first when the form changed. */
-  async function backToDetails() {
-    if (!nativeOrigin || !await canReplace()) return;
-    editNative(nativeOrigin);
+  async function closeDocument() {
+    if (!await canReplace()) return;
+    clearDocument();
   }
-  async function closeCompose() {
+  /** Drops the working copy and returns to what is saved, without losing the entry itself. */
+  async function revertDraft() {
+    if (!await canReplace()) return;
+    if (selected) loadEntry(selected);
+    else clearDocument();
+  }
+  async function closeBatch() {
     if (!await canReplace()) return;
     setBatchItems(null); setImportSource('');
-    setComposing(false); setPreview(null); setCommitResults(null); setError('');
+    clearDocument();
   }
   function normalizedDraft() {
     return { ...draft, name: draft.name.trim(), args: keptMcpArgs(draft.args), cwd: mcpCwdOf(draft), id: linked?.id ?? draft.id,
@@ -180,20 +192,29 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
       env: recordOfRows(envRows), headers: recordOfRows(headerRows) };
   }
   async function save() {
+    if (!opened) return;
     if (scope === 'project' && !project) { setError(t('tools.mcp.pickProject')); return; }
     if (hasMcpIssues(mcpDraftIssues(draft))) { setShowIssues(true); return; }
     setBusy(true); setError('');
     try {
       const next = normalizedDraft();
+      const nextEnabled = enabled;
       if (remoteTargetId) {
         const current = await native.getRemoteResourceStore(remoteTargetId, toolId, 'mcp', { fresh: true }) as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
-        const entry: NativeMcpEntry = { name: next.name, transport: next.transport, command: next.command, args: next.args, cwd: next.cwd, url: next.url, env: next.env, headers: next.headers, inLibrary: next.inLibrary, enabled, protectedValues: false };
+        const entry: NativeMcpEntry = { name: next.name, transport: next.transport, command: next.command, args: next.args, cwd: next.cwd, url: next.url, env: next.env, headers: next.headers, inLibrary: next.inLibrary, enabled: nextEnabled, protectedValues: false };
         const entries = [...(current.entries ?? []).filter(item => item.name !== entry.name), entry];
         const definition: McpDefinition = { id: next.id ?? crypto.randomUUID(), name: next.name, transport: next.transport, command: next.command, args: next.args, cwd: next.cwd, url: next.url, env: next.env, headers: next.headers, inLibrary: next.inLibrary, version: (current.definitions ?? []).find(item => item.id === next.id)?.version ?? 1 };
         await native.saveRemoteResourceStore(remoteTargetId, toolId, 'mcp', { entries, definitions: [...(current.definitions ?? []).filter(item => item.id !== definition.id), definition] });
-        await refreshNative(); setDefinitions(value => [...value.filter(item => item.id !== definition.id), definition]); setComposing(false); setMode('read'); setNotice(t('tools.mcp.written')); return;
+        await refreshNative();
+        if (!mounted.current) return;
+        setDefinitions(value => [...value.filter(item => item.id !== definition.id), definition]);
+        setSelected(entry); setCreating(false); setMode('read');
+        resetForm({ ...next, id: definition.id, expectedVersion: definition.version, inLibrary: definition.inLibrary }, editableRowsOf(entry.env), editableRowsOf(entry.headers), entry.enabled);
+        setNotice(t('tools.mcp.written'));
+        return;
       }
-      setPreview(await native.previewMcpDraft(next, [{ ...target, enabled }])); setAllowReplace(false); setCommitResults(null);
+      setPreview(await native.previewMcpDraft(next, [{ ...target, enabled: nextEnabled }]));
+      setAllowReplace(false); setCommitResults(null);
     }
     catch (value) { setError(errorText(value)); }
     finally { if (mounted.current) setBusy(false); }
@@ -216,12 +237,19 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
       setDefinitions(current => [...current.filter(item => item.id !== result.definition.id), result.definition]);
       const written = result.targets.length > 0 && result.targets.every(item => item.status === 'written');
       await refreshNative();
+      if (!mounted.current) return;
       if (written) {
-        setComposing(false); setPreview(null);
+        const definition = result.definition;
+        const entry: NativeMcpEntry = { name: definition.name, transport: definition.transport, command: definition.command, args: definition.args, cwd: definition.cwd, url: definition.url, env: definition.env, headers: definition.headers, inLibrary: definition.inLibrary, enabled, protectedValues: false };
+        setSelected(entry); setCreating(false); setMode('read');
+        resetForm(mcpDraftOf(definition), editableRowsOf(definition.env), editableRowsOf(definition.headers), entry.enabled);
         setNotice(t('tools.mcp.written'));
       } else {
-        setPreview(null); setDraft(mcpDraftOf(result.definition)); setSavedFingerprint(JSON.stringify([mcpDraftOf(result.definition), envRows, headerRows, enabled, syncLibrary]));
-        setError(t('tools.mcp.partialFailed'));
+        // The definition was saved, but at least one target was not; the draft stays, now marked saved.
+        const saved = mcpDraftOf(result.definition);
+        setDraft(saved);
+        setSavedFingerprint(JSON.stringify([saved, envRows, headerRows, enabled, syncLibrary]));
+        setPreview(null); setCommitResults(result); setError(t('tools.mcp.partialFailed'));
       }
     } catch (value) { if (mounted.current) setError(errorText(value)); }
     finally { if (mounted.current) setBusy(false); }
@@ -234,7 +262,7 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
   function importJson(parsed: McpParsedServer[], source: string) {
     // Explicit names are claimed first, so a generated default never takes a name a later entry carries.
     const explicit = parsed.map(server => server.name.trim() || (parsed.length === 1 ? draft.name.trim() : ''));
-    const taken = new Set([...definitions.map(item => item.name), ...nativeEntries.map(item => item.name), ...explicit.filter(Boolean)]);
+    const taken = new Set([...definitions.map(item => item.name), ...entries.map(item => item.name), ...explicit.filter(Boolean)]);
     const items = parsed.map((server, index): McpBatchItem => {
       let name = explicit[index];
       const generatedName = !name;
@@ -263,136 +291,166 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
       }
       if (!remoteTargetId && !inLibrary && found) await native.deleteMcpDefinition(found.id, found.version);
       if (!remoteTargetId) setDefinitions(await native.listMcpDefinitions());
-      await refreshNative(); setComposing(false); setMode('read'); setNotice(t('tools.mcp.deleted'));
+      await refreshNative();
+      if (!mounted.current) return;
+      clearDocument(); setNotice(t('tools.mcp.deleted'));
     } catch (value) { setError(errorText(value)); }
     finally { if (mounted.current) setBusy(false); }
   }
+  function onKey(event: KeyboardEvent<HTMLElement>) {
+    if (!withMod(event) || event.key.toLowerCase() !== 's') return;
+    event.preventDefault();
+    if (event.repeat || busy || !opened) return;
+    if (preview) { if (committable && (!conflicted || allowReplace)) void commit(); return; }
+    if (draft.name.trim() && !(scope === 'project' && !project)) void save();
+  }
 
   const canAdd = !(busy || (scope === 'project' && !project));
-  const editing = mode === 'edit' || !nativeOrigin;
-  const dialogTitle = !nativeOrigin ? t('tools.mcp.newTitle') : editing ? t('tools.mcp.editTitle') : nativeOrigin.name;
-  const openedLibrary = nativeOrigin ? libraryFor(nativeOrigin.name) : undefined;
   const conflicted = !!preview && preview.targets.some(item => item.status === 'conflict');
   const committable = !!preview && preview.targets.some(item => item.status === 'ready' || item.status === 'conflict');
   const where = [toolName, scopeLabel].filter(Boolean).join(' · ');
-  const remoteOrigin = !!nativeOrigin && isRemoteMcp(nativeOrigin.transport);
 
   let listBody: ReactNode;
-  if (listLoading && !nativeEntries.length) listBody = <div role="status" aria-label={t('tools.mcp.loading')}><SkeletonRows count={3} /></div>;
-  else if (loadError && !nativeEntries.length) listBody = <div className={styles.empty}><StatusBanner tone="error">{loadError}</StatusBanner><p>{t('tools.mcp.blocked')}</p><Button icon={<Icon name="refresh" size={14} />} onClick={() => void refreshNative()}>{t('tools.plugins.rescan')}</Button></div>;
-  else if (!nativeEntries.length) listBody = <EmptyState icon="connections" title={t('tools.mcp.emptyTitle')} detail={[t('tools.mcp.emptyDetail'), scope === 'project' && !project ? t('tools.mcp.pickProjectFirst') : ''].filter(Boolean).join(' ')} action={<div className={styles.emptyActions}><Button variant="primary" disabled={!canAdd} icon={<Icon name="plus" size={14} />} onClick={() => void startNew()}>{t('tools.mcp.add')}</Button><Button disabled={!canAdd} icon={<Icon name="clipboard" size={14} />} onClick={() => void startNew(true)}>{t('library.resources.pasteCreate')}</Button></div>} />;
-  else if (!shown.length) listBody = <div className={styles.noMatch}><Icon name="search" size={18} /><p>{t('tools.mcp.noMatch', { query: search.trim() })}</p><Button size="sm" onClick={() => setSearch('')}>{t('tools.mcp.clearSearch')}</Button></div>;
-  else listBody = <ul className={styles.list} aria-label={t('tools.mcp.title')}>{shown.map(item => {
+  if (listLoading && !entries.length) listBody = <div className={styles.listWrap} role="status" aria-label={t('tools.mcp.loading')}><SkeletonRows count={3} /></div>;
+  else if (loadError && !entries.length) listBody = <div className={styles.listWrap}><div className={styles.blocked}><StatusBanner tone="error">{loadError}</StatusBanner><p>{t('tools.mcp.blocked')}</p><Button icon={<Icon name="refresh" size={14} />} onClick={() => void refreshNative()}>{t('tools.plugins.rescan')}</Button></div></div>;
+  else if (!entries.length) listBody = <div className={styles.listWrap}><EmptyState icon="connections" title={t('tools.mcp.emptyTitle')} detail={[t('tools.mcp.emptyDetail'), scope === 'project' && !project ? t('tools.mcp.pickProjectFirst') : ''].filter(Boolean).join(' ')} action={<div className={styles.emptyActions}><Button variant="primary" disabled={!canAdd} icon={<Icon name="plus" size={14} />} onClick={() => void startNew()}>{t('tools.mcp.add')}</Button><Button disabled={!canAdd} icon={<Icon name="clipboard" size={14} />} onClick={() => void startNew(true)}>{t('library.resources.pasteCreate')}</Button></div>} /></div>;
+  else if (!shown.length) listBody = <div className={styles.listWrap}><div className={doc.noMatch}><Icon name="search" size={18} /><p>{t('tools.mcp.noMatch', { query: search.trim() })}</p><Button size="sm" onClick={() => setSearch('')}>{t('tools.mcp.clearSearch')}</Button></div></div>;
+  else listBody = <div className={styles.listWrap}><ul className={doc.rows} aria-label={t('tools.mcp.title')}>{shown.map(item => {
+    // The row opens the document; a double-click goes straight to editing.
     const summary = mcpSummary(item);
     const inLibrary = libraryFor(item.name);
     const remote = isRemoteMcp(item.transport);
-    return <li key={item.name} className={styles.row} data-mcp-name={item.name} data-disabled={!item.enabled || undefined} data-open={composing && nativeOrigin?.name === item.name || undefined}>
-      {/* The row opens the details; a double-click goes straight to editing. */}
-      <button type="button" className={styles.rowOpen} aria-label={t('tools.mcp.rowOpen', { name: item.name })} title={t('tools.mcp.doubleClickHint')} disabled={busy} onClick={() => void openEntry(item)} onDoubleClick={() => void openEntry(item, true)}>
-        <span className={styles.glyph} data-transport={item.transport} aria-hidden="true"><Icon name={remote ? 'globe' : 'terminal'} size={18} /></span>
-        <span className={styles.main}>
-          <strong>{item.name}</strong>
-          <Badge className={styles.transport} tone={remote ? 'info' : 'neutral'}>{mcpTransportBadge(item.transport)}</Badge>
-          {inLibrary && <Badge tone="info">{t('tools.mcp.inLibrary')}</Badge>}
-          {item.protectedValues && <span className={styles.lock} title={t('tools.mcp.detailProtected')}><Icon name="lock" size={12} /></span>}
+    return <li key={item.name}>
+      <button type="button" className={doc.row} aria-current={!creating && selected?.name === item.name ? 'true' : undefined} data-disabled={!item.enabled || undefined} aria-label={t('tools.mcp.rowOpen', { name: item.name })} title={t('tools.mcp.doubleClickHint')} disabled={busy} onClick={() => void openEntry(item)} onDoubleClick={() => void openEntry(item, true)}>
+        <span className={doc.rowTitle}><Icon name={remote ? 'globe' : 'terminal'} size={14} /><strong>{item.name}</strong>{inLibrary && <Badge tone="info">{t('tools.mcp.inLibrary')}</Badge>}</span>
+        <span className={doc.rowSummary}>{summary || t(remote ? 'library.resources.noUrl' : 'library.resources.noCommand')}</span>
+        <span className={doc.rowMeta}>
+          <Badge>{mcpTransportBadge(item.transport)}</Badge>
+          <Badge tone={item.enabled ? 'success' : 'neutral'} dot>{item.enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</Badge>
+          {item.protectedValues && <Badge><Icon name="lock" size={10} />{t('tools.mcp.detailProtected')}</Badge>}
         </span>
-        <code className={styles.command} title={summary}>{summary || t(remote ? 'library.resources.noUrl' : 'library.resources.noCommand')}</code>
       </button>
-      <span className={styles.state} data-on={item.enabled || undefined}>{item.enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</span>
-      <div className={styles.rowActions} role="group" aria-label={t('library.page.itemActions', { title: item.name })}>
-        <Button variant="ghost" size="sm" disabled={busy} aria-label={t('tools.mcp.rowEdit', { name: item.name })} icon={<Icon name="pencil" size={14} />} onClick={() => void openEntry(item, true)}>{t('tools.mcp.edit')}</Button>
-        <RowMenu label={t('library.resources.rowMenu', { name: item.name })}>
-          {inLibrary && onOpenLibrary && <button type="button" role="menuitem" onClick={() => onOpenLibrary(inLibrary.id)}><Icon name="library" size={14} /><span>{t('tools.mcp.openLibrary')}</span></button>}
-          <button type="button" role="menuitem" data-danger="true" disabled={busy} onClick={() => void removeNative(item)}><Icon name="trash" size={14} /><span>{t('tools.mcp.removeFromTool')}</span></button>
-        </RowMenu>
-      </div>
     </li>;
-  })}</ul>;
+  })}</ul></div>;
+
+  const side = <aside className={styles.side} aria-label={t('tools.mcp.targetTitle')}>
+    <div className={styles.target}>
+      <span className={styles.sideLabel}>{t('tools.mcp.targetTitle')}</span>
+      <span className={styles.targetPlace}><ToolIcon toolId={toolId} size={22} /><span><strong>{toolName || toolId}</strong>{scopeLabel && <small title={project ?? undefined}>{scopeLabel}</small>}</span></span>
+      <small className={styles.sideNote}>{t(remoteTargetId ? 'tools.mcp.targetRemoteHint' : 'tools.mcp.targetHint')}</small>
+    </div>
+    <label className={styles.option}>
+      <input type="checkbox" checked={enabled} disabled={busy || !!preview} aria-labelledby={id + '-enabled-label'} aria-describedby={id + '-enabled'} onChange={event => setEnabled(event.target.checked)} />
+      <span><strong id={id + '-enabled-label'}>{t('tools.mcp.enabledLabel')}</strong><small id={id + '-enabled'}>{t('tools.mcp.enabledHint')}</small></span>
+    </label>
+    {!linkedInLibrary && <label className={styles.option}>
+      <input type="checkbox" checked={syncLibrary} disabled={busy || !!preview} aria-labelledby={id + '-library-label'} aria-describedby={id + '-library'} onChange={event => setSyncLibrary(event.target.checked)} />
+      <span><strong id={id + '-library-label'}>{t('tools.mcp.alsoLibrary')}</strong><small id={id + '-library'}>{t('tools.mcp.alsoLibraryHint')}</small></span>
+    </label>}
+  </aside>;
+
+  // Editing keeps the same document: the form, where it writes to, and any earlier write result.
+  const editor = <div className={doc.scroll}>
+    <div className={styles.editor}>
+      <div className={styles.editorForm}>
+        {linkedInLibrary && <p className={styles.linkedNote}><Icon name="info" size={14} />{t('tools.mcp.linkedNote', { name: linked?.name ?? draft.name })}</p>}
+        <fieldset className={styles.formFields} disabled={busy || !!preview}>
+          <McpFormFields key={formKey} title={t('library.resources.connectionTitle')} draft={draft} onChange={setDraft} envRows={envRows} onEnvRowsChange={setEnvRows} headerRows={headerRows} onHeaderRowsChange={setHeaderRows} showIssues={showIssues} onImport={importJson} initialPasteOpen={pasteFirst} initialPasteText={importSource} />
+        </fieldset>
+      </div>
+      {side}
+    </div>
+    {commitResults && <div className={styles.results}>{commitResults.targets.map((item, index) => <p key={index} data-status={item.status}>{item.status}: {item.detail}</p>)}</div>}
+  </div>;
+
+  // The preview is its own surface: the form is not being edited while a write is confirmed.
+  const review = preview ? <div className={doc.scroll}>
+    <div className={styles.review}>
+      <div className={styles.preview} role="group" aria-label={t('tools.mcp.previewLabel')} data-conflict={conflicted || undefined}>
+        <strong><Icon name={conflicted ? 'alert' : 'check'} size={14} />{conflicted ? t('tools.mcp.conflictTitle') : t('tools.mcp.previewTitle')}</strong>
+        {preview.targets.map((item, index) => <div key={index} className={styles.previewTarget} data-status={item.status}><p>{item.detail}</p>{item.status === 'conflict' && <div className={styles.diff}><CodeEditor compact label={t('tools.mcp.conflictCurrent')} format="json" readOnly value={JSON.stringify(item.existing, null, 2)} /><CodeEditor compact label={t('tools.mcp.conflictNext')} format="json" readOnly value={JSON.stringify(item.proposed, null, 2)} /></div>}</div>)}
+        {conflicted && <label className={styles.replace}><input type="checkbox" checked={allowReplace} disabled={busy} onChange={event => setAllowReplace(event.target.checked)} />{t('tools.mcp.batchReplace')}</label>}
+      </div>
+    </div>
+  </div> : null;
+
+  const foot = preview
+    ? <div className={doc.foot}>
+      <span className={doc.footNote} />
+      <Button disabled={busy} onClick={() => { setPreview(null); setAllowReplace(false); }}>{t('library.resources.back')}</Button>
+      <Button ref={confirmRef} variant="primary" disabled={busy || conflicted && !allowReplace || !committable} onClick={() => void commit()}>{t('tools.mcp.confirmWrite')}</Button>
+    </div>
+    : mode === 'edit' || creating || dirty
+      ? <DocumentFoot dirty={dirty} note={t('common.document.saveHint', { mod: modLabel })}>
+        <Button disabled={busy} onClick={() => void revertDraft()}>{creating ? t('common.dialog.cancel') : t('tools.mcp.cancelEdit')}</Button>
+        <Button variant="primary" title={saveShortcutHint()} disabled={busy || !draft.name.trim() || scope === 'project' && !project} onClick={() => void save()}>{selected || draft.id ? t('home.launcher.save') : t('tools.mcp.addSubmit')}</Button>
+      </DocumentFoot>
+      : null;
+
+  const errorStrip = error ? <p className={doc.strip} data-tone="error" role="alert"><Icon name="alert" size={14} /><span>{error}</span></p> : null;
+
+  const document = creating
+    ? <article className={doc.doc} aria-label={t('tools.mcp.newTitle')}>
+      <DocumentHeader title={t('tools.mcp.newTitle')} badges={<Badge>{mcpTransportBadge(draft.transport)}</Badge>} meta={<><ToolIcon toolId={toolId} size={14} /><span>{where || toolId}</span></>} />
+      {errorStrip}
+      {review ?? editor}
+      {foot}
+    </article>
+    : selected
+      ? <article className={doc.doc} aria-label={selected.name}>
+        <DocumentHeader
+          title={selected.name}
+          badges={<>
+            <Badge tone={isRemoteMcp(selected.transport) ? 'info' : 'neutral'}>{mcpTransportBadge(selected.transport)}</Badge>
+            <Badge tone={enabled ? 'success' : 'neutral'} dot>{enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</Badge>
+            {linkedInLibrary && <Badge tone="info">{t('tools.mcp.inLibrary')}</Badge>}
+            {selected.protectedValues && <Badge><Icon name="lock" size={10} />{t('tools.mcp.detailProtected')}</Badge>}
+          </>}
+          tools={<>
+            {!preview && <ModeSwitch mode={mode} editable disabled={busy} onChange={setMode} />}
+            {openedLibrary && onOpenLibrary && <IconButton size="sm" className={doc.iconButton} aria-label={t('tools.mcp.openLibrary')} title={t('tools.mcp.openLibrary')} onClick={() => onOpenLibrary(openedLibrary.id)} icon={<Icon name="library" size={15} />} />}
+            <IconButton size="sm" className={doc.iconButton} data-tone="danger" aria-label={t('tools.mcp.removeFromTool')} title={t('tools.mcp.removeFromTool')} disabled={busy} onClick={() => void removeNative(selected)} icon={<Icon name="trash" size={15} />} />
+          </>}
+          meta={<><ToolIcon toolId={toolId} size={14} /><span>{where || toolId}</span>{remoteTargetId && <span>{t('tools.mcp.targetRemoteHint')}</span>}</>}
+        />
+        {errorStrip}
+        {review ?? (mode === 'read'
+          ? <div className={doc.body}><div className={doc.readColumn}><section aria-label={t('tools.mcp.detailsLabel')}><McpDetails key={selected.name} statusInHeader item={{ ...selected, enabled }} /></section></div></div>
+          : editor)}
+        {foot}
+      </article>
+      : null;
 
   return <>
-    <section className={styles.layout} aria-label={t('tools.mcp.title')}>
-      <header className={styles.head} role="group" aria-label={t('tools.mcp.toolbar')}>
-        <div className={styles.headTitle}>
-          <span className={styles.heading}>{t('tools.mcp.title')}</span>
-          {nativeEntries.length > 0 && <span className={styles.count}>{needle ? t('tools.mcp.countFiltered', { filtered: shown.length, total: nativeEntries.length }) : t('tools.mcp.activeCount', { count: nativeEntries.length })}</span>}
-        </div>
-        <div className={styles.headActions}>
-          <IconButton size="sm" aria-label={t('tools.plugins.rescan')} title={t('tools.plugins.rescan')} disabled={listLoading || busy} data-spinning={listLoading || undefined} onClick={() => void refreshNative()} icon={<Icon name="refresh" size={15} />} />
-          <Button variant="primary" size="sm" disabled={!canAdd} icon={<Icon name="plus" size={14} />} onClick={() => void startNew()}>{t('tools.mcp.add')}</Button>
-        </div>
-      </header>
-      <p className={styles.hint}>{t('tools.mcp.description')}</p>
-      {(nativeEntries.length >= SEARCH_THRESHOLD || !!needle) && <SearchField type="search" className={styles.search} pageSearch title={searchShortcutHint()} label={t('tools.mcp.searchLabel')} placeholder={t('tools.mcp.searchPlaceholder')} value={search} onChange={setSearch} />}
-      <RemoteReadStatus state={remoteReads} />
-      {stale && <StatusBanner tone="warning">{t('tools.mcp.stale')}</StatusBanner>}
-      {loadError && nativeEntries.length > 0 && <div className={styles.retry}><StatusBanner tone="error">{loadError}</StatusBanner><Button size="sm" onClick={() => void refreshNative()}>{t('tools.plugins.rescan')}</Button></div>}
-      {listBody}
-    </section>
-
-    {/* One dialog reads, adds and edits; switching from reading to editing keeps the place. */}
-    <GuideDialog wide open={composing && !batchItems} title={dialogTitle} hint={editing ? t('tools.mcp.dialogHint') : undefined} onClose={() => void closeCompose()}>
-      {composing && (editing ? <>
-        <div className={styles.editor}>
-          <div className={styles.editorForm}>
-            {linkedInLibrary && <p className={styles.linkedNote}><Icon name="info" size={14} />{t('tools.mcp.linkedNote', { name: linked?.name ?? draft.name })}</p>}
-            <fieldset className={styles.formFields} disabled={busy || !!preview}>
-              <McpFormFields key={formKey} title={t('library.resources.connectionTitle')} draft={draft} onChange={setDraft} envRows={envRows} onEnvRowsChange={setEnvRows} headerRows={headerRows} onHeaderRowsChange={setHeaderRows} showIssues={showIssues} onImport={importJson} initialPasteOpen={pasteFirst} initialPasteText={importSource} />
-            </fieldset>
-          </div>
-          <aside className={styles.side} aria-label={t('tools.mcp.targetTitle')}>
-            <div className={styles.target}>
-              <span className={styles.sideLabel}>{t('tools.mcp.targetTitle')}</span>
-              <span className={styles.targetPlace}><ToolIcon toolId={toolId} size={22} /><span><strong>{toolName || toolId}</strong>{scopeLabel && <small title={project ?? undefined}>{scopeLabel}</small>}</span></span>
-              <small className={styles.sideNote}>{t(remoteTargetId ? 'tools.mcp.targetRemoteHint' : 'tools.mcp.targetHint')}</small>
-            </div>
-            <label className={styles.option}>
-              <input type="checkbox" checked={enabled} disabled={busy || !!preview} aria-labelledby={id + '-enabled-label'} aria-describedby={id + '-enabled'} onChange={event => setEnabled(event.target.checked)} />
-              <span><strong id={id + '-enabled-label'}>{t('tools.mcp.enabledLabel')}</strong><small id={id + '-enabled'}>{t('tools.mcp.enabledHint')}</small></span>
-            </label>
-            {!linkedInLibrary && <label className={styles.option}>
-              <input type="checkbox" checked={syncLibrary} disabled={busy || !!preview} aria-labelledby={id + '-library-label'} aria-describedby={id + '-library'} onChange={event => setSyncLibrary(event.target.checked)} />
-              <span><strong id={id + '-library-label'}>{t('tools.mcp.alsoLibrary')}</strong><small id={id + '-library'}>{t('tools.mcp.alsoLibraryHint')}</small></span>
-            </label>}
-          </aside>
-          {(preview || commitResults) && <div className={styles.review}>
-            {preview && <div className={styles.preview} role="group" aria-label={t('tools.mcp.previewLabel')} data-conflict={conflicted || undefined}>
-              <strong><Icon name={conflicted ? 'alert' : 'check'} size={14} />{conflicted ? t('tools.mcp.conflictTitle') : t('tools.mcp.previewTitle')}</strong>
-              {preview.targets.map((item, index) => <div key={index} className={styles.previewTarget} data-status={item.status}><p>{item.detail}</p>{item.status === 'conflict' && <div className={styles.diff}><CodeEditor compact label={t('tools.mcp.conflictCurrent')} format="json" readOnly value={JSON.stringify(item.existing, null, 2)} /><CodeEditor compact label={t('tools.mcp.conflictNext')} format="json" readOnly value={JSON.stringify(item.proposed, null, 2)} /></div>}</div>)}
-              {conflicted && <label className={styles.replace}><input type="checkbox" checked={allowReplace} disabled={busy} onChange={event => setAllowReplace(event.target.checked)} />{t('tools.mcp.batchReplace')}</label>}
-            </div>}
-            {commitResults && <div className={styles.results}>{commitResults.targets.map((item, index) => <p key={index} data-status={item.status}>{item.status}: {item.detail}</p>)}</div>}
-          </div>}
-        </div>
-        {error && <p className={styles.error} role="alert">{error}</p>}
-        <div className="dialog-footer">
-          {nativeOrigin && <Button variant="ghost" className={styles.danger} disabled={busy} icon={<Icon name="trash" size={14} />} onClick={() => void removeNative(nativeOrigin)}>{t('tools.mcp.removeFromTool')}</Button>}
-          <span className="dialog-footer-gap" />
-          {dirty && !preview && <span className={styles.dirty}>{t('library.page.dirtyState')}</span>}
-          {preview ? <Button disabled={busy} onClick={() => { setPreview(null); setAllowReplace(false); }}>{t('library.resources.back')}</Button>
-            : nativeOrigin ? <Button disabled={busy} onClick={() => void backToDetails()}>{t('tools.mcp.cancelEdit')}</Button> : <Button disabled={busy} onClick={() => void closeCompose()}>{t('common.dialog.cancel')}</Button>}
-          {preview ? <Button variant="primary" data-dialog-save disabled={busy || conflicted && !allowReplace || !committable} onClick={() => void commit()}>{t('tools.mcp.confirmWrite')}</Button>
-            : <Button variant="primary" data-dialog-save title={saveShortcutHint()} disabled={busy || !draft.name.trim() || scope === 'project' && !project} onClick={() => void save()}>{nativeOrigin || draft.id ? t('home.launcher.save') : t('tools.mcp.addSubmit')}</Button>}
-        </div>
-      </> : nativeOrigin && <>
-        <div className={styles.detailBadges}>
-          <Badge tone={remoteOrigin ? 'info' : 'neutral'}>{mcpTransportBadge(nativeOrigin.transport)}</Badge>
-          <Badge tone={enabled ? 'success' : 'neutral'} dot>{enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</Badge>
-          {openedLibrary && <Badge tone="info">{t('tools.mcp.inLibrary')}</Badge>}
-          {where && <span className={styles.detailWhere}><ToolIcon toolId={toolId} size={16} />{where}</span>}
-        </div>
-        <section className={styles.details} aria-label={t('tools.mcp.detailsLabel')}>
-          <McpDetails key={nativeOrigin.name} statusInHeader item={{ ...nativeOrigin, enabled }} />
-        </section>
-        {error && <p className={styles.error} role="alert">{error}</p>}
-        <div className="dialog-footer">
-          <Button variant="ghost" className={styles.danger} disabled={busy} icon={<Icon name="trash" size={14} />} onClick={() => void removeNative(nativeOrigin)}>{t('tools.mcp.removeFromTool')}</Button>
-          <span className="dialog-footer-gap" />
-          {openedLibrary && onOpenLibrary && <Button icon={<Icon name="library" size={14} />} onClick={() => { setComposing(false); onOpenLibrary(openedLibrary.id); }}>{t('tools.mcp.openLibrary')}</Button>}
-          <Button variant="primary" disabled={busy} icon={<Icon name="pencil" size={14} />} onClick={() => setMode('edit')}>{t('tools.mcp.edit')}</Button>
-        </div>
-      </>)}
-    </GuideDialog>
-    <GuideDialog wide open={!!batchItems} title={t('tools.mcp.batchTitle')} hint={t('tools.mcp.batchHint')} onClose={() => void closeCompose()}>
+    <DocumentWorkspace
+      documentKey={creating ? 'new' : selected?.name ?? null}
+      label={t('tools.mcp.title')}
+      toolbarLabel={t('tools.mcp.toolbar')}
+      heading={t('tools.mcp.title')}
+      count={entries.length > 0 ? needle ? t('tools.mcp.countFiltered', { filtered: shown.length, total: entries.length }) : t('tools.mcp.activeCount', { count: entries.length }) : undefined}
+      actions={<>
+        <IconButton size="sm" className={doc.iconButton} aria-label={t('tools.plugins.rescan')} title={t('tools.plugins.rescan')} disabled={listLoading || busy} data-spinning={listLoading || undefined} onClick={() => void refreshNative()} icon={<Icon name="refresh" size={15} />} />
+        <IconButton variant="primary" size="sm" aria-label={t('tools.mcp.add')} title={t('tools.mcp.add')} disabled={!canAdd} onClick={() => void startNew()} icon={<Icon name="plus" size={16} />} />
+      </>}
+      search={<SearchField type="search" pageSearch title={searchShortcutHint()} label={t('tools.mcp.searchLabel')} placeholder={t('tools.mcp.searchPlaceholder')} value={search} onChange={setSearch} />}
+      notices={<>
+        <RemoteReadStatus state={remoteReads} />
+        {stale && <StatusBanner tone="warning" action={loadError ? <Button size="sm" onClick={() => void refreshNative()}>{t('tools.plugins.rescan')}</Button> : undefined}>{t('tools.mcp.stale')}</StatusBanner>}
+        {loadError && entries.length > 0 && !stale && <StatusBanner tone="error" action={<Button size="sm" onClick={() => void refreshNative()}>{t('tools.plugins.rescan')}</Button>}>{loadError}</StatusBanner>}
+      </>}
+      list={listBody}
+      placeholder={!opened && entries.length > 0 ? <div className={doc.placeholder}>
+        <span className={doc.placeholderIcon} aria-hidden="true"><Icon name="connections" size={22} /></span>
+        <strong>{t('tools.mcp.selectHint')}</strong>
+        <p>{t('tools.mcp.selectDetail')}</p>
+      </div> : null}
+      document={document}
+      backLabel={t('common.dialog.back')}
+      onBack={() => { void closeDocument(); }}
+      closeLabel={t('tools.workspace.closeDocument')}
+      onKeyDown={onKey}
+    />
+    <GuideDialog wide open={!!batchItems} title={t('tools.mcp.batchTitle')} hint={t('tools.mcp.batchHint')} onClose={() => void closeBatch()}>
       {batchItems && <McpBatchImport items={batchItems} onCancel={() => setBatchItems(null)} onPreview={value => native.previewMcpDraft(linkDraft(value), [{ ...target, enabled }])}
         onCommit={(value, candidate, replace) => native.commitMcpDraft(value, candidate.targets.filter(item => item.status === 'ready' || replace && item.status === 'conflict').map(item => ({ toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, contextId: item.contextId ?? contextId, enabled, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: replace && item.status === 'conflict' })))}
         onDefinitionSaved={result => { setDefinitions(current => [...current.filter(item => item.id !== result.definition.id), result.definition]); void refreshNative(); }}
