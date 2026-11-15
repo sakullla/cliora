@@ -402,6 +402,11 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
       <p className={styles.hint}>{t('library.resources.mcpDescription')}</p>
       {loading && loaded && <p className={styles.progress} role="status">{t('library.resources.refreshing')}</p>}
       {stale && loaded && <div className={styles.stale} role="status"><strong>{t('library.resources.staleTitle')}</strong><span>{t('library.resources.staleDetail')}</span><Button size="sm" disabled={loading} onClick={() => void reload()}>{t('library.resources.retry')}</Button></div>}
+      {/* Same count-and-source line as the prompt, rule and Skill lists: one search, one clear, one hit count. */}
+      {loaded && <div className={styles.resultBar}>
+        <Badge tone={shown.length < library.length ? 'accent' : 'neutral'}>{t('library.page.countFiltered', { filtered: shown.length, total: library.length })}</Badge>
+        <span className={styles.resultNote}>{t(remoteTargetId ? 'library.page.sourceRemote' : 'library.page.sourceLocal')}</span>
+      </div>}
       {empty ?? <ul className={styles.list} aria-label={t('library.resources.mcpListAria')}>
         {shown.map((item) => {
           const places = placements.filter(entry => entry.definitionId === item.id);

@@ -461,3 +461,174 @@ test('library prompt editor commits pending tag text on save and cards support d
   await page.getByRole('dialog', { name: '删除资料' }).getByRole('button', { name: '删除资料' }).click();
   await expect(copyCard).toHaveCount(0);
 });
+
+/** Three prompts over two projects and two tags, filtered by the native query like `library::list`:
+ *  a keyword matches the title, the body or the tags, so a body-only match must narrow the list. */
+const filterPrompts = [
+  { id: 'p-1', kind: 'prompt', title: '发布检查', body: 'release notes draft', category: '发布', projectId: 'cliora', version: 1, updatedAt: 1790758800 },
+  { id: 'p-2', kind: 'prompt', title: '回归测试', body: 'release checklist', category: '测试', projectId: null, version: 1, updatedAt: 1790672400 },
+  { id: 'p-3', kind: 'prompt', title: '发布回归', body: '每周记录', category: '测试', projectId: 'cliora', version: 1, updatedAt: 1790589600 },
+];
+
+async function openFilterLibrary(page: Page) {
+  await page.addInitScript((prompts) => {
+    // The native bridge is installed before the app bundle runs, so the page reads these rows.
+    (window as any).isTauri = true;
+    (window as any).__TAURI_INTERNALS__ = {
+      invoke: async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], nativeConfig: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_projects') return [{ id: 'cliora', name: 'cliora', path: '/tmp/cliora', available: true, preferredTool: 'codex', modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} }];
+        if (command === 'list_rule_placements' || command === 'list_mcp_definitions' || command === 'list_skill_packages') return [];
+        if (command === 'get_launch_settings') return { selected: 'terminal', terminals: [] };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'list_library_items') {
+          const needle = String(args.search ?? '').toLowerCase();
+          return prompts.filter((item) => item.kind === args.kind
+            && (!needle || [item.title, item.body, item.category].some((value) => value.toLowerCase().includes(needle))));
+        }
+        return null;
+      },
+    };
+  }, filterPrompts);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  const library = page.getByRole('region', { name: '资料库内容' });
+  await expect(library.getByRole('button', { name: '发布检查', exact: true })).toBeVisible();
+  return library;
+}
+
+test('library keyword matches titles and bodies and combines with the project and tag filters', async ({ page }) => {
+  const library = await openFilterLibrary(page);
+  const card = (title: string) => library.getByRole('button', { name: title, exact: true });
+  await expect(library.getByText('命中 3 / 共 3')).toBeVisible();
+  // A keyword only the body carries still matches: 「发布检查」 has no "release" in its title.
+  await library.getByLabel('搜索资料').fill('release');
+  await expect(library.getByText('命中 2 / 共 3')).toBeVisible();
+  await expect(card('发布检查')).toBeVisible();
+  await expect(card('回归测试')).toBeVisible();
+  await expect(card('发布回归')).toHaveCount(0);
+  // Tag on top of the keyword: only the row that carries both stays.
+  await library.getByRole('button', { name: '标签筛选' }).click();
+  await page.getByRole('option', { name: '测试' }).click();
+  await expect(library.getByText('命中 1 / 共 3')).toBeVisible();
+  await expect(card('回归测试')).toBeVisible();
+  await expect(card('发布检查')).toHaveCount(0);
+  // Project on top of both: no row carries the keyword, the tag and this project.
+  await library.getByRole('button', { name: '项目筛选' }).click();
+  await page.getByRole('option', { name: /cliora/ }).click();
+  await expect(library.getByText('命中 0 / 共 3')).toBeVisible();
+  await expect(library.getByText(/筛选结果为空/)).toBeVisible();
+  // One clear returns the whole list with every condition gone.
+  await library.getByRole('button', { name: '清除筛选' }).click();
+  await expect(library.getByLabel('搜索资料')).toHaveValue('');
+  await expect(library.getByText('命中 3 / 共 3')).toBeVisible();
+  await expect(card('发布回归')).toBeVisible();
+  await expect(library.getByRole('button', { name: '标签筛选' })).toContainText('所有标签');
+  await expect(library.getByRole('button', { name: '项目筛选' })).toContainText('所有项目');
+  // An active tag stays named while the keyword narrows the rows below it, so the filter
+  // never looks unset; the no-match state offers the same single clear.
+  await library.getByRole('button', { name: '标签筛选' }).click();
+  await page.getByRole('option', { name: '测试' }).click();
+  await expect(library.getByText('命中 2 / 共 3')).toBeVisible();
+  await library.getByLabel('搜索资料').fill('notes draft');
+  await expect(library.getByText('命中 0 / 共 3')).toBeVisible();
+  await expect(library.getByRole('button', { name: '标签筛选' })).toContainText('测试');
+  await library.getByRole('button', { name: '清除筛选' }).click();
+  await expect(library.getByText('命中 3 / 共 3')).toBeVisible();
+  await expect(card('发布检查')).toBeVisible();
+});
+
+test('library filters and the search clear work from the keyboard alone', async ({ page }) => {
+  const library = await openFilterLibrary(page);
+  const projectPick = library.getByRole('button', { name: '项目筛选' });
+  const tagPick = library.getByRole('button', { name: '标签筛选' });
+  // Project pick: Enter opens, arrows move, Enter chooses, and focus returns to the trigger.
+  await projectPick.focus();
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(projectPick).toContainText('cliora');
+  await expect(projectPick).toBeFocused();
+  await expect(library.getByText('命中 2 / 共 3')).toBeVisible();
+  await expect(library.getByRole('button', { name: '回归测试', exact: true })).toHaveCount(0);
+  // The tag pick is the next stop: the same keys add the second condition. The tags come from
+  // the rows the project filter left, so 测试 is the second option after 发布.
+  await page.keyboard.press('Tab');
+  await expect(tagPick).toBeFocused();
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(tagPick).toContainText('测试');
+  await expect(library.getByText('命中 1 / 共 3')).toBeVisible();
+  // Escape in the search field clears the term and leaves the focus there.
+  await library.getByLabel('搜索资料').focus();
+  await page.keyboard.type('每周');
+  await expect(library.getByText('命中 1 / 共 3')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(library.getByLabel('搜索资料')).toHaveValue('');
+  await expect(library.getByLabel('搜索资料')).toBeFocused();
+  await expect(library.getByText('命中 1 / 共 3')).toBeVisible();
+  // Keyboard-only clear of every condition.
+  await library.getByLabel('搜索资料').fill('release notes');
+  await expect(library.getByText('命中 0 / 共 3')).toBeVisible();
+  const clear = library.getByRole('button', { name: '清除筛选' });
+  await clear.focus();
+  await page.keyboard.press('Enter');
+  await expect(library.getByText('命中 3 / 共 3')).toBeVisible();
+  await expect(projectPick).toContainText('所有项目');
+  await expect(tagPick).toContainText('所有标签');
+});
+
+test('every library section keeps its own create entry and fits 1360, 900 and 640', async ({ page }) => {
+  await page.addInitScript(() => {
+    const prompts = [{ id: 'p-1', kind: 'prompt', title: '发布检查', body: '检查功能、体验、测试、可读性、可维护性、性能与边界，先说明影响用户的行为，再给出具体文件和可执行的建议。'.repeat(3), category: '开发,写作,学习,复盘,发布,审查,文档,测试', projectId: null, version: 1, updatedAt: 1790758800 }];
+    const rules = [{ id: 'r-1', kind: 'rule', title: '提交前检查', body: '运行测试与构建', category: '流程', projectId: null, version: 1, updatedAt: 1790758700 }];
+    (window as any).isTauri = true;
+    (window as any).__TAURI_INTERNALS__ = {
+      invoke: async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], nativeConfig: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_projects') return [{ id: 'cliora', name: 'cliora', path: '/tmp/cliora', available: true, preferredTool: 'codex', modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} }];
+        if (command === 'list_rule_placements') return [];
+        if (command === 'get_launch_settings') return { selected: 'terminal', terminals: [] };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'list_library_items') return (args.kind === 'prompt' ? prompts : rules);
+        if (command === 'list_mcp_definitions') return [{ id: 'mcp-1', name: 'chrome-devtools-mcp', transport: 'stdio', command: 'npx', args: ['-y', 'chrome-devtools-mcp@latest'], url: '', env: {}, headers: {}, inLibrary: true, version: 1 }];
+        if (command === 'list_mcp_placements') return [];
+        if (command === 'list_skill_packages') return [{ id: 'pkg-1', name: 'code-review', description: 'Review a change set', compatibility: null, source: '/tmp/code-review', digest: 'd', fileCount: 2, updatedAt: 1790750000, inLibrary: true }];
+        if (command === 'list_skill_installations') return [];
+        return null;
+      },
+    };
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  const library = page.getByRole('region', { name: '资料库内容' });
+  const sections: Array<{ tab: string; create: string; list: string }> = [
+    { tab: '提示词', create: '新建提示词', list: '提示词列表' },
+    { tab: '长期规则', create: '新建规则', list: '规则列表' },
+    { tab: 'MCP', create: '新建 MCP', list: 'MCP 列表' },
+    { tab: 'Skill', create: '添加 Skill', list: 'Skill 列表' },
+  ];
+  for (const width of [1360, 900, 640]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const section of sections) {
+      await library.getByRole('tab', { name: section.tab, exact: true }).click();
+      const panel = library.getByRole('tabpanel');
+      await expect(library.getByRole('button', { name: section.create, exact: true })).toHaveAttribute('data-variant', 'primary');
+      // One clipped container per section: the rows inside it never scroll sideways.
+      const list = panel.locator(`[aria-label="${section.list}"]`).first();
+      await expect(list).toBeVisible();
+      expect(await list.evaluate((node) => node.scrollWidth - node.clientWidth), `${section.tab} ${width} list`).toBeLessThanOrEqual(1);
+      const bar = panel.locator('[class*="resultBar"]').first();
+      await expect(bar).toBeVisible();
+      expect(await bar.evaluate((node) => node.scrollWidth - node.clientWidth), `${section.tab} ${width} count`).toBeLessThanOrEqual(1);
+      const toolbar = library.locator('[data-toolbar]').first();
+      expect(await toolbar.evaluate((node) => node.scrollWidth - node.clientWidth), `${section.tab} ${width} toolbar`).toBeLessThanOrEqual(1);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), `${section.tab} ${width} page`).toBeLessThanOrEqual(0);
+    }
+  }
+});

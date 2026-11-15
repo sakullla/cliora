@@ -239,3 +239,41 @@ test('library MCP rows stay in name order through writes, removals and saves', a
   await page.getByRole('region', { name: '资料库 MCP' }).getByRole('button', { name: '刷新', exact: true }).click();
   await expect.poll(order).toEqual(expected);
 });
+
+// The MCP list carries the same search, hit count, source note and clear action as the
+// prompt, rule and Skill lists, so finding one of the four types reads the same way.
+test('library MCP search counts hits and clears like the other library lists', async ({ page }) => {
+  await installLibrary(page, [
+    mcpDefinition('mcp-chrome', shortName, summary),
+    mcpDefinition('mcp-long', longName, summary),
+    mcpDefinition('mcp-playwright', 'playwright-mcp', 'npx playwright@latest'),
+  ]);
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await openLibraryMcp(page);
+  const workspace = page.getByRole('region', { name: '资料库 MCP' });
+  const list = page.getByRole('list', { name: 'MCP 列表' });
+  const search = page.getByRole('textbox', { name: '搜索资料' });
+  await expect(workspace.getByText('命中 3 / 共 3')).toBeVisible();
+  await expect(workspace.getByText('本机资料库')).toBeVisible();
+  // The command is part of what MCP search covers, not only the name.
+  await search.fill('playwright');
+  await expect(workspace.getByText('命中 1 / 共 3')).toBeVisible();
+  await expect(list.locator(':scope > li')).toHaveCount(1);
+  await expect(list.locator('li[data-mcp-id="mcp-playwright"]')).toBeVisible();
+  await workspace.getByRole('button', { name: '清空搜索' }).click();
+  await expect(search).toHaveValue('');
+  await expect(workspace.getByText('命中 3 / 共 3')).toBeVisible();
+  await expect(list.locator(':scope > li')).toHaveCount(3);
+  // A keyword that matches nothing keeps its own count and its own clear action.
+  await search.fill('zzz-no-such-mcp');
+  await expect(workspace.getByText('命中 0 / 共 3')).toBeVisible();
+  await expect(workspace.getByText('没有匹配「zzz-no-such-mcp」的 MCP。')).toBeVisible();
+  await workspace.getByRole('button', { name: '清除搜索' }).click();
+  await expect(workspace.getByText('命中 3 / 共 3')).toBeVisible();
+  // The added count line never pushes the row sideways in the narrow window.
+  for (const width of [900, 720, 640]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await workspace.evaluate(node => node.scrollWidth - node.clientWidth), String(width)).toBeLessThanOrEqual(1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), String(width)).toBeLessThanOrEqual(0);
+  }
+});

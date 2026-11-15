@@ -312,7 +312,12 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     if (section !== sectionIntent.section) void openSection(sectionIntent.section);
   }, [active, sectionIntent?.section, sectionIntent?.token, section]);
 
-  const categories = useMemo(() => Array.from(new Set(items.flatMap((item) => tagsOf(item.category)))).sort(), [items]);
+  // Tags come from the rows on screen; the active tag stays listed even when the current
+  // (searched) rows no longer carry it, so the filter never looks unset while it still applies.
+  const categories = useMemo(() => Array.from(new Set([
+    ...items.flatMap((item) => tagsOf(item.category)),
+    ...(categoryFilter === '*' ? [] : [categoryFilter]),
+  ])).sort(), [items, categoryFilter]);
   const shown = items.filter((item) => (projectFilter === '*' || (projectFilter === 'global' ? !item.projectId : item.projectId === projectFilter))
     && (categoryFilter === '*' || tagsOf(item.category).includes(categoryFilter)));
   // The unfiltered count loads separately; clamp it so a fresh filtered batch never shows x > y.
@@ -764,7 +769,13 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
           <div className={styles.tags}>{t('library.page.tags')}
             <div className={styles.tagList} data-field-frame="">
               {tagsOf(draft.category).map((tag) => <button type="button" disabled={busy} key={tag} onClick={() => setDraft({ ...draft, category: categoryOf(tagsOf(draft.category).filter((item) => item !== tag)) })}>{tag} ×</button>)}
-              <input disabled={busy} aria-label={t('library.page.addTagAria')} value={tagText} placeholder={t('library.page.tagPlaceholder')} onChange={(event) => setTagText(event.target.value)} onBlur={() => { if (tagText.trim()) addTag(tagText); }} onKeyDown={(event) => {
+              <input disabled={busy} aria-label={t('library.page.addTagAria')} value={tagText} placeholder={t('library.page.tagPlaceholder')} onChange={(event) => setTagText(event.target.value)} onBlur={(event) => {
+                // A blur that lands on 保存 keeps the text pending: the extra chips would grow this
+                // row between press and release, so the first click on 保存 would never become a click.
+                // Saving consumes the pending text itself; every other blur still commits the tag here.
+                if (!tagText.trim() || (event.relatedTarget instanceof HTMLElement && event.relatedTarget.closest('[data-dialog-save]'))) return;
+                addTag(tagText);
+              }} onKeyDown={(event) => {
                 if (event.nativeEvent.isComposing) return;
                 if (event.key === 'Enter' || event.key === ',' || event.key === '，') { event.preventDefault(); addTag(tagText); return; }
                 if (event.key === 'Backspace' && !tagText) {
