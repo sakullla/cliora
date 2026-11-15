@@ -148,6 +148,17 @@ fn strip(model: &str) -> (&str, bool) {
     }
     (model, long)
 }
+/// A role display name describes the model it labels, so replacing the model
+/// also replaces an explicitly written `*_NAME`; a missing name already falls
+/// back to the model ID in Claude Code.
+fn sync_display_name(settings: &mut Value, key: &str, model: &str) {
+    let name_key = format!("{key}_NAME");
+    if let Some(env) = settings.get_mut("env").and_then(Value::as_object_mut) {
+        if env.contains_key(&name_key) {
+            env.insert(name_key, json!(model));
+        }
+    }
+}
 fn effort_choices(model: &str) -> Vec<&'static str> {
     // Exact native identities from https://code.claude.com/docs/en/model-config,
     // observed 2026-10-05. Custom IDs and aliases remain unverified.
@@ -510,6 +521,7 @@ impl ConfigurationAdapter for Claude {
                             .unwrap_or(""),
                     );
                     let (model, explicit_long) = strip(model);
+                    let display = model.to_string();
                     value = json!(format!(
                         "{model}{}",
                         if was_long || explicit_long {
@@ -518,6 +530,12 @@ impl ConfigurationAdapter for Claude {
                             ""
                         }
                     ));
+                    // A display name labels the model it sits next to. Once the
+                    // model is replaced, an existing name must follow it, or
+                    // Claude Code keeps offering the previous model's name.
+                    if let Some(key) = locations.first().and_then(|path| path.get(1)) {
+                        sync_display_name(settings, key, &display);
+                    }
                 } else if field.ends_with(".longContext") {
                     let long = value.as_bool().ok_or("长上下文须为布尔值")?;
                     let raw = baseline
@@ -798,6 +816,8 @@ mod tests {
         .unwrap();
         assert_eq!(draft.view["values"]["sonnet.longContext"], true);
         assert_eq!(draft.view["values"]["sonnet.model"], "中文模型");
+        // The display name follows the model that replaced it.
+        assert_eq!(draft.view["values"]["sonnet.name"], "中文模型");
         draft = configuration::edit(
             &registry,
             draft,
@@ -809,9 +829,10 @@ mod tests {
             assert_eq!(parsed["env"][*key], "gateway-all");
         }
         assert_eq!(parsed["model"], "gateway-all");
+        // Unification keeps display names as they stood; it never rewrites them.
         assert_eq!(
             parsed["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"],
-            "Sonnet gateway"
+            "中文模型"
         );
         assert_eq!(parsed["env"]["USER_CUSTOM_OPTION"], "preserve");
         assert_eq!(parsed["permissions"]["allow"][0], "Read");
