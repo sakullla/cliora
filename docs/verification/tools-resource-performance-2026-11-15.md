@@ -68,3 +68,9 @@ SSH ControlPath 原来使用完整 64 位十六进制摘要，在 macOS 常见�
 - `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` 通过。
 - 补查 library-distribute-result / reading-layout：39 项通过；本轮工具与远程界面回归共 295 项通过。
 - 0.4.137 标签触发 Release 工作流，等待同一提交的 main CI 通过后由 CI 打包发布。
+
+## 发布阻断修复（0.4.138）
+
+v0.4.137 的 Linux Rust 全量测试及三平台 Clippy、终端浏览器套件均通过；application 套件 822 项通过，1 项失败。失败是 library-tags 的四标签用例漏实现 `list_mcp_placements`，默认返回 null，与 Rust Vec 返回数组的契约不符。新增 MCP 位置索引会遍历这个值，从而暴露旧测试桩遗漏。
+
+本机重复运行原用例 3 次均失败；补齐空数组返回并增加 pageerror 断言后，library-tags / library-mcp-row / mcp-workspace 共 26 项通过。未削弱主按钮或四标签断言，未跳过 CI 用例。版本文件同步升级为 0.4.138，使用新标签继续完整 CI 与三平台发布流程。

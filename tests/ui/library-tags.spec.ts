@@ -143,6 +143,8 @@ test('library search debounces native queries, clears instantly and counts hits'
 });
 
 test('library keeps four tabs, one primary action, and every prompt card in the first screen', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', error => pageErrors.push(error.message));
   await page.addInitScript(() => {
     const body = '检查代码变更是否正确、安全、易于维护。先说明影响用户的行为，再给出具体文件和可执行的建议。优先指出会导致故障的问题。';
     const library = [
@@ -160,7 +162,7 @@ test('library keeps four tabs, one primary action, and every prompt card in the 
           if (command === 'list_projects') return [{ id: 'cliora', name: 'cliora', path: '/tmp/cliora', available: true, preferredTool: 'codex', modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} }];
           if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
           if (command === 'get_tray_status') return { available: false, error: null };
-          if (command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_rule_placements') return [];
+          if (command === 'list_mcp_definitions' || command === 'list_mcp_placements' || command === 'list_skill_packages' || command === 'list_rule_placements') return [];
           if (command === 'list_library_items') return library.filter((item) => item.kind === args.kind);
           return null;
         },
@@ -200,6 +202,7 @@ test('library keeps four tabs, one primary action, and every prompt card in the 
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   await expect(page.getByRole('button', { name: '新建 MCP', exact: true })).toHaveAttribute('data-variant', 'primary');
   await expect(toolbar.locator('[data-variant="primary"]')).toHaveCount(1);
+  expect(pageErrors).toEqual([]);
 });
 
 
