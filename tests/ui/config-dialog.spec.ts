@@ -1172,22 +1172,16 @@ test('a native file changed outside Cliora is never reported as in effect and ca
   const row = page.locator('[data-profile-id="existing"]');
   await expect(row).toHaveAttribute('data-profile-state', 'active');
   await expect(live).toHaveAttribute('data-live-state', 'applied');
-  const comparisons = () => page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command === 'compare_registered_application').length);
-  // The read-only comparison is what separates an unchanged file from an external edit.
+  const comparisons = () => page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command === 'get_registered_tool_workspace').length);
+  // The backend supplies an advisory verdict; no full comparison IPC is needed.
   const checked = await comparisons();
-  // Extra fields Cliora does not own are not this profile's content, so they are not a change.
-  await page.evaluate(() => { (window as any).workspaceFixture.nativeFile = { current: '{"model":"one","nativeOnly":true}', proposed: '{"model":"one"}' }; window.dispatchEvent(new Event('focus')); });
+  // Re-reading an unchanged scope consumes only the backend's compact verdict.
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect.poll(comparisons).toBeGreaterThan(checked);
   await expect(row).toHaveAttribute('data-profile-state', 'active');
   await expect(live).toHaveAttribute('data-live-state', 'applied');
-  // Formatting and comments Cliora does not own are not a change either.
-  const afterExtras = await comparisons();
-  await page.evaluate(() => { (window as any).workspaceFixture.nativeFile = { format: 'toml', current: 'model="one" # 本机手感\n', proposed: 'model = "one"\n' }; window.dispatchEvent(new Event('focus')); });
-  await expect.poll(comparisons).toBeGreaterThan(afterExtras);
-  await expect(row).toHaveAttribute('data-profile-state', 'active');
-  await expect(live).toHaveAttribute('data-live-state', 'applied');
   // Now the file no longer holds the applied value, while the applied record itself is untouched.
-  await page.evaluate(() => { (window as any).workspaceFixture.nativeFile = { current: '{"model":"edited-outside"}', proposed: '{"model":"one"}' }; window.dispatchEvent(new Event('focus')); });
+  await page.evaluate(() => { (window as any).workspaceFixture.appliedFileState = 'changed'; window.dispatchEvent(new Event('focus')); });
   await expect(row).toHaveAttribute('data-profile-state', 'external');
   await expect(row.getByText('原生文件已外部修改', { exact: true })).toBeVisible();
   await expect(row.getByText('原生文件被外部修改，需要重新应用', { exact: true })).toBeVisible();
@@ -1211,6 +1205,9 @@ test('a native file changed outside Cliora is never reported as in effect and ca
   await expect(row).toHaveAttribute('data-profile-state', 'active');
   await expect(live).toHaveAttribute('data-live-state', 'applied');
   expect(await page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command === 'apply_registered_native_profile').length)).toBe(1);
+  expect(await page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command === 'compare_registered_application').length)).toBe(0);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(live).toHaveAttribute('data-live-state', 'applied');
 });
 
 test('a comparison that cannot be read is unconfirmed instead of applied or invalid', async ({ page }) => {
@@ -1218,7 +1215,7 @@ test('a comparison that cannot be read is unconfirmed instead of applied or inva
   const live = page.locator('[data-tools-live]');
   const row = page.locator('[data-profile-id="existing"]');
   await expect(row).toHaveAttribute('data-profile-state', 'active');
-  const comparisons = () => page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command === 'compare_registered_application').length);
+  const comparisons = () => page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command === 'get_registered_tool_workspace').length);
   const checked = await comparisons();
   await page.evaluate(() => { (window as any).workspaceFixture.comparisonFailure = '原生文件读取失败：没有权限'; window.dispatchEvent(new Event('focus')); });
   await expect.poll(comparisons).toBeGreaterThan(checked);
@@ -1233,67 +1230,6 @@ test('a comparison that cannot be read is unconfirmed instead of applied or inva
   await expect(live).not.toContainText('当前生效');
   await expect(live).not.toContainText('已失效');
   await expect(row.getByRole('button', { name: '重新应用', exact: true })).toBeEnabled();
-});
-
-test('extra TOML the profile does not own keeps it in effect while a managed value is still checked', async ({ page }) => {
-  await setupConfigurationWorkspace(page, 'codex');
-  const live = page.locator('[data-tools-live]');
-  const row = page.locator('[data-profile-id="existing"]');
-  await expect(row).toHaveAttribute('data-profile-state', 'active');
-  const comparisons = () => page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command === 'compare_registered_application').length);
-  const checked = await comparisons();
-  // The MCP page and the CLI write the same config.toml; those tables are not this profile's content.
-  await page.evaluate(() => {
-    (window as any).workspaceFixture.nativeFile = { format: 'toml', current: 'model = "one" # 本机手感\n\n[mcp_servers.docs]\ncommand = "npx"\nargs = [\n  "-y",\n  "some-server",\n]\n\n[projects."/tmp/demo"]\ntrust_level = "trusted"\n', proposed: 'model = "one"\n' };
-    window.dispatchEvent(new Event('focus'));
-  });
-  await expect.poll(comparisons).toBeGreaterThan(checked);
-  await expect(row).toHaveAttribute('data-profile-state', 'active');
-  await expect(live).toHaveAttribute('data-live-state', 'applied');
-  // The managed value itself is still compared: a different model is an external edit.
-  const afterExtras = await comparisons();
-  await page.evaluate(() => {
-    (window as any).workspaceFixture.nativeFile = { format: 'toml', current: 'model = "edited"\n\n[mcp_servers.docs]\ncommand = "npx"\n', proposed: 'model = "one"\n' };
-    window.dispatchEvent(new Event('focus'));
-  });
-  await expect.poll(comparisons).toBeGreaterThan(afterExtras);
-  await expect(row).toHaveAttribute('data-profile-state', 'external');
-  await expect(row.getByText('原生文件已外部修改', { exact: true })).toBeVisible();
-  await expect(live).toHaveAttribute('data-live-state', 'external');
-  await expect(live).not.toContainText('当前生效');
-  // Applying again writes the value back, so the row returns to being in effect.
-  await row.getByRole('button', { name: '重新应用', exact: true }).click();
-  await expect(row).toHaveAttribute('data-profile-state', 'active');
-  await expect(live).toHaveAttribute('data-live-state', 'applied');
-});
-
-test('extra YAML the profile does not own keeps it in effect while a managed value is still checked', async ({ page }) => {
-  await setupConfigurationWorkspace(page, 'codex');
-  const live = page.locator('[data-tools-live]');
-  const row = page.locator('[data-profile-id="existing"]');
-  await expect(row).toHaveAttribute('data-profile-state', 'active');
-  const comparisons = () => page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command === 'compare_registered_application').length);
-  const checked = await comparisons();
-  const proposed = 'provider: gateway\nmodel: one\nlimits:\n  context: 8192\n';
-  await page.evaluate((proposed) => {
-    (window as any).workspaceFixture.nativeFile = { format: 'yaml', current: '# written by the CLI itself\nprovider: gateway\nmodel: one\ntheme: dark\nextra:\n  nested: true\nlimits:\n  context: 8192\n', proposed };
-    window.dispatchEvent(new Event('focus'));
-  }, proposed);
-  await expect.poll(comparisons).toBeGreaterThan(checked);
-  await expect(row).toHaveAttribute('data-profile-state', 'active');
-  await expect(live).toHaveAttribute('data-live-state', 'applied');
-  // A managed value under a managed key is still compared.
-  const afterExtras = await comparisons();
-  await page.evaluate((proposed) => {
-    (window as any).workspaceFixture.nativeFile = { format: 'yaml', current: 'provider: gateway\nmodel: one\nextra:\n  nested: true\nlimits:\n  context: 4096\n', proposed };
-    window.dispatchEvent(new Event('focus'));
-  }, proposed);
-  await expect.poll(comparisons).toBeGreaterThan(afterExtras);
-  await expect(row).toHaveAttribute('data-profile-state', 'external');
-  await expect(live).toHaveAttribute('data-live-state', 'external');
-  await row.getByRole('button', { name: '重新应用', exact: true }).click();
-  await expect(row).toHaveAttribute('data-profile-state', 'active');
-  await expect(live).toHaveAttribute('data-live-state', 'applied');
 });
 
 test('a native file no comparison can read is unconfirmed instead of in effect', async ({ page }) => {
@@ -1312,8 +1248,9 @@ test('a native file no comparison can read is unconfirmed instead of in effect',
 test('a scope with no applied binding is not compared and keeps its saved state', async ({ page }) => {
   await setupConfigurationWorkspace(page, 'codex');
   const comparisons = () => page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command === 'compare_registered_application').length);
-  // The first read of the applied scope owns a comparison; wait for it before counting a later one.
-  await expect.poll(comparisons).toBeGreaterThan(0);
+  // Loading an applied scope no longer requests a full comparison document.
+  await expect(page.locator('[data-tools-live]')).toHaveAttribute('data-live-state', 'applied');
+  expect(await comparisons()).toBe(0);
   await page.evaluate(() => { const fixture = (window as any).workspaceFixture; fixture.binding = null; fixture.calls.length = 0; window.dispatchEvent(new Event('focus')); });
   const row = page.locator('[data-profile-id="existing"]');
   await expect(row).toHaveAttribute('data-profile-state', 'saved');

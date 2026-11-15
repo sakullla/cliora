@@ -4,7 +4,8 @@ import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { nativeAvailable } from '../../lib/native';
-import { configurationAppliedFileState, configurationApplicationState, configurationLiveState, configurationRowState, type ConfigurationLiveState, type ConfigurationNativeFileState } from '../../lib/configurationDraft';
+import { BoundedCache } from '../../lib/boundedCache';
+import { configurationApplicationState, configurationLiveState, configurationRowState, type ConfigurationLiveState, type ConfigurationNativeFileState } from '../../lib/configurationDraft';
 import { confirmAction } from '../../lib/confirm';
 import { useFillHeight } from '../../lib/fillHeight';
 import { searchShortcutHint } from '../../lib/shortcut';
@@ -60,11 +61,9 @@ const resourceViews: ResourceView[] = ['config', 'accounts', 'mcp', 'skills', 'a
 const contextStoreKey = 'cliora:workspace-context';
 // Presentation-only snapshots. Always re-read bindings and native files;
 // editor opens and mutations still obtain their own current baselines.
-const workspaceSnapshots = new Map<string, RegisteredToolWorkspace>();
+const workspaceSnapshots = new BoundedCache<string, RegisteredToolWorkspace>(8, 60_000);
 function rememberWorkspace(key: string, value: RegisteredToolWorkspace) {
-  workspaceSnapshots.delete(key);
   workspaceSnapshots.set(key, value);
-  if (workspaceSnapshots.size > 24) workspaceSnapshots.delete(workspaceSnapshots.keys().next().value!);
 }
 type StoredContext = { resource?: ResourceView; scope?: Scope; projectPath?: string };
 function readStoredContexts(): Record<string, StoredContext> {
@@ -223,21 +222,6 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     if (!nativeAvailable || !nextTool) { setLoading(false); setWorkspace(null); return null; }
     const request = ++loadSequence.current; setLoading(true); setError('');
     const key = JSON.stringify([nextTool, nextScope, nextProject]);
-    // Only a read-only comparison of the applied content against the current native files can
-    // distinguish an unchanged file from an external edit; the binding record never carries it.
-    // Rows and the strip stay on the binding's own statement when there is nothing to compare.
-    const appliedFile = async (value: RegisteredToolWorkspace): Promise<ConfigurationNativeFileState> => {
-      const profile = value.binding ? value.profiles.find(item => item.id === value.binding!.profileId) : null;
-      if (!profile || !configurationApplicationState(profile, value.binding, value.common).applied) return 'unchecked';
-      const files = value.probe.nativeFiles;
-      // Nothing to read at all: the binding's own statement is the only fact there is.
-      if (!files.length) return 'unchecked';
-      // Every file is sensitive, so nothing can be compared; the state stays unconfirmed rather
-      // than falling back to "in effect".
-      if (!files.some(file => !file.sensitive)) return 'unknown';
-      try { return configurationAppliedFileState((await native.compareRegisteredApplication(profile.id, nextScope, nextProject))?.files ?? []); }
-      catch { return 'unknown'; }
-    };
     let completed = false;
     // Resource pages need the binding, not CLI version processes. A full
     // workspace result remains authoritative if it finishes first.
@@ -254,8 +238,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     try {
       const value = await native.getRegisteredToolWorkspace(nextTool, nextScope, nextProject, false, fresh);
       if (!alive.current || request !== loadSequence.current) return null;
-      const file = await appliedFile(value);
-      if (!alive.current || request !== loadSequence.current) return null;
+      const file = value.appliedFileState ?? 'unchecked';
       rememberWorkspace(key, value);
       setWorkspace(value); setNativeFile({ key, state: file }); setScopedContext({ key, value: { effectiveContextId: value.effectiveContextId, nativeContextError: value.nativeContextError ?? null } }); setCustomPath(value.customPath ?? ''); return value;
     } catch (failure) { if (alive.current && request === loadSequence.current) setError(errorText(failure)); return null; }
@@ -285,7 +268,13 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     epoch.current++;
     if (active) void reload(toolId, scope, projectPath);
   }, [toolId, scope, projectPath, remoteTargetId, remoteReads.identity]);
-  useEffect(() => { if (active && !workspace) void reload(toolId, scope, projectPath); }, [active]);
+  const wasActive = useRef(active);
+  useEffect(() => {
+    const resumed = active && !wasActive.current;
+    wasActive.current = active;
+    // The context effect owns the initial load; only resume an empty hidden page here.
+    if (resumed && !workspace) void reload(toolId, scope, projectPath);
+  }, [active]);
   useEffect(() => {
     if (!nativeAvailable || !active) return;
     if (isRemote) {

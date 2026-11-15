@@ -1059,10 +1059,18 @@ fn safe_name(value: &str) -> bool {
     skill_manifest::valid_name(value)
 }
 fn digest(files: &BTreeMap<String, String>) -> Result<String, String> {
-    Ok(format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec(files).map_err(|error| error.to_string())?)
-    ))
+    // Hash serialized bytes directly; don't allocate a second complete base64 package.
+    let mut hash = Sha256::new();
+    serde_json::to_writer(HashWriter(&mut hash), files).map_err(|error| error.to_string())?;
+    Ok(format!("{:x}", hash.finalize()))
+}
+struct HashWriter<'a>(&'a mut Sha256);
+impl std::io::Write for HashWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
 }
 fn collect(
     root: &Path,
@@ -1137,6 +1145,50 @@ fn snapshot(path: &Path) -> Result<SkillSnapshot, String> {
     let manifest = manifest_info(&files, &name)?;
     let checksum = digest(&files)?;
     Ok((name, manifest, files, checksum))
+}
+
+/// Read-only inventory: retain paths and stream each attachment into the same
+/// canonical digest used by packages. No base64 attachment map or JSON copy.
+fn inventory_digest(path: &Path) -> Result<String, String> {
+    fn paths(root: &Path, dir: &Path, files: &mut BTreeMap<String, PathBuf>, bytes: &mut u64) -> Result<(), String> {
+        for entry in fs::read_dir(dir).map_err(|error| error.to_string())? {
+            let path = entry.map_err(|error| error.to_string())?.path();
+            let meta = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+            if meta.file_type().is_symlink() { return Err("Skills 包不能包含符号链接".into()); }
+            if meta.is_dir() { paths(root, &path, files, bytes)?; continue; }
+            if !meta.is_file() { return Err("Skills 包只能包含普通文件".into()); }
+            if files.len() >= MAX_FILES { return Err("Skills 包文件数量超出上限".into()); }
+            *bytes += meta.len();
+            if *bytes > MAX_BYTES as u64 { return Err("Skills 包超过 12 MiB".into()); }
+            let name = path.strip_prefix(root).map_err(|_| "Skills 文件不在来源目录中")?
+                .components().map(|part| part.as_os_str().to_str().ok_or("Skills 文件名无法识别"))
+                .collect::<Result<Vec<_>, _>>()?.join("/");
+            files.insert(name, path);
+        }
+        Ok(())
+    }
+    let root = resolved_skill_dir(path)?;
+    let mut files = BTreeMap::new();
+    paths(&root, &root, &mut files, &mut 0)?;
+    let mut hash = Sha256::new();
+    hash.update(b"{");
+    let mut bytes = 0;
+    for (index, (name, path)) in files.into_iter().enumerate() {
+        if index > 0 { hash.update(b","); }
+        serde_json::to_writer(HashWriter(&mut hash), &name).map_err(|error| error.to_string())?;
+        hash.update(b":\"");
+        // Base64 has no JSON escape characters. Streaming also bounds memory for large binaries.
+        let mut input = fs::File::open(path).map_err(|error| error.to_string())?.take((MAX_BYTES + 1 - bytes) as u64);
+        {
+            let mut encoded = base64::write::EncoderWriter::new(HashWriter(&mut hash), &STANDARD);
+            bytes += std::io::copy(&mut input, &mut encoded).map_err(|error| error.to_string())? as usize;
+            encoded.finish().map_err(|error| error.to_string())?;
+        }
+        if bytes > MAX_BYTES { return Err("Skills 包超过 12 MiB".into()); }
+        hash.update(b"\"");
+    }
+    hash.update(b"}");
+    Ok(format!("{:x}", hash.finalize()))
 }
 
 fn local_candidate(source: &str) -> Result<Candidate, String> {
@@ -1469,16 +1521,22 @@ pub fn set_in_library(db: &Database, id: &str, in_library: bool) -> Result<(), S
 pub fn list(db: &Database) -> Result<Vec<SkillPackage>, String> {
     let _ = recover_report(db)?;
     db.with_connection(|conn| {
-        let mut statement = conn.prepare("SELECT id, name, description, source, digest, files_json, updated_at, in_library FROM skill_packages ORDER BY name COLLATE NOCASE")
+        // Extract list metadata in SQLite. Attachments never cross into Rust just to count files.
+        let mut statement = conn.prepare("SELECT id, name, description, source, digest,
+            CASE WHEN json_valid(files_json) THEN json_extract(files_json, '$.\"SKILL.md\"') END,
+            updated_at, in_library,
+            CASE WHEN json_valid(files_json) THEN (SELECT count(*) FROM json_each(files_json)) ELSE 0 END
+            FROM skill_packages ORDER BY name COLLATE NOCASE")
             .map_err(|error| error.to_string())?;
         let rows = statement.query_map([], |row| {
-            let json: String = row.get(5)?;
-            let files = serde_json::from_str::<BTreeMap<String, String>>(&json).ok();
-            let file_count = files.as_ref().map_or(0, BTreeMap::len);
+            let encoded: Option<String> = row.get(5)?;
+            let file_count = row.get::<_, i64>(8)?.max(0) as usize;
             let name: String = row.get(1)?;
             // Display comes from the stored SKILL.md, so a description saved by
             // an older reader is corrected without a migration.
-            let manifest = files.as_ref().and_then(|files| manifest_info(files, &name).ok());
+            let manifest = encoded.as_ref().and_then(|encoded| STANDARD.decode(encoded).ok())
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .map(|text| skill_manifest::analyze(&text, &name));
             let stored: String = row.get(2)?;
             let (description, compatibility, issues) = match manifest {
                 Some(manifest) => { let issues = manifest.issue_codes(); (manifest.description, manifest.compatibility, issues) }
@@ -1877,7 +1935,8 @@ fn scan_skill_children(
             None
         };
         let inspected = if managed.is_some() {
-            snapshot(&path).map(|(_, manifest, _, checksum)| { let issues = manifest.issue_codes(); (Some(checksum), manifest.description, issues) })
+            inventory_digest(&path).and_then(|checksum| native_description(&path)
+                .map(|(description, issues)| (Some(checksum), description, issues)))
         } else {
             native_description(&path).map(|(description, issues)| (None, description, issues))
         };

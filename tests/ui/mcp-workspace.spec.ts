@@ -337,3 +337,18 @@ test('the keyboard selects a row, edits and saves, and closing returns focus to 
   await expect(detail).toHaveCount(0);
   await expect(row(page, 'remote-service')).toBeFocused();
 });
+
+
+test('MCP listing is read once and draft switches do not rescan native files', async ({ page }) => {
+  await install(page);
+  await expect(list(page).getByRole('listitem')).toHaveCount(3);
+  await row(page, 'remote-service').click();
+  await expect(card(page, 'remote-service')).toBeVisible();
+  await card(page, 'remote-service').getByRole('button', { name: '编辑', exact: true }).click();
+  const toggle = card(page, 'remote-service').getByRole('checkbox', { name: '启用', exact: true });
+  await toggle.check();
+  await toggle.uncheck();
+  await search(page).fill('remote');
+  await expect(list(page).getByRole('listitem')).toHaveCount(1);
+  expect((await calls(page)).filter(call => call.command === 'list_native_mcp')).toHaveLength(1);
+});

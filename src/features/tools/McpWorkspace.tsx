@@ -73,7 +73,8 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
   const [search, setSearch] = useState('');
   const project = scope === 'project' ? projectPath || null : null;
   const target = useMemo<McpTargetRequest>(() => ({ toolId, scope, projectPath: project, enabled, contextId }), [toolId, scope, project, enabled, contextId]);
-  const readTarget = useMemo<McpTargetRequest>(() => ({ ...target, enabled: true }), [target]);
+  const readTarget = useMemo<McpTargetRequest>(() => ({ toolId, scope, projectPath: project, contextId, enabled: true }), [toolId, scope, project, contextId]);
+  const hasEntries = useRef(false); hasEntries.current = entries.length > 0;
   const feedback = useFeedback();
   const mounted = useRef(true);
   const loadSequence = useRef(0);
@@ -108,12 +109,12 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
       setEntries(value); setLoadError(''); setStale(false);
     } catch (value) {
       if (!mounted.current || request !== loadSequence.current) return;
-      setLoadError(errorText(value)); setStale(entries.length > 0);
+      setLoadError(errorText(value)); setStale(hasEntries.current);
     } finally {
       if (mounted.current && request === loadSequence.current) setListLoading(false);
     }
-  }, [toolId, scope, project, readTarget, entries.length, remoteTargetId, native]);
-  useEffect(() => { if (remoteReads.active) void refreshNative(false); }, [toolId, scope, project, contextId, remoteTargetId, refreshNative]);
+  }, [toolId, scope, project, readTarget, remoteTargetId, native]);
+  useEffect(() => { if (remoteReads.active) void refreshNative(false); }, [toolId, scope, project, contextId, remoteTargetId, refreshNative, remoteReads.active]);
   useEffect(() => {
     if (remoteTargetId) {
       void native.getRemoteResourceStore(remoteTargetId, toolId, 'mcp').then(value => {

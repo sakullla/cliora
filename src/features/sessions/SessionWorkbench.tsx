@@ -176,8 +176,11 @@ export function remapArrangement(current: RailArrangement, restored: Record<stri
 }
 
 /** The session the user last had selected; a restore maps it to its new id. */
-function readStoredSelection(): string | null {
-  try { return localStorage.getItem('cliora:workbench-selected'); } catch { return null; }
+function readStoredSelection(targetId = 'local'): string | null {
+  try {
+    return localStorage.getItem(`cliora:workbench-selected:${encodeURIComponent(targetId)}`)
+      ?? (targetId === 'local' ? localStorage.getItem('cliora:workbench-selected') : null);
+  } catch { return null; }
 }
 
 /** Native skips a saved record whose id is already live (`restore_with` keeps `!live`), and a
@@ -438,6 +441,22 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [selectedId, setSelectedId] = useState<string | null>(focusSessionId);
   const pendingSelectionId = useRef<string | null>(focusSessionId);
   const selectionTarget = useRef(activeTargetId);
+  const selectedByTarget = useRef(new Map<string, string>());
+  function rememberSelection(targetId: string, id: string) {
+    if (selectedByTarget.current.get(targetId) === id) return;
+    selectedByTarget.current.delete(targetId);
+    selectedByTarget.current.set(targetId, id);
+    if (selectedByTarget.current.size > 64) selectedByTarget.current.delete(selectedByTarget.current.keys().next().value!);
+    try {
+      localStorage.setItem(`cliora:workbench-selected:${encodeURIComponent(targetId)}`, id);
+      // Keep the legacy local restore preference; a remote selection must not replace it.
+      if (targetId === 'local') localStorage.setItem('cliora:workbench-selected', id);
+    } catch { /* Host switching still remembers the selection without storage. */ }
+  }
+  function remapLocalSelection(restored: Record<string, string>) {
+    const previous = selectedByTarget.current.get('local') ?? readStoredSelection();
+    if (previous && restored[previous]) rememberSelection('local', restored[previous]);
+  }
   function selectPendingSession(id: string) {
     pendingSelectionId.current = id;
     setSelectedId(id);
@@ -567,11 +586,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     selectionTarget.current = activeTargetId;
     if (targetChanged) pendingSelectionId.current = null;
     setSelectedId((current) => {
-      if (current && scopedSessions.some((item) => item.id === current)) {
+      if (!targetChanged && current && scopedSessions.some((item) => item.id === current)) {
         if (pendingSelectionId.current === current) pendingSelectionId.current = null;
         return current;
       }
       if (current && pendingSelectionId.current === current) return current;
+      const remembered = selectedByTarget.current.get(activeTargetId) ?? readStoredSelection(activeTargetId);
+      if (remembered && scopedSessions.some((item) => item.id === remembered)) return remembered;
       return scopedSessions.find((item) => item.running)?.id ?? scopedSessions[0]?.id ?? null;
     });
     setSplit((current) => current && current.every((id) => scopedSessions.some((item) => item.id === id)) ? current : null);
@@ -735,6 +756,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   /** Replace one pending row with the real session, without waiting for a second list IPC. */
   function applyRestoredSession(savedId: string, snapshot: WorkbenchSession) {
     if (retiredSessionIds.current.has(snapshot.id)) return;
+    remapLocalSelection({ [savedId]: snapshot.id });
     if (savedId !== snapshot.id) forgetSession(savedId);
     if (!firstSeenAt.current.has(snapshot.id)) firstSeenAt.current.set(snapshot.id, snapshot.startedAt ?? Date.now());
     pendingRestored.current.set(snapshot.id, snapshot);
@@ -765,6 +787,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       markRestoreRowFailed(failure.session, failure.detail, Array.isArray(failure.candidates) ? failure.candidates : []);
     }
     if (!Object.keys(report.restored).length) return;
+    remapLocalSelection(report.restored);
     // Reports also replace old tabs when the progress event was not delivered.
     const replaced = new Set(Object.keys(report.restored).filter((id) => id !== report.restored[id]));
     for (const id of replaced) forgetSession(id);
@@ -936,9 +959,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     return () => { alive = false; stop?.(); };
   }, [t]);
   useEffect(() => {
-    if (!selectedId || restoring) return;
-    try { localStorage.setItem('cliora:workbench-selected', selectedId); } catch { /* optional */ }
-  }, [selectedId, restoring]);
+    // On a host-change render selectedId can still name the previous host.
+    // An empty/loading scope must not overwrite that host's remembered choice.
+    if (!selectedId || restoring || !scopedSessions.some(item => item.id === selectedId)) return;
+    rememberSelection(activeTargetId, selectedId);
+  }, [activeTargetId, selectedId, scopedSessions, restoring]);
   const [clock, setClock] = useState(() => Date.now());
   const writers = useRef(new Map<string, (chunk: OutputChunk) => void>());
   const pending = useRef(new PendingTerminalOutput());
@@ -1553,7 +1578,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         if (takeFocus) return focusSessionId;
         if (current && next.some((item) => item.id === current)) return current;
         if (current && pendingSelectionId.current === current) return current;
-        return next.find((item) => item.running)?.id ?? next[0]?.id ?? null;
+        // Only the scoped selection effect may choose a fallback. The global
+        // list can arrive before remote projects and must not pick another host.
+        return null;
       });
       for (const session of next) {
         const write = writers.current.get(session.id);
@@ -3199,6 +3226,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   // Every live terminal stays mounted, including other hosts' sessions: a remount replays history
   // into a fresh xterm. Ended ones are mounted only while on screen or recently viewed.
   // A temporary look keeps its own terminal mounted without putting it in visibleIds.
+  const scopedSessionIds = useMemo(() => new Set(scopedSessions.map(session => session.id)), [scopedSessions]);
   const mountedSessions = sessions.filter((session) => session.running || visibleIds.includes(session.id) || recentSessionIds.includes(session.id) || session.id === peekSessionId || session.id === menu?.sessionId);
   // A pending selection has no input target until that identity has been listed.
   const stageSession = selected;
@@ -3473,7 +3501,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   const canResume = !remotePane && tools.some(tool => tool.id === session.toolId && tool.resume?.state === 'available' && tool.history?.state === 'available');
                   // Clipboard files use the same queue; local sessions retain staged files.
                   const peeking = peekSessionId === session.id;
-                  return <SessionTerminal key={session.id} sessionId={session.id} toolId={session.toolId} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} suspendInput={!!peekSession && session.id === selectedId} peeking={peeking} keepRendererWarm={renderActive} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onFilesPaste={(inputs) => uploads.enqueueUpload(session.id, remotePane || null, inputs)} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={TERMINAL_LINE_HEIGHT[density]} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
+                  return <SessionTerminal key={session.id} sessionId={session.id} toolId={session.toolId} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} suspendInput={!!peekSession && session.id === selectedId} peeking={peeking} keepRendererWarm={renderActive && scopedSessionIds.has(session.id)} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onFilesPaste={(inputs) => uploads.enqueueUpload(session.id, remotePane || null, inputs)} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={TERMINAL_LINE_HEIGHT[density]} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
                     header={split && visible ? <div className={styles.paneHead}>
                       <SessionActivityIcon tone={sessionTone(session)} slot="pane" className={styles.paneDot} label={stateLabel(session, sessionTone(session))} />
                       <ToolIcon toolId={session.toolId} size={14} />

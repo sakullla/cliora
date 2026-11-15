@@ -45,6 +45,7 @@ docs/verification/*
 !docs/verification/performance-after-0.4.17.md
 !docs/verification/git-worktree-performance.md
 !docs/verification/session-recovery-status-2026-11-13.md
+!docs/verification/tools-resource-performance-2026-11-15.md
 !docs/verification/performance-installation/
 docs/verification/performance-installation/*
 !docs/verification/performance-installation/README.md
