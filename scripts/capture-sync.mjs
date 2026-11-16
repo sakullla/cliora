@@ -12,7 +12,9 @@ const languageOption = option('--language', 'zh');
 const languages = languageOption === 'all' ? ['zh', 'en'] : [languageOption];
 // The General tab is captured too when asked, so the settings grouping has browser evidence.
 const withGeneral = process.argv.includes('--general');
-const widths = sizeOption === 'all' ? [1360, 900, 640] : sizeOption.split(',').map(Number);
+const compat640 = process.env.CLIORA_CAPTURE_640 === '1' || process.argv.includes('--compat-640');
+const defaultWidths = compat640 ? [1360, 900, 720, 640] : [1360, 900, 720];
+const widths = sizeOption === 'all' ? defaultWidths : sizeOption.split(',').map(Number);
 const root = fileURLToPath(new URL('../', import.meta.url)).replace(/\\/g, '/').replace(/\/$/, '');
 const out = process.env.CLIORA_CAPTURE_OUT ?? `${root}/docs/verification/ui-sync`;
 const previewUrl = process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736';
@@ -227,7 +229,7 @@ const invocation = ['node', 'scripts/capture-sync.mjs', ...process.argv.slice(2)
 fs.writeFileSync(`${out}/index.html`, `<!doctype html><meta charset="utf-8"><title>Sync captures</title><style>body{font:14px system-ui;background:#222;color:#eee}figure{display:inline-block;margin:12px;vertical-align:top}img{max-width:640px;border:1px solid #555}</style><p>${failures.length ? '捕获有失败，请查看清单' : '捕获完成'} · ${shots.length} 张 · <a href="capture-sync-manifest.json" style="color:#b8d2ff">捕获清单</a></p><p>${escape(acceptanceNote)}</p>${shots.map((item) => `<figure><img src="${escape(item.file)}"><figcaption>${escape(item.file)}</figcaption></figure>`).join('')}`);
 fs.writeFileSync(`${out}/capture-sync-manifest.json`, JSON.stringify({ capturedAt: new Date().toISOString(), synthetic: true, acceptance, invocation, previewUrl, matrix: { themes, widths, languages }, scenarios: [...Object.keys(scenarios), ...(withGeneral ? ['general'] : [])], success: failures.length === 0, imageCount: shots.length, captures: shots, failures }, null, 2) + '\n');
 const rows = [...new Set(shots.map((item) => item.name))].map((label) => `| ${label} | ${shots.filter((item) => item.name === label).map((item) => `[${item.language} ${item.theme} ${item.width}](${item.file})`).join(' · ')} |`);
-fs.writeFileSync(`${out}/README.md`, `# 迁移与同步捕获\n\n[浏览图片画廊](index.html) · [机器可读清单](capture-sync-manifest.json)\n\n捕获 WebDAV 未连接、正常、需处理、失败与暂停状态，连接、导出、恢复对话框，冲突展开，以及同步进行中与结果。\n\n执行：\n\n\`\`\`sh\nCLIORA_PREVIEW_URL=http://127.0.0.1:14736 ${invocation}\n\`\`\`\n\n\`--theme all|light|dark\`、\`--size 1360,900,640\` 与 \`--language all|zh|en\` 可缩小范围；\`CLIORA_CAPTURE_OUT\` 指定输出目录。预览服务器需运行当前 frontend build。\n\n本次生成 ${shots.length} 张图片，${failures.length} 项检查失败（页面错误、横向溢出或场景步骤失败）。${acceptanceNote}\n\n| 场景 | 图片 |\n| --- | --- |\n${rows.join('\n')}\n`);
+fs.writeFileSync(`${out}/README.md`, `# 迁移与同步捕获\n\n[浏览图片画廊](index.html) · [机器可读清单](capture-sync-manifest.json)\n\n捕获 WebDAV 未连接、正常、需处理、失败与暂停状态，连接、导出、恢复对话框，冲突展开，以及同步进行中与结果。\n\n执行：\n\n\`\`\`sh\nCLIORA_PREVIEW_URL=http://127.0.0.1:14736 ${invocation}\n\`\`\`\n\n\`--theme all|light|dark\`、\`--size 1360,900,720\` 与 \`--language all|zh|en\` 可缩小范围；640 需显式指定或设置 CLIORA_CAPTURE_640=1；\`CLIORA_CAPTURE_OUT\` 指定输出目录。预览服务器需运行当前 frontend build。\n\n本次生成 ${shots.length} 张图片，${failures.length} 项检查失败（页面错误、横向溢出或场景步骤失败）。${acceptanceNote}\n\n| 场景 | 图片 |\n| --- | --- |\n${rows.join('\n')}\n`);
 console.log(JSON.stringify({ out, count: shots.length, failures }, null, 2));
 if (failures.length) process.exitCode = 1;
 

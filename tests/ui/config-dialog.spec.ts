@@ -1867,6 +1867,10 @@ test('new configuration opens quick, and advanced keeps the same draft and model
   const advanced = dialog.getByRole('button', { name: '高级配置', exact: true });
   await expect(quick).toHaveAttribute('aria-pressed', 'true');
   await expect(dialog.getByRole('note')).toContainText('保存只更新配置库');
+  const nativeRadio = dialog.getByRole('radio', { name: '使用 CLI 当前登录或凭据', exact: true });
+  const recommendedBy = await nativeRadio.getAttribute('aria-describedby');
+  expect(recommendedBy).toBeTruthy();
+  await expect(dialog.locator(`[id="${recommendedBy}"]`)).toHaveText('推荐');
   // The generated name is usable without typing, and advanced-only chrome is hidden.
   await expect(dialog.getByLabel('配置名称')).toHaveValue(/配置$/);
   await expect(dialog.getByRole('button', { name: '常用设置', exact: true })).toHaveCount(0);
@@ -1911,7 +1915,7 @@ for (const width of [1360, 900, 720]) {
       const body = element.querySelector<HTMLElement>('.guide-dialog-body')!;
       const cards = [...body.querySelectorAll<HTMLElement>('[role="radio"]')];
       const right = body.getBoundingClientRect().right;
-      return { dialog: element.scrollWidth - element.clientWidth, body: body.scrollWidth - body.clientWidth, clipped: cards.some(card => card.getBoundingClientRect().right > right + 1), page: document.documentElement.scrollWidth - innerWidth };
+      return { dialog: element.scrollWidth - element.clientWidth, body: body.scrollWidth - body.clientWidth, clipped: cards.some(card => card.getBoundingClientRect().right > right + 1 || card.scrollWidth > card.clientWidth + 1 || card.scrollHeight > card.clientHeight + 1), page: document.documentElement.scrollWidth - innerWidth };
     });
     expect(quick).toEqual({ dialog: 0, body: 0, clipped: false, page: 0 });
     await dialog.getByRole('button', { name: '高级配置', exact: true }).click();

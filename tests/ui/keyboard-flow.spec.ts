@@ -168,6 +168,36 @@ test('the keyboard alone navigates, launches from the split button, closes a dia
   await expect(palette).toHaveCount(0);
 });
 
+test('a quick step jump switches advanced once, focuses the address and stops scheduling frames', async ({ page }) => {
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await setupConfigurationWorkspace(page, 'codex');
+  await page.evaluate(() => {
+    const original = window.requestAnimationFrame.bind(window);
+    const state = { count: 0 };
+    (window as any).__rafAudit = state;
+    window.requestAnimationFrame = (callback: FrameRequestCallback) => { state.count += 1; return original(callback); };
+  });
+  await page.getByRole('button', { name: '新建配置' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('button', { name: '快速配置', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.evaluate(() => { (window as any).__rafAudit.count = 0; });
+  await dialog.getByRole('button', { name: '供应商（已完成）', exact: true }).click();
+  const address = dialog.getByLabel('请求地址', { exact: true });
+  await expect(address).toBeFocused();
+  await expect(dialog.getByRole('button', { name: '高级配置', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.waitForTimeout(250);
+  const settled = await page.evaluate(() => (window as any).__rafAudit.count);
+  expect(settled).toBeLessThanOrEqual(3);
+  await page.waitForTimeout(250);
+  expect(await page.evaluate(() => (window as any).__rafAudit.count)).toBe(settled);
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await page.waitForTimeout(100);
+  const afterClose = await page.evaluate(() => (window as any).__rafAudit.count);
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => (window as any).__rafAudit.count)).toBe(afterClose);
+});
+
 test('the configuration quick/advanced shell works from the keyboard and returns focus', async ({ page }) => {
   await page.setViewportSize({ width: 1360, height: 900 });
   await setupConfigurationWorkspace(page, 'codex');

@@ -81,6 +81,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
   const [visibleSecret, setVisibleSecret] = useState<string | null>(null);
   const [secretShown, setSecretShown] = useState(false);
   const nameId = useId();
+  const recommendedHintId = useId();
   const modelPane = useRef<HTMLDivElement>(null);
   const directoryPanel = useRef<HTMLElement>(null);
   const [directory, setDirectory] = useState<ModelDirectory | null>(null);
@@ -124,6 +125,35 @@ export function ConfigurationWorkspaceEditor(props: Props) {
   const focusReturn = useRef<HTMLElement | null>(null);
   const credentialPanel = useRef<HTMLDivElement>(null);
   const credentialSource = useRef<ConfigurationCredential['source'] | null>(null);
+  // A quick step that needs the advanced shell is scheduled once, after the
+  // level state has rendered. The ref never captures a stale `quick` value.
+  const pendingStep = useRef<ConfigurationStepKey | null>(null);
+  const focusStep = (key: ConfigurationStepKey) => {
+    const target = modelPane.current?.querySelector<HTMLElement>(`[data-config-step="${key}"]`);
+    if (!target) return;
+    target.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+    if (key === 'connection') {
+      // The address is the last input of the provider/address card in every
+      // adapter that renders one; focus it rather than the provider id.
+      const inputs = [...target.querySelectorAll<HTMLElement>('input:not([disabled]):not([type="hidden"])')];
+      const address = inputs.at(-1) ?? target.querySelector<HTMLElement>('select:not([disabled]), input:not([disabled]):not([type="hidden"])');
+      address?.focus({ preventScroll: true });
+      return;
+    }
+    const focusable = ['input:not([disabled]):not([type="hidden"]), select:not([disabled])', '[role="radio"][aria-checked="true"]:not([disabled])', 'button:not([disabled])'];
+    for (const selector of focusable) { const control = target.querySelector<HTMLElement>(selector); if (control) { control.focus({ preventScroll: true }); break; } }
+  };
+  const jumpTo = (key: ConfigurationStepKey) => {
+    if (quick && key === 'connection') { pendingStep.current = key; setLevel('advanced'); return; }
+    focusStep(key);
+  };
+  useEffect(() => {
+    if (level !== 'advanced' || !pendingStep.current) return;
+    const step = pendingStep.current;
+    pendingStep.current = null;
+    const frame = requestAnimationFrame(() => { if (alive.current) focusStep(step); });
+    return () => cancelAnimationFrame(frame);
+  }, [level]);
 
   useEffect(() => {
     alive.current = true;
@@ -403,9 +433,11 @@ export function ConfigurationWorkspaceEditor(props: Props) {
   const fileCount = draft ? new Set([...workspace.probe.nativeFiles.filter(file => !file.sensitive).map(file => file.role), ...Object.keys(draft.profile.files)]).size : 0;
   const views = configViews(subject, Boolean(Editor), fieldCount, fileCount, connectionChainAbsent && !!Editor);
   const activeView = views.includes(view) ? view : views[0] ?? view;
-  // Quick always shows the connection/model page. The chosen tab remains in
-  // state, so returning to advanced restores exactly the view that was there.
-  const shownView = quick ? 'models' : activeView;
+  // Quick shows the first view the adapter actually declared. Settings-only
+  // tools (no connection/model chain) must not be driven as an empty model page.
+  const quickView = views.includes('models') ? 'models' : views[0] ?? view;
+  const shownView = quick ? quickView : activeView;
+  const quickNoteVisible = quick && views.includes('models') && !connectionChainAbsent;
   useEffect(() => {
     const previous = credentialSource.current;
     credentialSource.current = source;
@@ -460,7 +492,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
   const accountReady = !!selectedAccount && accountReadyForSelection(selectedAccount, props.accounts.capability);
   const accountTitle = selectedAccount?.identity?.email ?? selectedAccount?.identity?.subject ?? (accountReady ? selectedAccount?.label : undefined) ?? t('tools.config.noAccountSelected');
   const accountStatus = accountReady ? (selectedAccount?.identity ? t('tools.config.verified') : t('tools.config.noIdentity')) : t('tools.config.pendingVerify');
-  const sourceChoice = (value: ConfigurationCredential['source'], aria: string, title: string, detail: string) => <button type="button" role="radio" aria-checked={source === value} data-recommended={recommendedSource === value || undefined} disabled={busy || pending || cancelling} onClick={event => { focusReturn.current = event.currentTarget; void chooseSource(value); }}><span className="sr-only">{aria}</span><span className={styles.sourceMark} aria-hidden="true" /><span className={styles.sourceCopy} aria-hidden="true"><strong>{title}{recommendedSource === value && <span className={styles.recommend}>{t('tools.config.recommended')}</span>}</strong><small>{detail}</small></span></button>;
+  const sourceChoice = (value: ConfigurationCredential['source'], aria: string, title: string, detail: string) => <><button type="button" role="radio" aria-checked={source === value} aria-describedby={recommendedSource === value ? recommendedHintId : undefined} data-recommended={recommendedSource === value || undefined} disabled={busy || pending || cancelling} onClick={event => { focusReturn.current = event.currentTarget; void chooseSource(value); }}><span className="sr-only">{aria}</span><span className={styles.sourceMark} aria-hidden="true" /><span className={styles.sourceCopy} aria-hidden="true"><strong>{title}{recommendedSource === value && <span className={styles.recommend}>{t('tools.config.recommended')}</span>}</strong><small>{detail}</small></span></button>{recommendedSource === value && <span id={recommendedHintId} className="sr-only">{t('tools.config.recommended')}</span>}</>;
   const stepLabels: Record<ConfigurationStepKey, string> = { connection: t('tools.config.chainConnection'), login: t('tools.config.chainLogin'), model: t('tools.config.chainModel') };
   const stepDone: Record<ConfigurationStepKey, boolean> = {
     connection: !!(connection?.providerId?.trim() || connection?.baseUrl?.trim()),
@@ -468,15 +500,6 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     model: !!connection?.model?.trim(),
   };
   const steps = configurationStepOrder.filter(key => key !== 'connection' || connectionConfigurable).map(key => ({ key, label: stepLabels[key], done: stepDone[key] }));
-  // Jump to a numbered step and hand keyboard focus to its first control.
-  const jumpTo = (key: ConfigurationStepKey) => {
-    if (quick && key === 'connection') { setLevel('advanced'); requestAnimationFrame(() => jumpTo('connection')); return; }
-    const target = modelPane.current?.querySelector<HTMLElement>(`[data-config-step="${key}"]`);
-    if (!target) return;
-    target.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
-    const focusable = ['input:not([disabled]):not([type="hidden"]), select:not([disabled])', '[role="radio"][aria-checked="true"]:not([disabled])', 'button:not([disabled])'];
-    for (const selector of focusable) { const control = target.querySelector<HTMLElement>(selector); if (control) { control.focus({ preventScroll: true }); break; } }
-  };
   const visibleDirectory = directory ? directory.models.filter(id => id.toLowerCase().includes(search.toLowerCase())) : [];
   const loginSection = (
         <section data-config-step="login" className={`${styles.sources} ${sharedStyles.step}`} aria-label={t('tools.config.sourcesLabel')}>
@@ -501,7 +524,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
       {history && <section aria-label={t('tools.config.historyLabel')}><button onClick={() => { setHistory(false); setBackup(null); }}>{t('tools.config.backToEdit')}</button><div className={styles.buttons}>{backups.map(row => <button key={row.transactionId} onClick={() => void selectBackup(row.transactionId)}>{row.createdAt ? backupStamp(row.createdAt) : row.transactionId}</button>)}</div>{!backups.length && <p>{t('tools.config.noBackups')}</p>}{backup && <><CodeEditor label={t('tools.config.historyOriginal')} format={workspace.probe.nativeFiles.find(file => file.role === backup.role)?.format ?? 'json'} readOnly value={backup.original} /><details><summary>{t('tools.config.historyCurrentSummary')}</summary><CodeEditor label={t('tools.config.historyCurrentLabel')} format={workspace.probe.nativeFiles.find(file => file.role === backup.role)?.format ?? 'json'} readOnly value={backup.current} /></details><button disabled={busy || cancelling} onClick={() => void restoreBackup()}>{t('tools.config.restoreThis')}</button></>}</section>}
       <div hidden={picking || history}>
         {quickCapable && <div className={styles.level} role="group" aria-label={t('tools.config.levelLabel')}><button type="button" aria-pressed={quick} onClick={() => setLevel('quick')}>{t('tools.config.levelQuick')}</button><button type="button" aria-pressed={!quick} onClick={() => setLevel('advanced')}>{t('tools.config.levelAdvanced')}</button></div>}
-        {quick && <p className={styles.quickNote} role="note">{t('tools.config.quickNote')}</p>}
+        {quickNoteVisible && <p className={styles.quickNote} role="note">{t('tools.config.quickNote')}</p>}
         {subject === 'profile' && <div className={styles.name} data-empty={!nameInput.trim() || undefined} data-quick={quick || undefined}><label htmlFor={nameId}>{t('tools.config.name')}<span className={styles.required} aria-hidden="true">*</span></label><input id={nameId} aria-label={t('tools.config.name')} aria-required="true" aria-invalid={!nameInput.trim() || undefined} title={quick ? t('tools.config.quickNameHint') : undefined} placeholder={t('tools.config.namePlaceholder')} value={nameInput} disabled={busy || cancelling} onChange={event => { setNameInput(event.target.value); metadata({ name: event.target.value }); }} /></div>}
         {views.length > 1 && <nav className={styles.tabs} hidden={quick} aria-label={t('tools.config.tabsLabel')}>{views.includes('models') && <button aria-pressed={activeView === 'models'} disabled={pending} onClick={() => setView('models')}>{t('tools.config.tabModels')}</button>}{views.includes('settings') && <button aria-pressed={activeView === 'settings'} disabled={pending} onClick={() => setView('settings')}>{t('tools.config.tabSettings')}</button>}{views.includes('raw') && <button aria-pressed={activeView === 'raw'} disabled={pending} onClick={() => setView('raw')}>{t('tools.config.tabRaw')}</button>}{views.includes('preview') && <button aria-pressed={activeView === 'preview'} title={!valid ? t('tools.config.previewDisabledTitle') : undefined} disabled={!valid || pending || cancelling} onClick={() => void showPreview()}>{t('tools.config.tabPreview')}</button>}</nav>}
         <ConnectionCredentialProvider value={shownView === 'models' && subject !== 'common' && !connectionChainAbsent ? loginSection : null}><div ref={modelPane} className={styles.modelPane} data-under-tabs={!quick && views.length > 1 || undefined} hidden={!quick && (shownView === 'raw' || shownView === 'preview')}>

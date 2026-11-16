@@ -3,8 +3,8 @@
  * vite preview on 127.0.0.1:14736, run the four capture scripts over all themes and widths, then
  * stop the preview. The scripts run as one job per theme × width, two at a time by default
  * (CLIORA_CAPTURE_JOBS overrides), and the total wall-clock is printed at the end. The
- * configuration/page gallery uses 1360/900/720, with 640 only when CLIORA_CAPTURE_640=1;
- * the other galleries keep their 1360/900/640 matrix. Output goes to docs/verification/ui-redesign/<script>/<theme>-<width>,
+ * default matrix is 1360/900/720 for every gallery, with 640 only when
+ * CLIORA_CAPTURE_640=1. Output goes to docs/verification/ui-redesign/<script>/<theme>-<width>,
  * each with the script's own gallery, manifest and job.log. Any failing job makes the run exit
  * non-zero and its failing scenarios are printed. Captures use synthetic IPC and are
  * not native platform acceptance.
@@ -20,13 +20,11 @@ const port = 14736;
 const previewUrl = `http://127.0.0.1:${port}`;
 const outRoot = path.join(root, 'docs', 'verification', 'ui-redesign');
 const themes = ['light', 'dark'];
-// Configuration and page galleries use the native minimum width 720 by
-// default. 640 stays an explicit compatibility sweep (CLIORA_CAPTURE_640=1).
-// The other galleries keep their existing matrix in this task's scope.
+// The native minimum width 720 is the default compatibility edge. 640 stays
+// an explicit opt-in sweep (CLIORA_CAPTURE_640=1). All four galleries share it.
 const desktopWidths = [1360, 900, 720];
 const compat640 = process.env.CLIORA_CAPTURE_640 === '1' || process.argv.includes('--compat-640');
-const configurationWidths = compat640 ? [...desktopWidths, 640] : desktopWidths;
-const legacyWidths = [1360, 900, 640];
+const widths = compat640 ? [...desktopWidths, 640] : desktopWidths;
 // Independent capture jobs share the one preview server. Two at a time by default: at four, CPU
 // contention on a loaded host pushed Playwright waits past 30 s. CLIORA_CAPTURE_JOBS (integer ≥ 1)
 // overrides it. Each job covers one theme × width of one script and writes to
@@ -38,7 +36,7 @@ if (jobsSetting !== undefined && !/^[1-9]\d*$/.test(jobsSetting.trim())) {
 }
 const poolSize = jobsSetting === undefined ? 2 : Number(jobsSetting.trim());
 const scripts = ['capture-ui', 'capture-sync', 'capture-workbench', 'capture-memory'];
-const jobs = scripts.flatMap((script) => themes.flatMap((theme) => (script === 'capture-ui' ? configurationWidths : legacyWidths).map((width) => ({
+const jobs = scripts.flatMap((script) => themes.flatMap((theme) => widths.map((width) => ({
   script,
   label: `${theme}-${width}`,
   args: ['--theme', theme, '--size', String(width), ...(script === 'capture-ui' && theme === 'light' && width === 1360 ? ['--measure'] : [])],

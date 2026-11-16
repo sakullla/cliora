@@ -46,6 +46,20 @@ test('Qoder common memory defaults remain unknown until explicitly set', async (
   await expect(dialog.getByLabel('用户自动记忆', { exact: true })).toHaveValue('');
 });
 
+test('Qoder quick new profile stays on its settings view without a model prompt', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'qoder_cn');
+  await page.getByRole('button', { name: '新建配置' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('button', { name: '快速配置', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(dialog.getByRole('button', { name: '常用设置', exact: true })).toHaveCount(0);
+  await expect(dialog.locator('[data-config-step="model"]')).toHaveCount(0);
+  await expect(dialog.getByRole('note')).toHaveCount(0);
+  await expect(dialog.getByLabel('推理强度', { exact: true })).toHaveValue('future-effort');
+  await dialog.getByRole('button', { name: '高级配置', exact: true }).click();
+  await expect(dialog.getByRole('button', { name: '常用设置', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(dialog.getByLabel('推理强度', { exact: true })).toHaveValue('future-effort');
+});
+
 const component = ts.transpileModule(readFileSync('src/components/configuration/ConfigurationField.tsx', 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 },
 }).outputText;

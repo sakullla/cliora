@@ -21,7 +21,9 @@ const option = (flag, fallback) => { const index = process.argv.indexOf(flag); r
 const themeOption = option('--theme', 'all');
 const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
 const sizeOption = option('--size', '1360');
-const widths = sizeOption === 'all' ? [1360, 900, 640] : sizeOption.split(',').map(Number);
+const compat640 = process.env.CLIORA_CAPTURE_640 === '1' || process.argv.includes('--compat-640');
+const defaultWidths = compat640 ? [1360, 900, 720, 640] : [1360, 900, 720];
+const widths = sizeOption === 'all' ? defaultWidths : sizeOption.split(',').map(Number);
 const root = fileURLToPath(new URL('../', import.meta.url)).replace(/\\/g, '/').replace(/\/$/, '');
 const out = process.env.CLIORA_CAPTURE_OUT ?? `${root}/docs/verification/ui-memory`;
 const previewUrl = process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736';
