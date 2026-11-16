@@ -22,6 +22,18 @@
 //!   entries use `serverUrl` + `headers`/`oauth`. Legacy remote entries that
 //!   still carry `url`/`httpUrl` keys are surfaced read-only and never
 //!   rewritten — the current key spelling is not guessed for them.
+//!   Version-shaped since the 1.5.9 evidence run
+//!   (`docs/verification/remote-workflow/agy-1.5.9/`, fixture
+//!   `tests/fixtures/native/antigravity-cli-1.5.9/mcp-config.json`): the
+//!   native writer still spells remote entries `serverUrl` but stamps an
+//!   explicit per-entry `disabled` boolean (`agy mcp enable` removes the key),
+//!   native edits canonicalize legacy `url` entries back to `serverUrl`, and
+//!   disable keeps the entry with `disabled: true`. Installs below 1.5 keep
+//!   the 1.3.x shape (no per-entry flag; disabling removes the entry, legacy
+//!   `url`/`httpUrl` entries stay read-only). `<workspace>/.agents/
+//!   mcp_config.json` is the runtime project scope: it loads in sessions but
+//!   `agy mcp` subcommands never list or write it, so Cliora manages it as a
+//!   native config file directly.
 //! * **Skills**: personal `antigravity-cli/skills/<dir>/SKILL.md` and the
 //!   open-standard project `.agents/skills/`; only the two brand roots are
 //!   managed here.
@@ -114,28 +126,45 @@ impl CliAdapter for Antigravity {
         &self,
         scope: Scope,
         home: &Path,
-        _project: Option<&Path>,
+        project: Option<&Path>,
         known: bool,
     ) -> Vec<NativeFile> {
-        if scope != Scope::Global {
-            return Vec::new();
+        match scope {
+            Scope::Global => vec![file(
+                "settings",
+                gemini_root(home)
+                    .join("antigravity-cli")
+                    .join("settings.json"),
+                FileKind::Json,
+                known,
+                Some("Antigravity CLI（agy）设置（纯 JSON）；keyring 登录态不接管，headless 密钥经 GEMINI_API_KEY 注入"),
+                false,
+            )],
+            Scope::Project => {
+                // Runtime project MCP scope (1.5.9 evidence): sessions load
+                // `<workspace>/.agents/mcp_config.json`, but `agy mcp`
+                // subcommands manage only the user-level global file. Cliora
+                // edits this file directly through the registered-file path,
+                // which the shared transaction service protects.
+                let Some(project) = project else {
+                    return Vec::new();
+                };
+                vec![file(
+                    "mcp",
+                    project.join(".agents").join("mcp_config.json"),
+                    FileKind::Json,
+                    known,
+                    Some("项目级 MCP 运行时作用域（.agents/mcp_config.json）；agy mcp 子命令不管理此文件，仅在会话内加载"),
+                    false,
+                )]
+            }
         }
-        vec![file(
-            "settings",
-            gemini_root(home)
-                .join("antigravity-cli")
-                .join("settings.json"),
-            FileKind::Json,
-            known,
-            Some("Antigravity CLI（agy）设置（纯 JSON）；keyring 登录态不接管，headless 密钥经 GEMINI_API_KEY 注入"),
-            false,
-        )]
     }
     fn interface_formats(&self) -> &'static [&'static str] {
         &[]
     }
     fn file_kind(&self, role: &str) -> Result<FileKind, String> {
-        if role == "settings" {
+        if role == "settings" || role == "mcp" {
             Ok(FileKind::Json)
         } else {
             Err("Antigravity 不支持此原生文件角色".into())
@@ -161,16 +190,46 @@ impl CliAdapter for Antigravity {
             child: None,
         })
     }
+    /// The verified entry shape differs between the 1.3.x and 1.5.9 install
+    /// lines (per-entry `disabled` flag, legacy-key canonicalization), so the
+    /// MCP contract follows the probed version.
+    fn mcp_requires_version(&self) -> bool {
+        true
+    }
+    fn mcp_location_for_version(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+        version: Option<&str>,
+    ) -> Option<McpLocation> {
+        if let Some(text) = version {
+            let parsed = semver::Version::parse(text.trim().trim_start_matches('v')).ok()?;
+            if parsed.major != 1 {
+                // Only the 1.3.x and 1.5.9 shapes are evidenced; a newer
+                // major's contract stays unconfirmed instead of guessed.
+                return None;
+            }
+        }
+        self.mcp_location(scope, home, project)
+    }
     fn mcp_entry_view(&self, entry: &Value) -> Value {
-        // Remote entries spell the URL `serverUrl`; surface it through the
-        // shared `url` view key without rewriting the native document.
+        // Remote entries spell the URL `serverUrl` (legacy entries keep their
+        // own `url`/`httpUrl` key); surface the address through the shared
+        // `url` view key without rewriting the native document. The current
+        // key wins when a hand-edited entry carries both spellings.
         let Some(object) = entry.as_object() else {
             return entry.clone();
         };
-        if let Some(server_url) = object.get("serverUrl").and_then(Value::as_str) {
-            let mut view = object.clone();
-            view.insert("url".into(), json!(server_url));
-            return Value::Object(view);
+        let mirror = ["serverUrl", "url", "httpUrl"]
+            .into_iter()
+            .find_map(|key| object.get(key).and_then(Value::as_str));
+        if let Some(url) = mirror {
+            if object.get("url").and_then(Value::as_str) != Some(url) {
+                let mut view = object.clone();
+                view.insert("url".into(), json!(url));
+                return Value::Object(view);
+            }
         }
         entry.clone()
     }
@@ -180,46 +239,29 @@ impl CliAdapter for Antigravity {
         enabled: bool,
         existing: Option<&Value>,
     ) -> Result<Option<Value>, String> {
-        // No documented per-entry enabled flag: disabling removes the native
-        // entry while the Cliora definition stays for re-enabling.
-        if !enabled {
-            return Ok(None);
-        }
-        let legacy = existing.and_then(Value::as_object).is_some_and(|map| {
-            map.get("url").is_some() || map.get("httpUrl").is_some()
-        });
-        if legacy {
-            return Err(
-                "该条目仍是旧版 url/httpUrl 拼写（现行键为 serverUrl）；为避免误写，此条目只读保留，请先在原生文件中确认或改名"
-                    .into(),
-            );
-        }
-        let map = match definition.transport {
-            McpTransport::Stdio => {
-                // stdio shape: command/args/env/cwd (+ other native keys the CLI owns).
-                let mut map = mcp::stdio_doc_with_env(definition, existing, "env");
-                mcp::apply_cwd(&mut map, definition);
-                map
-            }
-            McpTransport::Sse => {
-                return Err("Antigravity 没有已确认的旧版 HTTP+SSE 映射，未改写为 Streamable HTTP".into());
-            }
-            McpTransport::Http => {
-                // Remote shape: serverUrl + headers; the oauth/trust fields of
-                // an existing entry stay untouched, and sensitive existing
-                // headers keep their protected values through the shared
-                // builder. The shared builder writes `url`, which this CLI
-                // spells `serverUrl`.
-                let mut map = mcp::http_doc(definition, existing, "headers");
-                map.remove("url");
-                map.insert("serverUrl".into(), json!(definition.url));
-                map
-            }
-        };
-        Ok(Some(Value::Object(map)))
+        // Without a probed install line the long-standing 1.3.x shape stays:
+        // no per-entry enabled flag is guessed onto the document.
+        mcp_document_for_shape(definition, enabled, existing, false)
+    }
+    fn mcp_document_for_version(
+        &self,
+        definition: &McpDefinition,
+        enabled: bool,
+        existing: Option<&Value>,
+        _location: &McpLocation,
+        version: Option<&str>,
+    ) -> Result<Option<Value>, String> {
+        mcp_document_for_shape(definition, enabled, existing, per_entry_disabled(version)?)
     }
     fn mcp_disabled_description(&self) -> Option<&'static str> {
         Some("停用会移除原生条目，Cliora 中的定义仍保留")
+    }
+    fn mcp_disabled_description_for_version(&self, version: Option<&str>) -> Option<&'static str> {
+        if per_entry_disabled(version).unwrap_or(false) {
+            Some("停用会写入 disabled:true 并保留原生条目；启用时移除该键")
+        } else {
+            self.mcp_disabled_description()
+        }
     }
     fn mcp_supports_cwd(&self) -> bool {
         true
@@ -407,7 +449,7 @@ impl CliAdapter for Antigravity {
             },
             resources: Facet {
                 state: "available",
-                reason: "MCP（~/.gemini/config/mcp_config.json mcpServers：stdio command/args/env/cwd 与远程 serverUrl+headers/oauth，旧版 url/httpUrl 条目只读保留）与 Skills（antigravity-cli/skills 与项目 .agents/skills）由原生路径提供",
+                reason: "MCP（~/.gemini/config/mcp_config.json mcpServers：stdio command/args/env/cwd 与远程 serverUrl+headers/oauth；1.5+ 按实测写逐条 disabled（停用保留条目），1.3.x 停用移除条目且旧版 url/httpUrl 条目只读；项目 .agents/mcp_config.json 为运行时作用域，agy mcp 子命令不管理）与 Skills（antigravity-cli/skills 与项目 .agents/skills）由原生路径提供",
             },
             history: Facet {
                 state: "available",
@@ -427,6 +469,92 @@ impl CliAdapter for Antigravity {
             },
         }
     }
+}
+
+/// Whether the probed install line writes the 1.5.9 per-entry `disabled`
+/// contract (verified on 1.5.9: `agy mcp add` stamps `disabled:false`,
+/// `disable` keeps the entry with `disabled:true`, `enable` removes the key).
+/// 1.3.x has no per-entry flag. An absent version keeps the 1.3.x shape —
+/// the long-standing Cliora behavior — while an unverified major refuses
+/// writes instead of guessing.
+fn per_entry_disabled(version: Option<&str>) -> Result<bool, String> {
+    let Some(text) = version else {
+        return Ok(false);
+    };
+    let parsed = semver::Version::parse(text.trim().trim_start_matches('v'))
+        .map_err(|_| format!("无法识别的 agy 版本号「{text}」；未执行 MCP 写入"))?;
+    if parsed.major != 1 {
+        return Err(format!("agy {parsed} 的 MCP 键契约尚未验证；未执行写入"));
+    }
+    Ok(parsed.minor >= 5)
+}
+
+/// Native entry document for one shape line. `per_entry_flag` is the 1.5.9
+/// contract above; without it the 1.3.x shape applies (disabling removes the
+/// entry, legacy `url`/`httpUrl` entries stay read-only).
+fn mcp_document_for_shape(
+    definition: &McpDefinition,
+    enabled: bool,
+    existing: Option<&Value>,
+    per_entry_flag: bool,
+) -> Result<Option<Value>, String> {
+    // 1.3.x: no documented per-entry enabled flag — disabling removes the
+    // native entry while the Cliora definition stays for re-enabling.
+    if !enabled && !per_entry_flag {
+        return Ok(None);
+    }
+    let legacy = existing
+        .and_then(Value::as_object)
+        .is_some_and(|map| map.get("url").is_some() || map.get("httpUrl").is_some());
+    if legacy && !per_entry_flag {
+        return Err(
+            "该条目仍是旧版 url/httpUrl 拼写（现行键为 serverUrl）；为避免误写，此条目只读保留，请先在原生文件中确认或改名"
+                .into(),
+        );
+    }
+    let mut map = match definition.transport {
+        McpTransport::Stdio => {
+            // stdio shape: command/args/env/cwd (+ other native keys the CLI
+            // owns). Remote keys never survive a stdio entry.
+            let mut map = mcp::stdio_doc_with_env(definition, existing, "env");
+            map.remove("serverUrl");
+            map.remove("httpUrl");
+            mcp::apply_cwd(&mut map, definition);
+            map
+        }
+        McpTransport::Sse => {
+            return Err("Antigravity 没有已确认的旧版 HTTP+SSE 映射，未改写为 Streamable HTTP".into());
+        }
+        McpTransport::Http => {
+            // Remote shape: serverUrl + headers; the oauth/trust fields of an
+            // existing entry stay untouched, and sensitive existing headers
+            // keep their protected values through the shared builder. Legacy
+            // `url`/`httpUrl` spellings canonicalize back to the native
+            // writer's `serverUrl` on 1.5.9 — never both keys on one entry.
+            let mut map = mcp::http_doc(definition, existing, "headers");
+            map.remove("url");
+            map.remove("httpUrl");
+            map.insert("serverUrl".into(), json!(definition.url));
+            map
+        }
+    };
+    if per_entry_flag {
+        // 1.5.9 native writer semantics: `mcp add` stamps an explicit
+        // `disabled:false`, disable flips the flag in place with the entry
+        // kept, and enable removes the key entirely (implicit enabled).
+        let was_disabled = existing
+            .and_then(Value::as_object)
+            .and_then(|map| map.get("disabled"))
+            == Some(&Value::Bool(true));
+        if !enabled {
+            map.insert("disabled".into(), json!(true));
+        } else if was_disabled {
+            map.remove("disabled");
+        } else {
+            map.insert("disabled".into(), json!(false));
+        }
+    }
+    Ok(Some(Value::Object(map)))
 }
 
 #[cfg(test)]
@@ -457,6 +585,10 @@ mod tests {
     }
   }
 }"#;
+
+    // Sanitized 1.5.9 sample pinned by the remote evidence run.
+    const MCP_159_FIXTURE: &str =
+        include_str!("../../../../tests/fixtures/native/antigravity-cli-1.5.9/mcp-config.json");
 
     fn definition(transport: McpTransport) -> McpDefinition {
         McpDefinition {
@@ -525,10 +657,23 @@ mod tests {
                 .replace('\\', "/")
                 .ends_with(".gemini/antigravity-cli/settings.json")
         );
-        assert!(Antigravity
-            .native_files(Scope::Project, home, Some(Path::new("/work/p")), true)
-            .is_empty());
+        assert!(Antigravity.native_files(Scope::Project, home, None, true).is_empty());
+        // The project runtime MCP scope is a native config file role: `agy mcp`
+        // subcommands manage only the user-level global file (1.5.9 evidence).
+        let project = Antigravity.native_files(Scope::Project, home, Some(Path::new("/work/p")), true);
+        assert_eq!(project.len(), 1);
+        assert_eq!(project[0].role, "mcp");
+        assert_eq!(project[0].format, "json");
+        assert!(project[0].writable);
+        assert!(!project[0].sensitive);
+        assert!(
+            project[0]
+                .path
+                .replace('\\', "/")
+                .ends_with("/work/p/.agents/mcp_config.json")
+        );
         assert_eq!(Antigravity.file_kind("settings").unwrap(), FileKind::Json);
+        assert_eq!(Antigravity.file_kind("mcp").unwrap(), FileKind::Json);
         assert!(Antigravity.file_kind("config").is_err());
         assert!(!Antigravity.node_required_when_missing());
         let install = Antigravity.install_command().unwrap();
@@ -652,6 +797,240 @@ mod tests {
             Antigravity.mcp_disabled_description(),
             Some("停用会移除原生条目，Cliora 中的定义仍保留")
         );
+    }
+
+    fn mcp_location_global() -> McpLocation {
+        Antigravity
+            .mcp_location(Scope::Global, Path::new("/home/example"), None)
+            .unwrap()
+    }
+
+    #[test]
+    fn mcp_shape_gating_follows_the_probed_install_line() {
+        // 1.3.x and unparsed lines keep the flag-free shape; 1.5+ flip to the
+        // per-entry disabled contract; other majors refuse writes.
+        assert!(!per_entry_disabled(None).unwrap());
+        assert!(!per_entry_disabled(Some("1.3.1")).unwrap());
+        assert!(!per_entry_disabled(Some("v1.4.2")).unwrap());
+        assert!(per_entry_disabled(Some("1.5.9")).unwrap());
+        assert!(per_entry_disabled(Some("1.6.0")).unwrap());
+        assert!(per_entry_disabled(Some("2.0.0"))
+            .unwrap_err()
+            .contains("尚未验证"));
+        assert!(per_entry_disabled(Some("junk"))
+            .unwrap_err()
+            .contains("版本"));
+        // The location stays the documented file for every verified line...
+        assert!(Antigravity
+            .mcp_location_for_version(Scope::Global, Path::new("/h"), None, Some("1.5.9"))
+            .is_some());
+        assert!(Antigravity
+            .mcp_location_for_version(Scope::Global, Path::new("/h"), None, None)
+            .is_some());
+        // ...but an unverified major keeps the contract unconfirmed.
+        assert!(Antigravity
+            .mcp_location_for_version(Scope::Global, Path::new("/h"), None, Some("2.0.0"))
+            .is_none());
+        assert!(Antigravity.mcp_requires_version());
+        // Disable descriptions differ per shape.
+        assert_eq!(
+            Antigravity.mcp_disabled_description_for_version(Some("1.3.1")),
+            Some("停用会移除原生条目，Cliora 中的定义仍保留")
+        );
+        assert_eq!(
+            Antigravity.mcp_disabled_description_for_version(Some("1.5.9")),
+            Some("停用会写入 disabled:true 并保留原生条目；启用时移除该键")
+        );
+        assert_eq!(
+            Antigravity.mcp_disabled_description_for_version(None),
+            Antigravity.mcp_disabled_description()
+        );
+    }
+
+    #[test]
+    fn mcp_159_writes_stamp_the_disabled_flag_and_disable_keeps_the_entry() {
+        let location = mcp_location_global();
+        // Create (no existing entry): the native writer stamps disabled:false.
+        let stdio = Antigravity
+            .mcp_document_for_version(
+                &definition(McpTransport::Stdio),
+                true,
+                None,
+                &location,
+                Some("1.5.9"),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(stdio["disabled"], false);
+        assert!(stdio.get("serverUrl").is_none());
+        // Disable keeps the entry and flips the flag in place.
+        let disabled = Antigravity
+            .mcp_document_for_version(
+                &definition(McpTransport::Stdio),
+                false,
+                Some(&stdio),
+                &location,
+                Some("1.5.9"),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(disabled["disabled"], true);
+        assert_eq!(disabled["command"], "npx");
+        // Enable removes the key entirely (implicit enabled, `agy mcp enable`).
+        let enabled = Antigravity
+            .mcp_document_for_version(
+                &definition(McpTransport::Stdio),
+                true,
+                Some(&disabled),
+                &location,
+                Some("1.5.9"),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(enabled.get("disabled").is_none());
+        // An enabled write of an already-enabled native entry re-stamps
+        // disabled:false, matching `agy mcp add`.
+        let edited = Antigravity
+            .mcp_document_for_version(
+                &definition(McpTransport::Stdio),
+                true,
+                Some(&stdio),
+                &location,
+                Some("1.5.9"),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(edited["disabled"], false);
+        // The 1.3.x line never carries the flag and still removes the entry
+        // on disable.
+        assert!(Antigravity
+            .mcp_document_for_version(
+                &definition(McpTransport::Stdio),
+                true,
+                None,
+                &location,
+                Some("1.3.1")
+            )
+            .unwrap()
+            .unwrap()
+            .get("disabled")
+            .is_none());
+        assert!(Antigravity
+            .mcp_document_for_version(
+                &definition(McpTransport::Stdio),
+                false,
+                Some(&stdio),
+                &location,
+                Some("1.3.1")
+            )
+            .unwrap()
+            .is_none());
+        // SSE stays rejected on the new line as well.
+        assert!(Antigravity
+            .mcp_document_for_version(
+                &definition(McpTransport::Sse),
+                true,
+                None,
+                &location,
+                Some("1.5.9")
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn mcp_159_edits_canonicalize_legacy_url_entries_without_dual_writes() {
+        let location = mcp_location_global();
+        let legacy_http = json!({
+            "url": "https://legacy.example.com/sse",
+            "headers": { "X-Legacy": "fixture" },
+            "trust": true
+        });
+        // A 1.5.9 edit rewrites the legacy key back to serverUrl and never
+        // leaves both spellings on the entry; unknown fields survive.
+        let rewritten = Antigravity
+            .mcp_document_for_version(
+                &definition(McpTransport::Http),
+                true,
+                Some(&legacy_http),
+                &location,
+                Some("1.5.9"),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(rewritten["serverUrl"], "https://mcp.example.com/sse");
+        assert!(rewritten.get("url").is_none(), "不允许 url/serverUrl 双写");
+        assert!(rewritten.get("httpUrl").is_none());
+        assert_eq!(rewritten["trust"], true);
+        assert_eq!(rewritten["headers"]["X-Example"], "1");
+        // Disabling a legacy entry on 1.5.9 keeps it with disabled:true.
+        let disabled = Antigravity
+            .mcp_document_for_version(
+                &definition(McpTransport::Http),
+                false,
+                Some(&legacy_http),
+                &location,
+                Some("1.5.9"),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(disabled["disabled"], true);
+        assert!(disabled.get("url").is_none());
+        assert_eq!(disabled["serverUrl"], "https://mcp.example.com/sse");
+        // The 1.3.x line keeps the read-only rejection for the same entry.
+        let error = Antigravity
+            .mcp_document_for_version(
+                &definition(McpTransport::Http),
+                true,
+                Some(&legacy_http),
+                &location,
+                Some("1.3.1"),
+            )
+            .unwrap_err();
+        assert!(error.contains("只读保留"), "{error}");
+        // A legacy entry also survives a stdio rewrite without remote keys.
+        let stdio = Antigravity
+            .mcp_document_for_version(
+                &definition(McpTransport::Stdio),
+                true,
+                Some(&legacy_http),
+                &location,
+                Some("1.5.9"),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(
+            stdio.get("serverUrl").is_none()
+                && stdio.get("url").is_none()
+                && stdio.get("httpUrl").is_none()
+        );
+        assert_eq!(stdio["command"], "npx");
+    }
+
+    #[test]
+    fn mcp_reads_the_159_fixture_including_the_legacy_and_disabled_entries() {
+        let location = mcp_location_global();
+        let parsed = crate::native::format::parse(FileKind::Json, MCP_159_FIXTURE).unwrap();
+        let entries = Antigravity.mcp_entries(&parsed, &location).unwrap();
+        assert_eq!(entries.len(), 3, "{entries:?}");
+        // The current-key entry surfaces through the shared url view.
+        let current = Antigravity.mcp_entry_view(&entries["fixture-http-current"]);
+        assert_eq!(current["url"], "https://mcp.fixture.invalid/mcp");
+        assert_eq!(current["serverUrl"], "https://mcp.fixture.invalid/mcp");
+        assert_eq!(current["disabled"], false);
+        // The legacy url entry keeps its own key and its disabled state.
+        let legacy = Antigravity.mcp_entry_view(&entries["fixture-http-legacy-url"]);
+        assert_eq!(legacy["url"], "https://legacy.fixture.invalid/mcp");
+        assert_eq!(legacy["disabled"], true);
+        // httpUrl mirrors into the shared view key as well.
+        let http_url_only = json!({"httpUrl": "https://older.example.invalid/mcp"});
+        assert_eq!(
+            Antigravity.mcp_entry_view(&http_url_only)["url"],
+            "https://older.example.invalid/mcp"
+        );
+        // stdio entries read unchanged.
+        let stdio = Antigravity.mcp_entry_view(&entries["fixture-stdio"]);
+        assert_eq!(stdio["command"], "/bin/cat");
+        assert_eq!(stdio["env"]["FIXTURE_MODE"], "sanitized");
     }
 
     #[test]

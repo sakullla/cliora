@@ -1256,6 +1256,11 @@ pub trait CliAdapter: Sync {
     ) -> Option<McpLocation> {
         None
     }
+    /// Whether the native MCP contract (location or entry shape) follows the
+    /// identified native version. The shared MCP service then resolves the
+    /// probed install version once per target and hands it to the
+    /// `*_for_version` hooks, so a read and a later write agree on the same
+    /// evidence.
     fn mcp_requires_version(&self) -> bool {
         false
     }
@@ -1300,8 +1305,28 @@ pub trait CliAdapter: Sync {
     ) -> Result<Option<Value>, String> {
         self.mcp_document(definition, enabled, existing)
     }
+    /// Version-aware native entry shape. The default keeps the location-shaped
+    /// document; adapters whose verified entry shape follows the install line
+    /// override this together with `mcp_requires_version`.
+    fn mcp_document_for_version(
+        &self,
+        definition: &McpDefinition,
+        enabled: bool,
+        existing: Option<&Value>,
+        location: &McpLocation,
+        version: Option<&str>,
+    ) -> Result<Option<Value>, String> {
+        let _ = version;
+        self.mcp_document_at(definition, enabled, existing, location)
+    }
     fn mcp_disabled_description(&self) -> Option<&'static str> {
         None
+    }
+    /// Version-aware disable description for previews. The default keeps the
+    /// static description.
+    fn mcp_disabled_description_for_version(&self, version: Option<&str>) -> Option<&'static str> {
+        let _ = version;
+        self.mcp_disabled_description()
     }
     /// Whether the native format has a verified stdio working-directory mapping.
     /// Undeclared targets report unsupported instead of dropping a non-empty `cwd`.

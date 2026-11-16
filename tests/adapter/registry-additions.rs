@@ -628,11 +628,15 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
             true
         )
         .is_empty());
-    // antigravity (local agy 1.3.1 + [RE] codeburn on 1.2.x): settings.json
-    // editing, --conversation resume, MCP (config/mcp_config.json) + Skills,
-    // conversation index + gen_metadata protobuf ModelUsageStats usage with
-    // strict degrade; headless GEMINI_API_KEY is the only managed credential
-    // channel; keyring login is never adopted.
+    // antigravity (local agy 1.3.1 + [RE] codeburn on 1.2.x, extended by the
+    // isolated 1.5.9 remote evidence run 2026-11-16): settings.json editing,
+    // --conversation resume, version-shaped MCP (config/mcp_config.json —
+    // 1.5+ writes the per-entry `disabled` contract, 1.3.x stays flag-free
+    // with remove-on-disable; the project .agents/mcp_config.json runtime
+    // scope is a directly managed native file) + Skills, conversation index +
+    // gen_metadata protobuf ModelUsageStats usage with strict degrade;
+    // headless GEMINI_API_KEY is the only managed credential channel; keyring
+    // login is never adopted.
     let antigravity = registry.get("antigravity").unwrap();
     assert!(antigravity.supports_skills());
     assert!(antigravity.configuration().is_none());
@@ -645,14 +649,105 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
         antigravity.auth_env_name(&env_key_connection()).as_deref(),
         Some("GEMINI_API_KEY")
     );
+    // The MCP entry shape follows the probed install line; the location stays
+    // the documented file for both verified lines and refuses an unverified
+    // major instead of guessing.
+    assert!(antigravity.mcp_requires_version());
     assert!(antigravity
-        .native_files(
-            crate::native::adapter::Scope::Project,
+        .mcp_location_for_version(
+            crate::native::adapter::Scope::Global,
             home,
-            Some(work),
-            true
+            None,
+            Some("1.5.9")
         )
-        .is_empty());
+        .is_some());
+    assert!(antigravity
+        .mcp_location_for_version(
+            crate::native::adapter::Scope::Global,
+            home,
+            None,
+            Some("2.0.0")
+        )
+        .is_none());
+    // 1.5.9 disable keeps the native entry with disabled:true; 1.3.x disable
+    // removes it; an enabled 1.5.9 write stamps the native writer's flag.
+    let location = antigravity
+        .mcp_location(crate::native::adapter::Scope::Global, home, None)
+        .unwrap();
+    let mut shape_definition = crate::resources::mcp::McpDefinition {
+        id: "fixture-shape".into(),
+        name: "shape".into(),
+        cwd: String::new(),
+        transport: crate::resources::mcp::McpTransport::Stdio,
+        command: "npx".into(),
+        args: Vec::new(),
+        url: String::new(),
+        env: indexmap::IndexMap::new(),
+        headers: indexmap::IndexMap::new(),
+        in_library: true,
+        version: 0,
+        updated_at: None,
+    };
+    let written_159 = antigravity
+        .mcp_document_for_version(&shape_definition, true, None, &location, Some("1.5.9"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(written_159["disabled"], false);
+    let disabled_159 = antigravity
+        .mcp_document_for_version(
+            &shape_definition,
+            false,
+            Some(&written_159),
+            &location,
+            Some("1.5.9")
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(disabled_159["disabled"], true);
+    assert!(antigravity
+        .mcp_document_for_version(
+            &shape_definition,
+            false,
+            Some(&written_159),
+            &location,
+            Some("1.3.1")
+        )
+        .unwrap()
+        .is_none());
+    shape_definition.transport = crate::resources::mcp::McpTransport::Http;
+    shape_definition.url = "https://shape.example.com/mcp".into();
+    let legacy_entry = serde_json::json!({"url": "https://legacy.example.com/mcp"});
+    let rewritten = antigravity
+        .mcp_document_for_version(
+            &shape_definition,
+            true,
+            Some(&legacy_entry),
+            &location,
+            Some("1.5.9")
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(rewritten["serverUrl"], "https://shape.example.com/mcp");
+    assert!(rewritten.get("url").is_none(), "不允许 url/serverUrl 双写");
+    assert!(antigravity
+        .mcp_document_for_version(
+            &shape_definition,
+            true,
+            Some(&legacy_entry),
+            &location,
+            Some("1.3.1")
+        )
+        .is_err());
+    // The project runtime MCP scope is a native config file role.
+    let project_files = antigravity.native_files(
+        crate::native::adapter::Scope::Project,
+        home,
+        Some(work),
+        true,
+    );
+    assert_eq!(project_files.len(), 1);
+    assert_eq!(project_files[0].role, "mcp");
+    assert_eq!(antigravity.file_kind("mcp").unwrap(), crate::native::format::FileKind::Json);
     // kiro (official docs + real local install %LOCALAPPDATA%\kiro-cli,
     // 2.34.2/V3): cli.json editing, --resume-id, dual-scope MCP, Skills
     // (~/.kiro/skills + .kiro/skills), agents (~/.kiro/agents + .kiro/agents
