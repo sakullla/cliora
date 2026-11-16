@@ -122,3 +122,19 @@ WebDAV manifest 随写入升级到 5，使旧客户端在处理新载体前拒�
 截图来自现有 `scripts/capture-sync.mjs --theme all --size 1360 --only unconnected,local-only`，预览为本次独立启动的 `http://127.0.0.1:14739`，父进程最终清理 released。图集位于忽略目录 `docs/verification/multi-repository-project-workspaces-sync/`，机器清单为 `capture-sync-manifest.json`。首次结果图截在有限 opacity 动画中，已只修捕获就绪等待并重采；没有修改产品透明度。已实际查看最终 `zh-light-1360-local-only-result.png`、`zh-dark-1360-local-only-result.png`、`zh-light-1360-export-dialog.png`，结果 warning/部分同步语义和三种组织层级标签可读，无背景文字透出。
 
 以上为开发验证。HTTP WebDAV 使用隔离本地协议服务器；截图使用 Playwright 合成 IPC，不证明真实 WebDAV 服务、已安装桌面端、系统 credential 后端或双端 scheme 往返。没有因此重跑或宣称通过无关的完整产品检查；累计正式验证与 T5 联动仍交后续阶段。
+
+## T4-A2：跨平台位置提示校验返修
+
+固定候选 `08a6f8ff` 的组织位置校验使用接收 OS 的 `portable::looks_absolute`，与 T1 原始位置提示合同不一致。新增 3 项反例在修前全部失败（`8a7672bc39eb8113f875d49bf3ab855f9043ba28605b48decf387373efa1b309`）：共享 fixtures 中合法 UNC/extended 被拒绝，不完整 `//`、`//server`、`//server/` 被误收；真实 T1 清单关联后的 bundle 导出，以及独立加密 schema5 包的接收均报资料无效。
+
+最小修复只把 T1 `absolute_location_path` 提升为 `pub(crate)` 并供 organization 复用，保留原有长度、控制字符、host 和重复位置限制。没有修改旧 portable 路径编码。该验证器只判定跨平台 hint 语法，不能替代本机 host、`Path::is_absolute`、canonicalization 和 Git 执行验证。
+
+修后 3 项覆盖共享表的 10 个 valid / 15 个 invalid 路径，以及 home token/控制符拒绝；真实加密导入、导出和再次导出保留原始路径及来源 host，不将 sender home 改写为 receiver home。所有外机位置仍不可启动、无自动目录/配置绑定，接收端原生配置哨兵字节未变。
+
+| A2 开发检查 | 实际结果 | 受控回执键 |
+| --- | --- | --- |
+| portable 直接组 | 85/85，包含 3 项原失败 | `46ac58f3d087a2c76c40ed1015a1fa270e5ab9d25a6f48f6914f01824596a488` |
+| workspaces 直接组 | 20/20，共用原验证器消费者保持通过 | `ff0d22309bf56c1621528b3012acba0411d00a98f459f0fd96f8fb1cd8143ece` |
+| Clippy all-targets -D warnings | 通过 | `565a25eaf1cc461c0810e275442082afab069dc28032e6cb16cbe30ab07614bc` |
+
+以上命令均退出 0、清理 released。本轮没有 UI 变更，保留 A1 Node/UI/深浅捕获证据而未重复运行。跨平台字符串和 bundle 测试在本机执行，不声称验证了 Windows/Linux 实机执行或外机目录访问；正式累计验证仍由 Delivery 负责。

@@ -213,7 +213,10 @@ fn host_id_at(path: &Path) -> Result<String, String> {
         Err(error) => Err(error.to_string()),
     }
 }
-fn absolute_location_path(path: &str) -> bool {
+/// Cross-platform location-hint syntax shared with portable organization data.
+/// This does not authorize local use: callers still require host provenance,
+/// native Path::is_absolute/canonicalization and Git verification before launch.
+pub(crate) fn absolute_location_path(path: &str) -> bool {
     fn drive(path: &str) -> bool {
         let bytes = path.as_bytes();
         bytes.len() >= 3

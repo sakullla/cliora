@@ -4131,3 +4131,121 @@ fn multi_repository_snapshot_versions_and_unknown_fields_reject_before_restore()
     let value=PortableEntity{id:"scope".into(),payload:PortablePayload::Prompt(PortablePrompt{item:LibraryItem{id:"scope".into(),kind:crate::library::LibraryKind::Prompt,title:"X".into(),body:"body".into(),category:"".into(),project_id:None,version:1,updated_at:1},metadata:crate::prompts::PromptMetadata{scope:crate::prompts::PromptScope::Global,tags:vec![]}})};
     assert!(validate_snapshot(&PortableSnapshot{schema_version:4,entities:vec![value]}).is_err());
 }
+
+fn cross_platform_hint_paths() -> serde_json::Value {
+    serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/workspaces/path-cases-v1.json"))).unwrap()
+}
+
+fn cross_platform_hint_workspace(paths: &[String]) -> organization::PortableWorkspace {
+    organization::PortableWorkspace {
+        id: "33333333-3333-4333-8333-333333333333".into(),
+        name: "Cross-platform hints".into(),
+        revision: 3,
+        members: vec![organization::PortableMember {
+            repository_id: "44444444-4444-4444-8444-444444444444".into(),
+            favorite: true,
+            locations: paths.iter().enumerate().map(|(index, path)| organization::PortableLocation {
+                id: format!("foreign-hint-{index}"),
+                host_id: "22222222-2222-4222-8222-222222222222".into(),
+                path: Some(path.clone()), native_project_id: None, target_id: None,
+            }).collect(),
+        }],
+        legacy_mappings: vec![],
+    }
+}
+
+#[test]
+fn cross_platform_hint_validation_matches_shared_path_fixture() {
+    let fixture = cross_platform_hint_paths();
+    let mut mismatches = Vec::new();
+    for (group, expected) in [("valid", true), ("invalid", false)] {
+        for path in fixture[group].as_array().unwrap() {
+            let path = path.as_str().unwrap();
+            let workspace = cross_platform_hint_workspace(&[path.into()]);
+            if organization::validate_workspace(&workspace) != expected {
+                mismatches.push(format!("{group}: {path:?}"));
+            }
+        }
+    }
+    assert!(mismatches.is_empty(), "portable organization disagrees with the shared location contract: {mismatches:?}");
+    for path in ["~/not-a-raw-location", "cliora-home:/not-a-raw-location", "/work/with\ncontrol"] {
+        assert!(!organization::validate_workspace(&cross_platform_hint_workspace(&[path.into()])));
+    }
+}
+
+#[test]
+fn cross_platform_hint_t1_manifest_exports_real_encrypted_bundle() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(&temp.path().join("source"));
+    let registry = Registry::builtins();
+    let store = MemoryCredentials::default();
+    let fixture = cross_platform_hint_paths();
+    let paths: Vec<String> = fixture["valid"].as_array().unwrap().iter().map(|path| path.as_str().unwrap().into()).collect();
+    let workspace = cross_platform_hint_workspace(&paths);
+    let manifest = crate::workspaces::Manifest {
+        schema_version: 1, workspace_id: workspace.id.clone(), name: workspace.name.clone(), revision: workspace.revision,
+        repositories: vec![crate::workspaces::ManifestRepository {
+            id: workspace.members[0].repository_id.clone(), name: "Foreign repository".into(),
+            locations: paths.iter().map(|path| crate::workspaces::ManifestLocation { host_id: "22222222-2222-4222-8222-222222222222".into(), path: path.clone() }).collect(),
+        }],
+    };
+    let source = temp.path().join("project.dev-workspace.json");
+    fs::write(&source, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let preview = crate::workspaces::preview_manifest(&db, source.to_str().unwrap()).unwrap();
+    let attached = crate::workspaces::attach_manifest(&db, "11111111-1111-4111-8111-111111111111", source.to_str().unwrap(), &preview.digest, false).unwrap();
+    assert!(attached.repositories[0].locations.iter().all(|location| !location.available));
+    let destination = temp.path().join("foreign-hints.cliora");
+    export_bundle(&db, &store, &registry, "synthetic-password", None, &destination).unwrap();
+    let decoded = unlock_bundle(&destination, "synthetic-password").unwrap();
+    let saved = decoded.entities.iter().find_map(|entity| match &entity.payload { PortablePayload::Workspace(value) => Some(value), _ => None }).unwrap();
+    let exported: BTreeSet<_> = saved.members[0].locations.iter().map(|location| location.path.clone().unwrap()).collect();
+    assert_eq!(exported, paths.into_iter().collect::<BTreeSet<_>>());
+    assert_eq!(fs::read(&source).unwrap(), serde_json::to_vec(&manifest).unwrap());
+}
+
+#[test]
+fn cross_platform_hint_encrypted_receive_and_reexport_preserve_foreign_paths_without_binding() {
+    let _roots = RestoreRootsGuard;
+    let temp = tempfile::tempdir().unwrap();
+    let sender_home = temp.path().join("sender-home");
+    let receiver_home = temp.path().join("receiver-home");
+    fs::create_dir_all(&sender_home).unwrap(); fs::create_dir_all(&receiver_home).unwrap();
+    set_restore_roots_for_test(Some((receiver_home.clone(), temp.path().to_path_buf())));
+    fs::create_dir_all(receiver_home.join(".codex")).unwrap();
+    fs::write(receiver_home.join(".codex/config.toml"), "# unchanged receiver configuration\n").unwrap();
+    let fixture = cross_platform_hint_paths();
+    let mut paths: Vec<String> = fixture["valid"].as_array().unwrap().iter().map(|path| path.as_str().unwrap().into()).collect();
+    paths.push(sender_home.join("repository").to_string_lossy().into_owned());
+    let workspace = cross_platform_hint_workspace(&paths);
+    let repository_id = workspace.members[0].repository_id.clone();
+    let snapshot = PortableSnapshot { schema_version: 5, entities: vec![
+        PortableEntity { id: repository_id.clone(), payload: PortablePayload::Repository(organization::PortableRepository { id: repository_id.clone(), name: "Foreign repository".into() }) },
+        PortableEntity { id: workspace.id.clone(), payload: PortablePayload::Workspace(workspace.clone()) },
+    ] };
+    // Seal raw schema5 data to exercise the receiver independently of export validation.
+    let incoming = temp.path().join("from-another-platform.cliora");
+    fs::write(&incoming, crypto::seal("synthetic-password", "offline", &serde_json::to_vec(&snapshot).unwrap()).unwrap()).unwrap();
+    let received = unlock_bundle(&incoming, "synthetic-password").unwrap();
+    let db = database(&temp.path().join("receiver"));
+    let registry = Registry::builtins(); let store = MemoryCredentials::default();
+    let preview = preview_import(&db, &store, &registry, received).unwrap();
+    restore_preview(&db, &store, &registry, &preview).unwrap();
+    let displayed = crate::workspaces::get(&db, "11111111-1111-4111-8111-111111111111", &workspace.id).unwrap();
+    assert!(displayed.repositories[0].locations.iter().all(|location| !location.available && location.worktrees.is_empty() && location.project_id.is_none() && location.reason.as_deref().is_some_and(|reason| reason.contains("其他主机"))));
+    assert!(crate::workspaces::prepare_launch(&db, "11111111-1111-4111-8111-111111111111", &workspace.id, &repository_id, None).is_err());
+    db.with_connection(|conn| {
+        assert_eq!(conn.query_row("SELECT count(*) FROM projects", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        assert_eq!(conn.query_row("SELECT count(*) FROM applied_bindings", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        assert!(!conn.prepare("PRAGMA foreign_key_check").unwrap().exists([]).unwrap());
+        Ok(())
+    }).unwrap();
+    assert_eq!(fs::read_to_string(receiver_home.join(".codex/config.toml")).unwrap(), "# unchanged receiver configuration\n");
+    let outgoing = temp.path().join("reexport.cliora");
+    export_bundle(&db, &store, &registry, "synthetic-password", None, &outgoing).unwrap();
+    let roundtrip = unlock_bundle(&outgoing, "synthetic-password").unwrap();
+    let saved = roundtrip.entities.iter().find_map(|entity| match &entity.payload { PortablePayload::Workspace(value) => Some(value), _ => None }).unwrap();
+    let actual: BTreeSet<_> = saved.members[0].locations.iter().map(|location| location.path.clone().unwrap()).collect();
+    assert_eq!(actual, paths.into_iter().collect::<BTreeSet<_>>());
+    assert!(saved.members[0].locations.iter().all(|location| location.host_id == "22222222-2222-4222-8222-222222222222"));
+    assert!(!serde_json::to_string(saved).unwrap().contains("cliora-home:/"));
+}

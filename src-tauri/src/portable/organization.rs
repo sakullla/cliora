@@ -87,7 +87,7 @@ pub(super) fn validate_workspace(value: &PortableWorkspace) -> bool {
                 if path.is_empty()
                     || path.len() > 16_384
                     || path.chars().any(char::is_control)
-                    || !super::looks_absolute(path)
+                    || !crate::workspaces::absolute_location_path(path)
                     || !paths.insert((&location.host_id, path))
                 {
                     return false;
