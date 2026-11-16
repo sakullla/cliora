@@ -636,7 +636,12 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
     // scope is a directly managed native file) + Skills + standalone Agents
     // (workspace .agents/agents/{name}/agent.md and global
     // ~/.gemini/config/agents/{name}/agent.md; the --agent launch flag is
-    // 1.5+-verified and publishes agent launchability), conversation index +
+    // 1.5+-verified and publishes agent launchability) + Plugins
+    // (~/.gemini/config/plugins/ directories with the config.json
+    // plugins.<dir>.enabled ledger; file-backed listing, native
+    // install/uninstall commands, shared-transaction enable/disable, builtins
+    // read-only; mutations gated to >=1.5 because the 1.3.x plugin storage is
+    // undocumented), conversation index +
     // gen_metadata protobuf ModelUsageStats usage with strict degrade;
     // headless GEMINI_API_KEY is the only managed credential channel; keyring
     // login is never adopted.
@@ -805,6 +810,85 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
     assert_eq!(project_files.len(), 1);
     assert_eq!(project_files[0].role, "mcp");
     assert_eq!(antigravity.file_kind("mcp").unwrap(), crate::native::format::FileKind::Json);
+    // Plugins (1.5.9 evidence run, tests/fixtures/plugins/sources.json
+    // antigravity_2026_11_16): the storage layout is verified on the 1.5 line
+    // only, so the accepted range excludes the undocumented 1.3.x plugin
+    // surface while ordinary 1.5+/1.6 movement stays accepted.
+    let agy_plugins = antigravity.plugins().expect("antigravity plugins port");
+    assert_eq!(
+        agy_plugins.capability().actions,
+        ["list", "install", "enable", "disable", "uninstall"]
+    );
+    assert!(!agy_plugins.capability().project);
+    assert!(agy_plugins.discovery_only(), "列举读目录与分类账，不启动 CLI");
+    assert!(antigravity.descriptor().management.plugins);
+    assert!(!antigravity.descriptor().management.project_plugins);
+    let plugin_policy = agy_plugins.version_policy();
+    assert!(plugin_policy.accepts("1.5.9"));
+    assert!(plugin_policy.accepts("1.6.0"));
+    assert!(!plugin_policy.accepts("1.3.1"));
+    assert!(!plugin_policy.accepts("2.0.0"));
+    let plugin_target = crate::resources::plugins::PluginTarget {
+        tool_id: "antigravity".into(),
+        scope: crate::native::adapter::Scope::Global,
+        project_path: None,
+        context_id: None,
+    };
+    let (plugin_ledger, plugin_kind) = agy_plugins
+        .config_location(home, &plugin_target)
+        .unwrap()
+        .unwrap();
+    assert_eq!(plugin_kind, crate::native::format::FileKind::Json);
+    assert_eq!(
+        plugin_ledger.display().to_string().replace('\\', "/"),
+        format!(
+            "{}/.gemini/config/config.json",
+            home.display().to_string().replace('\\', "/")
+        )
+    );
+    // Enable/disable plan one ledger leaf write (a shared config
+    // transaction); install/uninstall stay native plugin subcommands.
+    assert!(agy_plugins.config_only("disable", None));
+    assert!(!agy_plugins.config_only("install", None));
+    let mut plugin_saved = serde_json::Map::new();
+    let ledger_change = agy_plugins
+        .config_changes(
+            &serde_json::json!({}),
+            &mut plugin_saved,
+            &crate::resources::plugins::PluginRequest {
+                target: plugin_target,
+                action: "disable".into(),
+                source: "probe-kit".into(),
+                baseline: String::new(),
+                trusted: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        ledger_change[0].path,
+        vec![
+            "plugins".to_string(),
+            "probe-kit".to_string(),
+            "enabled".to_string()
+        ]
+    );
+    assert_eq!(ledger_change[0].value, Some(serde_json::json!(false)));
+    assert_eq!(
+        agy_plugins
+            .command_args("install", "/tmp/probe-kit", false)
+            .unwrap(),
+        [
+            "plugin".to_string(),
+            "install".to_string(),
+            "/tmp/probe-kit".to_string()
+        ]
+    );
+    assert_eq!(
+        agy_plugins
+            .command_args("uninstall", "probe-kit", false)
+            .unwrap(),
+        ["plugin".to_string(), "uninstall".to_string(), "probe-kit".to_string()]
+    );
     // kiro (official docs + real local install %LOCALAPPDATA%\kiro-cli,
     // 2.34.2/V3): cli.json editing, --resume-id, dual-scope MCP, Skills
     // (~/.kiro/skills + .kiro/skills), agents (~/.kiro/agents + .kiro/agents

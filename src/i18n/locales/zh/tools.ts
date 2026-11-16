@@ -1016,6 +1016,7 @@ export default {
     contextRetry: '重新读取',
   },
   adapters: {
+    antigravity: { installLabel: '从本机目录安装' },
     cursor: { installLabel: '添加本地插件' },
     shared: {
       modelAria: '模型 {{id}}',

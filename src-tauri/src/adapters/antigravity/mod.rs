@@ -66,13 +66,24 @@
 //!   required, `mainAgent`/`subagent` type the roster membership, and the
 //!   `--agent` launch flag (1.5+ only) selects a main agent for a new
 //!   session. Plugin agents stay owned by the shared plugin scan.
-//! * Plugins/quota: no verified contract (`agy plugin` exists but its storage
-//!   is undocumented; `/usage` is a TUI subscription panel, not a local
-//!   statistic) — those ports stay absent by design.
+//! * **Plugins** (1.5.9 evidence run, see [`plugins`]): installs are
+//!   directories under `~/.gemini/config/plugins/<name>/`; enable/disable is
+//!   a ledger inside `~/.gemini/config/config.json`
+//!   (`plugins.<dir>.enabled` — separate from the plugin tree, so toggles
+//!   never rewrite plugin files; `plugin uninstall` removes the row
+//!   natively). Listing is file-backed; install/uninstall run
+//!   `agy plugin install|uninstall` through the shared native command
+//!   channel, enable/disable are shared-transaction ledger writes. Builtins
+//!   surface read-only (the real machine's `swarm` is a ledger row without
+//!   an install directory). The contract is verified on the 1.5 line only,
+//!   so mutations are gated to `>=1.5.0, <2.0.0`.
+//! * Quota: no verified contract (`/usage` is a TUI subscription panel, not
+//!   a local statistic) — that port stays absent by design.
 
 pub(crate) mod agents;
 pub(crate) mod history;
 pub(crate) mod memory;
+pub(crate) mod plugins;
 pub(crate) mod protobuf;
 pub(crate) mod skills;
 
@@ -481,6 +492,9 @@ impl CliAdapter for Antigravity {
     fn agents(&self) -> Option<&dyn super::agents::AgentAdapter> {
         Some(self)
     }
+    fn plugins(&self) -> Option<&dyn super::plugins::PluginAdapter> {
+        Some(self)
+    }
     /// Verified on 1.5.9 (`agy --help`: `--agent <name>`; the roster holds
     /// main agents only, see [`agents`]). The version-less form is the
     /// capability declaration used by the descriptor and remote launches.
@@ -602,7 +616,7 @@ impl CliAdapter for Antigravity {
             },
             resources: Facet {
                 state: "available",
-                reason: "MCP（~/.gemini/config/mcp_config.json mcpServers：stdio command/args/env/cwd 与远程 serverUrl+headers/oauth；1.5+ 按实测写逐条 disabled（停用保留条目），1.3.x 停用移除条目且旧版 url/httpUrl 条目只读；项目 .agents/mcp_config.json 为运行时作用域，agy mcp 子命令不管理）、Skills（可写根 antigravity-cli/skills 与项目 .agents/skills；只读发现 Shared ~/.gemini/skills、config 目录、builtin 与 skills.json 声明目录；SKILL.md frontmatter name/description 契约强制）与 Agents（独立定义 <project>/.agents/agents/{name}/agent.md 与 ~/.gemini/config/agents/{name}/agent.md；mainAgent/subagent 决定 --agent 启动名单；插件 Agent 随插件只读管理）由原生路径提供",
+                reason: "MCP（~/.gemini/config/mcp_config.json mcpServers：stdio command/args/env/cwd 与远程 serverUrl+headers/oauth；1.5+ 按实测写逐条 disabled（停用保留条目），1.3.x 停用移除条目且旧版 url/httpUrl 条目只读；项目 .agents/mcp_config.json 为运行时作用域，agy mcp 子命令不管理）、Skills（可写根 antigravity-cli/skills 与项目 .agents/skills；只读发现 Shared ~/.gemini/skills、config 目录、builtin 与 skills.json 声明目录；SKILL.md frontmatter name/description 契约强制）、Agents（独立定义 <project>/.agents/agents/{name}/agent.md 与 ~/.gemini/config/agents/{name}/agent.md；mainAgent/subagent 决定 --agent 启动名单；插件 Agent 随插件只读管理）与 Plugins（~/.gemini/config/plugins/ 目录 + config.json plugins.<目录>.enabled 分类账；安装/卸载走原生命令，启停写分类账（重装后保留用户选择）；详情列出 Skills/Agents/规则/MCP/Hooks 五类资源；内置插件只读，1.5 以下安装线拒绝写入）由原生路径提供",
             },
             history: Facet {
                 state: "available",
@@ -614,8 +628,10 @@ impl CliAdapter for Antigravity {
                 mcp: true,
                 skills: true,
                 agents: true,
-                plugins: false,
-                project_plugins: false,
+                plugins: self
+                    .plugins()
+                    .is_some_and(|adapter| !adapter.capability().actions.is_empty()),
+                project_plugins: self.plugins().is_some_and(|adapter| adapter.capability().project),
                 rules: RuleSupport::bare(false, false),
                 memory: self.published_memory(),
                 memory_reason: "",
@@ -1347,12 +1363,13 @@ mod tests {
         assert!(Antigravity.supports_mcp());
         assert!(Antigravity.supports_skills());
         // Agents: standalone agent.md directories verified by the 1.5.9
-        // evidence run. Plugins (native `agy plugin` storage undocumented),
-        // accounts (keyring login never adopted) and official quota (/usage is
-        // a TUI panel) stay absent.
+        // evidence run. Plugins: the 1.5.9 evidence run pinned the
+        // ~/.gemini/config/plugins storage and the config.json ledger (see
+        // plugins.rs). Accounts (keyring login never adopted) and official
+        // quota (/usage is a TUI panel) stay absent.
         assert!(Antigravity.configuration().is_none());
         assert!(Antigravity.agents().is_some());
-        assert!(Antigravity.plugins().is_none());
+        assert!(Antigravity.plugins().is_some());
         assert!(Antigravity.accounts().is_none());
         assert!(Antigravity.official_usage().is_none());
         // No native file ever carries a key and no secret is written to
@@ -1406,7 +1423,8 @@ mod tests {
         assert!(descriptor.management.mcp && descriptor.management.skills);
         assert!(!descriptor.management.accounts);
         assert!(descriptor.management.agents);
-        assert!(!descriptor.management.plugins);
+        assert!(descriptor.management.plugins);
+        assert!(!descriptor.management.project_plugins);
         assert!(!descriptor.management.rules.global && !descriptor.management.rules.project);
     }
 

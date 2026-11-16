@@ -1016,6 +1016,7 @@ export default {
     contextRetry: 'Read again',
   },
   adapters: {
+    antigravity: { installLabel: 'Install from local directory' },
     cursor: { installLabel: 'Add local plugin' },
     shared: {
       modelAria: 'Model {{id}}',
