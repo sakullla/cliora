@@ -646,7 +646,7 @@ export async function probeOmp(engine, marker, temporary, context) {
   await fs.mkdir(project, { recursive: true });
   const base = { tool: 'omp', home: isolatedHome, database };
   const runOmp = async (args, options = {}) => {
-    const result = await run(runner.command, runner.wrap(args), { cwd: options.cwd ?? project, env, timeout: options.timeout ?? 240_000 });
+    const result = await run(runner.command, runner.wrap(args), { cwd: options.cwd ?? project, env: options.env ?? env, timeout: options.timeout ?? 240_000 });
     return { ...result, text: `${result.stdout}\n${result.stderr}`.trim() };
   };
   const configPath = () => path.join(isolatedHome, '.omp', 'agent', 'config.yml');
@@ -662,7 +662,7 @@ export async function probeOmp(engine, marker, temporary, context) {
     const backendCase = (await fixture('backend.json')).case;
     const version = await runOmp(['--version']);
     record.version = version.text.slice(0, 120);
-    check(record, 'real omp reports its version', /omp\/\d+\.\d+\.\d+/.test(version.text), version.text);
+    check(record, 'real omp is the verified 18.20.2 baseline', /^omp\/18\.20\.2$/m.test(version.text), version.text);
     const pathResult = await runOmp(['config', 'path']);
     check(record, 'omp config path resolves the isolated agent dir',
       ompNormal(pathResult.text).endsWith('/.omp/agent') && ompNormal(pathResult.text).startsWith(ompNormal(isolatedHome)),
@@ -708,13 +708,25 @@ export async function probeOmp(engine, marker, temporary, context) {
     const learned = await runOmp(['read', 'memory://root/learned.md']);
     check(record, 'real omp reads memory://root/learned.md', learned.text.includes(marker), learned.text.slice(0, 240));
 
+    // `off` is a native backend state, not an empty Markdown family: the status
+    // must state that the local files stay on disk, untouched.
+    await runOmp(['config', 'set', 'memory.backend', 'off']);
+    const off = await aggregate();
+    check(record, 'off reports the preserved local files instead of an empty memory',
+      off.stores.length === 0 && off.entries.length === 0
+      && (off.switchGroups ?? []).some(group => group.detail.includes('本机仍有 1 个项目的 local Markdown 记忆文件')
+        && group.detail.includes('不把磁盘上的旧 Markdown 文件当作当前记忆')),
+      JSON.stringify(off.switchGroups));
+
     // Remote/SQLite/decision-file backends stay native: no Markdown store, no
     // rewrite of the chosen value, and the local files are not destroyed.
     await runOmp(['config', 'set', 'memory.backend', 'hindsight']);
     const remote = await aggregate();
     check(record, 'hindsight publishes no local Markdown store',
       remote.stores.length === 0 && remote.entries.length === 0
-      && (remote.switchGroups ?? []).some(group => group.id === 'memory.backend' && group.enabled === false && group.detail.includes('hindsight')),
+      && (remote.switchGroups ?? []).some(group => group.id === 'memory.backend' && group.enabled === false
+        && group.detail.includes('hindsight') && group.detail.includes('由 OMP 原生后端管理')
+        && group.detail.includes('不展示为本地 Markdown')),
       JSON.stringify(remote.switchGroups));
     let refused = null;
     try { await op({ op: 'save', scope: 'project', project, id: ids[0], baseline: '', confirmExternal: true, text: 'must not be written\n' }); }
@@ -737,9 +749,45 @@ export async function probeOmp(engine, marker, temporary, context) {
       (await fs.readFile(configPath(), 'utf8')).includes('backend: future-backend')
       && await backendValue() === 'off',
       `value=${await backendValue()}`);
+    let unknownRefused = null;
+    try { await op({ op: 'group', group: 'memory.backend', enabled: true }); }
+    catch (error) { unknownRefused = error.message; }
+    check(record, 'unknown backend refuses an enable write and keeps the raw value',
+      !!unknownRefused && unknownRefused.includes('不会覆盖未知值')
+      && (await fs.readFile(configPath(), 'utf8')).includes('backend: future-backend'),
+      unknownRefused ?? 'write unexpectedly succeeded');
+
+    // Named Profile, PI_CONFIG_DIR and PI_CODING_AGENT_DIR must resolve to the
+    // same roots the product engine computes, and the real CLI must read the
+    // memory files written there.
+    const encodedProject = (() => {
+      const text = process.platform === 'win32' ? project.toLowerCase() : project;
+      return `--${text.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`;
+    })();
+    const variant = async (label, overrides, expectedAgent) => {
+      const variantEnv = { ...env, ...overrides };
+      const pathResult = await runOmp(['config', 'path'], { env: variantEnv });
+      check(record, `${label} resolves the native agent dir`,
+        ompNormal(pathResult.text) === ompNormal(expectedAgent), pathResult.text);
+      await runOmp(['config', 'set', 'memory.backend', 'local'], { env: variantEnv });
+      const resolved = await engine.resolve('omp', 'project', isolatedHome, project, variantEnv);
+      check(record, `${label} resolves the same product memory bank`,
+        ompNormal(resolved.directory) === ompNormal(path.join(expectedAgent, 'memories', encodedProject)),
+        resolved.directory);
+      const bank = path.join(expectedAgent, 'memories', encodedProject);
+      await fs.mkdir(bank, { recursive: true });
+      await fs.writeFile(path.join(bank, 'memory_summary.md'), `${label}-MARKER ${marker}\n`);
+      const read = await runOmp(['read', 'memory://root'], { env: variantEnv });
+      check(record, `${label} memory is read by the real omp`, read.text.includes(`${label}-MARKER`), read.text.slice(0, 240));
+    };
+    await variant('OMP_PROFILE', { OMP_PROFILE: 'work' }, path.join(isolatedHome, '.omp', 'profiles', 'work', 'agent'));
+    await variant('PI_PROFILE', { PI_PROFILE: 'legacy' }, path.join(isolatedHome, '.omp', 'profiles', 'legacy', 'agent'));
+    await variant('PI_CONFIG_DIR', { PI_CONFIG_DIR: 'alt-omp' }, path.join(isolatedHome, 'alt-omp', 'agent'));
+    await variant('PI_CODING_AGENT_DIR', { PI_CODING_AGENT_DIR: path.join(root, 'omp-pinned', 'agent') }, path.join(root, 'omp-pinned', 'agent'));
   } finally {
     await fs.rm(isolatedHome, { recursive: true, force: true });
     await fs.rm(project, { recursive: true, force: true });
+    await fs.rm(path.join(root, 'omp-pinned'), { recursive: true, force: true });
     await fs.rm(path.join(root, 'omp-localappdata'), { recursive: true, force: true });
     await fs.rm(path.join(root, 'omp-appdata'), { recursive: true, force: true });
     await fs.rm(path.join(root, 'omp-temp'), { recursive: true, force: true });

@@ -49,7 +49,7 @@ pub(crate) const AVAILABLE_REASON: &str =
 /// Static explanation for the management surface. The live backend value and
 /// every per-backend boundary are reported by the switch group and the switch
 /// state, so this text only describes the permanent boundary.
-pub(crate) const LIMITATION: &str = "OMP 记忆按项目存放；只有 memory.backend=local 时提供本机 Markdown 管理。MEMORY.md 与 memory_summary.md 由合并流程生成、learned.md 由 learn 工具追加，skills/ 由合并流程生成（Cliora 不编辑生成 Skills）。Hindsight 是远程 bank 与 hindsight-outbox 投递队列，Mnemopi 是本机 SQLite，Sharpshooter 是项目决策文件与队列：都不作为通用 Markdown 记忆读取或编辑，也不展示为空的本地记忆。切换后端只写 memory.backend，不删除、不重建任何记忆文件。";
+pub(crate) const LIMITATION: &str = "OMP 记忆按项目存放；只有 memory.backend=local 时提供本机 Markdown 管理。MEMORY.md 与 memory_summary.md 由合并流程生成、learned.md 由 learn 工具追加，skills/ 由合并流程生成（Cliora 不编辑生成 Skills）。Hindsight 是远程 bank 与 hindsight-outbox 投递队列，Mnemopi 是本机 SQLite，Sharpshooter 是项目决策文件与队列：都不作为通用 Markdown 记忆读取或编辑；非 local 后端会显示原生状态与磁盘上保留的文件，不会伪装成空的本地记忆。记忆界面的开关只在 local/off 之间切换，其它已验证值请在 OMP 配置或原生 CLI 设置；未识别值只报告、不被覆盖。切换后端只写 memory.backend，不删除、不重建任何记忆文件。";
 
 const GROUP_ID: &str = "memory.backend";
 const BACKEND_VALUE: &str = "local";
@@ -157,20 +157,24 @@ impl Backend {
         }
     }
 
-    fn status_detail(&self, legacy: bool) -> String {
+    fn status_detail(&self, home: &Path, legacy: bool) -> String {
         if let Self::Unknown(value) = self {
-            let mut detail = format!(
-                "memory.backend 为未核实值 {value}；OMP 18.20.2 会忽略并使用默认 off，Cliora 保留原值不改写"
+            return format!(
+                "memory.backend 为未核实值 {value}；OMP 18.20.2 会忽略并使用默认 off，Cliora 保留原值不改写；选择“开”会被拒绝，请先在 OMP 原生配置中修复{}",
+                local_bank_note(home)
             );
-            if legacy {
-                detail.push_str("；旧版 memories.enabled 也存在");
-            }
-            return detail;
         }
         let mut detail = format!("当前后端：{}（{}）", self.label(), self.storage());
         if legacy {
             detail.push_str("；来自旧版 memories.enabled 迁移");
         }
+        if matches!(self, Self::Off) {
+            detail.push_str("；Cliora 不把磁盘上的旧 Markdown 文件当作当前记忆");
+        } else {
+            detail.push_str("；该数据由 OMP 原生后端管理，Cliora 不展示为本地 Markdown");
+            detail.push_str("；记忆界面的开关只写 local/off，选择“开”会替换当前值");
+        }
+        detail.push_str(&local_bank_note(home));
         detail
     }
 
@@ -196,9 +200,18 @@ struct Reading {
 
 impl Reading {
     fn patch(&self, enabled: bool) -> Result<Option<MemoryFileChange>, String> {
-        // Only `local` and `off` are Cliora's own switch values. Any other
-        // native value is preserved: turning "not local" off again must not
-        // replace a chosen remote/SQLite backend with `off`.
+        // Only `local` and `off` are Cliora's own switch values. An unknown
+        // native value is never overwritten, not even by an explicit "on":
+        // the user must repair it in the native configuration first.
+        if let Backend::Unknown(value) = &self.backend {
+            if enabled {
+                return Err(format!(
+                    "memory.backend 为未核实值 {value}；Cliora 不会覆盖未知值，请先在 OMP 原生配置中修复"
+                ));
+            }
+        }
+        // Any verified non-local backend is preserved when the switch is
+        // turned off; turning it on is an explicit choice that writes `local`.
         if self.backend.is_local() == enabled {
             return Ok(None);
         }
@@ -403,6 +416,79 @@ fn project_root(home: &Path, project: &Path) -> Result<PathBuf, String> {
     Ok(root.join(encode_project(project, cfg!(windows))))
 }
 
+/// A local memory bank is one encoded project directory. Anything else under
+/// the memories root belongs to another backend (mnemopi/, sharpshooter/) or is
+/// not a project bank at all.
+fn is_bank_name(name: &str) -> bool {
+    name.len() > 4 && name.starts_with("--") && name.ends_with("--")
+}
+
+fn local_banks(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let read = match fs::read_dir(root) {
+        Ok(read) => read,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(format!(
+                "无法枚举 OMP local 记忆目录（{}）：{error}",
+                root.display()
+            ))
+        }
+    };
+    let mut banks = Vec::new();
+    for item in read {
+        let item = item
+            .map_err(|error| format!("无法枚举 OMP local 记忆目录（{}）：{error}", root.display()))?;
+        let name = item.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !is_bank_name(name) {
+            continue;
+        }
+        let directory = item.path();
+        // Follow the entry to classify a directory (a junction stays a store
+        // and is rejected later by the engine's reparse check, not hidden).
+        if store_present(&directory) {
+            banks.push(directory);
+        }
+    }
+    banks.sort();
+    Ok(banks)
+}
+
+/// Disk reality appended to the backend status. An `off`, remote or unknown
+/// backend must never look like "no memory": the local Markdown files may still
+/// be on disk, untouched and simply not loaded.
+fn local_bank_note(home: &Path) -> String {
+    let banks = memories_dir(home).and_then(|root| local_banks(&root));
+    match banks {
+        Ok(banks) if banks.is_empty() => "；本机没有已落盘的 local Markdown 记忆".to_owned(),
+        Ok(banks) => format!(
+            "；本机仍有 {} 个项目的 local Markdown 记忆文件，当前后端不读取，Cliora 不删除或重建",
+            banks.len()
+        ),
+        Err(_) => "；无法枚举本机 local Markdown 记忆目录，请修复后重试".to_owned(),
+    }
+}
+
+/// A store whose directory is not a project bank. Listing it fails with a
+/// recoverable error instead of silently looking like an empty store.
+fn status_store(directory: PathBuf, label: &str) -> MemoryStoreRef {
+    MemoryStoreRef {
+        scope: Scope::Project,
+        project_path: None,
+        label: label.to_owned(),
+        directory,
+    }
+}
+
+fn unavailable_store(home: &Path) -> MemoryStoreRef {
+    status_store(
+        home.join(".cliora-omp-memory-unavailable"),
+        "OMP 记忆根目录无法解析",
+    )
+}
+
 /// Restore the exact prior config text (or remove the fixture file) after a
 /// verification case.
 fn restore_config(path: &Path, previous: Option<String>) -> Result<(), String> {
@@ -416,7 +502,17 @@ fn restore_config(path: &Path, previous: Option<String>) -> Result<(), String> {
     }
 }
 
-fn canonical_path(directory: &Path, id: &str) -> Result<PathBuf, String> {    CANONICAL_FILES
+fn canonical_path(directory: &Path, id: &str) -> Result<PathBuf, String> {
+    if !directory
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(is_bank_name)
+    {
+        return Err(
+            "OMP local 记忆目录未解析为项目存储；请修复配置或 memories 根目录后重试".to_owned(),
+        );
+    }
+    CANONICAL_FILES
         .iter()
         .find(|(known, _)| *known == id)
         .map(|(_, file)| directory.join(file))
@@ -474,28 +570,36 @@ impl MemoryAdapter for Memory {
     }
 
     /// Only project banks (`--...--`) are local memory stores. A non-local
-    /// backend publishes no store at all: its data lives in a remote bank, a
-    /// SQLite database or a decision-file queue, never in a Markdown family.
+    /// backend publishes no store: its data lives in a remote bank, a SQLite
+    /// database or a decision-file queue, never in a Markdown family. A backend
+    /// or directory error is not an empty store: a status store is returned so
+    /// the shared engine reports a recoverable failed source (or the aggregate
+    /// carries the backend read error) instead of "no memory".
     fn existing_stores(&self, home: &Path) -> Vec<MemoryStoreRef> {
-        let Ok(backend) = backend(home) else {
-            return Vec::new();
+        let root = match memories_dir(home) {
+            Ok(root) => root,
+            Err(_) => return vec![unavailable_store(home)],
         };
-        if !backend.is_local() {
-            return Vec::new();
+        match backend(home) {
+            Ok(backend) if !backend.is_local() => return Vec::new(),
+            Ok(_) => {}
+            Err(_) => return vec![status_store(root, "OMP 记忆后端状态无法读取")],
         }
-        let Ok(root) = memories_dir(home) else {
-            return Vec::new();
-        };
-        let Ok(read) = fs::read_dir(&root) else {
-            return Vec::new();
+        let read = match fs::read_dir(&root) {
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+            Err(_) => return vec![status_store(root, "OMP 记忆根目录无法枚举")],
         };
         let mut stores = Vec::new();
-        for item in read.flatten() {
+        for item in read {
+            let Ok(item) = item else {
+                return vec![status_store(root, "OMP 记忆根目录无法枚举")];
+            };
             let name = item.file_name();
             let Some(name) = name.to_str() else {
                 continue;
             };
-            if !name.starts_with("--") || !name.ends_with("--") {
+            if !is_bank_name(name) {
                 continue;
             }
             let directory = item.path();
@@ -519,6 +623,19 @@ impl MemoryAdapter for Memory {
 
 impl MemoryLayout for Memory {
     fn entries(&self, directory: &Path) -> Result<Vec<MemoryLayoutEntry>, String> {
+        // A status store is never a project bank. Refusing it here keeps a
+        // backend/directory error visible as a failed source instead of an
+        // empty memory family.
+        if !directory
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(is_bank_name)
+        {
+            return Err(
+                "OMP local 记忆目录未解析为项目存储；请修复配置或 memories 根目录后重试"
+                    .to_owned(),
+            );
+        }
         let read = match fs::read_dir(directory) {
             Ok(read) => read,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -588,7 +705,7 @@ impl MemoryLayout for Memory {
             id: GROUP_ID.into(),
             scope: Scope::Project,
             enabled: Some(reading.backend.is_local()),
-            detail: reading.backend.status_detail(reading.legacy),
+            detail: reading.backend.status_detail(home, reading.legacy),
         }])
     }
 
@@ -612,7 +729,7 @@ impl MemoryLayout for Memory {
             detail: if enabled {
                 String::new()
             } else {
-                reading.backend.status_detail(reading.legacy)
+                reading.backend.status_detail(home, reading.legacy)
             },
         })
     }
@@ -800,6 +917,14 @@ pub(crate) fn verify_case(
                         CaseError::Failed(format!("无法写入 fixture config.yml：{error}"))
                     })?;
                 }
+                let _ = std::fs::remove_dir_all(&project_dir);
+                if item.get("diskFiles").and_then(Value::as_bool) == Some(true) {
+                    std::fs::create_dir_all(&project_dir).map_err(|error| {
+                        CaseError::Failed(format!("无法创建 fixture 记忆目录：{error}"))
+                    })?;
+                    std::fs::write(&marker, marker_text)
+                        .map_err(|error| CaseError::Failed(format!("无法写入 fixture 记忆：{error}")))?;
+                }
                 let expected = item.get("expect").and_then(Value::as_object);
                 let enabled = expected
                     .and_then(|expect| expect.get("enabled"))
@@ -904,6 +1029,26 @@ pub(crate) fn verify_case(
                     let kept = std::fs::read_to_string(&path).unwrap_or_default();
                     checks.push((
                         format!("{name}：原生值未被改写"),
+                        kept.contains(
+                            item.get("configContains")
+                                .and_then(Value::as_str)
+                                .unwrap_or("memory"),
+                        ),
+                        kept.replace('\n', " "),
+                    ));
+                }
+                if item.get("enableError").and_then(Value::as_bool) == Some(true) {
+                    let outcome = Memory.switch_group_patch(&context.home, GROUP_ID, true);
+                    checks.push((
+                        format!("{name}：拒绝覆盖未知值"),
+                        outcome.is_err(),
+                        outcome
+                            .err()
+                            .unwrap_or_else(|| "错误地写入了 local".into()),
+                    ));
+                    let kept = std::fs::read_to_string(&path).unwrap_or_default();
+                    checks.push((
+                        format!("{name}：未知值在拒绝后仍保留"),
                         kept.contains(
                             item.get("configContains")
                                 .and_then(Value::as_str)
@@ -1150,9 +1295,15 @@ mod tests {
             Backend::from_value("Local"),
             Backend::Unknown("Local".into())
         );
-        let detail = Backend::Unknown("future".into()).status_detail(false);
+        let temp = tempfile::tempdir().unwrap();
+        let detail = Backend::Unknown("future".into()).status_detail(temp.path(), false);
         assert!(detail.contains("未核实值 future"));
         assert!(detail.contains("保留原值"));
+        assert!(detail.contains("选择“开”会被拒绝"));
+        let detail = Backend::Hindsight.status_detail(temp.path(), false);
+        assert!(detail.contains("由 OMP 原生后端管理"));
+        assert!(detail.contains("不展示为本地 Markdown"));
+        assert!(detail.contains("选择“开”会替换当前值"));
     }
 
     #[test]
@@ -1262,7 +1413,7 @@ mod tests {
                 reading.patch(false).unwrap().is_none(),
                 "{value} must not be replaced by off"
             );
-            let detail = reading.backend.status_detail(false);
+            let detail = reading.backend.status_detail(home, false);
             assert!(detail.contains(value), "{detail}");
             assert_eq!(
                 std::fs::read_to_string(&reading.path).unwrap(),
@@ -1356,7 +1507,7 @@ mod tests {
     #[test]
     fn layout_lists_only_the_native_memory_files() {
         let temp = tempfile::tempdir().unwrap();
-        let directory = temp.path().join("memory");
+        let directory = temp.path().join("--fixture-project--");
         std::fs::create_dir_all(directory.join("skills").join("generated")).unwrap();
         for file in ["MEMORY.md", "memory_summary.md", "learned.md", "notes.md", "readme.txt"] {
             std::fs::write(directory.join(file), "# fixture\n").unwrap();
@@ -1374,9 +1525,12 @@ mod tests {
         );
         assert!(MEMORY.entry_path(&directory, "notes").is_err());
         assert!(MEMORY
-            .entries(&temp.path().join("missing"))
+            .entries(&temp.path().join("--missing--"))
             .unwrap()
             .is_empty());
+        // A non-bank directory is a status store, never an empty family.
+        assert!(MEMORY.entries(temp.path()).is_err());
+        assert!(MEMORY.entry_path(temp.path(), "MEMORY").is_err());
         assert!(MEMORY
             .index_after_save(&directory, "MEMORY", "text")
             .unwrap()
@@ -1413,6 +1567,146 @@ mod tests {
             .unwrap_err();
         assert!(error.contains("mnemopi"), "{error}");
         assert!(error.contains("Markdown"), "{error}");
+    }
+
+    #[test]
+    fn unknown_backend_never_accepts_an_enable_write() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        write_config(home, "memory:\n  backend: future-backend\n");
+        let reading = read(home).unwrap();
+        let error = reading.patch(true).unwrap_err();
+        assert!(error.contains("不会覆盖未知值"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(&reading.path).unwrap(),
+            "memory:\n  backend: future-backend\n"
+        );
+        // The off direction stays a no-op and keeps the raw value.
+        assert!(reading.patch(false).unwrap().is_none());
+        // A verified non-local backend can be replaced by an explicit "on".
+        write_config(home, "memory:\n  backend: mnemopi\n");
+        let change = read(home).unwrap().patch(true).unwrap().unwrap();
+        assert!(change.contents.unwrap().contains("backend: local"));
+    }
+
+    #[test]
+    fn non_local_status_reports_disk_reality_instead_of_an_empty_family() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        write_config(home, "memory:\n  backend: local\n");
+        let (project, root) = project_fixture(home);
+        std::fs::write(root.join("MEMORY.md"), "# kept\n").unwrap();
+        write_config(home, "memory:\n  backend: off\n");
+        let group = MEMORY.switch_groups(home).unwrap().remove(0);
+        assert_eq!(group.enabled, Some(false));
+        assert!(group.detail.contains("本机仍有 1 个项目的 local Markdown 记忆文件"));
+        assert!(group.detail.contains("不把磁盘上的旧 Markdown 文件当作当前记忆"));
+        assert!(MEMORY.existing_stores(home).is_empty());
+        let db = crate::database::Database::open(&temp.path().join("cliora.db")).unwrap();
+        let registry = Registry::builtins();
+        let aggregate = list_all_memories(&db, &registry, home, "omp").unwrap();
+        assert!(aggregate.entries.is_empty());
+        assert!(aggregate.stores.is_empty());
+        assert_eq!(
+            aggregate.switch_groups.first().map(|group| group.enabled),
+            Some(Some(false))
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("MEMORY.md")).unwrap(),
+            "# kept\n"
+        );
+        assert!(!project.exists() || project.is_dir());
+        // A verified remote backend adds the same disk note and an explicit
+        // replacement warning, while a fresh home reports no local files.
+        write_config(home, "memory:\n  backend: hindsight\n");
+        let group = MEMORY.switch_groups(home).unwrap().remove(0);
+        assert!(group.detail.contains("由 OMP 原生后端管理"));
+        assert!(group.detail.contains("本机仍有 1 个项目"));
+        std::fs::remove_dir_all(&root).unwrap();
+        let group = MEMORY.switch_groups(home).unwrap().remove(0);
+        assert!(group.detail.contains("本机没有已落盘的 local Markdown 记忆"));
+    }
+
+    #[test]
+    fn unreadable_memories_root_is_a_failed_source_not_an_empty_list() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        write_config(home, "memory:\n  backend: local\n");
+        let root = memories_dir(home).unwrap();
+        std::fs::create_dir_all(root.parent().unwrap()).unwrap();
+        // A file where the memories directory belongs makes enumeration fail
+        // deterministically on every platform.
+        std::fs::write(&root, "not a directory").unwrap();
+        let stores = MEMORY.existing_stores(home);
+        assert_eq!(stores.len(), 1, "{stores:?}");
+        assert_eq!(stores[0].directory, root);
+        assert!(MEMORY.entries(&root).is_err());
+        let db = crate::database::Database::open(&temp.path().join("cliora.db")).unwrap();
+        let registry = Registry::builtins();
+        let aggregate = list_all_memories(&db, &registry, home, "omp").unwrap();
+        assert!(aggregate.entries.is_empty());
+        assert_eq!(aggregate.failed_sources.len(), 1, "{:?}", aggregate.failed_sources);
+        assert!(
+            aggregate.failed_sources[0].reason.contains("记忆目录"),
+            "{}",
+            aggregate.failed_sources[0].reason
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn one_unreadable_bank_does_not_hide_the_other_stores() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        write_config(home, "memory:\n  backend: local\n");
+        let (_, good) = project_fixture(home);
+        std::fs::write(good.join("MEMORY.md"), "# kept\n").unwrap();
+        let root = memories_dir(home).unwrap();
+        let broken = root.join("--broken-project--");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&broken)
+            .arg(&outside)
+            .status();
+        if !status.map(|status| status.success()).unwrap_or(false) {
+            // Junction creation is unavailable in this environment; the engine
+            // per-store failure path is covered by the shared memory tests.
+            return;
+        }
+        let db = crate::database::Database::open(&temp.path().join("cliora.db")).unwrap();
+        let registry = Registry::builtins();
+        let aggregate = list_all_memories(&db, &registry, home, "omp").unwrap();
+        assert!(
+            aggregate.entries.iter().any(|entry| entry.id == "MEMORY"),
+            "{:?}",
+            aggregate.entries
+        );
+        assert_eq!(aggregate.failed_sources.len(), 1, "{:?}", aggregate.failed_sources);
+        assert!(
+            aggregate
+                .failed_sources
+                .iter()
+                .any(|source| source.reason.contains("重解析点")),
+            "{:?}",
+            aggregate.failed_sources
+        );
+        assert!(aggregate.stores.iter().any(|store| store.directory == good.display().to_string()));
+    }
+
+    #[test]
+    fn damaged_backend_config_blocks_the_aggregate_instead_of_looking_empty() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        write_config(home, "memory: [unterminated\n");
+        let stores = MEMORY.existing_stores(home);
+        assert_eq!(stores.len(), 1, "the read error must not become an empty scan");
+        let db = crate::database::Database::open(&temp.path().join("cliora.db")).unwrap();
+        let registry = Registry::builtins();
+        let error = list_all_memories(&db, &registry, home, "omp").unwrap_err();
+        assert!(error.contains("config.yml"), "{error}");
+        assert!(MEMORY.switch_groups(home).is_err());
     }
 
     #[test]

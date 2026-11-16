@@ -59,6 +59,24 @@
         "configContains": "backend: future-backend"
       },
       {
+        "name": "unknown value rejects an enable write",
+        "config": "memory:\n  backend: future-backend\n",
+        "expect": {
+          "enabled": false
+        },
+        "enableError": true,
+        "configContains": "backend: future-backend"
+      },
+      {
+        "name": "off reports the local files that stay on disk",
+        "config": "memory:\n  backend: off\n",
+        "diskFiles": true,
+        "expect": {
+          "enabled": false,
+          "detailContains": "本机仍有 1 个项目的 local Markdown 记忆文件"
+        }
+      },
+      {
         "name": "enabling local writes only memory.backend and keeps memory files",
         "config": "memory:\n  backend: off\nretry:\n  attempts: 2\n",
         "expectFile": "backend: local",

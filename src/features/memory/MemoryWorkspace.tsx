@@ -346,6 +346,13 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   // absent until the native switch selects the managed family again.
   const writesOff = switchGroups.some(group => group.enabled === false && group.detail.trim() !== '');
   const canCreate = can('create') && !writesOff;
+  // A disabled group with a reason is the adapter's status for a backend whose
+  // data (remote bank, SQLite, decision files, unknown value) is not this
+  // Markdown family. With nothing to list it becomes the panel's state instead
+  // of the generic "no memory yet" copy.
+  const backendStatus = writesOff
+    ? switchGroups.find(group => group.enabled === false && group.detail.trim() !== '') ?? null
+    : null;
 
   // ---------- Destinations for new entries ----------
   const destinations = useMemo<Destination[]>(() => {
@@ -779,7 +786,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     </span>}
     {switchGroups.map(group => {
       const stateText = group.enabled === null ? t('common.memory.nativeDefault') : group.enabled ? t('common.memory.autoOnShort') : t('common.memory.autoOffShort');
-      const detail = group.detail.trim() && group.detail !== t('common.memory.nativeDefault') ? group.detail : '';
+      const detail = group.detail.trim() && group.detail !== t('common.memory.nativeDefault') && !(backendStatus && group.id === backendStatus.id) ? group.detail : '';
       return <div key={group.id} className={styles.scopeSwitch}>
         <strong>{t(group.scope === 'global' ? 'common.memory.userScopeSwitch' : 'common.memory.projectScopeSwitch')}</strong>
         <span>{stateText}</span>
@@ -807,7 +814,9 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     heading={aggregate ? t('tools.workspace.view.memory') : undefined}
     count={aggregate && total > 0 ? filtering ? t('common.memory.countFiltered', { filtered: visible.length, total }) : t('common.memory.countAll', { count: total, stores: listedStores.length }) : undefined}
     actions={aggregate ? <>
-      {limitation && !master && (writesOff || (!can('edit') && !canCreate)) && <Badge title={limitation}><Icon name="lock" size={11} />{t('common.memory.readOnly')}</Badge>}
+      {limitation && !master && (writesOff || (!can('edit') && !canCreate))
+        ? <Badge title={limitation}><Icon name="lock" size={11} />{t('common.memory.readOnly')}</Badge>
+        : limitation && !master && <Badge title={limitation}><Icon name="info" size={11} />{t('common.memory.noteTitle')}</Badge>}
       <IconButton size="sm" className={doc.iconButton} aria-label={t('common.memory.refresh')} title={t('common.memory.refresh')} disabled={refreshing || busy} data-spinning={refreshing || undefined} onClick={() => void reload()} icon={<Icon name="refresh" size={15} />} />
       {canCreate && <IconButton variant="primary" size="sm" aria-label={t('common.memory.create')} disabled={busy || !aggregate || destinations.length === 0} title={destinations.length === 0 && aggregate ? t('common.memory.createUnavailable', { tool }) : t('common.memory.create')} onClick={() => void startCompose()} icon={<Icon name="plus" size={16} />} />}
     </> : undefined}
@@ -831,7 +840,11 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     list={!aggregate && !listFailure
       ? <div className={styles.loading} role="status" aria-label={t('common.memory.loading')}><span className="skeleton-block short" /><span className="skeleton-block" /><span className="skeleton-block tall" /></div>
       : aggregate && total === 0
-        ? <EmptyState icon="sparkle" title={t('common.memory.emptyTitle')} detail={aggregate.failedSources.length ? t('common.memory.emptyFailed') : t('common.memory.emptyAll')} action={canCreate && destinations.length > 0 ? <Button variant="primary" disabled={busy} onClick={() => void startCompose()}><Icon name="plus" size={14} />{t('common.memory.create')}</Button> : undefined} />
+        ? aggregate.failedSources.length
+          ? <EmptyState icon="alert" title={t('common.memory.noteTitle')} detail={t('common.memory.emptyFailed')} action={canCreate && destinations.length > 0 ? <Button variant="primary" disabled={busy} onClick={() => void startCompose()}><Icon name="plus" size={14} />{t('common.memory.create')}</Button> : undefined} />
+          : backendStatus
+            ? <EmptyState icon="lock" title={t('common.memory.noteTitle')} detail={backendStatus.detail} />
+            : <EmptyState icon="sparkle" title={t('common.memory.emptyTitle')} detail={t('common.memory.emptyAll')} action={canCreate && destinations.length > 0 ? <Button variant="primary" disabled={busy} onClick={() => void startCompose()}><Icon name="plus" size={14} />{t('common.memory.create')}</Button> : undefined} />
         : aggregate && filtering && visible.length === 0
           ? <div className={doc.noMatch}><Icon name="search" size={18} /><p>{needle ? t('common.memory.noMatch', { query: query.trim() }) : t('common.memory.noMatchFilter')}</p><Button onClick={clearFilters}>{t('common.memory.clearFilters')}</Button></div>
           : aggregate ? <nav ref={listRef} className={doc.rows} aria-label={t('common.memory.listLabel')} onKeyDown={onListKey}>{ordered.map(entryButton)}</nav> : null}

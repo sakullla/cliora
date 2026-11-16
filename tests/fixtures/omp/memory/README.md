@@ -11,7 +11,7 @@ is not native evidence: the real `omp/18.20.2` observations live in
 | File | Meaning |
 | --- | --- |
 | `layout.json` | the project memory root under the default agent dir, a named Profile, `PI_CONFIG_DIR` and `PI_CODING_AGENT_DIR`; invalid Profile names are rejected |
-| `backend.json` | verified `memory.backend` values and legacy `memories.enabled` migration; switching writes only `memory.backend` and keeps memory files |
+| `backend.json` | verified `memory.backend` values and legacy `memories.enabled` migration; switching writes only `memory.backend` and keeps memory files; unknown values reject an enable write; `off` reports the local files that stay on disk |
 | `entries.json` | `local` lists only `MEMORY.md`, `memory_summary.md` and `learned.md`; `skills/` and foreign Markdown files are not entries |
 | `boundary.json` | `off`, `hindsight`, `mnemopi`, `sharpshooter` and unknown values publish no Markdown store and leave native data untouched |
 

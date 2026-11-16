@@ -20,13 +20,14 @@ async function setMode(page: Page, mode: string) {
   await page.evaluate(value => { (window as unknown as { __memory: { mode: string } }).__memory.mode = value; }, mode);
 }
 
-async function install(page: Page, options: { catalog?: 'none' | 'session' | 'memory'; suggestion?: string | null; mode?: string; copies?: number; backend?: 'local' | 'hindsight' } = {}) {
+async function install(page: Page, options: { catalog?: 'none' | 'session' | 'memory'; suggestion?: string | null; mode?: string; copies?: number; backend?: 'local' | 'off' | 'hindsight' | 'mnemopi' | 'sharpshooter' | 'future-backend'; zetaFailure?: string } = {}) {
   const catalog = options.catalog ?? 'memory';
   const suggestion = options.suggestion === undefined ? 'C:/A' : options.suggestion;
   const copies = options.copies ?? 0;
   const backend = options.backend ?? null;
+  const zetaFailure = options.zetaFailure ?? null;
   const storePaths = { alphaGlobal: alphaGlobalStore, alphaA: alphaAStore, alphaB: alphaBStore, beta: betaStore, epsilon: epsilonStores };
-  await page.addInitScript(({ catalog: kind, suggestion: suggested, mode, stores, copies, backend: initialBackend }) => {
+  await page.addInitScript(({ catalog: kind, suggestion: suggested, mode, stores, copies, backend: initialBackend, zetaFailure: zetaFailureReason }) => {
     const state = {
       mode,
       backend: initialBackend as string | null,
@@ -42,7 +43,7 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
     };
     (window as unknown as { __memory: typeof state }).__memory = state;
     // The suggestion is the stored workspace context of the project-only CLI (delta).
-    if (suggested) localStorage.setItem('cliora:workspace-context', JSON.stringify({ delta: { scope: 'project', projectPath: suggested, resource: 'config' }, ...(initialBackend ? { zeta: { scope: 'project', projectPath: suggested, resource: 'config' } } : {}) }));
+    if (suggested) localStorage.setItem('cliora:workspace-context', JSON.stringify({ delta: { scope: 'project', projectPath: suggested, resource: 'config' }, ...(initialBackend || zetaFailureReason ? { zeta: { scope: 'project', projectPath: suggested, resource: 'config' } } : {}) }));
     else localStorage.removeItem('cliora:workspace-context');
     const full = ['list', 'open', 'create', 'edit', 'delete', 'master_switch', 'item_enable'];
     const base = (id: string, name: string, memory?: unknown) => ({
@@ -61,7 +62,7 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
           base('gamma', 'Gamma'),
           base('delta', 'Delta', { scope: { global: false, project: true }, targets: ['project'], operations: full }),
           base('epsilon', 'Epsilon', { scope: { global: false, project: true }, targets: ['project'], operations: ['list', 'open', 'create', 'edit', 'delete', 'master_switch'] }),
-          ...(initialBackend ? [base('zeta', 'Zeta', { scope: { global: false, project: true }, targets: ['project'], operations: ['list', 'open', 'create', 'edit', 'master_switch'], limitation: 'OMP 记忆按项目存放；只有 memory.backend=local 时提供本机 Markdown 管理。' })] : []),
+          ...(initialBackend || zetaFailureReason ? [base('zeta', 'Zeta', { scope: { global: false, project: true }, targets: ['project'], operations: ['list', 'open', 'create', 'edit', 'master_switch'], limitation: 'OMP 记忆按项目存放；只有 memory.backend=local 时提供本机 Markdown 管理。' })] : []),
         ];
     const ids = registered.map(item => item.id);
     const workspace = () => ({
@@ -91,12 +92,26 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
       }
       if (toolId === 'zeta') {
         const backend = state.backend ?? 'hindsight';
+        const bankNote = '；本机仍有 1 个项目的 local Markdown 记忆文件，当前后端不读取，Cliora 不删除或重建';
         const storage = backend === 'local'
           ? '本机 Markdown（MEMORY.md、memory_summary.md、learned.md）'
           : backend === 'off'
-            ? '原生默认 off，本机 Markdown 文件保留但不会被读取'
-            : '远程 Hindsight bank（另含 hindsight-outbox 投递队列，可能失败或待投递）';
-        const detail = `当前后端：${backend}（${storage}）`;
+            ? '原生默认 off；本机 Markdown 文件保留但 OMP 不读取'
+            : backend === 'mnemopi'
+              ? '本机 Mnemopi SQLite 数据库；不读取本机 Markdown 记忆文件'
+              : backend === 'sharpshooter'
+                ? '按项目的 Sharpshooter 决策文件与队列；不读取 MEMORY.md 记忆族'
+                : backend === 'future-backend'
+                  ? '未核实后端；OMP 18.20.2 忽略该值并使用默认 off'
+                  : '远程 Hindsight bank（另含 hindsight-outbox 投递队列）；本机 Markdown 文件不参与';
+        const detail = backend === 'future-backend'
+          ? `memory.backend 为未核实值 future-backend；OMP 18.20.2 会忽略并使用默认 off，Cliora 保留原值不改写；选择“开”会被拒绝，请先在 OMP 原生配置中修复${bankNote}`
+          : backend === 'local'
+            ? `当前后端：local（${storage}）`
+            : backend === 'off'
+              ? `当前后端：off（${storage}）；Cliora 不把磁盘上的旧 Markdown 文件当作当前记忆${bankNote}`
+              : `当前后端：${backend}（${storage}）；该数据由 OMP 原生后端管理，Cliora 不展示为本地 Markdown；记忆界面的开关只写 local/off，选择“开”会替换当前值${bankNote}`;
+        if (zetaFailureReason) return { toolId, failedSources: [{ label: 'OMP 记忆根目录无法枚举', reason: zetaFailureReason }], entries: [], stores: [], switchShared: true, switchGroups: [{ id: 'memory.backend', scope: 'project', enabled: true, detail: `当前后端：local（${storage}）` }] };
         if (backend !== 'local') return { toolId, failedSources: [], entries: [], stores: [], switchShared: true, switchGroups: [{ id: 'memory.backend', scope: 'project', enabled: false, detail }] };
         const target = { toolId: 'zeta', scope: 'project', projectPath: 'C:/A', storeDirectory: 'C:/home/.omp/agent/memories/--c--a--' };
         const entries = ['learned', 'memory_summary'].map(id => entry(id, 'C:/home/.omp/agent/memories/--c--a--', '--c--a--', target));
@@ -151,7 +166,10 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
           }
           if (command === 'set_memory_enabled') return null;
           if (command === 'set_memory_switch_group') {
-            if (args.groupId === 'memory.backend') state.backend = args.enabled ? 'local' : 'off';
+            if (args.groupId === 'memory.backend') {
+              if ((state.backend ?? 'hindsight') === 'future-backend' && args.enabled) throw new Error('memory.backend 为未核实值 future-backend；Cliora 不会覆盖未知值，请先在 OMP 原生配置中修复');
+              state.backend = args.enabled ? 'local' : 'off';
+            }
             return null;
           }
           if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return () => {};
@@ -159,7 +177,7 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
         },
       },
     });
-  }, { catalog, suggestion, mode: options.mode ?? 'normal', stores: storePaths, copies, backend });
+  }, { catalog, suggestion, mode: options.mode ?? 'normal', stores: storePaths, copies, backend, zetaFailure });
 }
 
 
@@ -849,6 +867,52 @@ test('OMP reports a non-local memory backend without offering Markdown entries',
   await page.getByRole('combobox', { name: '所有项目记忆' }).selectOption('off');
   await expect(page.getByText(/当前后端：off/)).toBeVisible();
   await expect(page.getByRole('button', { name: '新建记忆' })).toHaveCount(0);
+});
+
+
+for (const [backend, expected] of [
+  ['hindsight', /当前后端：hindsight/],
+  ['mnemopi', /当前后端：mnemopi/],
+  ['sharpshooter', /当前后端：sharpshooter/],
+  ['future-backend', /未核实值 future-backend/],
+  ['off', /当前后端：off/],
+] as const) test(`OMP ${backend} reports its native backend instead of an empty memory family`, async ({ page }) => {
+  await install(page, { backend });
+  await openMemory(page, 'Zeta');
+  await expect(page.getByText(expected)).toBeVisible();
+  // The generic "no memory yet" copy would be false for a remote/SQLite/decision
+  // backend and for off while local files still exist on disk.
+  await expect(page.getByText('还没有记忆')).toHaveCount(0);
+  await expect(page.getByText(/本机还没有已落盘的记忆条目/)).toHaveCount(0);
+  await expect(page.getByText(/本机仍有 1 个项目的 local Markdown 记忆文件/)).toBeVisible();
+  await expect(page.getByRole('button', { name: '新建记忆' })).toHaveCount(0);
+  if (backend === 'off') {
+    await expect(page.getByText(/不把磁盘上的旧 Markdown 文件当作当前记忆/)).toBeVisible();
+  } else if (backend === 'future-backend') {
+    await expect(page.getByText(/保留原值不改写/)).toBeVisible();
+  } else {
+    await expect(page.getByText(/不展示为本地 Markdown/)).toBeVisible();
+  }
+});
+
+
+test('OMP unknown backend refuses an enable write and keeps its raw value', async ({ page }) => {
+  await install(page, { backend: 'future-backend' });
+  await openMemory(page, 'Zeta');
+  await page.getByRole('combobox', { name: '所有项目记忆' }).selectOption('on');
+  await expect(page.getByText(/不会覆盖未知值/)).toBeVisible();
+  await expect(page.getByText(/未核实值 future-backend/).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: '新建记忆' })).toHaveCount(0);
+});
+
+
+test('OMP unreadable memories root shows a recoverable error instead of an empty family', async ({ page }) => {
+  await install(page, { zetaFailure: '无法枚举 OMP local 记忆目录（C:/home/.omp/agent/memories）：拒绝访问' });
+  await openMemory(page, 'Zeta');
+  await expect(page.getByText(/OMP 记忆根目录无法枚举/)).toBeVisible();
+  await expect(page.getByText(/部分来源暂时无法读取/)).toBeVisible();
+  await expect(page.getByText('还没有记忆')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '刷新记忆' })).toBeEnabled();
 });
 
 
