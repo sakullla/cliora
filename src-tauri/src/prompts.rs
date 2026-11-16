@@ -260,14 +260,23 @@ pub fn normalize_tags(tags: &[String]) -> Result<Vec<String>, String> {
     }
     Ok(result)
 }
-/// Legacy categories allowed any trimmed string up to 80 characters, before the
-/// new per-tag/count rules. Only preserve vectors representable by that old format.
-fn legacy_tag_shape(tags: &[String]) -> bool {
-    let category = tags.join(",");
-    category.chars().count() <= 80 && legacy_tags(&category) == tags
+#[derive(Clone, Copy)]
+enum LegacyTagSource {
+    Local,
+    Remote,
 }
-fn normalize_preserving_tags(draft: &PromptDraft, previous: Option<&[String]>) -> Result<PromptDraft, String> {
-    if previous.is_some_and(|tags| tags == draft.tags && legacy_tag_shape(tags)) {
+/// Local categories allowed 80 characters; the remote library allowed 400 UTF-8
+/// bytes. Preserve only vectors representable by their actual source's old format.
+fn legacy_tag_shape(tags: &[String], source: LegacyTagSource) -> bool {
+    let category = tags.join(",");
+    let within_limit = match source {
+        LegacyTagSource::Local => category.chars().count() <= 80,
+        LegacyTagSource::Remote => category.len() <= 400,
+    };
+    within_limit && legacy_tags(&category) == tags
+}
+fn normalize_preserving_tags(draft: &PromptDraft, previous: Option<&[String]>, source: LegacyTagSource) -> Result<PromptDraft, String> {
+    if previous.is_some_and(|tags| tags == draft.tags && legacy_tag_shape(tags, source)) {
         let mut without_tags = draft.clone();
         without_tags.tags.clear();
         let mut normalized = normalize_draft(&without_tags)?;
@@ -414,7 +423,7 @@ pub fn export_metadata(db: &Database) -> Result<BTreeMap<String, PromptMetadata>
 /// Used by versioned portable restore; missing scope targets and valid legacy tag
 /// representations are retained for explicit repair. New writes validate before this call.
 pub fn restore_metadata(conn: &Connection, id: &str, meta: &PromptMetadata) -> Result<(), String> {
-    let tags = if legacy_tag_shape(&meta.tags) { meta.tags.clone() } else { normalize_tags(&meta.tags)? };
+    let tags = if legacy_tag_shape(&meta.tags, LegacyTagSource::Local) { meta.tags.clone() } else { normalize_tags(&meta.tags)? };
     conn.execute("INSERT INTO prompt_metadata(library_id,scope_json,tags_json) VALUES(?1,?2,?3) ON CONFLICT(library_id) DO UPDATE SET scope_json=excluded.scope_json,tags_json=excluded.tags_json",params![id,json(&meta.scope)?,json(&tags)?]).map_err(sql)?;
     Ok(())
 }
@@ -582,7 +591,7 @@ fn save_in(
     create_id: Option<&str>,
 ) -> Result<PromptDocument, String> {
     let previous = draft.id.as_ref().map(|id| metadata(tx, id)).transpose()?;
-    let draft = normalize_preserving_tags(draft, previous.as_ref().map(|meta| meta.tags.as_slice()))?;
+    let draft = normalize_preserving_tags(draft, previous.as_ref().map(|meta| meta.tags.as_slice()), LegacyTagSource::Local)?;
     validate_scope(tx, &draft.scope)?;
     let id = draft
         .id
@@ -913,7 +922,7 @@ pub fn apply_remote_item(
         let previous = items.iter().find(|old| Some(&old.id) == effective.id.as_ref()
             && old.kind == crate::library::LibraryKind::Prompt)
             .map(|old| remote_document(old, state));
-        let draft = normalize_preserving_tags(&effective, previous.as_ref().map(|old| old.tags.as_slice()))?;
+        let draft = normalize_preserving_tags(&effective, previous.as_ref().map(|old| old.tags.as_slice()), LegacyTagSource::Remote)?;
         if (item.action == BatchAction::Create && draft.id.is_some())
             || (matches!(item.action, BatchAction::Replace | BatchAction::Reclassify)
                 && (draft.id.is_none() || draft.expected_version.is_none()))

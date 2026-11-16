@@ -516,6 +516,84 @@ fn remote_legacy_tags_can_be_preserved_but_not_created_or_expanded() {
     assert_eq!(items.len(), 1);
 }
 
+fn remote_category_fixture(category: String) -> (Vec<crate::library::LibraryItem>, RemotePromptState, BatchItem) {
+    let tags = legacy_tags(&category);
+    (vec![crate::library::LibraryItem {
+        id: "legacy-remote".into(), kind: crate::library::LibraryKind::Prompt,
+        title: "Legacy remote".into(), body: "original body".into(), category,
+        project_id: None, version: 1, updated_at: 1,
+    }], RemotePromptState::default(), BatchItem {
+        item_id: Uuid::new_v4().to_string(), action: BatchAction::Replace,
+        draft: PromptDraft {
+            id: Some("legacy-remote".into()), title: "Legacy remote".into(), body: "edited body".into(),
+            scope: PromptScope::Global, tags, expected_version: Some(1),
+        },
+    })
+}
+fn assert_remote_category_can_be_preserved(category: String) {
+    let (mut items, mut state, mut item) = remote_category_fixture(category);
+    let tags = item.draft.tags.clone();
+    apply_remote_item(&mut items, &mut state, &Uuid::new_v4().to_string(), &item).unwrap();
+    assert_eq!(remote_document(&items[0], &state).tags, tags);
+    assert_eq!(items[0].body, "edited body");
+    // The second edit reads saved metadata rather than falling back to legacy category.
+    item.action = BatchAction::Reclassify;
+    item.draft.expected_version = Some(2);
+    item.draft.body = "must not replace".into();
+    item.draft.scope = PromptScope::Workspace { workspace_id: "workspace".into() };
+    apply_remote_item(&mut items, &mut state, &Uuid::new_v4().to_string(), &item).unwrap();
+    let document = remote_document(&items[0], &state);
+    assert_eq!(document.tags, tags);
+    assert_eq!(document.body, "edited body");
+    assert_eq!(document.scope, item.draft.scope);
+}
+#[test]
+fn remote_legacy_category_preserves_81_ascii_characters() {
+    assert_remote_category_can_be_preserved("a".repeat(81));
+}
+#[test]
+fn remote_legacy_category_preserves_exactly_400_ascii_bytes() {
+    assert_remote_category_can_be_preserved("a".repeat(400));
+}
+#[test]
+fn remote_legacy_category_preserves_exactly_400_multibyte_bytes() {
+    let category = format!("{}a", "中".repeat(133));
+    assert_eq!(category.len(), 400);
+    assert_remote_category_can_be_preserved(category);
+}
+#[test]
+fn remote_legacy_category_does_not_relax_new_or_changed_tags_or_local_restore() {
+    for category in ["a".repeat(81), "a".repeat(400), format!("{}a", "中".repeat(133))] {
+        let (mut items, mut state, item) = remote_category_fixture(category);
+        let mut create = item.clone();
+        create.action = BatchAction::Create;
+        create.draft.id = None;
+        create.draft.expected_version = None;
+        assert!(apply_remote_item(&mut items, &mut state, &Uuid::new_v4().to_string(), &create).is_err());
+        let mut append = item.clone();
+        append.draft.tags.push("new".into());
+        assert!(apply_remote_item(&mut items, &mut state, &Uuid::new_v4().to_string(), &append).is_err());
+        let mut expand = item.clone();
+        expand.draft.tags[0].push('b');
+        assert!(apply_remote_item(&mut items, &mut state, &Uuid::new_v4().to_string(), &expand).is_err());
+        let input = ImportInput { json_text: serde_json::json!([{"title":"new", "body":"body", "tags":item.draft.tags}]).to_string(), ..Default::default() };
+        assert!(preview_import(input, &[]).unwrap().rows[0].error.is_some());
+        assert_eq!(items[0].version, 1);
+        assert_eq!(items[0].body, "original body");
+        assert!(state.receipts.is_empty());
+        let db = db();
+        let local = save(&db, &draft("Local", "body", PromptScope::Global)).unwrap();
+        assert!(db.with_connection(|conn| restore_metadata(conn, &local.id, &PromptMetadata {
+            scope: PromptScope::Global, tags: item.draft.tags.clone(),
+        })).is_err());
+        assert_eq!(get(&db, &local.id, None).unwrap().tags, local.tags);
+    }
+    for category in ["a".repeat(401), "中".repeat(134)] {
+        let (mut items, mut state, item) = remote_category_fixture(category);
+        assert!(apply_remote_item(&mut items, &mut state, &Uuid::new_v4().to_string(), &item).is_err());
+    }
+}
+
 #[test]
 fn duplicate_preview_bounds_match_samples_for_large_identical_input() {
     let input = serde_json::to_string(&vec![serde_json::json!({"title":"same", "body":"same"}); MAX_BATCH]).unwrap();
