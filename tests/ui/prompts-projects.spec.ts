@@ -124,6 +124,50 @@ test('batch classification changes scope and tags while preserving full text', a
   expect(saved.body).toBe('先检查边界，再检查错误恢复。'); expect(saved.scope).toEqual({ kind: 'workspace', workspaceId: 'workspace-commerce' });
 });
 
+test('incoming batch duplicates are visible in an empty library without becoming replacement targets', async ({ page }) => {
+  await install(page);
+  await page.evaluate(() => {
+    (window as any).__promptFixture.documents.local = [];
+    // Native contract fixture; Rust tests independently exercise duplicate detection.
+    const original = (window as any).__TAURI_INTERNALS__.invoke;
+    (window as any).__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      const result = await original(command, args);
+      if (command === 'preview_prompt_import') {
+        const preview = result.value ?? result;
+        preview.rows.forEach((row: any) => {
+          row.batchMatches = preview.rows.filter((other: any) => other !== row).map((other: any) => ({ itemId: other.item.itemId, title: other.item.draft.title, sameBody: true }));
+        });
+      }
+      return result;
+    };
+  });
+  const panel = await library(page);
+  await panel.getByRole('button', { name: '批量导入', exact: true }).click();
+  const input = page.getByRole('dialog', { name: '导入提示词' });
+  await input.getByLabel('JSON 内容').fill('[{"title":"same","body":"same body"},{"title":"same","body":"same body"}]');
+  await input.getByRole('button', { name: '预览导入' }).click();
+  const preview = page.getByRole('dialog', { name: '确认导入内容' });
+  await expect(preview.getByText(/本批次同名或相同正文/)).toHaveCount(2);
+  const rows = preview.locator('[data-import-item]');
+  await expect(rows.nth(0).getByRole('option', { name: '替换已有条目' })).toBeDisabled();
+  await expect(rows.nth(1).getByRole('option', { name: '替换已有条目' })).toBeDisabled();
+  await rows.nth(1).getByRole('checkbox').uncheck();
+  await expect(preview.getByText(/本批次同名或相同正文/)).toHaveCount(0);
+  await rows.nth(1).getByRole('checkbox').check();
+  await expect(preview.getByText(/本批次同名或相同正文/)).toHaveCount(2);
+  await preview.getByLabel('标题', { exact: true }).fill('different title');
+  await preview.getByLabel('正文', { exact: true }).fill('different body');
+  await expect(preview.getByText(/本批次同名或相同正文/)).toHaveCount(0);
+  await preview.getByLabel('正文', { exact: true }).fill('same body');
+  await expect(preview.getByText(/本批次同名或相同正文/)).toHaveCount(2);
+  await rows.nth(1).getByRole('combobox').selectOption('skip');
+  await expect(preview.getByText(/本批次同名或相同正文/)).toHaveCount(0);
+  await preview.getByRole('button', { name: '保存所选 2 条' }).click();
+  await expect(preview.getByRole('status').filter({ hasText: '已保存' })).toHaveCount(1);
+  await expect(preview.getByRole('status').filter({ hasText: '已跳过' })).toHaveCount(1);
+  expect(await page.evaluate(() => (window as any).__promptFixture.documents.local.length)).toBe(1);
+});
+
 test('remote prompt edits carry both observed file baselines and retain host identity', async ({ page }) => {
   await install(page, true); const panel = await library(page);
   await panel.getByRole('button', { name: '远端审查', exact: true }).click();

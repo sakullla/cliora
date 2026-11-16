@@ -1,4 +1,5 @@
 export default {
+  batchDuplicate: '本批次同名或相同正文（可跳过或另存）',
   insertShortcut: 'Ctrl / ⌘ + Enter 插入草稿',
   baselineMissing: '尚未取得当前主机提示词文件的读取基线，请先刷新或重新预览后保存。', stale: '刷新失败，当前显示上次读取的提示词。',
   select: '选择', action: '导入操作', sourceChanged: '当前主机或上下文已变化，请返回原来源或重新预览后再保存。', changeTags: '同时更新标签（不勾选则保留原标签）', exampleTitle: '代码审查', exampleBody: '请审查改动中的边界条件与失败恢复。',

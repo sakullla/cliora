@@ -167,9 +167,17 @@ pub struct ImportMatch {
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ImportBatchMatch {
+    pub item_id: String,
+    pub title: String,
+    pub same_body: bool,
+}
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ImportRow {
     pub item: BatchItem,
     pub matches: Vec<ImportMatch>,
+    pub batch_matches: Vec<ImportBatchMatch>,
     pub error: Option<String>,
 }
 #[derive(Clone, Debug, Serialize)]
@@ -252,6 +260,23 @@ pub fn normalize_tags(tags: &[String]) -> Result<Vec<String>, String> {
     }
     Ok(result)
 }
+/// Legacy categories allowed any trimmed string up to 80 characters, before the
+/// new per-tag/count rules. Only preserve vectors representable by that old format.
+fn legacy_tag_shape(tags: &[String]) -> bool {
+    let category = tags.join(",");
+    category.chars().count() <= 80 && legacy_tags(&category) == tags
+}
+fn normalize_preserving_tags(draft: &PromptDraft, previous: Option<&[String]>) -> Result<PromptDraft, String> {
+    if previous.is_some_and(|tags| tags == draft.tags && legacy_tag_shape(tags)) {
+        let mut without_tags = draft.clone();
+        without_tags.tags.clear();
+        let mut normalized = normalize_draft(&without_tags)?;
+        normalized.tags = draft.tags.clone();
+        Ok(normalized)
+    } else {
+        normalize_draft(draft)
+    }
+}
 pub fn normalize_draft(draft: &PromptDraft) -> Result<PromptDraft, String> {
     let mut result = draft.clone();
     result.title = result.title.trim().into();
@@ -321,7 +346,7 @@ pub fn ensure_metadata(db: &Database) -> Result<(), String> {
                 let workspace:Option<String>=tx.query_row("SELECT m.workspace_id FROM workspace_legacy_map m JOIN workspace_projects w ON w.id=m.workspace_id WHERE m.project_id=?1",[legacy_project_id],|r|r.get(0)).optional().map_err(sql)?;
                 if let Some(workspace_id)=workspace{next=PromptScope::Workspace{workspace_id};}
             }
-            if next!=scope||tags.is_none(){let normalized=if let Some(tags)=tags{serde_json::from_str::<Vec<String>>(&tags).map_err(|_|"提示词标签记录损坏")?}else{normalize_tags(&legacy_tags(&category))?};tx.execute("UPDATE prompt_metadata SET scope_json=?2,tags_json=?3 WHERE library_id=?1",params![id,json(&next)?,json(&normalized)?]).map_err(sql)?;}
+            if next!=scope||tags.is_none(){let normalized=if let Some(tags)=tags{serde_json::from_str::<Vec<String>>(&tags).map_err(|_|"提示词标签记录损坏")?}else{legacy_tags(&category)};tx.execute("UPDATE prompt_metadata SET scope_json=?2,tags_json=?3 WHERE library_id=?1",params![id,json(&next)?,json(&normalized)?]).map_err(sql)?;}
         }
         tx.commit().map_err(sql)
     })
@@ -386,9 +411,10 @@ pub fn export_metadata(db: &Database) -> Result<BTreeMap<String, PromptMetadata>
             .collect()
     })
 }
-/// Used by versioned portable restore; missing scope targets are retained for explicit repair.
+/// Used by versioned portable restore; missing scope targets and valid legacy tag
+/// representations are retained for explicit repair. New writes validate before this call.
 pub fn restore_metadata(conn: &Connection, id: &str, meta: &PromptMetadata) -> Result<(), String> {
-    let tags = normalize_tags(&meta.tags)?;
+    let tags = if legacy_tag_shape(&meta.tags) { meta.tags.clone() } else { normalize_tags(&meta.tags)? };
     conn.execute("INSERT INTO prompt_metadata(library_id,scope_json,tags_json) VALUES(?1,?2,?3) ON CONFLICT(library_id) DO UPDATE SET scope_json=excluded.scope_json,tags_json=excluded.tags_json",params![id,json(&meta.scope)?,json(&tags)?]).map_err(sql)?;
     Ok(())
 }
@@ -555,7 +581,8 @@ fn save_in(
     draft: &PromptDraft,
     create_id: Option<&str>,
 ) -> Result<PromptDocument, String> {
-    let draft = normalize_draft(draft)?;
+    let previous = draft.id.as_ref().map(|id| metadata(tx, id)).transpose()?;
+    let draft = normalize_preserving_tags(draft, previous.as_ref().map(|meta| meta.tags.as_slice()))?;
     validate_scope(tx, &draft.scope)?;
     let id = draft
         .id
@@ -747,7 +774,7 @@ pub fn preview_import(
     if bytes > MAX_INPUT || raw.len() > MAX_BATCH {
         return Err("导入内容过大，请分批处理".into());
     }
-    let rows = raw
+    let mut rows: Vec<ImportRow> = raw
         .into_iter()
         .map(|entry| {
             let draft = PromptDraft {
@@ -785,10 +812,35 @@ pub fn preview_import(
                     draft,
                 },
                 matches,
+                batch_matches: vec![],
                 error,
             }
         })
         .collect();
+    // Keep incoming matches separate: they have no stored ID/version and cannot be
+    // replacement targets. Stable item IDs still let users keep copies or skip rows.
+    let keys: Vec<_> = rows.iter().map(|row| (
+        row.item.draft.title.to_ascii_lowercase(),
+        format!("{:x}", Sha256::digest(row.item.draft.body.as_bytes())),
+    )).collect();
+    let mut titles: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    let mut bodies: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (index, (title, body)) in keys.iter().enumerate() {
+        titles.entry(title).or_default().push(index);
+        bodies.entry(body).or_default().push(index);
+    }
+    for (index, (title, body)) in keys.iter().enumerate() {
+        // A bounded sample is sufficient to flag duplicates without returning millions
+        // of repeated matches when a maximum-sized import contains identical entries.
+        let mut seen = HashSet::new();
+        rows[index].batch_matches = titles[title.as_str()].iter().take(9)
+            .chain(bodies[body.as_str()].iter().take(9))
+            .filter(|&&other| other != index && seen.insert(other))
+            .take(8).map(|&other| ImportBatchMatch {
+                item_id: rows[other].item.item_id.clone(), title: rows[other].item.draft.title.clone(),
+                same_body: rows[other].item.draft.body == rows[index].item.draft.body,
+            }).collect();
+    }
     Ok(ImportPreview {
         operation_id: Uuid::new_v4().to_string(),
         rows,
@@ -858,7 +910,10 @@ pub fn apply_remote_item(
             effective.title = old.title.clone();
             effective.body = old.body.clone();
         }
-        let draft = normalize_draft(&effective)?;
+        let previous = items.iter().find(|old| Some(&old.id) == effective.id.as_ref()
+            && old.kind == crate::library::LibraryKind::Prompt)
+            .map(|old| remote_document(old, state));
+        let draft = normalize_preserving_tags(&effective, previous.as_ref().map(|old| old.tags.as_slice()))?;
         if (item.action == BatchAction::Create && draft.id.is_some())
             || (matches!(item.action, BatchAction::Replace | BatchAction::Reclassify)
                 && (draft.id.is_none() || draft.expected_version.is_none()))

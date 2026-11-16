@@ -749,8 +749,8 @@ for(const width of widths)for(const theme of themes){
   await page.getByRole('dialog',{name:'编辑提示词'}).getByRole('textbox',{name:'资料正文',exact:true}).waitFor();await capture('prompts-edit');
   await page.getByRole('dialog',{name:'编辑提示词'}).getByRole('button',{name:'关闭',exact:true}).click();
   await panel.getByRole('button',{name:'批量导入',exact:true}).click();
-  const input=page.getByRole('dialog',{name:'导入提示词'});await input.getByLabel('JSON 内容').fill(JSON.stringify([{title:'通用审查',body:'先检查边界，再检查错误恢复。'},{title:'发布前检查',body:'确认变更范围。\n检查回滚步骤。',tags:['release']}],null,2));
-  await input.getByRole('button',{name:'预览导入'}).click();const imported=page.getByRole('dialog',{name:'确认导入内容'});await imported.getByText('发现同名或相同正文',{exact:false}).waitFor();await capture('prompts-import-preview');
+  const input=page.getByRole('dialog',{name:'导入提示词'});await input.getByLabel('JSON 内容').fill(JSON.stringify([{title:'通用审查',body:'先检查边界，再检查错误恢复。'},{title:'通用审查',body:'确认变更范围。\n检查回滚步骤。',tags:['release']}],null,2));
+  await input.getByRole('button',{name:'预览导入'}).click();const imported=page.getByRole('dialog',{name:'确认导入内容'});await imported.getByText('发现同名或相同正文',{exact:false}).first().waitFor();await imported.getByText('本批次同名或相同正文',{exact:false}).first().waitFor();await capture('prompts-import-preview');
   await imported.getByRole('button',{name:'关闭',exact:true}).click();
   await nav.getByRole('button',{name:'工作台',exact:true}).click();await page.getByRole('button',{name:'新建会话',exact:true}).first().click();
   const session=page.getByRole('dialog',{name:'新建工作台会话'});await session.getByLabel('初始提示词（可选）').fill('已有初始草稿');

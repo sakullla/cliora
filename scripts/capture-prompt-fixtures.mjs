@@ -77,6 +77,7 @@ export function installPromptFixtureBridge() {
         for (const path of input.files) entries.push(...(path.endsWith('.json') ? JSON.parse(fixture.files[path]) : [{ title: path.split('/').pop().replace(/\.[^.]+$/, ''), body: fixture.files[path] ?? 'fixture file\nsecond line' }]));
         const existing = await docs(host);
         value = { operationId: crypto.randomUUID(), rows: entries.map(entry => ({ item: { itemId: crypto.randomUUID(), action: 'create', draft: { id: null, title: entry.title, body: entry.body, tags: entry.tags || input.tags, scope: entry.scope || input.scope, expectedVersion: null } }, matches: existing.filter(item => item.title === entry.title || item.body === entry.body).map(item => ({ id: item.id, title: item.title, scope: item.scope, version: item.version, sameBody: item.body === entry.body })), error: entry.title.trim() ? null : '标题不能为空' })) };
+        for (const row of value.rows) row.batchMatches = value.rows.filter(other => other !== row && (other.item.draft.title.toLowerCase() === row.item.draft.title.toLowerCase() || other.item.draft.body === row.item.draft.body)).slice(0, 8).map(other => ({ itemId: other.item.itemId, title: other.item.draft.title, sameBody: other.item.draft.body === row.item.draft.body }));
       } else {
         const results = []; let changed = false;
         for (const item of args.batch.items) {

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
 import { native } from '../../lib/native';
@@ -8,12 +8,33 @@ import { GuideDialog } from '../../components/GuideDialog';
 import { FilterSelect } from '../../components/FilterSelect';
 import { Button } from '../../components/ui';
 import type { BusinessWorkspace } from '../../types/workspaces';
-import type { PromptBatchResultItem, PromptContext, PromptScope, PromptImportPreview, PromptImportRow } from '../../types/prompts';
+import type { PromptBatchResultItem, PromptContext, PromptScope, PromptImportPreview, PromptImportRow, PromptImportBatchMatch } from '../../types/prompts';
 import { parseScope, scopeLabel, scopeOptions, scopeValue } from './promptScope';
 import { notifyPromptsChanged, promptContextKey } from './usePromptQuery';
 import styles from './Prompts.module.css';
 
 const tagsOf = (value: string) => value.split(/[,，、]/).map(tag => tag.trim()).filter(Boolean);
+// Recompute from editable, selected input. Native preview matches describe the initial
+// batch; they must not hide duplicates introduced later by editing or selecting rows.
+function currentBatchMatches(rows: PromptImportRow[], selected: Set<string>) {
+  const titles = new Map<string, PromptImportRow[]>(); const bodies = new Map<string, PromptImportRow[]>();
+  const titleKey = (title: string) => title.trim().replace(/[A-Z]/g, char => char.toLowerCase());
+  const active = rows.filter(row => selected.has(row.item.itemId) && row.item.action !== 'skip');
+  for (const row of active) {
+    const title = titleKey(row.item.draft.title); const body = row.item.draft.body;
+    if (!titles.has(title)) titles.set(title, []); if (!bodies.has(body)) bodies.set(body, []);
+    titles.get(title)!.push(row); bodies.get(body)!.push(row);
+  }
+  const matches = new Map<string, PromptImportBatchMatch[]>();
+  for (const row of active) {
+    const candidates = new Map<string, PromptImportRow>();
+    for (const group of [titles.get(titleKey(row.item.draft.title)), bodies.get(row.item.draft.body)]) {
+      for (const other of group?.slice(0, 9) ?? []) if (other !== row) candidates.set(other.item.itemId, other);
+    }
+    matches.set(row.item.itemId, [...candidates.values()].slice(0, 8).map(other => ({ itemId: other.item.itemId, title: other.item.draft.title, sameBody: other.item.draft.body === row.item.draft.body })));
+  }
+  return matches;
+}
 export function PromptImportDialog({ context, workspaces, initialScope, onClose, onDone }: { initialScope: PromptScope; context: PromptContext; workspaces: BusinessWorkspace[]; onClose: () => void; onDone: () => void }) {
   const { t } = useTranslation();
   const [input, setInput] = useState('');
@@ -26,6 +47,7 @@ export function PromptImportDialog({ context, workspaces, initialScope, onClose,
   const [results, setResults] = useState<Record<string, PromptBatchResultItem>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const batchMatches = useMemo(() => currentBatchMatches(preview?.rows ?? [], selected), [preview, selected]);
   const remoteIdentity = useRemoteIdentity(context.targetId ?? 'local');
   const source = `${promptContextKey(context)}:${remoteIdentity}`;
   const latest = useRef(source); latest.current = source;
@@ -86,6 +108,7 @@ export function PromptImportDialog({ context, workspaces, initialScope, onClose,
             return <article key={id} className={styles.batchRow} data-import-item={id}>
               <div className={styles.batchHeader}><input type="checkbox" aria-label={`${t('prompts.select')} ${draft.title}`} disabled={busy || done} checked={selected.has(id)} onChange={event => setSelected(previous => { const next = new Set(previous); if (event.target.checked) next.add(id); else next.delete(id); return next; })} /><strong>{draft.title || t('prompts.invalid')}</strong><span>{scopeLabel(draft.scope, workspaces, t)}</span><Button size="sm" variant="ghost" onClick={() => setExpanded(expanded === id ? null : id)}>{t('prompts.preview')}</Button></div>
               {row.matches.length > 0 && <p className={styles.hint}>{t('prompts.duplicate')}: {row.matches.map(item => item.title).join('、')}</p>}
+              {(batchMatches.get(id)?.length ?? 0) > 0 && <p className={styles.hint}>{t('prompts.batchDuplicate')}: {batchMatches.get(id)!.map(item => item.title).join('、')}</p>}
               {(row.error || result?.error) && <p role="alert" className={styles.error}>{row.error || result?.error}</p>}
               {result && <span role="status">{t(`prompts.${result.status}`)}</span>}
               {!done && <select aria-label={`${t('prompts.action')} ${draft.title}`} disabled={busy} value={row.item.action} onChange={event => update(id, current => ({ ...current, item: { ...current.item, action: event.target.value as 'create' | 'replace' | 'skip', draft: { ...current.item.draft, id: null, expectedVersion: null } } }))}><option value="create">{t('prompts.createCopy')}</option><option value="replace" disabled={!row.matches.length}>{t('prompts.replace')}</option><option value="skip">{t('prompts.skip')}</option></select>}

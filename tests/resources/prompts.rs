@@ -430,3 +430,96 @@ fn import_reads_enforce_actual_byte_limit_and_reject_invalid_utf8() {
     .is_err());
     assert_eq!(query(&db, &PromptQuery::default()).unwrap().total, before);
 }
+
+#[test]
+fn import_preview_reports_batch_duplicates_without_inventing_stored_targets() {
+    let preview = preview_import(ImportInput {
+        json_text: r#"[{"title":"same","body":"same body"},{"title":"same","body":"same body"},{"title":"SAME","body":"different"},{"title":"other","body":"same body"},{"title":"unique","body":"unique"}]"#.into(),
+        ..Default::default()
+    }, &[]).unwrap();
+    let serialized = serde_json::to_value(&preview).unwrap();
+    for index in 0..4 {
+        let matches = serialized["rows"][index]["batchMatches"].as_array()
+            .expect("incoming duplicates must be visible independently of stored matches");
+        assert!(!matches.is_empty());
+        assert!(matches.iter().all(|item| item["itemId"] != preview.rows[index].item.item_id));
+        assert!(matches.iter().all(|item| item.get("version").is_none() && item.get("id").is_none()));
+        assert!(preview.rows[index].matches.is_empty());
+        assert!(preview.rows[index].error.is_none());
+    }
+    assert_eq!(serialized["rows"][4]["batchMatches"], serde_json::json!([]));
+    // Keeping copies remains an explicit valid operation; preview performs no write.
+    let db = db();
+    assert_eq!(query(&db, &PromptQuery::default()).unwrap().total, 0);
+    let results = apply_batch(&db, &PromptBatch {
+        operation_id: preview.operation_id,
+        items: preview.rows.into_iter().map(|row| row.item).collect(),
+    }).unwrap();
+    assert!(results.items.iter().all(|item| item.status == BatchStatus::Saved));
+    assert_eq!(query(&db, &PromptQuery::default()).unwrap().total, 5);
+}
+
+#[test]
+fn valid_legacy_tags_remain_readable_editable_and_portable_without_relaxing_new_writes() {
+    let db = db();
+    let tags: Vec<_> = (0x4e00..0x4e21).map(|code| char::from_u32(code).unwrap().to_string()).collect();
+    let category = tags.join(",");
+    assert_eq!(category.chars().count(), 65);
+    let old = crate::library::save(&db, crate::library::LibraryDraft {
+        id: None, kind: crate::library::LibraryKind::Prompt,
+        title: "Legacy".into(), body: "preserved".into(), category,
+        project_id: None, expected_version: None,
+    }).unwrap();
+    assert_eq!(query(&db, &PromptQuery::default()).unwrap().total, 1);
+    let old_doc = get(&db, &old.id, None).unwrap();
+    assert_eq!(old_doc.tags, tags);
+    save(&db, &draft("Unrelated", "still works", PromptScope::Global)).unwrap();
+    let mut edit = PromptDraft {
+        id: Some(old.id.clone()), title: old.title, body: "edited".into(),
+        scope: PromptScope::Global, tags: tags.clone(), expected_version: Some(old.version),
+    };
+    let edited = save(&db, &edit).unwrap();
+    assert_eq!(edited.tags, tags);
+    let exported = export_metadata(&db).unwrap();
+    db.with_connection(|conn| restore_metadata(conn, &old.id, &exported[&old.id])).unwrap();
+    assert_eq!(get(&db, &old.id, None).unwrap().tags, tags);
+    let mut new = draft("New oversized", "not saved", PromptScope::Global);
+    new.tags = tags;
+    assert!(save(&db, &new).is_err());
+    assert!(normalize_draft(&new).is_err());
+    edit.expected_version = Some(edited.version);
+    edit.tags = vec!["cleaned".into()];
+    assert_eq!(save(&db, &edit).unwrap().tags, vec!["cleaned"]);
+    assert_eq!(query(&db, &PromptQuery::default()).unwrap().total, 2);
+}
+
+#[test]
+fn remote_legacy_tags_can_be_preserved_but_not_created_or_expanded() {
+    let tags: Vec<_> = (0x4e00..0x4e21).map(|code| char::from_u32(code).unwrap().to_string()).collect();
+    let mut items = vec![crate::library::LibraryItem {
+        id: "old".into(), kind: crate::library::LibraryKind::Prompt,
+        title: "Legacy".into(), body: "old body".into(), category: tags.join(","),
+        project_id: None, version: 1, updated_at: 1,
+    }];
+    let mut state = RemotePromptState::default();
+    let mut item = BatchItem { item_id: Uuid::new_v4().to_string(), action: BatchAction::Replace,
+        draft: PromptDraft { id: Some("old".into()), title: "Legacy".into(), body: "edited".into(), scope: PromptScope::Global, tags: tags.clone(), expected_version: Some(1) },
+    };
+    apply_remote_item(&mut items, &mut state, &Uuid::new_v4().to_string(), &item).unwrap();
+    assert_eq!(remote_document(&items[0], &state).tags, tags);
+    item.draft.expected_version = Some(2);
+    item.draft.tags.push("new".into());
+    assert!(apply_remote_item(&mut items, &mut state, &Uuid::new_v4().to_string(), &item).is_err());
+    item.action = BatchAction::Create; item.draft.id = None; item.draft.expected_version = None;
+    item.draft.tags = tags;
+    assert!(apply_remote_item(&mut items, &mut state, &Uuid::new_v4().to_string(), &item).is_err());
+    assert_eq!(items.len(), 1);
+}
+
+#[test]
+fn duplicate_preview_bounds_match_samples_for_large_identical_input() {
+    let input = serde_json::to_string(&vec![serde_json::json!({"title":"same", "body":"same"}); MAX_BATCH]).unwrap();
+    let preview = preview_import(ImportInput { json_text: input, ..Default::default() }, &[]).unwrap();
+    assert_eq!(preview.rows.len(), MAX_BATCH);
+    assert!(preview.rows.iter().all(|row| row.batch_matches.len() == 8));
+}

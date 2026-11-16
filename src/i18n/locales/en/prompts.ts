@@ -1,4 +1,5 @@
 export default {
+  batchDuplicate: 'Matching title or text in this batch (skip or keep copies)',
   insertShortcut: 'Ctrl / ⌘ + Enter to insert into the draft',
   baselineMissing: 'No read baseline is available for this host. Refresh or preview again before saving.', stale: 'Refresh failed. Previously read prompts are shown.',
   select: 'Select', action: 'Import action', sourceChanged: 'The host or context changed. Return to the original source or preview again before saving.', changeTags: 'Update tags too (otherwise retain existing tags)', exampleTitle: 'Code review', exampleBody: 'Review edge cases and failure recovery in these changes.',

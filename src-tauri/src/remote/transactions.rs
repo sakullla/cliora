@@ -85,6 +85,10 @@ restore_before() {
 }
 protect() {
   command -v sha256sum >/dev/null && command -v flock >/dev/null && command -v stat >/dev/null && command -v id >/dev/null || exit 70
+  lock_store
+}
+lock_store() {
+  command -v flock >/dev/null || { printf '%s\n' '远端缺少 flock，无法安全读取或写入资料。' >&2; exit 70; }
   [ ! -L "$HOME/.cliora" ] && [ ! -L "$HOME/.cliora/transactions" ] || exit 71
   mkdir -p "$HOME/.cliora/transactions" || exit 72
   chmod 700 "$HOME/.cliora" "$HOME/.cliora/transactions" || exit 73
@@ -92,7 +96,27 @@ protect() {
   exec 9>"$HOME/.cliora/transactions/lock" || exit 75
   flock -w 15 9 || exit 76
 }
+require_settled() {
+  for r in "$HOME/.cliora/transactions/"*/receipt; do
+    [ -e "$r" ] || [ -L "$r" ] || continue
+    state=invalid
+    if [ ! -L "${r%/receipt}" ] && [ ! -L "$r" ] && [ -f "$r" ] && [ -r "$r" ]; then
+      header=$(sed -n '1p' "$r") || exit 78
+      [ "$header" != cliora-tx-v1 ] || state=$(sed -n '5p' "$r") || exit 78
+    fi
+    case "$state" in committed|rolled_back|conflict_before_commit|prepare_failed) ;;
+      *) printf '%s\n' '存在未核查写入，暂停读取或写入；请先打开写入恢复。' >&2; exit 78;;
+    esac
+  done
+}
 "#;
+
+/// Read a multi-file snapshot under the writer's lock and durable recovery barrier.
+/// A process crash releases flock but leaves an unfinished receipt, so both are required.
+pub(super) fn read_consistent(target: &RemoteTarget, read_script: &str) -> Result<String, RemoteError> {
+    let script = format!("{HELPERS}\nlock_store\nrequire_settled\n{read_script}");
+    Ok(run_command_with_stdin(target, "sh -s", script.as_bytes())?.stdout)
+}
 
 fn paths_script(paths: &[String]) -> Result<String, RemoteError> {
     let mut script = String::from(HELPERS);
@@ -216,7 +240,7 @@ fn commit_script(receipt: &Receipt, changes: &BTreeMap<String, Option<&[u8]>>) -
     let mut script = String::from(HELPERS);
     script.push_str(&format!("protect\nid={}\ntx=\"$HOME/.cliora/transactions/$id\"\n", shell_quote(&receipt.id)));
     // Block unresolved older transactions, including receipts discovered after an app restart.
-    script.push_str("for r in \"$HOME/.cliora/transactions/\"*/receipt; do [ -f \"$r\" ] || continue; state=$(sed -n '5p' \"$r\"); case \"$state\" in committed|rolled_back|conflict_before_commit|prepare_failed) ;; *) printf '%s' '存在未核查写入，请先打开写入恢复' >&2; exit 78;; esac; done\nmkdir \"$tx\" || exit 77\nchmod 700 \"$tx\" || exit 77\noutcome=preparing\n");
+    script.push_str("require_settled\nmkdir \"$tx\" || exit 77\nchmod 700 \"$tx\" || exit 77\noutcome=preparing\n");
     for n in 0..receipt.items.len() { script.push_str(&format!("s{n}=untouched\n")); }
     script.push_str(&journal(receipt));
     script.push_str("cleanup_staging() { case \"$outcome\" in committed|rolled_back|prepare_failed|conflict_before_commit)\n");
