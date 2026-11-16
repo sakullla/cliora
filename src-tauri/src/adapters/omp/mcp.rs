@@ -46,12 +46,9 @@ pub(crate) fn omp_config_root(home: &Path) -> PathBuf {
 }
 /// Effective user agent directory: the active profile or the default one.
 /// Delegates the default/named profile rules to the configuration capability so
-/// MCP, Skills and Agents cannot disagree with the config editor.
-pub(crate) fn user_agent_directory(home: &Path) -> PathBuf {
-    user_agent_directory_checked(home)
-        .unwrap_or_else(|_| home.join(".cliora-unresolved-omp-profile"))
-}
-
+/// MCP, Skills and Agents cannot disagree with the config editor. Callers that
+/// need a writable target must propagate the error instead of falling back to a
+/// default Profile or synthesized path.
 pub(crate) fn user_agent_directory_checked(home: &Path) -> Result<PathBuf, String> {
     let omp_profile = env::var_os("OMP_PROFILE").map(|value| value.to_string_lossy().into_owned());
     let pi_profile = if omp_profile.is_none() {
@@ -98,8 +95,8 @@ fn user_agent_directory_from(
 pub(crate) fn project_config_directory(project: &Path) -> PathBuf {
     project.join(".omp")
 }
-pub(crate) fn user_mcp_path(home: &Path) -> PathBuf {
-    user_agent_directory(home).join("mcp.json")
+pub(crate) fn user_mcp_path(home: &Path) -> Result<PathBuf, String> {
+    Ok(user_agent_directory_checked(home)?.join("mcp.json"))
 }
 pub(crate) fn project_mcp_path(project: &Path) -> PathBuf {
     project_config_directory(project).join("mcp.json")
@@ -123,7 +120,7 @@ pub(crate) fn facet() -> crate::adapters::Facet {
 pub(crate) fn location(scope: Scope, home: &Path, project: Option<&Path>) -> Option<McpLocation> {
     Some(McpLocation {
         path: match scope {
-            Scope::Global => user_mcp_path(home),
+            Scope::Global => user_mcp_path(home).ok()?,
             Scope::Project => project_mcp_path(project?),
         },
         kind: FileKind::Json,
@@ -456,7 +453,7 @@ struct UserSources {
 fn user_sources(home: &Path) -> Result<UserSources, (PathBuf, String)> {
     let agent = user_agent_directory_checked(home).map_err(|error| {
         (
-            home.join(".cliora-unresolved-omp-profile").join("config.yml"),
+            home.join(".omp").join("config.yml"),
             error,
         )
     })?;
@@ -542,7 +539,12 @@ pub(crate) fn observations(
                 path,
                 message: format!("{message}；用户级外部来源按未启用处理"),
             });
-            (Vec::new(), Vec::new(), true, user_agent_directory(home).join("config.yml"))
+            (
+                Vec::new(),
+                Vec::new(),
+                true,
+                home.join(".omp").join("config.yml"),
+            )
         }
     };
     if project.is_some() && !project_enabled {
@@ -575,25 +577,34 @@ pub(crate) fn observations(
         }
     }
     // OMP's own user overlays also decide whether a foreign entry loads.
-    let overlay_path = user_mcp_path(home);
-    let overlay = match std::fs::read_to_string(&overlay_path) {
-        Ok(text) => match serde_json::from_str::<Value>(&text) {
-            Ok(value) => value,
+    let overlay = match user_mcp_path(home) {
+        Ok(overlay_path) => match std::fs::read_to_string(&overlay_path) {
+            Ok(text) => match serde_json::from_str::<Value>(&text) {
+                Ok(value) => value,
+                Err(error) => {
+                    issues.push(ObservationIssue {
+                        source: "OMP 覆盖配置",
+                        path: overlay_path,
+                        message: format!("JSON 无法解析：{error}；本次启停覆盖按空处理"),
+                    });
+                    json!({})
+                }
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
             Err(error) => {
                 issues.push(ObservationIssue {
                     source: "OMP 覆盖配置",
                     path: overlay_path,
-                    message: format!("JSON 无法解析：{error}；本次启停覆盖按空处理"),
+                    message: format!("无法读取：{error}；本次启停覆盖按空处理"),
                 });
                 json!({})
             }
         },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
         Err(error) => {
             issues.push(ObservationIssue {
                 source: "OMP 覆盖配置",
-                path: overlay_path,
-                message: format!("无法读取：{error}；本次启停覆盖按空处理"),
+                path: home.join(".omp").join("mcp.json"),
+                message: format!("{error}；本次启停覆盖按空处理"),
             });
             json!({})
         }
@@ -636,7 +647,7 @@ pub(crate) fn external_switch(
     _project: Option<&Path>,
 ) -> Option<crate::adapters::McpExternalSwitch> {
     Some(crate::adapters::McpExternalSwitch {
-        path: user_mcp_path(home),
+        path: user_mcp_path(home).ok()?,
         kind: FileKind::Json,
     })
 }
@@ -1168,7 +1179,10 @@ mod tests {
     #[test]
 
     fn native_paths_follow_default_profile_and_project() {
-        assert_eq!(user_mcp_path(&home()), home().join(".omp/agent/mcp.json"));
+        assert_eq!(
+            user_mcp_path(&home()).unwrap(),
+            home().join(".omp/agent/mcp.json")
+        );
         assert_eq!(
             project_mcp_path(Path::new("/work/app")),
             Path::new("/work/app/.omp/mcp.json")
@@ -1213,6 +1227,17 @@ mod tests {
         assert!(
             user_agent_directory_from(&home, None, None, None, Some(Path::new("relative")))
                 .is_err()
+        );
+        assert_eq!(
+            user_agent_directory_from(
+                &home,
+                Some("work"),
+                None,
+                None,
+                Some(Path::new("relative")),
+            )
+            .unwrap(),
+            home.join(".omp/profiles/work/agent")
         );
     }
     #[test]

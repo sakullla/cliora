@@ -185,15 +185,6 @@ fn valid_config_relative(path: &Path) -> bool {
 }
 
 pub(crate) fn resolve_root(input: &ResolutionInput<'_>) -> Result<ResolvedRoot, String> {
-    if input
-        .coding_agent_dir
-        .is_some_and(|path| !path.has_root())
-    {
-        return Err(
-            "PI_CODING_AGENT_DIR 必须是绝对路径；OMP 会按进程工作目录解析，Cliora 无法安全定位。请使用绝对路径，或从目标项目目录启动 OMP。"
-                .into(),
-        );
-    }
     // OMP joins `PI_CONFIG_DIR` under the home directory (`path.join(home,
     // PI_CONFIG_DIR)`); it is not an absolute root. Cliora rejects an absolute
     // or parent-traversing value instead of reproducing OMP's concatenated,
@@ -208,27 +199,37 @@ pub(crate) fn resolve_root(input: &ResolutionInput<'_>) -> Result<ResolvedRoot, 
     let config = input.home.join(relative);
     match input.profile {
         Some(name) => match normalize_profile_name(name)? {
+            // A named Profile never uses PI_CODING_AGENT_DIR.
             Some(name) => Ok(ResolvedRoot {
                 kind: "profile",
                 root: config.join("profiles").join(name).join("agent"),
             }),
-            None => Ok(default_root(config, input.coding_agent_dir)),
+            None => default_root(config, input.coding_agent_dir),
         },
-        None => Ok(default_root(config, input.coding_agent_dir)),
+        None => default_root(config, input.coding_agent_dir),
     }
 }
 
-fn default_root(config: PathBuf, coding_agent_dir: Option<&Path>) -> ResolvedRoot {
-    ResolvedRoot {
+fn default_root(
+    config: PathBuf,
+    coding_agent_dir: Option<&Path>,
+) -> Result<ResolvedRoot, String> {
+    let root = match coding_agent_dir {
+        // OMP resolves a relative value against its process cwd. A desktop app
+        // cannot know that cwd, so no target is better than a guessed path.
+        Some(path) if !path.is_absolute() => {
+            return Err(
+                "PI_CODING_AGENT_DIR 必须是绝对路径；OMP 会按进程工作目录解析，Cliora 无法安全定位。请使用绝对路径，或从目标项目目录启动 OMP。"
+                    .into(),
+            )
+        }
+        Some(path) => path.to_path_buf(),
+        None => config.join("agent"),
+    };
+    Ok(ResolvedRoot {
         kind: "default",
-        // PI_CODING_AGENT_DIR relocates only the default profile. A named
-        // profile above deliberately ignores it. OMP resolves a relative value
-        // against its process cwd; account discovery records that boundary
-        // explicitly instead of guessing the desktop app's cwd.
-        root: coding_agent_dir
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| config.join("agent")),
-    }
+        root,
+    })
 }
 
 /// OMP 18.20.2 trims profile values and treats empty/whitespace and the literal
@@ -294,10 +295,6 @@ fn windows_reserved_name(name: &str) -> bool {
     )
 }
 
-fn valid_profile_name(name: &str) -> bool {
-    normalize_profile_name(name).is_ok()
-}
-
 fn env_value(name: &str) -> Option<String> {
     env::var_os(name)
         .map(|value| value.to_string_lossy().into_owned())
@@ -313,7 +310,7 @@ fn environment_profile() -> Option<String> {
     }
 }
 
-fn environment_root(home: &Path) -> Option<ResolvedRoot> {
+fn environment_root(home: &Path) -> Result<ResolvedRoot, String> {
     let config = env_value("PI_CONFIG_DIR").map(PathBuf::from);
     let coding_agent = env_value("PI_CODING_AGENT_DIR").map(PathBuf::from);
     let profile = environment_profile();
@@ -323,7 +320,17 @@ fn environment_root(home: &Path) -> Option<ResolvedRoot> {
         config_dir: config.as_deref(),
         coding_agent_dir: coding_agent.as_deref(),
     })
-    .ok()
+}
+
+/// A resolver error produces no target. It must never fall back to the default
+/// `.omp/agent` path, which OMP would not use for the same environment.
+fn native_global_directory(
+    _home: &Path,
+    root: Result<ResolvedRoot, String>,
+) -> Option<PathBuf> {
+    let fallback = root.ok()?.root;
+    // An active OAuth/account context keeps configuration inside its own root.
+    Some(crate::accounts::selection::config_root(super::ID, || fallback))
 }
 
 /// OMP loads `config.yml` before `config.yaml`, and the same for models. A
@@ -349,25 +356,10 @@ pub(crate) fn native_files(
     known: bool,
 ) -> Vec<NativeFile> {
     let directory = match scope {
-        Scope::Global => {
-            if environment_profile().is_some_and(|name| !valid_profile_name(&name)) {
-                // Never edit another profile's files because OMP_PROFILE was
-                // malformed; the workspace shows no target until it is fixed.
-                return Vec::new();
-            }
-            if env_value("PI_CONFIG_DIR")
-                .map(PathBuf::from)
-                .is_some_and(|path| !valid_config_relative(&path))
-            {
-                return Vec::new();
-            }
-            let fallback = environment_root(home)
-                .map(|root| root.root)
-                .unwrap_or_else(|| home.join(".omp/agent"));
-            // An active OAuth/account context keeps configuration inside its
-            // own root; without one the environment/default profile applies.
-            crate::accounts::selection::config_root(super::ID, || fallback)
-        }
+        Scope::Global => match native_global_directory(home, environment_root(home)) {
+            Some(directory) => directory,
+            None => return Vec::new(),
+        },
         Scope::Project => match project {
             Some(project) => project.join(".omp"),
             None => return Vec::new(),

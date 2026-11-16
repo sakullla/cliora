@@ -259,27 +259,24 @@ fn broker_configured(context: &NativeContext) -> bool {
 }
 
 fn broker_values_configured(url: Option<&str>) -> bool {
-    url.is_some_and(|value| !value.trim().is_empty())
+    url.is_some_and(|value| {
+        let value = value.trim();
+        !value.is_empty() && !value.starts_with('!')
+    })
 }
 
 fn config_broker_configured(root: &Path) -> bool {
     let preferred = root.join("config.yml");
-    let path = if preferred.is_file() {
+    let legacy = root.join("config.yaml");
+    let path = if preferred.exists() {
         preferred
+    } else if legacy.exists() {
+        legacy
     } else {
-        let legacy = root.join("config.yaml");
-        if legacy.is_file() {
-            legacy
-        } else {
-            return false;
-        }
-    };
-    let Ok(metadata) = fs::metadata(&path) else {
         return false;
     };
-    if metadata.len() > 64 * 1024 {
-        return false;
-    }
+    // A directory/unreadable/invalid preferred file means no broker config; it
+    // does not fall back to config.yaml, matching OMP's single-file read.
     let Ok(bytes) = fs::read(&path) else {
         return false;
     };
@@ -291,7 +288,10 @@ fn config_broker_configured(root: &Path) -> bool {
         .and_then(|auth| auth.get("broker"))
         .and_then(|broker| broker.get("url"))
         .and_then(serde_yaml::Value::as_str)
-        .is_some_and(|url| !url.trim().is_empty())
+        .is_some_and(|url| {
+            let url = url.trim();
+            !url.is_empty() && !url.starts_with('!')
+        })
 }
 
 fn sidecar_note(sidecars: Sidecars) -> &'static str {
@@ -1302,12 +1302,29 @@ mod tests {
         let error = native_context(temp.path(), &environment).unwrap_err();
         assert!(error.contains("无法安全定位"), "{error}");
         assert!(error.contains("绝对路径"), "{error}");
+
+        let named = BTreeMap::from([
+            ("OMP_PROFILE".to_string(), "work".to_string()),
+            (
+                "PI_CODING_AGENT_DIR".to_string(),
+                "relative-agent".to_string(),
+            ),
+        ]);
+        assert_eq!(
+            native_context(temp.path(), &named).unwrap().root,
+            temp.path()
+                .join(".omp")
+                .join("profiles")
+                .join("work")
+                .join("agent")
+        );
     }
 
     #[test]
     fn broker_detection_uses_official_url_only_and_first_config_file() {
         assert!(broker_values_configured(Some("https://broker.test")));
         assert!(!broker_values_configured(Some("   ")));
+        assert!(!broker_values_configured(Some("!ENV")));
         assert!(!broker_values_configured(None));
 
         let temp = tempfile::tempdir().unwrap();
@@ -1326,20 +1343,35 @@ mod tests {
         assert!(config_broker_configured(temp.path()));
         fs::write(
             temp.path().join("config.yml"),
-            "auth:\n  broker:\n    url: '   '\n    token: fixture-token\n",
+            "auth:\n  broker:\n    url: '!ENV'\n    token: fixture-token\n",
         )
         .unwrap();
         assert!(!config_broker_configured(temp.path()));
+        let padded = format!(
+            "auth:\n  broker:\n    url: https://broker.test\n# {}\n",
+            "x".repeat(70 * 1024)
+        );
+        fs::write(temp.path().join("config.yml"), padded).unwrap();
+        assert!(config_broker_configured(temp.path()));
         // config.yml is the only file OMP reads when it exists; config.yaml is
-        // not a fallback for a token-only / invalid preferred file.
+        // not a fallback for an invalid preferred file.
+        fs::write(
+            temp.path().join("config.yaml"),
+            "auth:\n  broker:\n    url: https://yaml-broker.test\n",
+        )
+        .unwrap();
+        fs::write(temp.path().join("config.yml"), "not: [valid").unwrap();
+        assert!(!config_broker_configured(temp.path()));
+        fs::remove_file(temp.path().join("config.yml")).unwrap();
+        assert!(config_broker_configured(temp.path()));
+        fs::remove_file(temp.path().join("config.yaml")).unwrap();
+        fs::create_dir(temp.path().join("config.yml")).unwrap();
         fs::write(
             temp.path().join("config.yaml"),
             "auth:\n  broker:\n    url: https://yaml-broker.test\n",
         )
         .unwrap();
         assert!(!config_broker_configured(temp.path()));
-        fs::remove_file(temp.path().join("config.yml")).unwrap();
-        assert!(config_broker_configured(temp.path()));
     }
 
     #[test]

@@ -17,7 +17,7 @@ use crate::adapters::{RuleFileSpec, RuleSupport, SkillObservation, SkillSwitchLo
 use crate::native::adapter::Scope;
 use crate::native::format::FileKind;
 
-use super::mcp::{project_config_directory, user_agent_directory};
+use super::mcp::{project_config_directory, user_agent_directory_checked};
 
 pub(crate) const UNAVAILABLE_REASON: &str =
     "OMP Skills 与规则资源（原生根、外部来源只读、禁用覆盖）尚未交付";
@@ -44,7 +44,7 @@ pub(crate) fn facet() -> crate::adapters::Facet {
 
 pub(crate) fn root(scope: Scope, home: &Path, project: Option<&Path>) -> Option<PathBuf> {
     Some(match scope {
-        Scope::Global => user_agent_directory(home).join("skills"),
+        Scope::Global => user_agent_directory_checked(home).ok()?.join("skills"),
         Scope::Project => project_config_directory(project?).join("skills"),
     })
 }
@@ -61,10 +61,12 @@ pub(crate) fn observations(
     let mut roots = Vec::new();
     match scope {
         Scope::Global => {
-            roots.push(SkillObservation {
-                root: user_agent_directory(home).join("managed-skills"),
-                detail: "OMP 自动学习生成的 Skills，只读，由原生自动学习写入",
-            });
+            if let Ok(agent) = user_agent_directory_checked(home) {
+                roots.push(SkillObservation {
+                    root: agent.join("managed-skills"),
+                    detail: "OMP 自动学习生成的 Skills，只读，由原生自动学习写入",
+                });
+            }
             for (relative, detail) in [
                 (
                     ".claude/skills",
@@ -121,8 +123,10 @@ fn config_file(base: &Path) -> PathBuf {
     }
 }
 
-pub(crate) fn user_config_path(home: &Path) -> PathBuf {
-    config_file(&user_agent_directory(home))
+pub(crate) fn user_config_path(home: &Path) -> Option<PathBuf> {
+    user_agent_directory_checked(home)
+        .ok()
+        .map(|agent| config_file(&agent))
 }
 
 pub(crate) fn project_config_path(project: &Path) -> PathBuf {
@@ -139,7 +143,7 @@ pub(crate) fn switch_location(
 ) -> Option<SkillSwitchLocation> {
     Some(SkillSwitchLocation {
         path: match scope {
-            Scope::Global => user_config_path(home),
+            Scope::Global => user_config_path(home)?,
             Scope::Project => project_config_path(project?),
         },
         kind: FileKind::Yaml,
@@ -210,7 +214,7 @@ pub(crate) fn switch_restore(
 
 pub(crate) fn rule_path(scope: Scope, home: &Path, project: Option<&Path>) -> Option<PathBuf> {
     Some(match scope {
-        Scope::Global => user_agent_directory(home).join("AGENTS.md"),
+        Scope::Global => user_agent_directory_checked(home).ok()?.join("AGENTS.md"),
         Scope::Project => project_config_directory(project?).join("AGENTS.md"),
     })
 }

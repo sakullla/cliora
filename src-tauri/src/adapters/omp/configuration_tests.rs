@@ -11,6 +11,21 @@ use std::collections::BTreeMap;
 const CONFIG: &str = include_str!("../../../../tests/fixtures/native/omp-18.20.2-config.yml");
 const MODELS: &str = include_str!("../../../../tests/fixtures/native/omp-18.20.2-models.yml");
 
+#[test]
+fn resolver_error_has_no_default_fallback_target() {
+    let home = Path::new("/home/omp-user");
+    assert!(native_global_directory(home, Err("invalid".into())).is_none());
+    let directory = native_global_directory(
+        home,
+        Ok(ResolvedRoot {
+            kind: "default",
+            root: home.join("explicit/agent"),
+        }),
+    )
+    .unwrap();
+    assert_eq!(directory, home.join("explicit/agent"));
+}
+
 fn documents() -> Documents {
     BTreeMap::from([
         (
@@ -210,6 +225,29 @@ fn default_named_and_project_roots_stay_isolated() {
             })
             .is_err(),
             "PI_CODING_AGENT_DIR {relative:?} 必须被拒绝"
+        );
+        let named = resolve_agent_root(
+            home,
+            Some("work"),
+            None,
+            None,
+            Some(Path::new(relative)),
+        )
+        .unwrap();
+        assert_eq!(named.kind, "profile");
+        assert_eq!(named.root, home.join(".omp/profiles/work/agent"));
+    }
+    #[cfg(windows)]
+    for root_relative in ["\\foo", "/foo"] {
+        assert!(
+            resolve_root(&ResolutionInput {
+                home,
+                profile: None,
+                config_dir: None,
+                coding_agent_dir: Some(Path::new(root_relative)),
+            })
+            .is_err(),
+            "Windows root-relative {root_relative:?} 必须被拒绝"
         );
     }
 }

@@ -14,7 +14,7 @@ use crate::adapters::Facet;
 use crate::native::adapter::Scope;
 use crate::native::format::FileKind;
 
-use super::mcp::{project_config_directory, user_agent_directory};
+use super::mcp::{project_config_directory, user_agent_directory_checked};
 use super::skills::{project_config_path, user_config_path};
 
 pub(crate) const UNAVAILABLE_REASON: &str =
@@ -113,7 +113,7 @@ impl AgentAdapter for OmpAgents {
 
     fn root(&self, scope: Scope, home: &Path, project: Option<&Path>) -> Result<PathBuf, String> {
         Ok(match scope {
-            Scope::Global => user_agent_directory(home),
+            Scope::Global => user_agent_directory_checked(home)?,
             Scope::Project => project_config_directory(project.ok_or("请选择项目目录")?),
         })
     }
@@ -150,7 +150,7 @@ impl AgentAdapter for OmpAgents {
         // replaces the lower layer, so a project toggle must not edit the user
         // file (and project restore only accepts the project config).
         let path = match scope {
-            Scope::Global => user_config_path(home),
+            Scope::Global => user_config_path(home)?,
             Scope::Project => project_config_path(project?),
         };
         Some(AgentToggleLocation {
@@ -173,8 +173,8 @@ impl AgentAdapter for OmpAgents {
         let names = match scope {
             Scope::Project => project
                 .and_then(|project| disabled_names_in(&project_config_path(project)))
-                .or_else(|| disabled_names_in(&user_config_path(home))),
-            Scope::Global => disabled_names_in(&user_config_path(home)),
+                .or_else(|| user_config_path(home).and_then(|path| disabled_names_in(&path))),
+            Scope::Global => user_config_path(home).and_then(|path| disabled_names_in(&path)),
         };
         names.map(|names| json!(names)).unwrap_or(Value::Null)
     }
@@ -188,8 +188,8 @@ impl AgentAdapter for OmpAgents {
         let mut names = match scope {
             Scope::Project => project
                 .and_then(|project| disabled_names_in(&project_config_path(project)))
-                .or_else(|| disabled_names_in(&user_config_path(home))),
-            Scope::Global => disabled_names_in(&user_config_path(home)),
+                .or_else(|| user_config_path(home).and_then(|path| disabled_names_in(&path))),
+            Scope::Global => user_config_path(home).and_then(|path| disabled_names_in(&path)),
         }
         .unwrap_or_default();
         names.sort();

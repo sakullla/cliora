@@ -1087,12 +1087,16 @@ mod tests {
         let home = Path::new("/home/fixture");
         let default = sessions_root_with(home, &BTreeMap::new()).unwrap();
         assert_eq!(default, PathBuf::from("/home/fixture/.omp/agent/sessions"));
+        let custom_agent = std::env::temp_dir().join("custom-agent");
         let relocated = sessions_root_with(
             home,
-            &BTreeMap::from([("PI_CODING_AGENT_DIR".into(), "/custom/agent".into())]),
+            &BTreeMap::from([(
+                "PI_CODING_AGENT_DIR".into(),
+                custom_agent.display().to_string(),
+            )]),
         )
         .unwrap();
-        assert_eq!(relocated, PathBuf::from("/custom/agent/sessions"));
+        assert_eq!(relocated, custom_agent.join("sessions"));
         let named = sessions_root_with(
             home,
             &BTreeMap::from([
