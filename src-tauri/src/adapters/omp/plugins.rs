@@ -361,6 +361,8 @@ impl PluginAdapter for OmpPlugins {
         // lock without a package.json dependency, and its native upgrade
         // refuses local paths. Say so instead of offering an update that cannot
         // work, while keeping disable/uninstall available.
+        let mut user_dependencies = None;
+        let mut project_dependencies = None;
         for (index, entry) in entries.iter_mut().enumerate() {
             let Some(name) = identities
                 .get(index)
@@ -371,17 +373,15 @@ impl PluginAdapter for OmpPlugins {
             if is_marketplace_id(&entry.id) {
                 continue;
             }
-            let root = if entry.scope == "project" {
-                project
-                    .as_ref()
-                    .map(|project| project_plugins_root(project))
+            let dependencies = if entry.scope == "project" {
+                let Some(project) = project.as_ref() else {
+                    continue;
+                };
+                project_dependencies.get_or_insert_with(|| package_dependencies(&project_plugins_root(project)))
             } else {
-                Some(user_root.clone())
+                user_dependencies.get_or_insert_with(|| package_dependencies(&user_root))
             };
-            let Some(root) = root else {
-                continue;
-            };
-            if !package_dependencies(&root).contains(name) {
+            if !dependencies.contains(name) {
                 entry.policy.push_str(
                     " · 包清单无依赖（本地 link 或安装残留）；原生 upgrade 可能拒绝，重新 link 或 install 更新",
                 );
@@ -422,9 +422,10 @@ impl PluginAdapter for OmpPlugins {
         // A marketplace registry entry can survive a deleted runtime link. The
         // cache may still exist, so a missing link is the visible partial-link
         // failure; the native uninstall/install commands remain available.
-        for entry in entries
+        for (index, entry) in entries
             .iter_mut()
-            .filter(|entry| is_marketplace_id(&entry.id))
+            .enumerate()
+            .filter(|(_, entry)| is_marketplace_id(&entry.id))
         {
             let Some(root) = entry.root.as_deref() else {
                 continue;
@@ -432,7 +433,7 @@ impl PluginAdapter for OmpPlugins {
             if !Path::new(root).exists() {
                 continue;
             }
-            let Some(name) = package_name_of(entry) else {
+            let Some(name) = identities.get(index).and_then(Option::as_deref) else {
                 continue;
             };
             let link_root = if entry.scope == "project" {
@@ -445,7 +446,7 @@ impl PluginAdapter for OmpPlugins {
             let Some(link_root) = link_root else {
                 continue;
             };
-            if !link_root.join("node_modules").join(&name).exists() {
+            if !link_root.join("node_modules").join(name).exists() {
                 entry.policy.push_str(if entry.scope == "project" {
                     " · 项目运行时链接不存在（link/缓存部分失败）；可重新 install --scope project 或卸载移除记录"
                 } else if project_page {

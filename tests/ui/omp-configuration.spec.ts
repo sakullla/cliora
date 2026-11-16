@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { build } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { setupConfigurationWorkspace } from './configuration-workspace-fixture';
 
 // OMP's dedicated editor mounted in isolation. Native YAML semantics, profile
@@ -12,6 +13,10 @@ let harness: string;
 test.beforeAll(async () => {
   const entry = 'virtual:omp-configuration-test';
   const i18nEntry = path.resolve('src/i18n/index.ts');
+  const editorEntry = path.resolve('src/adapters/omp/ConfigurationEditor.tsx');
+  const baseline = process.env.CLIORA_OMP_BASELINE === '1'
+    ? execFileSync('git', ['show', '6cf02fe4:src/adapters/omp/ConfigurationEditor.tsx'], { encoding: 'utf8' })
+    : null;
   const source = `
     import React from 'react';
     import { createRoot } from 'react-dom/client';
@@ -40,6 +45,8 @@ test.beforeAll(async () => {
       connection:{baseUrl:'https://alpha.example.test/v1',protocol:'openai-responses'},
       capabilityReason:'OMP 模型角色引用 provider/model；未编辑的角色与其他供应商保持原生值。',
     };
+    const modelCount = Math.min(500, Number(new URL(location.href).searchParams.get('models')) || 2);
+    for (let index = initial.models.length; index < modelCount; index++) initial.models.push({id:'model-'+index,kind:'model',fields:{name:'Model '+index,contextWindow:128000}});
     function Harness() {
       const [draft,setDraft]=React.useState({sessionId:'editor-test',revision:0,scope:project?'project':'global',profile:{files:{},editing:{version:1,selectedProvider:'alpha',intents:[]}},baselineFiles:{},issues:[],view:structuredClone(initial)});
       const [valid,setValid]=React.useState(true);
@@ -80,7 +87,7 @@ test.beforeAll(async () => {
     }
     createRoot(document.getElementById('root')).render(React.createElement(Harness));
   `;
-  const result = await build({ configFile: false, logLevel: 'silent', plugins: [react(), { name: 'omp-configuration-test', resolveId: id => id === entry ? `\0${entry}` : undefined, load: id => id === `\0${entry}` ? source : undefined }], build: { write: false, minify: false, cssCodeSplit: false, rollupOptions: { input: entry } } });
+  const result = await build({ configFile: false, logLevel: 'silent', plugins: [react(), { name: 'omp-configuration-test', resolveId: id => id === entry ? `\0${entry}` : undefined, load: id => id === `\0${entry}` ? source : baseline && path.normalize(id) === editorEntry ? baseline : undefined }], build: { write: false, minify: false, cssCodeSplit: false, rollupOptions: { input: entry } } });
   const output = (Array.isArray(result) ? result[0] : result) as { output: { type: string; code?: string; source?: string | Uint8Array }[] };
   const code = output.output.filter(item => item.type === 'chunk').map(item => item.code).join('\\n');
   const css = output.output.filter(item => item.type === 'asset').map(item => String(item.source)).join('\\n');
@@ -121,6 +128,51 @@ test('OMP model edits stay inside one model and invalid numbers block save', asy
   await expect.poll(() => page.evaluate(() => (window as unknown as { __actions: unknown[] }).__actions)).toEqual([
     { version: 1, target: { kind: 'model', provider: 'alpha', id: 'one' }, operation: 'set', field: 'contextWindow', value: 100000 },
   ]);
+});
+
+test('large OMP model lists mount fields on first expansion and preserve invalid drafts when folded', async ({ page }) => {
+  await page.goto('/__omp_configuration_test?models=200');
+  const models = page.locator('article[aria-label^="模型 "]');
+  await expect(models).toHaveCount(200);
+  await expect(models.locator('input, select, textarea')).toHaveCount(0);
+  const one = page.getByLabel('模型 one', { exact: true });
+  const two = page.getByLabel('模型 two', { exact: true });
+  await one.getByRole('button').first().click();
+  const context = one.getByLabel('上下文上限（Token）');
+  await context.fill('0');
+  await expect(page.getByRole('button', { name: '保存配置' })).toBeDisabled();
+  const firstCount = await models.locator('input, select, textarea').count();
+  expect(firstCount).toBeGreaterThan(0);
+  await one.getByRole('button').first().click();
+  await two.getByRole('button').first().click();
+  await expect(page.getByRole('button', { name: '保存配置' })).toBeDisabled();
+  await expect(context).toHaveValue('0');
+  await one.getByRole('button').first().click();
+  await expect(context).toBeVisible();
+  await expect(context).toHaveValue('0');
+  await context.fill('100000');
+  await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
+  expect(await models.locator('input, select, textarea').count()).toBeLessThanOrEqual(firstCount * 2);
+});
+
+test('OMP large-list performance benchmark', async ({ page }) => {
+  test.skip(process.env.CLIORA_OMP_BENCH !== '1', 'Explicit synthetic browser memory measurement');
+  const cdp = await page.context().newCDPSession(page);
+  for (let pass = 0; pass < 3; pass++) {
+    const start = performance.now();
+    await page.goto('/__omp_configuration_test?models=200');
+    const models = page.locator('article[aria-label^="模型 "]');
+    await expect(models).toHaveCount(200);
+    const readyMs = performance.now() - start;
+    await cdp.send('HeapProfiler.collectGarbage');
+    const heap = await cdp.send('Runtime.getHeapUsage');
+    const controls = await models.locator('input, select, textarea').count();
+    const elements = await page.locator('*').count();
+    console.log(JSON.stringify({ ompBenchmark: true, baseline: process.env.CLIORA_OMP_BASELINE === '1', pass, readyMs, usedHeapBytes: heap.usedSize, controls, elements }));
+    if (process.env.CLIORA_OMP_BASELINE === '1') expect(controls).toBeGreaterThan(0);
+    else expect(controls).toBe(0);
+  }
+  await cdp.detach();
 });
 
 test('OMP retry JSON is validated, saved as a native object and failure recovers', async ({ page }) => {

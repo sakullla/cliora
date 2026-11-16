@@ -53,7 +53,6 @@ fn environment() -> BTreeMap<String, String> {
         .filter_map(|name| {
             env::var(name)
                 .ok()
-                .filter(|value| !value.trim().is_empty())
                 .map(|value| ((*name).to_owned(), value))
         })
         .collect()
@@ -67,24 +66,21 @@ fn sessions_root_with(
     home: &Path,
     environment: &BTreeMap<String, String>,
 ) -> Result<PathBuf, String> {
-    let profile = environment
-        .get("OMP_PROFILE")
-        .filter(|value| !value.is_empty())
-        .or_else(|| environment.get("PI_PROFILE").filter(|value| !value.is_empty()));
     let config_dir = environment
         .get("PI_CONFIG_DIR")
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from);
     let coding_agent_dir = environment
         .get("PI_CODING_AGENT_DIR")
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from);
-    let resolved = super::configuration::resolve_root(&super::configuration::ResolutionInput {
+    let resolved = super::configuration::resolve_agent_root(
         home,
-        profile: profile.map(String::as_str),
-        config_dir: config_dir.as_deref(),
-        coding_agent_dir: coding_agent_dir.as_deref(),
-    })?;
+        environment.get("OMP_PROFILE").map(String::as_str),
+        environment.get("PI_PROFILE").map(String::as_str),
+        config_dir.as_deref(),
+        coding_agent_dir.as_deref(),
+    )?;
     Ok(resolved.root.join("sessions"))
 }
 
@@ -332,7 +328,7 @@ fn active_path(entries: &[Entry]) -> (Vec<usize>, bool) {
     for (index, entry) in entries.iter().enumerate() {
         if let Some(id) = entry.id.as_deref().filter(|id| !id.is_empty()) {
             // OMP's loader lets the last entry with an id win.
-            by_id.insert(id.to_owned(), index);
+            by_id.insert(id, index);
         }
     }
     // v1 files, and unindexed entries OMP would migrate, have no tree.
@@ -342,11 +338,11 @@ fn active_path(entries: &[Entry]) -> (Vec<usize>, bool) {
     let last = entries.last().expect("non-empty");
     let captured = match &last.active_leaf {
         Some(None) => None,
-        Some(Some(id)) => Some(id.clone()),
-        None => last.id.clone(),
+        Some(Some(id)) => Some(id.as_str()),
+        None => last.id.as_deref(),
     };
     let leaf = match captured {
-        Some(id) if by_id.contains_key(&id) => Some(id),
+        Some(id) if by_id.contains_key(id) => Some(id),
         _ => entries
             .iter()
             .rev()
@@ -355,7 +351,7 @@ fn active_path(entries: &[Entry]) -> (Vec<usize>, bool) {
                 Some(Some(id)) => entry.id.as_deref() == Some(id.as_str()),
                 Some(None) => false,
             })
-            .and_then(|entry| entry.id.clone()),
+            .and_then(|entry| entry.id.as_deref()),
     };
     let Some(leaf) = leaf else {
         return (Vec::new(), false);
@@ -365,17 +361,17 @@ fn active_path(entries: &[Entry]) -> (Vec<usize>, bool) {
     let mut damaged = false;
     let mut current = Some(leaf);
     while let Some(id) = current {
-        if !seen.insert(id.clone()) {
+        if !seen.insert(id) {
             damaged = true;
             break;
         }
-        let Some(&index) = by_id.get(&id) else {
+        let Some(&index) = by_id.get(id) else {
             damaged = true;
             break;
         };
         path.push(index);
-        current = entries[index].parent.clone();
-        if current.as_ref().is_some_and(|parent| !by_id.contains_key(parent)) {
+        current = entries[index].parent.as_deref();
+        if current.is_some_and(|parent| !by_id.contains_key(parent)) {
             damaged = true;
             break;
         }
@@ -546,11 +542,13 @@ fn parse_controlled(
         latest_time = latest_time.max(entry.timestamp.or_else(|| entry_time(entry)));
     }
     for index in path {
-        let entry = &entries[index];
+        crate::history::check_cancelled(cancelled)?;
+        let entry = &mut entries[index];
+        let key = entry_key(entry);
         if let Some(model) = entry.model.as_ref() {
             active_model = Some(model.clone());
         }
-        match &entry.kind {
+        match &mut entry.kind {
             EntryKind::Message {
                 role,
                 text,
@@ -558,17 +556,17 @@ fn parse_controlled(
                 ..
             } => {
                 session.add_message(
-                    entry_key(entry),
+                    key,
                     role,
-                    text.clone(),
+                    std::mem::take(text),
                     *timestamp,
                 );
             }
             EntryKind::System { text, timestamp } if !text.trim().is_empty() => {
                 session.add_message(
-                    format!("system:{}", entry_key(entry)),
+                    format!("system:{key}"),
                     "system",
-                    text.clone(),
+                    std::mem::take(text),
                     *timestamp,
                 );
             }
@@ -578,7 +576,9 @@ fn parse_controlled(
     session.model = active_model;
 
     let mut events = BTreeMap::<String, RequestUsage>::new();
+    let source_key = source.key();
     for entry in &entries {
+        crate::history::check_cancelled(cancelled)?;
         let sample = match &entry.kind {
             EntryKind::Message { usage: Some(sample), .. } => Some(sample),
             EntryKind::ModelUsage(sample) => Some(sample),
@@ -589,7 +589,7 @@ fn parse_controlled(
         };
         usage::keep_largest_output(
             &mut events,
-            format!("{}:{}", source.key(), entry_key(entry)),
+            format!("{source_key}:{}", entry_key(entry)),
             RequestUsage {
                 counts: sample.counts,
                 model: sample.model.clone(),
@@ -1087,6 +1087,21 @@ mod tests {
         let home = Path::new("/home/fixture");
         let default = sessions_root_with(home, &BTreeMap::new()).unwrap();
         assert_eq!(default, PathBuf::from("/home/fixture/.omp/agent/sessions"));
+        for blank in ["", " ", "\t\n"] {
+            for profile in ["default", "work"] {
+                let environment = BTreeMap::from([
+                    ("OMP_PROFILE".into(), profile.into()),
+                    ("PI_CONFIG_DIR".into(), blank.into()),
+                    ("PI_CODING_AGENT_DIR".into(), blank.into()),
+                ]);
+                let expected = sessions_root_with(
+                    home,
+                    &BTreeMap::from([("OMP_PROFILE".into(), profile.into())]),
+                )
+                .unwrap();
+                assert_eq!(sessions_root_with(home, &environment).unwrap(), expected);
+            }
+        }
         let custom_agent = std::env::temp_dir().join("custom-agent");
         let relocated = sessions_root_with(
             home,
@@ -1107,11 +1122,34 @@ mod tests {
         )
         .unwrap();
         assert_eq!(named, PathBuf::from("/home/fixture/.omp/profiles/work/agent/sessions"));
+        for profile in ["", " ", "default", " default "] {
+            let root = sessions_root_with(
+                home,
+                &BTreeMap::from([
+                    ("OMP_PROFILE".into(), profile.into()),
+                    ("PI_PROFILE".into(), "work".into()),
+                ]),
+            )
+            .unwrap();
+            assert_eq!(root, default, "OMP_PROFILE={profile:?} must override PI_PROFILE");
+        }
         assert!(sessions_root_with(
             home,
             &BTreeMap::from([("PI_CONFIG_DIR".into(), "../escape".into())])
         )
         .is_err());
+    }
+
+    #[test]
+    fn borrowed_branch_index_keeps_duplicate_ids_and_detects_cycles_and_missing_parents() {
+        let entry = |id: &str, parent: Option<&str>| new_entry(
+            0,
+            &serde_json::json!({"id": id, "parentId": parent}),
+            EntryKind::Ignore,
+        );
+        assert_eq!(active_path(&[entry("root", None), entry("root", None)]), (vec![1], false));
+        assert_eq!(active_path(&[entry("a", Some("b")), entry("b", Some("a"))]), (vec![0, 1], true));
+        assert_eq!(active_path(&[entry("a", Some("missing"))]), (vec![0], true));
     }
 
     #[test]

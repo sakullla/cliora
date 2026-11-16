@@ -102,7 +102,7 @@ mod tests {
             .prepare("SELECT name FROM sqlite_master")
             .unwrap_err();
         assert!(matches!(classify(&error), ReadFailure::NotADatabase));
-        let _ = std::fs::write(temp.path().join("agent.db-wal"), "").unwrap();
+        std::fs::write(temp.path().join("agent.db-wal"), "").unwrap();
         assert!(Sidecars::detect(&path).present());
         assert!(!Sidecars::detect(&temp.path().join("other.db")).present());
     }

@@ -172,8 +172,18 @@ pub(crate) struct ResolvedRoot {
     pub root: PathBuf,
 }
 
-fn valid_config_relative(path: &Path) -> bool {
+pub(super) fn valid_config_relative(path: &Path) -> bool {
+    // Path components follow the host OS: Unix treats Windows drive prefixes
+    // and backslashes as ordinary filename characters. Reject foreign roots
+    // and traversal too, so a config directory remains relative on every OS.
+    let text = path.as_os_str().to_string_lossy();
+    let bytes = text.as_bytes();
+    let drive_prefix = bytes.first().is_some_and(u8::is_ascii_alphabetic)
+        && bytes.get(1) == Some(&b':');
     !path.is_absolute()
+        && !drive_prefix
+        && !text.starts_with('\\')
+        && !text.split(['/', '\\']).any(|part| part == "..")
         && !path.components().any(|component| {
             matches!(
                 component,

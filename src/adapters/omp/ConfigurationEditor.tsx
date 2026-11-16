@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { ConnectionCredential } from '../../components/configuration/ConnectionCredential';
@@ -51,8 +51,9 @@ function Editor(props: ConfigurationContentProps) {
   const { t } = useTranslation();
   const { draft, descriptor } = props;
   const view = (draft.view ?? {}) as View;
-  const models = (view.models ?? []).map(model => ({ ...model, fields: objectFields(model.fields) }));
+  const models = useMemo(() => (view.models ?? []).map(model => ({ ...model, fields: objectFields(model.fields) })), [view.models]);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [visited, setVisited] = useState<ReadonlySet<string>>(() => new Set());
   const action = useEditorAction(props, 'omp-actions');
   const provider = view.providerId ?? '';
   const blocked = props.disabled || action.pending;
@@ -61,7 +62,15 @@ function Editor(props: ConfigurationContentProps) {
   const modelValue = (model: Model, id: string) => model.fields[id];
   const target = (model: Model) => ({ kind: 'model', provider, id: model.id });
   const key = (model: Model) => model.id;
-  const choices = models.map(model => `${provider}/${model.id}`);
+  const choices = useMemo(() => models.map(model => `${provider}/${model.id}`), [models, provider]);
+  const modelFields = useMemo(() => descriptor.fields.filter(item => !item.id.startsWith('modelRoles.') && item.id !== 'retry'), [descriptor.fields]);
+  const basicFields = useMemo(() => modelFields.filter(item => !item.advanced), [modelFields]);
+  const visitKey = (id: string) => `${provider}/${id}`;
+  const expandModel = (id: string) => {
+    const identity = visitKey(id);
+    setVisited(previous => previous.has(identity) ? previous : new Set(previous).add(identity));
+    setExpanded(id);
+  };
   const unknownRoles = (view.roleNames ?? []).filter(role => !knownRoles.includes(role as (typeof knownRoles)[number]));
   const field = (id: string, model?: Model) => <EditorField
     key={`${draft.sessionId}:${provider}:${model ? key(model) : 'settings'}:${id}`}
@@ -101,20 +110,20 @@ function Editor(props: ConfigurationContentProps) {
             badges={[view.defaultModel === model.id ? t('common.models.defaultBadge') : '', view.smallModel === model.id ? t('tools.adapters.omp.smallBadge') : ''].filter(Boolean)}
             expanded={expanded === key(model)} sectioned={Boolean(props.section)} disabled={structuralBlocked}
             canDefault={can('default') && view.defaultModel !== model.id}
-            onToggle={() => setExpanded(expanded === key(model) ? null : key(model))}
+            onToggle={() => expanded === key(model) ? setExpanded(null) : expandModel(key(model))}
             onSetDefault={() => void action.run(target(model), 'default')} />
-          <div className={styles.fields} hidden={expanded !== key(model)}>
-            {descriptor.fields.filter(item => !item.advanced && !item.id.startsWith('modelRoles.') && item.id !== 'retry').map(item => modelField(item.id, model))}
+          {(expanded === key(model) || visited.has(visitKey(model.id))) && <div className={styles.fields} hidden={expanded !== key(model)}>
+            {basicFields.map(item => modelField(item.id, model))}
             {modelField('input', model)}
             <details><summary>{t('tools.adapters.omp.optionalSummary')}</summary>{modelField('thinkingLevelMap', model)}{modelField('cost', model)}</details>
             <EntityActions id={model.id} target={target(model)} descriptor={descriptor} disabled={structuralBlocked}
               defaultModel={view.defaultModel === model.id} smallModel={view.smallModel === model.id}
               onRun={action.run} onRemove={() => setExpanded(null)} />
-          </div>
+          </div>}
         </article>)}
         <div hidden={Boolean(props.section && expanded)}>{can('create') && <NewModelForm key={`new-model:${draft.sessionId}:${provider}`} props={action.props} provider={provider} disabled={structuralBlocked || !provider} label={t('tools.adapters.shared.modelId')}
-          fields={descriptor.fields.filter(item => !item.id.startsWith('modelRoles.') && item.id !== 'retry')}
-          onCreate={async (id, values) => { const success = await action.run({ kind: 'model', provider, id }, 'create', values); if (success) setExpanded(id); return success; }}
+          fields={modelFields}
+          onCreate={async (id, values) => { const success = await action.run({ kind: 'model', provider, id }, 'create', values); if (success) expandModel(id); return success; }}
           listChoices={{ input: [['text', t('tools.adapters.shared.modality.text')], ['image', t('tools.adapters.shared.modality.image')]] }} />}</div>
       </ModelStep>
       <div className={styles.modelSpacer} data-list-spacer />

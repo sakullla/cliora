@@ -28,19 +28,7 @@ pub(crate) fn omp_config_root(home: &Path) -> PathBuf {
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
     {
-        Some(relative)
-            if !relative.is_absolute()
-                && !relative.components().any(|component| {
-                    matches!(
-                        component,
-                        std::path::Component::ParentDir
-                            | std::path::Component::RootDir
-                            | std::path::Component::Prefix(_)
-                    )
-                }) =>
-        {
-            home.join(relative)
-        }
+        Some(relative) if super::configuration::valid_config_relative(&relative) => home.join(relative),
         _ => home.join(".omp"),
     }
 }

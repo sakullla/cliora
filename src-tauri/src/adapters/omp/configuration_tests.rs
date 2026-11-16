@@ -193,18 +193,6 @@ fn default_named_and_project_roots_stay_isolated() {
             "{invalid:?} 必须被拒绝"
         );
     }
-    for invalid in ["/absolute", "../outside", "C:\\absolute"] {
-        assert!(
-            resolve_root(&ResolutionInput {
-                home,
-                profile: None,
-                config_dir: Some(Path::new(invalid)),
-                coding_agent_dir: None,
-            })
-            .is_err(),
-            "PI_CONFIG_DIR {invalid:?} 必须被拒绝"
-        );
-    }
     for blank in ["", "   "] {
         let outcome = resolve_root(&ResolutionInput {
             home,
@@ -249,6 +237,53 @@ fn default_named_and_project_roots_stay_isolated() {
             .is_err(),
             "Windows root-relative {root_relative:?} 必须被拒绝"
         );
+    }
+}
+
+#[test]
+fn config_directory_validation_is_platform_independent() {
+    let home = Path::new("/home/omp-user");
+    for profile in [None, Some("work")] {
+        for invalid in [
+            "/absolute",
+            "../outside",
+            "nested/../../outside",
+            r"C:\absolute",
+            "C:/absolute",
+            r"c:relative",
+            r"\rooted",
+            r"\\server\share",
+            r"\\?\C:\absolute",
+            r"..\outside",
+            r"nested\..\..\outside",
+            r"nested/..\outside",
+        ] {
+            assert!(
+                resolve_root(&ResolutionInput {
+                    home,
+                    profile,
+                    config_dir: Some(Path::new(invalid)),
+                    coding_agent_dir: None,
+                })
+                .is_err(),
+                "PI_CONFIG_DIR {invalid:?} 必须被拒绝，profile={profile:?}"
+            );
+        }
+        for valid in ["custom-config", "nested/config", r"nested\config", "./custom-config"] {
+            let outcome = resolve_root(&ResolutionInput {
+                home,
+                profile,
+                config_dir: Some(Path::new(valid)),
+                coding_agent_dir: None,
+            })
+            .unwrap();
+            let config = home.join(valid);
+            let expected = match profile {
+                Some(name) => config.join("profiles").join(name).join("agent"),
+                None => config.join("agent"),
+            };
+            assert_eq!(outcome.root, expected, "{valid:?}, profile={profile:?}");
+        }
     }
 }
 

@@ -119,7 +119,7 @@ test('every committed OMP session fixture is exercised by a product test', async
 
 test('the OMP parser is read-only, reuses the profile resolver and keeps Pi arguments out', () => {
   const source = historySource.split('#[cfg(test)]')[0].split('fn verify_case')[0];
-  assert.match(source, /super::configuration::resolve_root/);
+  assert.match(source, /super::configuration::resolve_agent_root/);
   assert.match(source, /crate::accounts::selection::history_root/);
   assert.match(source, /discover_jsonl_controlled/);
   assert.doesNotMatch(source, /fs::write|OpenOptions|File::create|write_all/, '历史解析不得写原生 JSONL');

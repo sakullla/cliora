@@ -578,17 +578,17 @@ fn read_candidate(
     broker: bool,
 ) -> Result<ReadRows, String> {
     let fields = [
-        Some(candidate.provider.clone()),
-        candidate.kind.clone(),
-        candidate.access.clone(),
-        candidate.refresh.clone(),
-        candidate.api_key.clone(),
-        candidate.data.clone(),
-        candidate.expires.clone(),
-        candidate.account.clone(),
-        candidate.email.clone(),
-        candidate.plan.clone(),
-        candidate.disabled.clone(),
+        Some(candidate.provider.as_str()),
+        candidate.kind.as_deref(),
+        candidate.access.as_deref(),
+        candidate.refresh.as_deref(),
+        candidate.api_key.as_deref(),
+        candidate.data.as_deref(),
+        candidate.expires.as_deref(),
+        candidate.account.as_deref(),
+        candidate.email.as_deref(),
+        candidate.plan.as_deref(),
+        candidate.disabled.as_deref(),
     ];
     let select = fields
         .iter()
@@ -618,16 +618,16 @@ fn read_candidate(
         if total > ROW_LIMIT {
             break;
         }
-        let mut values = Vec::with_capacity(11);
+        let mut values: [Option<String>; 11] = Default::default();
         let mut unusable = false;
-        for index in 0..11 {
+        for (index, slot) in values.iter_mut().enumerate() {
             match row.get_ref(index) {
                 Ok(ValueRef::Blob(_)) if (2..=5).contains(&index) || index == 10 => {
                     // Encrypted or binary material cannot be verified safely.
                     unusable = true;
                     break;
                 }
-                Ok(value) => values.push(read_text(value)),
+                Ok(value) => *slot = read_text(value),
                 Err(_) => {
                     unusable = true;
                     break;
@@ -638,23 +638,24 @@ fn read_candidate(
             skipped += 1;
             continue;
         }
-        let Some(provider) = values[0].as_deref().filter(|value| valid_provider(value)) else {
+        let [provider, kind, access, refresh, api_key, data, expires, account, address, plan, disabled_raw] = values;
+        let Some(provider) = provider.as_deref().filter(|value| valid_provider(value)) else {
             skipped += 1;
             continue;
         };
         let clean = |value: Option<String>| value.filter(|text| !text.trim().is_empty());
-        let mut kind = clean(values[1].clone());
-        let mut access = clean(values[2].clone());
-        let mut refresh = clean(values[3].clone());
-        let mut api_key = clean(values[4].clone());
-        let mut expires = clean(values[6].clone());
-        let mut account = clean(values[7].clone());
-        let mut address = clean(values[8].clone());
-        let mut plan = clean(values[9].clone());
+        let mut kind = clean(kind);
+        let mut access = clean(access);
+        let mut refresh = clean(refresh);
+        let mut api_key = clean(api_key);
+        let mut expires = clean(expires);
+        let mut account = clean(account);
+        let mut address = clean(address);
+        let mut plan = clean(plan);
         // OMP 18.20.2 tombstones rows left by /logout, deduplication or a
         // failed refresh with a non-NULL disabled_cause. A legacy `disabled`
         // integer flag is only a tombstone when truthy (0 means active).
-        let disabled = match values[10].as_deref() {
+        let disabled = match disabled_raw.as_deref() {
             Some(raw) if candidate.disabled_legacy => {
                 let raw = raw.trim().to_ascii_lowercase();
                 raw == "1"
@@ -676,26 +677,22 @@ fn read_candidate(
             tombstones.push(Tombstone {
                 provider: provider.to_owned(),
                 auth_kind,
-                cause: diagnostic_cause(values[10].as_deref().unwrap_or("")),
+                cause: diagnostic_cause(disabled_raw.as_deref().unwrap_or("")),
             });
             continue;
         }
-        if access.is_none() && refresh.is_none() && api_key.is_none() {
-            if let Some(record) = values[5].as_deref().and_then(json_record) {
-                kind = kind.or(record.kind);
-                access = record.access;
-                refresh = record.refresh;
-                api_key = record.api_key;
-                expires = expires.or(record.expires);
+        let missing_credentials = access.is_none() && refresh.is_none() && api_key.is_none();
+        if missing_credentials || (account.is_none() && address.is_none()) {
+            if let Some(record) = data.as_deref().and_then(json_record) {
+                if missing_credentials {
+                    kind = kind.or(record.kind);
+                    access = record.access;
+                    refresh = record.refresh;
+                    api_key = record.api_key;
+                    expires = expires.or(record.expires);
+                }
                 account = account.or(record.account);
                 address = address.or(record.email);
-                plan = plan.or(record.plan);
-            }
-        }
-        if account.is_none() && address.is_none() {
-            if let Some(record) = values[5].as_deref().and_then(json_record) {
-                account = record.account;
-                address = record.email;
                 plan = plan.or(record.plan);
             }
         }
