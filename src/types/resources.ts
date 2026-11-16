@@ -71,7 +71,7 @@ export type SkillFileListing = { files: SkillFileEntry[]; truncated: boolean };
 export type SkillFilePreview = { path: string; size: number; digest: string | null; text: string | null };
 export type SkillTargetPreview = { path: string; status: 'ready' | 'conflict'; detail: string; previewToken: string | null; existingDigest: string | null; packageDigest: string; changes: SkillFileChange[] };
 
-export type AgentEntry = { id: string; name: string; description: string; path: string; format: 'toml' | 'markdown' | 'json'; content: string; enabled: boolean; readOnly: boolean; builtin: boolean; owner: string; detail: string };
+export type AgentEntry = { id: string; name: string; description: string; path: string; format: 'toml' | 'markdown' | 'json'; content: string; enabled: boolean; readOnly: boolean; builtin: boolean; owner: string; detail: string; /** Roster membership when the adapter verified launch-selection semantics; absent otherwise. */ launchable?: boolean | null };
 export type AgentSnapshot = { target: PluginTarget; capability: { version: string; supported: boolean; format: 'toml' | 'markdown' | 'text'; detail: string; template: string }; entries: AgentEntry[]; baseline: string; detail: string };
 export type AgentRequest = { target: PluginTarget; action: 'create' | 'save' | 'enable' | 'disable' | 'delete' | 'restore'; id: string | null; name: string; content: string; baseline: string; transactionId: string | null };
 export type AgentResult = { transactionId: string; changedPaths: string[]; restorePath: string; snapshot: AgentSnapshot; detail: string };

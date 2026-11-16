@@ -294,6 +294,10 @@ pub trait AgentAdapter: Sync {
         let _ = version;
         self.config_edit(entry, request)
     }
+    /// Adapter-owned annotation for one scanned definition row (for example
+    /// launch-selection semantics derived from the frontmatter). The default
+    /// changes nothing, so adapters without such a contract keep their rows.
+    fn annotate_entry(&self, _entry: &mut crate::resources::agents::AgentEntry) {}
 }
 pub fn get(tool: &str) -> Result<&'static dyn AgentAdapter, String> {
     get_registered(&super::Registry::builtins(), tool)

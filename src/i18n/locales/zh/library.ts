@@ -163,6 +163,9 @@ export default {
     launchSubmitWorkbench: '在工作台启动',
     launchSubmitDesktop: '启动应用',
     launchStarting: '正在启动…',
+    launchAgentLabel: '启动 Agent',
+    launchAgentNone: '默认（不指定）',
+    searchAgent: '搜索 Agent',
   },
   resources: {
     sourceManaged: '托管包',

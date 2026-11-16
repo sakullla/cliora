@@ -1197,6 +1197,28 @@ pub trait CliAdapter: Sync {
         }
         Ok(Vec::new())
     }
+    /// Optional agent selection for a new session, composed by the shared
+    /// launch service after `launch_args`. `None` keeps the historical
+    /// argument list; a selection is refused unless the adapter verified a
+    /// native flag for it. The default has no verified selection.
+    fn launch_agent_args(&self, agent: Option<&str>) -> Result<Vec<String>, String> {
+        if agent.is_some() {
+            return Err("此 CLI 不支持启动时选择 Agent".into());
+        }
+        Ok(Vec::new())
+    }
+    /// Version-aware agent selection arguments. The default ignores the
+    /// version and keeps `launch_agent_args`, so fixed-shape adapters never
+    /// change. Adapters whose selection flag follows the install line refuse
+    /// unverified versions here instead of guessing.
+    fn launch_agent_args_for_version(
+        &self,
+        version: &str,
+        agent: Option<&str>,
+    ) -> Result<Vec<String>, String> {
+        let _ = version;
+        self.launch_agent_args(agent)
+    }
     fn skill_switch_location(
         &self,
         _scope: Scope,
@@ -1660,6 +1682,10 @@ pub struct PublishedDescriptor {
     #[serde(flatten)]
     pub descriptor: AdapterDescriptor,
     pub resume_latest_available: bool,
+    /// Whether a new-session launch may carry an agent selection
+    /// (`LaunchRequest::agent`). Derived from `launch_agent_args`, never
+    /// inferred from the tool id.
+    pub agent_launch_available: bool,
     /// Omitted when this CLI does not provide usage records.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub association: Option<Facet>,
@@ -1678,6 +1704,7 @@ impl PublishedDescriptor {
     pub fn from_adapter(adapter: &dyn CliAdapter) -> Self {
         Self {
             resume_latest_available: adapter.resume_latest_args(LaunchMode::Normal).is_ok(),
+            agent_launch_available: adapter.launch_agent_args(Some("probe")).is_ok(),
             association: history_association_facet(adapter),
             descriptor: adapter.descriptor(),
             remote_resources: adapter.remote_resource_layout(),

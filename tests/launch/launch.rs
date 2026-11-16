@@ -307,6 +307,115 @@ fn launch_mode_and_project_model_are_adapter_capabilities() {
 }
 
 #[test]
+fn agent_selection_composes_only_for_verified_adapters_and_new_sessions() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("app.db")).unwrap();
+    // Constructing commands without spawning them: a known executable keeps
+    // headless CI independent of installed terminals.
+    crate::launch::set_custom_terminal(
+        &db,
+        std::env::current_exe().unwrap().display().to_string(),
+        vec!["{script}".into()],
+    )
+    .unwrap();
+    let workspace = temp.path().join("repo");
+    std::fs::create_dir(&workspace).unwrap();
+    let registry = Registry::builtins().with_fixture_installation("antigravity", "1.5.9");
+    let project = projects::add(
+        &db,
+        &registry,
+        workspace.to_str().unwrap(),
+        Some("demo"),
+        Some("antigravity"),
+    )
+    .unwrap();
+    let request = |agent: Option<String>, session_id: Option<String>, mode: LaunchMode| LaunchRequest {
+        tool_id: "antigravity".into(),
+        project_id: Some(project.id.clone()),
+        session_id,
+        directory: None,
+        initial_prompt: None,
+        mode,
+        resume_latest: false, remote_intent: None,
+        agent,
+    };
+    // A 1.5.9 selection composes after the launch flags; no selection keeps
+    // the historical argument list byte-for-byte.
+    let selected = plan(
+        &db,
+        &registry,
+        temp.path(),
+        request(Some("probe-main".into()), None, LaunchMode::Normal),
+    )
+    .unwrap();
+    assert_eq!(selected.cli_args, ["--agent", "probe-main"]);
+    let yolo = plan(
+        &db,
+        &registry,
+        temp.path(),
+        request(Some("probe-main".into()), None, LaunchMode::Yolo),
+    )
+    .unwrap();
+    assert_eq!(
+        yolo.cli_args,
+        ["--dangerously-skip-permissions", "--agent", "probe-main"]
+    );
+    let unselected = plan(&db, &registry, temp.path(), request(None, None, LaunchMode::Yolo)).unwrap();
+    assert_eq!(unselected.cli_args, ["--dangerously-skip-permissions"]);
+    // Resume and an agent selection are mutually exclusive, and a malformed
+    // name is rejected before anything is spawned.
+    let resumed = plan(
+        &db,
+        &registry,
+        temp.path(),
+        request(Some("probe-main".into()), Some("conv-1".into()), LaunchMode::Normal),
+    )
+    .unwrap_err();
+    assert!(resumed.contains("不能同时选择"), "{resumed}");
+    let invalid = plan(
+        &db,
+        &registry,
+        temp.path(),
+        request(Some("  ".into()), None, LaunchMode::Normal),
+    )
+    .unwrap_err();
+    assert!(invalid.contains("Agent 名称无效"));
+    let control = plan(
+        &db,
+        &registry,
+        temp.path(),
+        request(Some("bad\nname".into()), None, LaunchMode::Normal),
+    )
+    .unwrap_err();
+    assert!(control.contains("Agent 名称无效"));
+    // An identified 1.3.x install refuses the unverified flag instead of
+    // passing it to a CLI that may not know it.
+    let legacy = Registry::builtins().with_fixture_installation("antigravity", "1.3.1");
+    let refused = plan(
+        &db,
+        &legacy,
+        temp.path(),
+        request(Some("probe-main".into()), None, LaunchMode::Normal),
+    )
+    .unwrap_err();
+    assert!(refused.contains("--agent"), "{refused}");
+    // Every other CLI keeps the default refusal: the extension never changes
+    // an adapter that did not verify a flag.
+    let others = Registry::builtins().with_fixture_installation("grok", "1.1.0");
+    let grok_request = LaunchRequest {
+        tool_id: "grok".into(),
+        project_id: None,
+        session_id: None,
+        directory: None,
+        initial_prompt: None,
+        mode: LaunchMode::Normal,
+        resume_latest: false, remote_intent: None, agent: Some("probe".into()),
+    };
+    let refused_default = plan(&db, &others, temp.path(), grok_request).unwrap_err();
+    assert!(refused_default.contains("不支持"), "{refused_default}");
+}
+
+#[test]
 fn missing_project_never_falls_back_to_user_home() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("app.db")).unwrap();
@@ -321,7 +430,7 @@ fn missing_project_never_falls_back_to_user_home() {
             directory: None,
             initial_prompt: None,
             mode: LaunchMode::Normal,
-            resume_latest: false, remote_intent: None,
+            resume_latest: false, remote_intent: None, agent: None,
         },
     );
     let failure = result.unwrap_err();
@@ -355,7 +464,7 @@ fn launch_recovers_interrupted_skills_before_tool_probe_without_opening_tools_pa
             directory: None,
             initial_prompt: None,
             mode: LaunchMode::Normal,
-            resume_latest: false, remote_intent: None,
+            resume_latest: false, remote_intent: None, agent: None,
         },
     );
     assert_eq!(result.unwrap_err().stage, LaunchStage::Tool);
@@ -413,7 +522,7 @@ fn damaged_claude_skill_backup_blocks_claude_but_not_grok_launch() {
             directory: None,
             initial_prompt: None,
             mode: LaunchMode::Normal,
-            resume_latest: false, remote_intent: None,
+            resume_latest: false, remote_intent: None, agent: None,
         },
     )
     .unwrap();
@@ -429,7 +538,7 @@ fn damaged_claude_skill_backup_blocks_claude_but_not_grok_launch() {
             directory: None,
             initial_prompt: None,
             mode: LaunchMode::Normal,
-            resume_latest: false, remote_intent: None,
+            resume_latest: false, remote_intent: None, agent: None,
         },
     )
     .unwrap_err();
@@ -498,7 +607,7 @@ fn damaged_project_skill_backup_only_blocks_that_project() {
         directory: None,
             initial_prompt: None,
         mode: LaunchMode::Normal,
-        resume_latest: false, remote_intent: None,
+        resume_latest: false, remote_intent: None, agent: None,
     };
     assert_eq!(
         plan_with_stage(&db, &registry, temp.path(), request(Some(first.id)))
@@ -556,7 +665,7 @@ fn project_launch_plan_uses_real_probe_and_project_model_without_shell_expansion
         directory: None,
         initial_prompt: None,
         mode: LaunchMode::Yolo,
-        resume_latest: false, remote_intent: None,
+        resume_latest: false, remote_intent: None, agent: None,
     };
     let defaulted = plan(&db, &registry, temp.path(), request.clone()).unwrap();
     assert_eq!(defaulted.terminal, TerminalId::Workbench);
@@ -597,7 +706,7 @@ fn project_launch_plan_uses_real_probe_and_project_model_without_shell_expansion
             directory: None,
             initial_prompt: None,
             mode: LaunchMode::Normal,
-            resume_latest: false, remote_intent: None,
+            resume_latest: false, remote_intent: None, agent: None,
         },
     )
     .unwrap_err();

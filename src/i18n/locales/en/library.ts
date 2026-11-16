@@ -163,6 +163,9 @@ export default {
     launchSubmitWorkbench: 'Start in workbench',
     launchSubmitDesktop: 'Launch app',
     launchStarting: 'Launching…',
+    launchAgentLabel: 'Launch agent',
+    launchAgentNone: 'Default (none)',
+    searchAgent: 'Search agents',
   },
   resources: {
     sourceManaged: 'Managed package',

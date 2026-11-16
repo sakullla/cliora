@@ -633,14 +633,71 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
     // --conversation resume, version-shaped MCP (config/mcp_config.json —
     // 1.5+ writes the per-entry `disabled` contract, 1.3.x stays flag-free
     // with remove-on-disable; the project .agents/mcp_config.json runtime
-    // scope is a directly managed native file) + Skills, conversation index +
+    // scope is a directly managed native file) + Skills + standalone Agents
+    // (workspace .agents/agents/{name}/agent.md and global
+    // ~/.gemini/config/agents/{name}/agent.md; the --agent launch flag is
+    // 1.5+-verified and publishes agent launchability), conversation index +
     // gen_metadata protobuf ModelUsageStats usage with strict degrade;
     // headless GEMINI_API_KEY is the only managed credential channel; keyring
     // login is never adopted.
     let antigravity = registry.get("antigravity").unwrap();
     assert!(antigravity.supports_skills());
     assert!(antigravity.configuration().is_none());
-    assert!(antigravity.agents().is_none());
+    let agy_agents = antigravity.agents().expect("agents port");
+    assert!(agy_agents.capability().supported);
+    assert_eq!(agy_agents.capability().format, "markdown");
+    assert_eq!(
+        agy_agents
+            .writable_definition(
+                &agy_agents
+                    .root(crate::native::adapter::Scope::Global, home, None)
+                    .unwrap(),
+                "reviewer"
+            )
+            .unwrap()
+            .display()
+            .to_string()
+            .replace('\\', "/"),
+        format!(
+            "{}/.gemini/config/agents/reviewer/agent.md",
+            home.display().to_string().replace('\\', "/")
+        )
+    );
+    assert_eq!(
+        agy_agents
+            .writable_definition(
+                &agy_agents
+                    .root(crate::native::adapter::Scope::Project, home, Some(work))
+                    .unwrap(),
+                "reviewer"
+            )
+            .unwrap()
+            .display()
+            .to_string()
+            .replace('\\', "/"),
+        format!(
+            "{}/.agents/agents/reviewer/agent.md",
+            work.display().to_string().replace('\\', "/")
+        )
+    );
+    assert!(antigravity.descriptor().management.agents);
+    // The agent launch selection is a verified extension point: antigravity
+    // (1.5+) carries --agent, older or unverified lines refuse it, and every
+    // other CLI keeps the default refusal so its launch args never change.
+    assert_eq!(
+        antigravity
+            .launch_agent_args_for_version("1.5.9", Some("probe-main"))
+            .unwrap(),
+        vec!["--agent".to_string(), "probe-main".to_string()]
+    );
+    assert!(antigravity
+        .launch_agent_args_for_version("1.3.1", Some("probe-main"))
+        .is_err());
+    assert!(antigravity.launch_agent_args(None).unwrap().is_empty());
+    assert!(crate::adapters::PublishedDescriptor::from_adapter(antigravity).agent_launch_available);
+    assert!(registry.get("grok").unwrap().launch_agent_args(Some("probe")).is_err());
+    assert!(!crate::adapters::PublishedDescriptor::from_adapter(registry.get("grok").unwrap())
+        .agent_launch_available);
     assert!(antigravity.descriptor().yolo_available);
     assert!(antigravity
         .launch_args(Some("conv_1"), crate::adapters::LaunchMode::Normal)

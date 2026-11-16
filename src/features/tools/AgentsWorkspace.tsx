@@ -290,6 +290,7 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, remoteT
               <span className={doc.rowSummary}>{entry.description || t('tools.agents.noDescription')}</span>
               <span className={doc.rowMeta}>
                 <Badge tone={entry.enabled ? 'success' : 'neutral'} title={t('tools.agents.badgeTitle')}>{statusText(entry)}</Badge>
+                {entry.launchable != null && <Badge>{entry.launchable ? t('tools.agents.mainAgentBadge') : t('tools.agents.subagentBadge')}</Badge>}
                 {entry.readOnly && <Badge><Icon name="lock" size={10} />{t('tools.plugins.readonly')}</Badge>}
               </span>
             </button>
@@ -314,6 +315,7 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, remoteT
         title={opened.name}
         badges={<>
           <Badge tone={opened.enabled ? 'success' : 'neutral'} title={t('tools.agents.badgeTitle')}>{statusText(opened)}</Badge>
+          {opened.launchable != null && <Badge>{opened.launchable ? t('tools.agents.mainAgentBadge') : t('tools.agents.subagentBadge')}</Badge>}
           {opened.readOnly && <Badge><Icon name="lock" size={11} />{t('tools.plugins.readonly')}</Badge>}
         </>}
         tools={<>

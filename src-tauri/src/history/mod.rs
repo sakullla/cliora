@@ -1710,7 +1710,7 @@ pub fn resume_plan(
             directory: None,
             initial_prompt: None,
             mode,
-            resume_latest: false, remote_intent: None,
+            resume_latest: false, remote_intent: None, agent: None,
         },
         &cwd,
         context,

@@ -95,6 +95,8 @@ export type AdapterDescriptor = {
   projectModelOverride: boolean;
   yoloAvailable: boolean;
   resumeLatestAvailable?: boolean;
+  /** Whether a new-session launch may carry an agent selection. */
+  agentLaunchAvailable?: boolean;
   launchForm: 'terminal' | 'desktop';
   nativeConfig: AdapterFacet;
   launch: AdapterFacet;

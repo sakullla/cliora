@@ -161,6 +161,11 @@ pub struct LaunchRequest {
     /// with `session_id`. Absent requests stay a normal launch.
     #[serde(default)]
     pub resume_latest: bool,
+    /// Native agent to start the new session with (`--agent`-style roster
+    /// selection). Only a new session may carry one; the adapter maps it to
+    /// verified native arguments. Absent keeps the historical launch.
+    #[serde(default)]
+    pub agent: Option<String>,
     #[serde(default)]
     pub remote_intent: Option<RemoteLaunchIntent>,
 }
@@ -605,6 +610,27 @@ fn remote_launch_plan(
     let mut launch_args = adapter
         .launch_args(None, request.mode)
         .map_err(|error| LaunchPlanError::new(LaunchStage::Tool, error))?;
+    // An agent selection only applies to a brand-new remote session; the
+    // remote host runs the verified native line directly, so the selection
+    // uses the adapter's flag without a local version probe.
+    if let Some(agent) = request.agent.as_deref() {
+        if agent.trim().is_empty() || agent.len() > 200 || agent.chars().any(char::is_control) {
+            return Err(LaunchPlanError::new(LaunchStage::Tool, "Agent 名称无效".into()));
+        }
+        if request.session_id.is_some()
+            || matches!(request.remote_intent, Some(RemoteLaunchIntent::Reattach { .. }))
+        {
+            return Err(LaunchPlanError::new(
+                LaunchStage::Tool,
+                "恢复远程会话不能同时选择 Agent".into(),
+            ));
+        }
+        launch_args.extend(
+            adapter
+                .launch_agent_args(Some(agent))
+                .map_err(|error| LaunchPlanError::new(LaunchStage::Tool, error))?,
+        );
+    }
     let path = project.path.trim();
     if path.is_empty() || path.chars().any(|ch| ch.is_control()) {
         return Err(LaunchPlanError::new(LaunchStage::ProjectDirectory, "远程路径无效".into()));
@@ -1547,6 +1573,20 @@ fn plan_with_stage_at(
             return Err(LaunchPlanError::new(LaunchStage::Tool, "提示词过长，请先缩短后再启动。".into()));
         }
     }
+    // An agent selection is only verified for a brand-new session, and only
+    // the shape of the name is checked here: an unknown agent surfaces the
+    // CLI's own roster error instead of being guessed in Cliora.
+    if let Some(agent) = request.agent.as_deref() {
+        if agent.trim().is_empty() || agent.len() > 200 || agent.chars().any(char::is_control) {
+            return Err(LaunchPlanError::new(LaunchStage::Tool, "Agent 名称无效".into()));
+        }
+        if request.session_id.is_some() || request.resume_latest {
+            return Err(LaunchPlanError::new(
+                LaunchStage::Tool,
+                "恢复既有会话不能同时选择 Agent".into(),
+            ));
+        }
+    }
     // The terminal is fixed before any worktree is created. Only a local new
     // session or another session (no session id, not resume) on the workbench
     // may follow the stored preference. External, desktop, resume, an existing
@@ -1625,6 +1665,13 @@ fn plan_with_stage_at(
         cli_args.extend(
             adapter
                 .project_model_args(model)
+                .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?,
+        );
+    }
+    if request.agent.is_some() {
+        cli_args.extend(
+            adapter
+                .launch_agent_args_for_version(version, request.agent.as_deref())
                 .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?,
         );
     }
@@ -2418,7 +2465,7 @@ mod desktop_launch {
             directory,
             initial_prompt: None,
             mode,
-            resume_latest: false, remote_intent: None,
+            resume_latest: false, remote_intent: None, agent: None,
         }
     }
 
@@ -2646,7 +2693,7 @@ mod installed_desktop_launch {
             directory: None,
             initial_prompt: None,
             mode: LaunchMode::Normal,
-            resume_latest: false, remote_intent: None,
+            resume_latest: false, remote_intent: None, agent: None,
         }
     }
 
@@ -2714,7 +2761,7 @@ mod installed_desktop_launch {
             directory: None,
             initial_prompt: None,
             mode: LaunchMode::Normal,
-            resume_latest: false, remote_intent: None,
+            resume_latest: false, remote_intent: None, agent: None,
         };
         let zcode = plan(&db, &registry, temp.path(), request("zcode")).unwrap();
         assert_eq!(zcode.directory, canonical);
@@ -2784,7 +2831,7 @@ mod installed_desktop_launch {
                     directory: None,
                     initial_prompt: None,
                     mode: LaunchMode::Normal,
-                    resume_latest: false, remote_intent: None,
+                    resume_latest: false, remote_intent: None, agent: None,
                 },
             )
             .unwrap_or_else(|error| panic!("{tool}: {error}"));
@@ -2882,6 +2929,7 @@ mod installed_desktop_launch {
                 mode: LaunchMode::Normal,
                 resume_latest,
                 remote_intent: None,
+                agent: None,
             },
             worktree_intent: WorktreeIntent::Preference,
             task_text: None,
@@ -2972,6 +3020,7 @@ mod installed_desktop_launch {
                 mode: LaunchMode::Normal,
                 resume_latest: resume,
                 remote_intent: None,
+                agent: None,
             },
             worktree_intent: intent,
             task_text: Some("feat: hello?".into()),
@@ -3067,6 +3116,7 @@ mod installed_desktop_launch {
                 mode: LaunchMode::Normal,
                 resume_latest: false,
                 remote_intent: None,
+                agent: None,
             },
             worktree_intent: WorktreeIntent::Preference,
             task_text: None,
@@ -3221,6 +3271,7 @@ mod installed_desktop_launch {
                 mode: LaunchMode::Normal,
                 resume_latest: false,
                 remote_intent: None,
+                agent: None,
             },
             worktree_intent: WorktreeIntent::Explicit,
             task_text: Some("feat: hello?".into()),

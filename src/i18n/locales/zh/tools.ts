@@ -423,6 +423,8 @@ export default {
     detail: '定义详情',
     noMatch: '没有匹配的定义。',
     listNote: '启停状态来自原生定义。已运行会话的加载情况未验证；插件所属定义请通过插件管理。',
+    mainAgentBadge: '主 Agent',
+    subagentBadge: '子代理',
     emptyTitle: '当前作用域还没有 Agent 定义',
     empty: '创建一个，或导入已有的原生文件。',
     compatSummary: '原生格式与加载说明',

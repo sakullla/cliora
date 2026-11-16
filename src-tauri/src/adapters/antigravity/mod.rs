@@ -59,11 +59,18 @@
 //!   managed: the value stays in the system credential store and is injected
 //!   into the child process at launch time, never serialized to the frontend
 //!   or written into `settings.json`.
-//! * Agents/plugins/quota: no verified contract (subagent definition format
-//!   not obtained; `agy plugin` exists but its storage is undocumented;
-//!   `/usage` is a TUI subscription panel, not a local statistic) — those
-//!   ports stay absent by design.
+//! * **Agents** (1.5.9 evidence run, see [`agents`]): standalone definitions
+//!   are one directory per agent holding `agent.md` — workspace
+//!   `<project>/.agents/agents/{name}/` and global
+//!   `~/.gemini/config/agents/{name}/`; frontmatter `name`/`description`
+//!   required, `mainAgent`/`subagent` type the roster membership, and the
+//!   `--agent` launch flag (1.5+ only) selects a main agent for a new
+//!   session. Plugin agents stay owned by the shared plugin scan.
+//! * Plugins/quota: no verified contract (`agy plugin` exists but its storage
+//!   is undocumented; `/usage` is a TUI subscription panel, not a local
+//!   statistic) — those ports stay absent by design.
 
+pub(crate) mod agents;
 pub(crate) mod history;
 pub(crate) mod memory;
 pub(crate) mod protobuf;
@@ -471,6 +478,34 @@ impl CliAdapter for Antigravity {
         }
         Ok(args)
     }
+    fn agents(&self) -> Option<&dyn super::agents::AgentAdapter> {
+        Some(self)
+    }
+    /// Verified on 1.5.9 (`agy --help`: `--agent <name>`; the roster holds
+    /// main agents only, see [`agents`]). The version-less form is the
+    /// capability declaration used by the descriptor and remote launches.
+    fn launch_agent_args(&self, agent: Option<&str>) -> Result<Vec<String>, String> {
+        Ok(agent
+            .map(|name| vec!["--agent".into(), name.into()])
+            .unwrap_or_default())
+    }
+    /// The flag was verified on the 1.5.9 line only: the local 1.3.1 help has
+    /// no `--agent`, so an identified older or unverified major refuses the
+    /// selection instead of passing a flag the CLI may not know.
+    fn launch_agent_args_for_version(
+        &self,
+        version: &str,
+        agent: Option<&str>,
+    ) -> Result<Vec<String>, String> {
+        let parsed = semver::Version::parse(version.trim().trim_start_matches('v'))
+            .map_err(|_| format!("无法识别的 agy 版本号「{version}」；未执行 Agent 选择"))?;
+        if parsed.major != 1 || parsed.minor < 5 {
+            return Err(format!(
+                "agy {parsed} 的 --agent 启动参数尚未验证（1.5 起有实证）；未执行启动"
+            ));
+        }
+        self.launch_agent_args(agent)
+    }
     fn node_required_when_missing(&self) -> bool {
         // The official installer ships a standalone binary.
         false
@@ -567,7 +602,7 @@ impl CliAdapter for Antigravity {
             },
             resources: Facet {
                 state: "available",
-                reason: "MCP（~/.gemini/config/mcp_config.json mcpServers：stdio command/args/env/cwd 与远程 serverUrl+headers/oauth；1.5+ 按实测写逐条 disabled（停用保留条目），1.3.x 停用移除条目且旧版 url/httpUrl 条目只读；项目 .agents/mcp_config.json 为运行时作用域，agy mcp 子命令不管理）与 Skills（可写根 antigravity-cli/skills 与项目 .agents/skills；只读发现 Shared ~/.gemini/skills、config 目录、builtin 与 skills.json 声明目录；SKILL.md frontmatter name/description 契约强制）由原生路径提供",
+                reason: "MCP（~/.gemini/config/mcp_config.json mcpServers：stdio command/args/env/cwd 与远程 serverUrl+headers/oauth；1.5+ 按实测写逐条 disabled（停用保留条目），1.3.x 停用移除条目且旧版 url/httpUrl 条目只读；项目 .agents/mcp_config.json 为运行时作用域，agy mcp 子命令不管理）、Skills（可写根 antigravity-cli/skills 与项目 .agents/skills；只读发现 Shared ~/.gemini/skills、config 目录、builtin 与 skills.json 声明目录；SKILL.md frontmatter name/description 契约强制）与 Agents（独立定义 <project>/.agents/agents/{name}/agent.md 与 ~/.gemini/config/agents/{name}/agent.md；mainAgent/subagent 决定 --agent 启动名单；插件 Agent 随插件只读管理）由原生路径提供",
             },
             history: Facet {
                 state: "available",
@@ -578,7 +613,7 @@ impl CliAdapter for Antigravity {
                 accounts: false,
                 mcp: true,
                 skills: true,
-                agents: false,
+                agents: true,
                 plugins: false,
                 project_plugins: false,
                 rules: RuleSupport::bare(false, false),
@@ -1311,11 +1346,12 @@ mod tests {
         assert!(Antigravity.history_supported());
         assert!(Antigravity.supports_mcp());
         assert!(Antigravity.supports_skills());
-        // Agents (definition format not obtained), plugins (native `agy
-        // plugin` storage undocumented), accounts (keyring login never
-        // adopted) and official quota (/usage is a TUI panel) stay absent.
+        // Agents: standalone agent.md directories verified by the 1.5.9
+        // evidence run. Plugins (native `agy plugin` storage undocumented),
+        // accounts (keyring login never adopted) and official quota (/usage is
+        // a TUI panel) stay absent.
         assert!(Antigravity.configuration().is_none());
-        assert!(Antigravity.agents().is_none());
+        assert!(Antigravity.agents().is_some());
         assert!(Antigravity.plugins().is_none());
         assert!(Antigravity.accounts().is_none());
         assert!(Antigravity.official_usage().is_none());
@@ -1369,8 +1405,59 @@ mod tests {
         assert!(descriptor.login.is_none());
         assert!(descriptor.management.mcp && descriptor.management.skills);
         assert!(!descriptor.management.accounts);
-        assert!(!descriptor.management.agents);
+        assert!(descriptor.management.agents);
         assert!(!descriptor.management.plugins);
         assert!(!descriptor.management.rules.global && !descriptor.management.rules.project);
+    }
+
+    #[test]
+    fn agent_selection_args_are_version_gated_and_never_touch_other_flags() {
+        // The capability probe (descriptor / remote) sees the verified flag.
+        assert_eq!(
+            Antigravity.launch_agent_args(Some("probe-main")).unwrap(),
+            vec!["--agent", "probe-main"]
+        );
+        assert!(Antigravity.launch_agent_args(None).unwrap().is_empty());
+        // The local launch path follows the identified install line: 1.5+
+        // carries the verified flag, older or unverified lines refuse it.
+        assert_eq!(
+            Antigravity
+                .launch_agent_args_for_version("1.5.9", Some("probe-main"))
+                .unwrap(),
+            vec!["--agent", "probe-main"]
+        );
+        assert!(Antigravity
+            .launch_agent_args_for_version("1.3.1", Some("probe-main"))
+            .unwrap_err()
+            .contains("尚未验证"));
+        assert!(Antigravity
+            .launch_agent_args_for_version("2.0.0", Some("probe-main"))
+            .unwrap_err()
+            .contains("尚未验证"));
+        assert!(Antigravity
+            .launch_agent_args_for_version("junk", Some("probe-main"))
+            .unwrap_err()
+            .contains("版本号"));
+        assert!(Antigravity
+            .launch_agent_args_for_version("1.5.9", None)
+            .unwrap()
+            .is_empty());
+        // The published catalog derives launchability from the port, and the
+        // default trait refuses selections for every other CLI.
+        assert!(crate::adapters::PublishedDescriptor::from_adapter(&Antigravity).agent_launch_available);
+        let grok = crate::adapters::Registry::builtins().get("grok").unwrap();
+        assert!(!crate::adapters::PublishedDescriptor::from_adapter(grok).agent_launch_available);
+        assert!(grok.launch_agent_args(Some("probe")).is_err());
+        assert!(grok.launch_agent_args(None).unwrap().is_empty());
+        // Only antigravity has verified the flag so far: no other builtin
+        // publishes agent launchability.
+        let publishers: Vec<&str> = crate::adapters::Registry::builtins()
+            .iter()
+            .filter(|adapter| {
+                crate::adapters::PublishedDescriptor::from_adapter(*adapter).agent_launch_available
+            })
+            .map(crate::adapters::contract::CliAdapter::id)
+            .collect();
+        assert_eq!(publishers, ["antigravity"]);
     }
 }

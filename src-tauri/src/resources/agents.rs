@@ -35,6 +35,11 @@ pub struct AgentEntry {
     pub builtin: bool,
     pub owner: String,
     pub detail: String,
+    /// Whether this definition is selectable as the session agent at launch
+    /// (the native `--agent` roster). `None` — the default — means the
+    /// adapter has no verified launch-selection semantics for definitions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launchable: Option<bool>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -175,16 +180,17 @@ pub(crate) fn entry_versioned(
         }
         Err(e) => (fallback.into(), String::new(), e),
     };
-    let native_disabled = contract::get(tool)
-        .is_ok_and(|a| a.native_disabled_for_version(format, &content, version));
+    let adapter = contract::get(tool).ok();
+    let native_disabled = adapter
+        .is_some_and(|a| a.native_disabled_for_version(format, &content, version));
     if native_disabled {
         detail.push_str(
-            contract::get(tool)
+            adapter
                 .map(|a| a.disabled_detail())
                 .unwrap_or("原生定义已停用。"),
         );
     }
-    AgentEntry {
+    let mut entry = AgentEntry {
         id: path.display().to_string(),
         name,
         description,
@@ -196,7 +202,12 @@ pub(crate) fn entry_versioned(
         builtin: false,
         owner: owner.into(),
         detail,
+        launchable: None,
+    };
+    if let Some(adapter) = adapter {
+        adapter.annotate_entry(&mut entry);
     }
+    entry
 }
 
 fn config_files(home: &Path, target: &PluginTarget) -> Result<Vec<PathBuf>, String> {
@@ -316,6 +327,7 @@ fn snapshot_inner(
             path: String::new(), format: "markdown".into(), content: String::new(),
             enabled: !overridden, read_only: true, builtin: true, owner: "CLI 内置".into(),
             detail: format!("参考核验版本 {} 的内置目录；模型继承当前会话。完整提示词与加载状态由原生 CLI 管理。{}", capability.version, if overridden { "当前作用域存在同名定义，可能覆盖此内置项。" } else { "" }),
+            launchable: None,
         });
     }
     basis.push_str(&serde_json::to_string(&entries).map_err(|_| "无法序列化定义")?);

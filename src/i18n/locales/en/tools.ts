@@ -423,6 +423,8 @@ export default {
     detail: 'Definition details',
     noMatch: 'No matching definitions.',
     listNote: 'Enabled state comes from the native definition. Loading in running sessions is unverified; plugin-owned definitions are managed via plugins.',
+    mainAgentBadge: 'Main agent',
+    subagentBadge: 'Subagent',
     emptyTitle: 'No agent definitions in this scope yet',
     empty: 'Create one, or import an existing native file.',
     compatSummary: 'Native format & loading notes',
