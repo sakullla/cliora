@@ -281,6 +281,7 @@ pub fn run() {
             commands::inspect_native_plugin,
             commands::read_native_plugin_file,
             commands::reveal_native_plugin_path,
+            commands::save_native_plugin_file,
             commands::get_managed_mcp_enabled,
             commands::preview_mcp_targets,
             commands::preview_mcp_draft,

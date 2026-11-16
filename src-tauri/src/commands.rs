@@ -125,6 +125,61 @@ pub async fn reveal_native_plugin_path(
     })
     .await
 }
+
+/// Saves an adapter-declared editable plugin resource file (the agy
+/// plugin-root hooks.json): validated against the adapter's schema contract
+/// first, then applied by the shared transaction service (baseline conflict
+/// detection + encrypted backup). Read-only plugins and undeclared resources
+/// are refused with the original file unchanged.
+#[tauri::command]
+pub async fn save_native_plugin_file(
+    app: AppHandle,
+    target: resources::plugins::PluginTarget,
+    plugin_id: String,
+    path: String,
+    original: String,
+    edited: String,
+) -> Result<crate::native::transaction::ApplyOutcome, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        let home = home()?;
+        let project = resources::plugins::project(&target).map_err(native_error)?;
+        // Same identity and install-line basis as every other plugin write.
+        let registry = adapters::Registry::builtins();
+        let custom = registered_tool_path(&db, &target.tool_id).map_err(native_error)?;
+        let probe = adapter::probe_registered(
+            &registry,
+            &target.tool_id,
+            custom.as_deref(),
+            &home,
+            project.as_deref(),
+            target.scope,
+        )
+        .map_err(native_error)?;
+        if probe.native_writes.state != "supported" {
+            return Err(native_error(probe.native_writes.reason.into()));
+        }
+        let version = probe
+            .installations
+            .iter()
+            .find(|item| Some(&item.path) == probe.selected_path.as_ref())
+            .and_then(|item| item.version.clone())
+            .ok_or_else(|| native_error("未确认 CLI 版本".into()))?;
+        resources::plugin_contents::save_file(
+            &db,
+            &AppCredentialStore,
+            &home,
+            &target,
+            &plugin_id,
+            &path,
+            &original,
+            &edited,
+            &version,
+        )
+        .map_err(native_error)
+    })
+    .await
+}
 use std::path::PathBuf;
 
 #[derive(Default)]

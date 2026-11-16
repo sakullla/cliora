@@ -10,7 +10,7 @@ export type PluginResult = { status: string; detail: string; transactionId: stri
 export type PluginManifest = { description: string | null; author: string | null; homepage: string | null; license: string | null; keywords: string[]; path: string | null };
 export type PluginItem = { kind: string; name: string; description: string | null; path: string; location: string; format: string };
 export type PluginContents = { pluginId: string; root: string | null; manifest: PluginManifest; items: PluginItem[]; truncated: boolean };
-export type PluginFile = { path: string; content: string; format: string; truncated: boolean };
+export type PluginFile = { path: string; content: string; format: string; truncated: boolean; editable: boolean };
 
 /** http is Streamable HTTP. sse is the legacy standalone HTTP+SSE transport, kept for configuration compatibility only. */
 export type McpTransport = 'stdio' | 'http' | 'sse';

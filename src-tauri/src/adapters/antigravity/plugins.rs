@@ -419,6 +419,42 @@ impl PluginAdapter for Antigravity {
         }
         Ok(())
     }
+
+    /// The plugin-root hooks document is the agy named-hooks schema (1.5.9
+    /// evidence): one row per hook with its events and enable state. The
+    /// generic `{"hooks": {...}}` wrapper never applies here; a document
+    /// that is not a JSON object keeps the generic fallback.
+    fn hooks_items(
+        &self,
+        document: &Value,
+        path: &str,
+    ) -> Option<Vec<crate::resources::plugin_contents::PluginItem>> {
+        let object = document.as_object()?;
+        if object.contains_key("hooks") {
+            // A Claude-style `{"hooks": {...}}` wrapper is not this schema;
+            // keep the shared generic parser for it.
+            return None;
+        }
+        Some(super::hooks::detail_items(document, path))
+    }
+
+    /// Only the plugin-root `hooks.json` is editable in place: the file is
+    /// package content under the verified 1.5 line, its schema is owned here,
+    /// and every other bundled resource stays read-only.
+    fn editable_resource_kinds(&self) -> &'static [&'static str] {
+        &["hooks"]
+    }
+
+    /// Strict JSON plus the named-hooks contract (see [`super::hooks`]).
+    /// Rejected before any write; the original file is unchanged.
+    fn validate_resource_text(&self, kind: &str, text: &str) -> Result<(), String> {
+        if kind != "hooks" {
+            return Err("Antigravity 插件包内只有根 hooks.json 可编辑".into());
+        }
+        let value: Value = serde_json::from_str(text)
+            .map_err(|error| format!("hooks.json 不是有效 JSON：{error}"))?;
+        super::hooks::validate_document(&value)
+    }
 }
 
 #[cfg(test)]

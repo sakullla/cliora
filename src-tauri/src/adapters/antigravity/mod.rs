@@ -87,11 +87,21 @@
 //!   plus every hierarchical `AGENTS.md`/`GEMINI.md` in the tree (editable,
 //!   never removed or toggled). Plugin rules stay plugin-detail read-only
 //!   resources; no formats are converted into each other.
+//! * **Hooks** (1.5.9 evidence run, see [`hooks`]): standalone documents at
+//!   `<workspace>/.agents/hooks.json` and `~/.gemini/config/hooks.json` are
+//!   declared native-file roles and edited through the registered-file path;
+//!   plugin-root `hooks.json` files are editable in place through the shared
+//!   plugin-file write path (adapter-declared editability + schema check).
+//!   Both validate the named-hooks contract before any write and leave the
+//!   original file unchanged on rejection. There is no separate Hooks
+//!   lifecycle surface: plugin hooks follow their plugin's enable state and
+//!   stay distinct from the standalone files.
 //! * Quota: no verified contract (`/usage` is a TUI subscription panel, not
 //!   a local statistic) — that port stays absent by design.
 
 pub(crate) mod agents;
 pub(crate) mod history;
+pub(crate) mod hooks;
 pub(crate) mod memory;
 pub(crate) mod plugins;
 pub(crate) mod protobuf;
@@ -184,16 +194,29 @@ impl CliAdapter for Antigravity {
         known: bool,
     ) -> Vec<NativeFile> {
         match scope {
-            Scope::Global => vec![file(
-                "settings",
-                gemini_root(home)
-                    .join("antigravity-cli")
-                    .join("settings.json"),
-                FileKind::Json,
-                known,
-                Some("Antigravity CLI（agy）设置（纯 JSON）；keyring 登录态不接管，headless 密钥经 GEMINI_API_KEY 注入"),
-                false,
-            )],
+            Scope::Global => vec![
+                file(
+                    "settings",
+                    gemini_root(home)
+                        .join("antigravity-cli")
+                        .join("settings.json"),
+                    FileKind::Json,
+                    known,
+                    Some("Antigravity CLI（agy）设置（纯 JSON）；keyring 登录态不接管，headless 密钥经 GEMINI_API_KEY 注入"),
+                    false,
+                ),
+                // Standalone global hooks (1.5.9 evidence): a native file the
+                // loader reads alongside the plugin roots; editing goes through
+                // the registered-file editor with the adapter schema check.
+                file(
+                    "hooks",
+                    gemini_root(home).join("config").join("hooks.json"),
+                    FileKind::Json,
+                    known,
+                    Some("独立全局 Hooks（~/.gemini/config/hooks.json，非插件）；命名 hook/事件/command 处理器契约按 1.5.9 实证校验后写入"),
+                    false,
+                ),
+            ],
             Scope::Project => {
                 // Runtime project MCP scope (1.5.9 evidence): sessions load
                 // `<workspace>/.agents/mcp_config.json`, but `agy mcp`
@@ -203,14 +226,26 @@ impl CliAdapter for Antigravity {
                 let Some(project) = project else {
                     return Vec::new();
                 };
-                vec![file(
-                    "mcp",
-                    project.join(".agents").join("mcp_config.json"),
-                    FileKind::Json,
-                    known,
-                    Some("项目级 MCP 运行时作用域（.agents/mcp_config.json）；agy mcp 子命令不管理此文件，仅在会话内加载"),
-                    false,
-                )]
+                vec![
+                    file(
+                        "mcp",
+                        project.join(".agents").join("mcp_config.json"),
+                        FileKind::Json,
+                        known,
+                        Some("项目级 MCP 运行时作用域（.agents/mcp_config.json）；agy mcp 子命令不管理此文件，仅在会话内加载"),
+                        false,
+                    ),
+                    // Standalone project hooks (1.5.9 evidence:
+                    // `<workspace>/.agents/hooks.json`).
+                    file(
+                        "hooks",
+                        project.join(".agents").join("hooks.json"),
+                        FileKind::Json,
+                        known,
+                        Some("独立项目 Hooks（.agents/hooks.json，非插件）；命名 hook/事件/command 处理器契约按 1.5.9 实证校验后写入"),
+                        false,
+                    ),
+                ]
             }
         }
     }
@@ -218,10 +253,21 @@ impl CliAdapter for Antigravity {
         &[]
     }
     fn file_kind(&self, role: &str) -> Result<FileKind, String> {
-        if role == "settings" || role == "mcp" {
+        if role == "settings" || role == "mcp" || role == "hooks" {
             Ok(FileKind::Json)
         } else {
             Err("Antigravity 不支持此原生文件角色".into())
+        }
+    }
+    /// The standalone hooks documents are validated against the 1.5.9 named
+    /// hooks contract before any write (see [`hooks`]); settings and the
+    /// project MCP file carry no adapter-level document restriction beyond
+    /// being JSON.
+    fn validate_draft(&self, role: &str, parsed: &Value) -> Result<(), String> {
+        if role == "hooks" {
+            hooks::validate_document(parsed)
+        } else {
+            Ok(())
         }
     }
     fn supports_mcp(&self) -> bool {
@@ -691,7 +737,7 @@ impl CliAdapter for Antigravity {
             },
             resources: Facet {
                 state: "available",
-                reason: "MCP（~/.gemini/config/mcp_config.json mcpServers：stdio command/args/env/cwd 与远程 serverUrl+headers/oauth；1.5+ 按实测写逐条 disabled（停用保留条目），1.3.x 停用移除条目且旧版 url/httpUrl 条目只读；项目 .agents/mcp_config.json 为运行时作用域，agy mcp 子命令不管理）、Skills（可写根 antigravity-cli/skills 与项目 .agents/skills；只读发现 Shared ~/.gemini/skills、config 目录、builtin 与 skills.json 声明目录；SKILL.md frontmatter name/description 契约强制）、Agents（独立定义 <project>/.agents/agents/{name}/agent.md 与 ~/.gemini/config/agents/{name}/agent.md；mainAgent/subagent 决定 --agent 启动名单；插件 Agent 随插件只读管理）、Plugins（~/.gemini/config/plugins/ 目录 + config.json plugins.<目录>.enabled 分类账；安装/卸载走原生命令，启停写分类账（重装后保留用户选择）；详情列出 Skills/Agents/规则/MCP/Hooks 五类资源；内置插件只读，1.5 以下安装线拒绝写入）与 Rules（纯 Markdown：单文件端口管理全局 ~/.gemini/config/AGENTS.md 与项目 <project>/AGENTS.md；目录端口覆盖全局 ~/.gemini/config/rules/ 与项目 .agents/rules/ 触发式 .md 规则及全部层级 AGENTS.md/GEMINI.md，目录规则可删除/启停，层级文件只编辑；插件规则随插件详情只读）由原生路径提供",
+                reason: "MCP（~/.gemini/config/mcp_config.json mcpServers：stdio command/args/env/cwd 与远程 serverUrl+headers/oauth；1.5+ 按实测写逐条 disabled（停用保留条目），1.3.x 停用移除条目且旧版 url/httpUrl 条目只读；项目 .agents/mcp_config.json 为运行时作用域，agy mcp 子命令不管理）、Skills（可写根 antigravity-cli/skills 与项目 .agents/skills；只读发现 Shared ~/.gemini/skills、config 目录、builtin 与 skills.json 声明目录；SKILL.md frontmatter name/description 契约强制）、Agents（独立定义 <project>/.agents/agents/{name}/agent.md 与 ~/.gemini/config/agents/{name}/agent.md；mainAgent/subagent 决定 --agent 启动名单；插件 Agent 随插件只读管理）、Plugins（~/.gemini/config/plugins/ 目录 + config.json plugins.<目录>.enabled 分类账；安装/卸载走原生命令，启停写分类账（重装后保留用户选择）；详情列出 Skills/Agents/规则/MCP/Hooks 五类资源；内置插件只读，1.5 以下安装线拒绝写入）与 Rules（纯 Markdown：单文件端口管理全局 ~/.gemini/config/AGENTS.md 与项目 <project>/AGENTS.md；目录端口覆盖全局 ~/.gemini/config/rules/ 与项目 .agents/rules/ 触发式 .md 规则及全部层级 AGENTS.md/GEMINI.md，目录规则可删除/启停，层级文件只编辑；插件规则随插件详情只读）与 Hooks（独立全局 ~/.gemini/config/hooks.json 与项目 .agents/hooks.json 为原生文件角色，插件根 hooks.json 经插件详情受控编辑；写入前按 1.5.9 实证命名 hook/事件/command 处理器契约校验，禁用插件的 Hook 不视为全局生效）由原生路径提供",
             },
             history: Facet {
                 state: "available",
@@ -807,6 +853,22 @@ mod tests {
     use crate::adapters::LaunchForm;
     use crate::native::adapter::Scope;
 
+    #[derive(Default)]
+    struct MemoryStore(std::cell::RefCell<std::collections::BTreeMap<String, String>>);
+    impl crate::credentials::CredentialStore for MemoryStore {
+        fn put(&self, id: &str, secret: &str) -> Result<(), String> {
+            self.0.borrow_mut().insert(id.into(), secret.into());
+            Ok(())
+        }
+        fn get(&self, id: &str) -> Result<String, String> {
+            self.0.borrow().get(id).cloned().ok_or_else(|| "missing".into())
+        }
+        fn delete(&self, id: &str) -> Result<(), String> {
+            self.0.borrow_mut().remove(id);
+            Ok(())
+        }
+    }
+
     const NATIVE_FIXTURE: &str =
         include_str!("../../../../tests/fixtures/native/antigravity-cli-1.3.json");
 
@@ -863,19 +925,6 @@ mod tests {
         }
     }
 
-    struct MemoryStore;
-    impl crate::credentials::CredentialStore for MemoryStore {
-        fn put(&self, _id: &str, _secret: &str) -> Result<(), String> {
-            Ok(())
-        }
-        fn get(&self, _id: &str) -> Result<String, String> {
-            Ok(String::new())
-        }
-        fn delete(&self, _id: &str) -> Result<(), String> {
-            Ok(())
-        }
-    }
-
     #[test]
     fn identity_accepts_only_the_official_command_name() {
         assert!(Antigravity.version_identity("agy", "1.3.1"));
@@ -892,7 +941,7 @@ mod tests {
     fn native_files_map_the_documented_settings_and_binary_directory() {
         let home = Path::new("/home/example");
         let global = Antigravity.native_files(Scope::Global, home, None, true);
-        assert_eq!(global.len(), 1);
+        assert_eq!(global.len(), 2);
         assert_eq!(global[0].role, "settings");
         assert_eq!(global[0].format, "json");
         assert!(
@@ -901,11 +950,24 @@ mod tests {
                 .replace('\\', "/")
                 .ends_with(".gemini/antigravity-cli/settings.json")
         );
+        // Standalone global hooks are a declared native-file role (1.5.9
+        // evidence: ~/.gemini/config/hooks.json), edited through the
+        // registered-file path with the adapter schema check.
+        assert_eq!(global[1].role, "hooks");
+        assert_eq!(global[1].format, "json");
+        assert!(global[1].writable);
+        assert!(!global[1].sensitive);
+        assert!(
+            global[1]
+                .path
+                .replace('\\', "/")
+                .ends_with(".gemini/config/hooks.json")
+        );
         assert!(Antigravity.native_files(Scope::Project, home, None, true).is_empty());
         // The project runtime MCP scope is a native config file role: `agy mcp`
         // subcommands manage only the user-level global file (1.5.9 evidence).
         let project = Antigravity.native_files(Scope::Project, home, Some(Path::new("/work/p")), true);
-        assert_eq!(project.len(), 1);
+        assert_eq!(project.len(), 2);
         assert_eq!(project[0].role, "mcp");
         assert_eq!(project[0].format, "json");
         assert!(project[0].writable);
@@ -916,9 +978,36 @@ mod tests {
                 .replace('\\', "/")
                 .ends_with("/work/p/.agents/mcp_config.json")
         );
+        // Standalone project hooks: <workspace>/.agents/hooks.json.
+        assert_eq!(project[1].role, "hooks");
+        assert!(project[1].writable);
+        assert!(
+            project[1]
+                .path
+                .replace('\\', "/")
+                .ends_with("/work/p/.agents/hooks.json")
+        );
         assert_eq!(Antigravity.file_kind("settings").unwrap(), FileKind::Json);
         assert_eq!(Antigravity.file_kind("mcp").unwrap(), FileKind::Json);
+        assert_eq!(Antigravity.file_kind("hooks").unwrap(), FileKind::Json);
         assert!(Antigravity.file_kind("config").is_err());
+        // The hooks role validates the named-hooks contract before any write;
+        // the other roles carry no adapter document restriction.
+        assert!(Antigravity
+            .validate_draft(
+                "hooks",
+                &serde_json::json!({"a": {"Stop": [{"type": "command", "command": "/bin/true"}]}})
+            )
+            .is_ok());
+        assert!(Antigravity
+            .validate_draft("hooks", &serde_json::json!({"a": {"SessionEnd": []}}))
+            .is_err());
+        assert!(Antigravity
+            .validate_draft(
+                "settings",
+                &serde_json::json!({"anything": "unchanged"})
+            )
+            .is_ok());
         assert!(!Antigravity.node_required_when_missing());
         let install = Antigravity.install_command().unwrap();
         assert!(install.contains(if cfg!(windows) { "install.ps1" } else { "install.sh" }));
@@ -943,6 +1032,49 @@ mod tests {
             .inspect_values(&parsed, &Value::Null, &Value::Null)
             .provider
             .is_none());
+    }
+
+    #[test]
+    fn standalone_hooks_roles_edit_through_the_registered_file_path() {
+        // ADR-8.2: the standalone hooks documents are plain native-file
+        // roles — the existing registered-file editor reads, schema-validates
+        // and saves them; every rejection leaves the original unchanged.
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let db = crate::database::Database::open(&home.join("hooks.db")).unwrap();
+        let store = MemoryStore::default();
+        let registry = crate::adapters::Registry::builtins();
+        let global = gemini_root(home).join("config").join("hooks.json");
+        std::fs::create_dir_all(global.parent().unwrap()).unwrap();
+        let original = "{\n  \"workspace-hook\": {\n    \"Stop\": [\n      { \"type\": \"command\", \"command\": \"/bin/true\" }\n    ]\n  }\n}\n";
+        std::fs::write(&global, original).unwrap();
+
+        // A valid edit saves through the shared transaction.
+        let edited = original.replace("\"/bin/true\"", "\"./after.sh\"");
+        crate::adapters::save_registered_text(&registry, "antigravity", "hooks", Scope::Global, home, None, "1.5.9", &db, &store, original, &edited).unwrap();
+        let after = std::fs::read_to_string(&global).unwrap();
+        assert!(after.contains("./after.sh"), "{after}");
+
+        // An unsupported structure or invalid JSON is refused before the
+        // write; the file keeps its content.
+        let current = after;
+        for bad in [
+            current.replace("\"Stop\"", "\"SessionEnd\""),
+            "{not json".to_string(),
+        ] {
+            let error = crate::adapters::save_registered_text(&registry, "antigravity", "hooks", Scope::Global, home, None, "1.5.9", &db, &store, &current, &bad).unwrap_err();
+            assert!(!error.is_empty());
+            assert_eq!(std::fs::read_to_string(&global).unwrap(), current);
+        }
+
+        // The project role creates the workspace hooks.json on first save.
+        let work = temp.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let created = "{\n  \"project-hook\": {\n    \"SessionStart\": [\n      { \"type\": \"command\", \"command\": \"/bin/true\" }\n    ]\n  }\n}\n";
+        crate::adapters::save_registered_text(&registry, "antigravity", "hooks", Scope::Project, home, Some(&work), "1.5.9", &db, &store, "", created).unwrap();
+        assert_eq!(std::fs::read_to_string(work.join(".agents").join("hooks.json")).unwrap(), created);
+        // Reading the role back goes through the same declared file.
+        assert_eq!(crate::adapters::read_registered_file(&registry, "antigravity", "hooks", Scope::Project, home, Some(&work), true).unwrap(), created);
     }
 
     #[test]
@@ -1466,7 +1598,7 @@ mod tests {
             connection: Some(connection()),
             native_credentials: std::collections::BTreeMap::new(),
         };
-        let keys = MemoryStore;
+        let keys = MemoryStore::default();
         let mut secrets = crate::native::apply::NativeSecrets::default();
         assert!(Antigravity
             .write_connection_secret(&profile, Scope::Global, &keys, &mut secrets)

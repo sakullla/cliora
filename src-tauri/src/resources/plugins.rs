@@ -107,8 +107,8 @@ fn config(registry: &Registry, home: &Path, target: &PluginTarget) -> Result<(Pa
 }
 /// Installed line for adapters whose declaration format follows the native
 /// major version. Other adapters keep their static field without a probe.
-/// The lookup uses the shared cached probe, so reads and a later write on the
-/// same operation resolve the same evidence.
+/// The lookup uses the shared cached probe, so reads and a later write on
+/// the same operation resolve the same evidence.
 fn declaration_version(
     registry: &Registry,
     db: &Database,
@@ -165,6 +165,13 @@ fn declaration_field(
         .config_field_for_version(Some(version))
         .map(Some)
         .ok_or_else(|| format!("{version} 的插件声明形态尚未验证；未执行写入"))
+}
+/// The lifecycle-operation lock, shared with in-place bundled-resource edits
+/// so the two write classes never race on one plugin tree.
+pub(super) fn operation_lock() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    OPERATIONS
+        .try_lock()
+        .map_err(|_| "已有插件操作进行中，请等待后重新扫描".into())
 }
 fn executable(registry: &Registry, db: &Database, home: &Path, target: &PluginTarget, fresh: bool) -> Result<PathBuf, String> {
     let custom: Option<String> = db.with_connection(|conn| {

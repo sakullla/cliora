@@ -211,6 +211,7 @@ export const native = {
   inspectNativePlugin: (target: PluginTarget, pluginId: string) => command<PluginContents>('inspect_native_plugin', { target, pluginId }),
   readNativePluginFile: (target: PluginTarget, pluginId: string, path: string) => command<PluginFile>('read_native_plugin_file', { target, pluginId, path }),
   revealNativePluginPath: (target: PluginTarget, pluginId: string, path: string | null) => command<void>('reveal_native_plugin_path', { target, pluginId, path }),
+  saveNativePluginFile: (target: PluginTarget, pluginId: string, path: string, original: string, edited: string) => command<ApplyOutcome>('save_native_plugin_file', { target, pluginId, path, original, edited }),
   accountCapabilities: () => command<AccountCapability[]>('account_capabilities'),
   discoverNativeLogins: (toolId: string) => command<NativeLoginSnapshot>('discover_native_logins', { toolId }),
   adoptNativeCodexAccount: (label: string) => command<AuthAccount>('adopt_native_codex_account', { label }),

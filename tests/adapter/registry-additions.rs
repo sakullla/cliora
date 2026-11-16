@@ -641,7 +641,10 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
     // plugins.<dir>.enabled ledger; file-backed listing, native
     // install/uninstall commands, shared-transaction enable/disable, builtins
     // read-only; mutations gated to >=1.5 because the 1.3.x plugin storage is
-    // undocumented), conversation index +
+    // undocumented) + Hooks (standalone hooks.json native-file roles on both
+    // scopes and an editable plugin-root hooks.json through the shared
+    // plugin-file write path, both schema-checked against the 1.5.9 named
+    // hooks contract before any write), conversation index +
     // gen_metadata protobuf ModelUsageStats usage with strict degrade;
     // headless GEMINI_API_KEY is the only managed credential channel; keyring
     // login is never adopted.
@@ -800,16 +803,45 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
             Some("1.3.1")
         )
         .is_err());
-    // The project runtime MCP scope is a native config file role.
+    // The project runtime MCP scope is a native config file role, joined by
+    // the standalone project hooks document (1.5.9 evidence:
+    // <workspace>/.agents/hooks.json; the global standalone hooks.json lives
+    // under ~/.gemini/config/).
     let project_files = antigravity.native_files(
         crate::native::adapter::Scope::Project,
         home,
         Some(work),
         true,
     );
-    assert_eq!(project_files.len(), 1);
+    assert_eq!(project_files.len(), 2);
     assert_eq!(project_files[0].role, "mcp");
     assert_eq!(antigravity.file_kind("mcp").unwrap(), crate::native::format::FileKind::Json);
+    assert_eq!(project_files[1].role, "hooks");
+    assert!(project_files[1].writable && !project_files[1].sensitive);
+    assert_eq!(antigravity.file_kind("hooks").unwrap(), crate::native::format::FileKind::Json);
+    let global_files = antigravity.native_files(
+        crate::native::adapter::Scope::Global,
+        home,
+        None,
+        true,
+    );
+    assert!(global_files
+        .iter()
+        .any(|file| file.role == "hooks"
+            && file.path.replace('\\', "/").ends_with(".gemini/config/hooks.json")));
+    // The standalone hooks role is schema-checked before any write (the
+    // registered-file editor calls validate_draft with the parsed document).
+    assert!(antigravity
+        .validate_draft(
+            "hooks",
+            &serde_json::json!({"probe": {"PreToolUse": [
+                {"matcher": "run_command", "hooks": [{"type": "command", "command": "./check.sh", "timeout": 10}]}
+            ]}})
+        )
+        .is_ok());
+    assert!(antigravity
+        .validate_draft("hooks", &serde_json::json!({"probe": {"Webhook": []}}))
+        .is_err());
     // Plugins (1.5.9 evidence run, tests/fixtures/plugins/sources.json
     // antigravity_2026_11_16): the storage layout is verified on the 1.5 line
     // only, so the accepted range excludes the undocumented 1.3.x plugin
@@ -889,6 +921,49 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
             .unwrap(),
         ["plugin".to_string(), "uninstall".to_string(), "probe-kit".to_string()]
     );
+    // The plugin-root hooks.json is the one editable bundled resource: the
+    // adapter declares the kind, owns the schema check that runs before any
+    // write, and parses its named-hooks detail rows itself (the committed
+    // 1.5.9 sample is the contract).
+    assert_eq!(agy_plugins.editable_resource_kinds(), ["hooks"]);
+    let hooks_text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/native/antigravity-cli-1.5.9/plugin/hooks.json")).unwrap();
+    assert!(agy_plugins.validate_resource_text("hooks", &hooks_text).is_ok());
+    assert!(agy_plugins
+        .validate_resource_text("hooks", "{\"a\":{\"NotAnEvent\":[]}}")
+        .unwrap_err()
+        .contains("不支持的事件"));
+    assert!(agy_plugins.validate_resource_text("hooks", "{not json").is_err());
+    assert!(agy_plugins
+        .validate_resource_text(
+            "hooks",
+            "{\"a\":{\"PreToolUse\":[{\"matcher\":\"x\",\"hooks\":[{\"type\":\"http\"}]}]}}"
+        )
+        .is_err());
+    // Undeclared kinds are refused even for a valid hooks document.
+    assert!(agy_plugins.validate_resource_text("agents", &hooks_text).is_err());
+    let hooks_document: serde_json::Value = serde_json::from_str(&hooks_text).unwrap();
+    let rows = agy_plugins
+        .hooks_items(&hooks_document, "/plugins/probe/hooks.json")
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].name, "fixture-plugin-hook");
+    assert_eq!(rows[0].description.as_deref(), Some("PostToolUse"));
+    // A Claude-style wrapper document goes back to the shared generic parser.
+    assert!(agy_plugins
+        .hooks_items(&serde_json::json!({"hooks": {"Stop": []}}), "/p/hooks.json")
+        .is_none());
+    // Every other CLI keeps declaring no editable plugin resources, so their
+    // packages stay read-only exactly as before.
+    for tool in ["cursor", "kiro", "codex"] {
+        assert!(
+            registry
+                .get(tool)
+                .and_then(|adapter| adapter.plugins())
+                .map(|port| port.editable_resource_kinds().is_empty())
+                .unwrap_or(true),
+            "{tool} 不应新增可编辑插件资源"
+        );
+    }
     // Rules (1.5.9 evidence run, evidence/rules.json): the single-file port
     // manages the hierarchical AGENTS.md standard on both scopes and the
     // catalog covers global (~/.gemini/config/rules/) and project

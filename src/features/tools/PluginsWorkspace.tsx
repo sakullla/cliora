@@ -118,6 +118,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
   const [contents, setContents] = useState<Record<string, ContentsState>>({});
   const [kindFilter, setKindFilter] = useState('all');
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [edit, setEdit] = useState<{ text: string; saving: boolean } | null>(null);
   const generation = useRef(0);
   const operationId = useRef(0);
   const refreshing = useRef(false);
@@ -264,7 +265,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
     document.querySelector<HTMLButtonElement>(`[data-plugin-key="${CSS.escape(key)}"]`)?.focus();
   }, [selectedKey]);
   // Each plugin opens on its full contents, never on another plugin's file preview.
-  useEffect(() => { setKindFilter('all'); setPreview(null); previewRequest.current++; }, [selectedKey]);
+  useEffect(() => { setKindFilter('all'); setPreview(null); setEdit(null); previewRequest.current++; }, [selectedKey]);
   // The bundled items are read once per plugin and scan baseline, after the plugin is opened.
   useEffect(() => {
     if (!opened || !inspectable || !contentsKey || contents[contentsKey]) return;
@@ -288,11 +289,32 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
     if (!opened) return;
     const request = ++previewRequest.current;
     setPreview({ item, file: null, error: '' });
+    setEdit(null);
     try {
       const file = await native.readNativePluginFile(target, opened.id, item.path);
       if (request === previewRequest.current) setPreview({ item, file, error: '' });
     } catch (value) {
       if (request === previewRequest.current) setPreview({ item, file: null, error: message(value) });
+    }
+  }
+
+  /** Adapter-declared editable plugin resources (the agy plugin-root hooks.json):
+   * validated against the native contract, then written by the shared
+   * transaction service with baseline conflict detection and a backup. */
+  async function savePluginFile() {
+    if (!opened || !preview?.file || !edit) return;
+    setEdit({ ...edit, saving: true });
+    setError('');
+    try {
+      await native.saveNativePluginFile(target, opened.id, preview.file.path, preview.file.content, edit.text);
+      setEdit(null);
+      setNotice(t('tools.plugins.fileSaved'));
+      // Hook names/counts and the file text both follow the new content.
+      setContents(current => { const next = { ...current }; delete next[contentsKey]; return next; });
+      await openPreview(preview.item);
+    } catch (value) {
+      setError(message(value));
+      setEdit(current => current ? { ...current, saving: false } : null);
     }
   }
   function reveal(entry: PluginEntry, path: string | null) {
@@ -346,24 +368,31 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
               <span className={styles.kindGlyph} data-kind={item.kind} aria-hidden="true"><Icon name={kindIcon(item.kind)} size={15} /></span>
               <span className={styles.itemCopy}>
                 <strong>{item.name}</strong>
-                <small>{item.kind === 'hooks' && item.description ? t('tools.plugins.hookHandlers', { count: Number(item.description) }) : item.description || kindLabel(item.kind)}</small>
+                <small>{item.kind === 'hooks' && item.description && /^\d+$/.test(item.description) ? t('tools.plugins.hookHandlers', { count: Number(item.description) }) : item.description || kindLabel(item.kind)}</small>
               </span>
             </button>
             {tab && <Button size="sm" variant="ghost" className={styles.itemJump} title={t(`tools.plugins.openIn.${tab}`)} onClick={() => onOpenItem!(tab, item.location)}>{t(`tools.plugins.openIn.${tab}`)}<Icon name="arrowUpRight" size={13} /></Button>}
           </li>;
         })}</ul>
+        {items.some(item => item.kind === 'hooks') && <p className={styles.muted}>{opened.enabled === false ? t('tools.plugins.hooksPluginDisabled') : t('tools.plugins.hooksPluginSource')}</p>}
         {openedContents.value.truncated && <p className={styles.muted}>{t('tools.plugins.itemsTruncated')}</p>}
       </>}
     </section>;
   })() : null;
 
   const manifest = openedContents?.status === 'ready' ? openedContents.value.manifest : null;
+  const canEditFile = !!preview?.file?.editable && !preview.file.truncated && !remoteTargetId && !!snapshot?.baseline && !operation;
   const previewView = opened && preview ? <div className={styles.preview}>
     <div className={styles.previewBar}>
-      <Button size="sm" variant="ghost" icon={<Icon name="arrowLeft" size={14} />} onClick={() => { previewRequest.current++; setPreview(null); }}>{t('tools.plugins.backToPlugin')}</Button>
+      <Button size="sm" variant="ghost" icon={<Icon name="arrowLeft" size={14} />} onClick={() => { previewRequest.current++; setPreview(null); setEdit(null); }}>{t('tools.plugins.backToPlugin')}</Button>
       <span className={styles.previewTitle}><span className={styles.kindGlyph} data-kind={preview.item.kind} aria-hidden="true"><Icon name={kindIcon(preview.item.kind)} size={14} /></span><strong>{preview.item.name}</strong><Badge>{kindLabel(preview.item.kind)}</Badge></span>
       <span className={styles.previewTools}>
-        {jumpTab(preview.item.kind) && <Button size="sm" onClick={() => onOpenItem!(jumpTab(preview.item.kind)!, preview.item.location)}>{t(`tools.plugins.openIn.${jumpTab(preview.item.kind)}`)}</Button>}
+        {jumpTab(preview.item.kind) && !edit && <Button size="sm" onClick={() => onOpenItem!(jumpTab(preview.item.kind)!, preview.item.location)}>{t(`tools.plugins.openIn.${jumpTab(preview.item.kind)}`)}</Button>}
+        {canEditFile && !edit && <Button size="sm" onClick={() => setEdit({ text: preview.file!.content, saving: false })}>{t('tools.plugins.editFile')}</Button>}
+        {edit && <>
+          <Button size="sm" variant="primary" disabled={edit.saving || edit.text === preview.file?.content} onClick={() => void savePluginFile()}>{edit.saving ? t('tools.plugins.savingFile') : t('tools.plugins.saveFile')}</Button>
+          <Button size="sm" disabled={edit.saving} onClick={() => setEdit(null)}>{t('tools.plugins.cancelEdit')}</Button>
+        </>}
         <IconButton size="sm" className={doc.iconButton} aria-label={t('tools.plugins.revealFile')} title={t('tools.plugins.revealFile')} onClick={() => reveal(opened, preview.item.path)} icon={<Icon name="folder" size={15} />} />
       </span>
     </div>
@@ -372,9 +401,10 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
       : !preview.file ? <div className={styles.previewLoading} role="status" aria-label={t('tools.plugins.previewLoading')}><SkeletonRows count={4} /></div>
       : <>
         {preview.file.truncated && <p className={doc.strip} data-tone="warn"><Icon name="alert" size={14} /><span>{t('tools.plugins.previewTruncated')}</span></p>}
-        {preview.file.format === 'markdown'
+        {edit && <p className={styles.muted}>{t('tools.plugins.editHint')}</p>}
+        {preview.file.format === 'markdown' && !edit
           ? <DocumentReader text={preview.file.content} format="markdown" label={t('tools.plugins.previewLabel', { name: preview.item.name })} />
-          : <div className={doc.editor} data-readonly><CodeEditor label={t('tools.plugins.previewLabel', { name: preview.item.name })} format={codeFormat(preview.file.format)} value={preview.file.content} readOnly documentId={preview.file.path} /></div>}
+          : <div className={doc.editor} data-readonly={!edit || undefined}><CodeEditor label={t('tools.plugins.previewLabel', { name: preview.item.name })} format={codeFormat(preview.file.format)} value={edit ? edit.text : preview.file.content} onChange={edit ? (text => setEdit(current => current ? { ...current, text } : current)) : undefined} readOnly={!edit || edit.saving} documentId={preview.file.path} /></div>}
       </>}
   </div> : null;
 

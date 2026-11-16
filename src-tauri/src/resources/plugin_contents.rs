@@ -1,11 +1,19 @@
-//! Read-only view of what a native plugin bundles: its manifest summary and the
-//! agents, skills, commands, hooks, MCP servers and other files it ships.
+//! Read and (adapter-declared) controlled edit of what a native plugin
+//! bundles: its manifest summary and the agents, skills, commands, hooks, MCP
+//! servers and other files it ships.
 //!
 //! Everything starts from a fresh native scan of the bound target. The UI names a
 //! plugin by id and, for file reads, a path; both are resolved against that scan, so
 //! only files inside the plugin's own root or its declared resource paths are read.
-//! Nothing here writes, runs plugin code, or follows a path outside those bases.
+//! Nothing here runs plugin code or follows a path outside those bases. Writes are
+//! limited to resource kinds the adapter declares editable ([`PluginAdapter::
+//! editable_resource_kinds`]): the edit is validated by the adapter's schema
+//! contract first, then planned as a text patch and applied by the shared
+//! transaction service (baseline conflict detection + encrypted backup), never
+//! by this module's own filesystem calls.
 use super::plugins::{scan_resources, PluginEntry, PluginTarget};
+use crate::adapters::plugins::PluginAdapter;
+use crate::credentials::CredentialStore;
 use crate::database::Database;
 use serde::Serialize;
 use serde_json::Value;
@@ -67,14 +75,24 @@ pub struct PluginFile {
     pub content: String,
     pub format: String,
     pub truncated: bool,
+    /// True only when the adapter declared this resource kind editable, the
+    /// entry is writable, and the file is exactly that declared resource.
+    pub editable: bool,
+}
+
+/// Resolve the plugin adapter behind a target (the scan already required it).
+fn adapter_for(target: &PluginTarget) -> Result<&'static dyn PluginAdapter, String> {
+    crate::adapters::plugins::get_registered(&crate::adapters::Registry::builtins(), &target.tool_id)
 }
 
 pub fn inspect(db: &Database, home: &Path, target: &PluginTarget, plugin_id: &str) -> Result<PluginContents, String> {
+    let adapter = adapter_for(target)?;
     let entry = find(db, home, target, plugin_id)?;
-    Ok(contents(&entry))
+    Ok(contents(adapter, &entry))
 }
 
 pub fn read_file(db: &Database, home: &Path, target: &PluginTarget, plugin_id: &str, path: &str) -> Result<PluginFile, String> {
+    let adapter = adapter_for(target)?;
     let entry = find(db, home, target, plugin_id)?;
     let file = contained(&entry, Path::new(path))?;
     if !file.is_file() {
@@ -87,7 +105,81 @@ pub fn read_file(db: &Database, home: &Path, target: &PluginTarget, plugin_id: &
     if bytes.iter().take(8_192).any(|byte| *byte == 0) {
         return Err("这是二进制文件，无法以文本查看".into());
     }
-    Ok(PluginFile { path: file.display().to_string(), content: String::from_utf8_lossy(&bytes).into_owned(), format: format_of(&file), truncated })
+    Ok(PluginFile { path: file.display().to_string(), content: String::from_utf8_lossy(&bytes).into_owned(), format: format_of(&file), truncated, editable: editable_resource(&entry, adapter, &file).is_some() })
+}
+
+/// The editable declared resource whose file this path is, when there is one.
+fn editable_resource(entry: &PluginEntry, adapter: &dyn PluginAdapter, resolved: &Path) -> Option<super::plugins::PluginResource> {
+    if entry.read_only {
+        return None;
+    }
+    let kinds = adapter.editable_resource_kinds();
+    entry
+        .resources
+        .iter()
+        .find(|resource| kinds.contains(&resource.kind.as_str()) && fs::canonicalize(&resource.path).is_ok_and(|path| path == resolved))
+        .cloned()
+}
+
+/// Save an edited bundled-resource file through the shared transaction
+/// service. The write path is adapter-declared (`editable_resource_kinds`),
+/// schema-validated before any write, gated to the adapter's verified install
+/// line (`version`, resolved by the caller's probe like every other plugin
+/// mutation), and applied as a text patch with baseline conflict detection and
+/// an encrypted backup — the original file is untouched by every rejection.
+#[allow(clippy::too_many_arguments)]
+pub fn save_file(
+    db: &Database,
+    credentials: &dyn CredentialStore,
+    home: &Path,
+    target: &PluginTarget,
+    plugin_id: &str,
+    path: &str,
+    original: &str,
+    edited: &str,
+    version: &str,
+) -> Result<crate::native::transaction::ApplyOutcome, String> {
+    let adapter = adapter_for(target)?;
+    // Serialize against lifecycle operations so an edit never races an
+    // install/uninstall on the same tree.
+    let _operation = super::plugins::operation_lock()?;
+    if !adapter.version_policy().accepts(version) {
+        return Err(format!(
+            "插件参考核验版本 {}；当前 {version} 不满足原生契约范围 {}，包内资源不可编辑",
+            adapter.capability().version,
+            adapter.version_policy().accepted_text()
+        ));
+    }
+    // The authoritative scan (with the package digest): a broken or externally
+    // changed package is read-only and never receives a write.
+    let entry = super::plugins::scan(db, home, target)?
+        .entries
+        .into_iter()
+        .find(|entry| entry.id == plugin_id)
+        .ok_or_else(|| "未找到该插件，请重新扫描".to_string())?;
+    if entry.read_only {
+        return Err("此插件只读，包内文件不可编辑".into());
+    }
+    let file = contained(&entry, Path::new(path))?;
+    if !file.is_file() {
+        return Err("只能编辑插件内的文件".into());
+    }
+    let resource = editable_resource(&entry, adapter, &file)
+        .ok_or_else(|| "此插件资源不可编辑（适配器未声明受控写入）".to_string())?;
+    let current = crate::native::transaction::read_native(&file)?;
+    let contents = if current == original {
+        edited.to_owned()
+    } else {
+        crate::native::format::merge_edits(crate::native::format::FileKind::for_name(&file.display().to_string())?, original, edited, &current)?
+    };
+    // Adapter-owned contract check before anything is planned or written.
+    adapter.validate_resource_text(&resource.kind, &contents)?;
+    crate::native::transaction::apply_text(
+        db,
+        credentials,
+        &[crate::native::transaction::TextPatch { path: file, baseline: current, contents, sensitive: false }],
+        |_tx| Ok(()),
+    )
 }
 
 /// A path inside the plugin, for revealing it in the file manager.
@@ -126,7 +218,7 @@ fn contained(entry: &PluginEntry, path: &Path) -> Result<PathBuf, String> {
     if bases(entry).iter().any(|base| resolved.starts_with(base)) { Ok(resolved) } else { Err("路径不在该插件内".into()) }
 }
 
-pub(crate) fn contents(entry: &PluginEntry) -> PluginContents {
+pub(crate) fn contents(adapter: &dyn PluginAdapter, entry: &PluginEntry) -> PluginContents {
     let mut items = Vec::new();
     let mut truncated = false;
     let mut seen = Vec::<String>::new();
@@ -134,7 +226,7 @@ pub(crate) fn contents(entry: &PluginEntry) -> PluginContents {
         // A resource file listed twice (a root manifest and a component path) is shown once.
         if seen.contains(&resource.path) { continue; }
         seen.push(resource.path.clone());
-        collect(&resource.kind, Path::new(&resource.path), &mut items, &mut truncated);
+        collect(adapter, &resource.kind, Path::new(&resource.path), &mut items, &mut truncated);
         if truncated { break; }
     }
     PluginContents { plugin_id: entry.id.clone(), root: entry.root.clone(), manifest: entry.root.as_deref().map(|root| manifest(Path::new(root))).unwrap_or_default(), items, truncated }
@@ -146,9 +238,9 @@ fn push(items: &mut Vec<PluginItem>, truncated: &mut bool, item: PluginItem) -> 
     true
 }
 
-fn collect(kind: &str, path: &Path, items: &mut Vec<PluginItem>, truncated: &mut bool) {
+fn collect(adapter: &dyn PluginAdapter, kind: &str, path: &Path, items: &mut Vec<PluginItem>, truncated: &mut bool) {
     if path.is_file() {
-        file_items(kind, path, items, truncated);
+        file_items(adapter, kind, path, items, truncated);
         return;
     }
     if !path.is_dir() { return; }
@@ -160,16 +252,16 @@ fn collect(kind: &str, path: &Path, items: &mut Vec<PluginItem>, truncated: &mut
         }
         return;
     }
-    walk(kind, path, 0, items, truncated);
+    walk(adapter, kind, path, 0, items, truncated);
 }
 
-fn walk(kind: &str, dir: &Path, depth: usize, items: &mut Vec<PluginItem>, truncated: &mut bool) {
+fn walk(adapter: &dyn PluginAdapter, kind: &str, dir: &Path, depth: usize, items: &mut Vec<PluginItem>, truncated: &mut bool) {
     if depth > MAX_DEPTH { return; }
     for child in children(dir) {
         if child.is_dir() {
-            walk(kind, &child, depth + 1, items, truncated);
+            walk(adapter, kind, &child, depth + 1, items, truncated);
         } else {
-            file_items(kind, &child, items, truncated);
+            file_items(adapter, kind, &child, items, truncated);
         }
         if *truncated { return; }
     }
@@ -191,7 +283,7 @@ fn children(dir: &Path) -> Vec<PathBuf> {
     list
 }
 
-fn file_items(kind: &str, path: &Path, items: &mut Vec<PluginItem>, truncated: &mut bool) {
+fn file_items(adapter: &dyn PluginAdapter, kind: &str, path: &Path, items: &mut Vec<PluginItem>, truncated: &mut bool) {
     let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default().to_ascii_lowercase();
     let display = path.display().to_string();
     if name.ends_with(".json") && (kind == "mcp" || name.contains("mcp")) {
@@ -207,12 +299,23 @@ fn file_items(kind: &str, path: &Path, items: &mut Vec<PluginItem>, truncated: &
         }
     }
     if name.ends_with(".json") && (kind == "hooks" || name.starts_with("hooks")) {
-        if let Some(events) = json_object(path).and_then(|value| value.get("hooks").cloned().or(Some(value))).and_then(|value| value.as_object().cloned()) {
-            for (event, handlers) in events {
-                let count = handlers.as_array().map(|list| list.len()).unwrap_or(1);
-                if !push(items, truncated, PluginItem { kind: "hooks".into(), name: event, description: Some(count.to_string()), path: display.clone(), location: display.clone(), format: "json".into() }) { return; }
+        if let Some(document) = json_object(path) {
+            // Adapter-owned hooks schemas parse their own document first; the
+            // generic walker below keeps the historical Claude-style
+            // `{"hooks": {event: [handlers]}}` wrapper for everyone else.
+            if let Some(rows) = adapter.hooks_items(&document, &display) {
+                for row in rows {
+                    if !push(items, truncated, row) { return; }
+                }
+                return;
             }
-            return;
+            if let Some(events) = document.get("hooks").cloned().or(Some(document)).and_then(|value| value.as_object().cloned()) {
+                for (event, handlers) in events {
+                    let count = handlers.as_array().map(|list| list.len()).unwrap_or(1);
+                    if !push(items, truncated, PluginItem { kind: "hooks".into(), name: event, description: Some(count.to_string()), path: display.clone(), location: display.clone(), format: "json".into() }) { return; }
+                }
+                return;
+            }
         }
     }
     let format = format_of(path);
@@ -279,6 +382,19 @@ fn format_of(path: &Path) -> String {
 mod tests {
     use super::*;
     use super::super::plugins::PluginResource;
+    use crate::adapters::plugins::{PluginAdapter, PluginCapability};
+
+    /// An adapter with no hooks schema and no editable resources: the shared
+    /// generic walkers apply unchanged.
+    struct BareAdapter;
+    impl PluginAdapter for BareAdapter {
+        fn capability(&self) -> PluginCapability {
+            PluginCapability { version: "", sources: "", actions: Vec::new(), project: false, detail: "" }
+        }
+        fn command_args(&self, _action: &str, _source: &str, _project: bool) -> Result<Vec<String>, String> {
+            Ok(Vec::new())
+        }
+    }
 
     fn entry(root: &Path, resources: &[(&str, &str)]) -> PluginEntry {
         PluginEntry {
@@ -305,7 +421,7 @@ mod tests {
         fs::write(root.join(".mcp.json"), r#"{"mcpServers":{"docs":{"command":"npx","args":["-y","docs-server"]},"remote":{"url":"https://example.test/mcp"}}}"#).unwrap();
         let plugin = entry(&root, &[("agents", "agents"), ("skills", "skills"), ("hooks", "hooks"), ("mcp", ".mcp.json")]);
 
-        let found = contents(&plugin);
+        let found = contents(&BareAdapter, &plugin);
         assert!(!found.truncated);
         assert_eq!(found.manifest.description.as_deref(), Some("Review helpers"));
         assert_eq!(found.manifest.author.as_deref(), Some("Example"));
@@ -334,12 +450,38 @@ mod tests {
     }
 
     #[test]
+    fn adapter_owned_hooks_schemas_replace_the_generic_wrapper_rows() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("agy-kit");
+        fs::create_dir_all(&root).unwrap();
+        // The agy named-hooks shape: one row per hook with events and the
+        // disabled marker, and the file itself is the editable resource.
+        fs::write(root.join("hooks.json"), r#"{"probe-hook":{"PostToolUse":[{"matcher":"run_command","hooks":[{"type":"command","command":"./h.sh"}]}]},"off-hook":{"enabled":false,"SessionStart":[{"type":"command","command":"/bin/true"}]}}"#).unwrap();
+        let plugin = entry(&root, &[("hooks", "hooks.json")]);
+
+        let found = contents(&crate::adapters::antigravity::Antigravity, &plugin);
+        let rows: Vec<(String, Option<String>)> = found.items.iter().map(|item| (item.name.clone(), item.description.clone())).collect();
+        assert_eq!(rows, vec![
+            ("probe-hook".into(), Some("PostToolUse".into())),
+            ("off-hook".into(), Some("SessionStart · 已停用".into())),
+        ]);
+        // The claude-style wrapper keeps the generic per-event rows for an
+        // adapter without its own parser.
+        fs::write(root.join("hooks.json"), r#"{"hooks":{"Stop":[{}]}}"#).unwrap();
+        let found = contents(&BareAdapter, &plugin);
+        assert_eq!(found.items[0].name, "Stop");
+        // The agy adapter hands a wrapper document back to the same fallback.
+        let found = contents(&crate::adapters::antigravity::Antigravity, &plugin);
+        assert_eq!(found.items[0].name, "Stop");
+    }
+
+    #[test]
     fn large_packages_are_bounded_and_marked_partial() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("big");
         fs::create_dir_all(root.join("commands")).unwrap();
         for index in 0..(MAX_ITEMS + 5) { fs::write(root.join(format!("commands/c{index:04}.md")), "x").unwrap(); }
-        let found = contents(&entry(&root, &[("commands", "commands")]));
+        let found = contents(&BareAdapter, &entry(&root, &[("commands", "commands")]));
         assert_eq!(found.items.len(), MAX_ITEMS);
         assert!(found.truncated);
     }
@@ -350,5 +492,113 @@ mod tests {
         assert_eq!(frontmatter("---\r\nname: a\r\n---\r\n"), (Some("a".into()), None));
         assert_eq!(frontmatter("body\n---\nname: a\n---"), (None, None));
         assert_eq!(frontmatter("---\nname: [unclosed\n---"), (None, None));
+    }
+
+    #[derive(Default)]
+    struct MemoryStore(std::cell::RefCell<std::collections::BTreeMap<String, String>>);
+    impl crate::credentials::CredentialStore for MemoryStore {
+        fn put(&self, id: &str, secret: &str) -> Result<(), String> {
+            self.0.borrow_mut().insert(id.into(), secret.into());
+            Ok(())
+        }
+        fn get(&self, id: &str) -> Result<String, String> {
+            self.0.borrow().get(id).cloned().ok_or_else(|| "missing".into())
+        }
+        fn delete(&self, id: &str) -> Result<(), String> {
+            self.0.borrow_mut().remove(id);
+            Ok(())
+        }
+    }
+
+    fn copy_tree(source: &Path, target: &Path) {
+        fs::create_dir_all(target).unwrap();
+        for row in fs::read_dir(source).unwrap() {
+            let row = row.unwrap();
+            let name = row.file_name();
+            if row.path().is_dir() {
+                copy_tree(&row.path(), &target.join(name));
+            } else {
+                fs::copy(row.path(), target.join(name)).unwrap();
+            }
+        }
+    }
+
+    /// A committed-fixture agy install under a temp home: the plugin-root
+    /// hooks.json is the editable resource and every other bundled file is
+    /// not.
+    fn agy_install(home: &Path) -> PluginTarget {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/native/antigravity-cli-1.5.9/plugin");
+        let installed = home.join(".gemini").join("config").join("plugins").join("probe-kit");
+        copy_tree(&fixture, &installed);
+        PluginTarget { tool_id: "antigravity".into(), scope: crate::native::adapter::Scope::Global, project_path: None, context_id: None }
+    }
+
+    #[test]
+    fn plugin_file_edits_are_schema_checked_transacted_and_conflict_detected() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let target = agy_install(home);
+        let db = crate::database::Database::open(&home.join("edit.db")).unwrap();
+        let store = MemoryStore::default();
+        let hooks_path = home.join(".gemini").join("config").join("plugins").join("probe-kit").join("hooks.json");
+        let original = fs::read_to_string(&hooks_path).unwrap();
+        let target_ref = &target;
+
+        // The committed fixture sample is exactly the editable resource…
+        let file = read_file(&db, home, target_ref, "probe-kit", &hooks_path.display().to_string()).unwrap();
+        assert!(file.editable, "插件根 hooks.json 应为适配器声明的可编辑资源");
+        // …while other bundled files of the same plugin are not.
+        let agents_dir = home.join(".gemini").join("config").join("plugins").join("probe-kit").join("agents");
+        let agent_file = fs::read_dir(&agents_dir).unwrap().next().unwrap().unwrap().path();
+        let file = read_file(&db, home, target_ref, "probe-kit", &agent_file.display().to_string()).unwrap();
+        assert!(!file.editable, "未声明的资源不可编辑");
+
+        // A valid edit writes through the shared transaction.
+        let edited = original.replace("\"./fixture-hook.sh\"", "\"./renamed-hook.sh\"");
+        let outcome = save_file(&db, &store, home, target_ref, "probe-kit", &hooks_path.display().to_string(), &original, &edited, "1.5.9").unwrap();
+        assert!(!outcome.changed_files.is_empty());
+        assert!(fs::read_to_string(&hooks_path).unwrap().contains("./renamed-hook.sh"));
+
+        // An invalid structure is rejected before any write and the file is
+        // unchanged.
+        let before = fs::read_to_string(&hooks_path).unwrap();
+        let broken = before.replace("\"PostToolUse\"", "\"SessionEnd\"");
+        let error = save_file(&db, &store, home, target_ref, "probe-kit", &hooks_path.display().to_string(), &before, &broken, "1.5.9").unwrap_err();
+        assert!(error.contains("不支持的事件"), "{error}");
+        assert_eq!(fs::read_to_string(&hooks_path).unwrap(), before);
+        // Invalid JSON never reaches the file either.
+        let error = save_file(&db, &store, home, target_ref, "probe-kit", &hooks_path.display().to_string(), &before, "{not json", "1.5.9").unwrap_err();
+        assert!(error.contains("有效 JSON"), "{error}");
+        assert_eq!(fs::read_to_string(&hooks_path).unwrap(), before);
+
+        // An external edit elsewhere merges (both changes survive); an
+        // external edit of the same region is a conflict that never
+        // overwrites the disk file. The external text keeps the original
+        // layout and only appends a new hook, so the two edits touch
+        // different regions.
+        let trimmed = before.trim_end();
+        let external = format!(
+            "{},\n  \"extra-hook\": {{\"Stop\": []}}\n}}",
+            &trimmed[..trimmed.len() - 1]
+        );
+        fs::write(&hooks_path, &external).unwrap();
+        let second = before.replace("\"./renamed-hook.sh\"", "\"./second-hook.sh\"");
+        save_file(&db, &store, home, target_ref, "probe-kit", &hooks_path.display().to_string(), &before, &second, "1.5.9").unwrap();
+        let merged = fs::read_to_string(&hooks_path).unwrap();
+        assert!(merged.contains("./second-hook.sh"), "{merged}");
+        assert!(merged.contains("extra-hook"), "{merged}");
+
+        let conflicted = merged.replace("\"./second-hook.sh\"", "\"./external-hook.sh\"");
+        fs::write(&hooks_path, &conflicted).unwrap();
+        let third = merged.replace("\"./second-hook.sh\"", "\"./third-hook.sh\"");
+        let error = save_file(&db, &store, home, target_ref, "probe-kit", &hooks_path.display().to_string(), &merged, &third, "1.5.9").unwrap_err();
+        assert!(error.contains("外部修改"), "{error}");
+        assert_eq!(fs::read_to_string(&hooks_path).unwrap(), conflicted);
+
+        // The verified-line gate refuses an out-of-range install before
+        // touching anything.
+        let error = save_file(&db, &store, home, target_ref, "probe-kit", &hooks_path.display().to_string(), &conflicted, &edited, "1.3.1").unwrap_err();
+        assert!(error.contains("1.3.1"), "{error}");
+        assert_eq!(fs::read_to_string(&hooks_path).unwrap(), conflicted);
     }
 }
