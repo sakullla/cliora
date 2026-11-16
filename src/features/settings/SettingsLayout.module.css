@@ -25,7 +25,6 @@
 }
 .modal::backdrop {
   background: var(--overlay);
-  backdrop-filter: blur(4px);
   animation: fade-in var(--medium) var(--ease);
 }
 @media (prefers-reduced-motion: reduce) {

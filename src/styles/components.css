@@ -84,10 +84,10 @@
 .guide-dialog, .confirmation-dialog { margin: auto; max-height: calc(100dvh - 40px); padding: 0; border: 1px solid var(--line-strong); border-radius: var(--radius-2xl); background: var(--surface); color: var(--text); box-shadow: var(--shadow-lg); overflow: hidden; }
 .guide-dialog[open], .confirmation-dialog[open] { animation: dialog-in var(--medium) var(--ease); }
 .guide-dialog:focus, .guide-dialog:focus-visible, .confirmation-dialog:focus, .confirmation-dialog:focus-visible { outline: none; }
-.guide-dialog::backdrop, .confirmation-dialog::backdrop, .command-dialog::backdrop { background: var(--overlay); backdrop-filter: blur(4px); animation: fade-in var(--medium) var(--ease); }
+.guide-dialog::backdrop, .confirmation-dialog::backdrop, .command-dialog::backdrop { background: var(--overlay); animation: fade-in var(--medium) var(--ease); }
 /* Avoid double-darkening when a confirmation or secondary dialog opens above an existing modal. */
 dialog[open] ~ .guide-dialog::backdrop,
-dialog[open] ~ .confirmation-dialog::backdrop { background: color-mix(in srgb, var(--overlay) 45%, transparent); backdrop-filter: none; }
+dialog[open] ~ .confirmation-dialog::backdrop { background: color-mix(in srgb, var(--overlay) 45%, transparent); }
 .command-dialog { width: min(620px, calc(100vw - 32px)); max-height: min(680px, calc(100dvh - 48px)); margin: var(--dialog-top) auto auto; padding: 0; border: 1px solid var(--line-strong); border-radius: var(--radius-2xl); background: var(--surface); color: var(--text); box-shadow: var(--shadow-lg); overflow: hidden; }
 .command-dialog[open] { display: flex; flex-direction: column; animation: dialog-in var(--medium) var(--ease); }
 .command-dialog:focus, .command-dialog:focus-visible { outline: none; }

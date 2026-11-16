@@ -541,8 +541,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   // The per-launch worktree choice; the saved preference only seeds it.
   const [dialogPlace, setDialogPlace] = useState<'direct' | 'worktree'>('direct');
   const dialogPlaceTouched = useRef(false);
-  const [dialogDirectory, setDialogDirectory] = useState<string | null>(null);
   const [baseChoice, setBaseChoice] = useState<WorktreeBase | null>(null);
+  const basePreviewContext = useRef('');
   const [baseRef, setBaseRef] = useState('');
   const [basePreview, setBasePreview] = useState<WorktreeBasePreview | null>(null);
   const [baseBusy, setBaseBusy] = useState(false);
@@ -2972,18 +2972,16 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const remoteHomePath = activeRemoteTarget ? remoteStartPath(activeRemoteTarget) : '';
   // The dialog reads its base from the directory it will really use; the home
   // entry has none, so a worktree cannot be chosen there.
-  useEffect(() => {
-    if (!newDialogOpen) { setDialogDirectory(null); return; }
-    setDialogDirectory(dialogPrepareDirectory());
-  }, [newDialogOpen, workspaceValue, availableProjects, activeRemoteTarget]);
+  const dialogDirectory = newDialogOpen ? dialogPrepareDirectory() : null;
   // The branch a creation would allocate follows the task text, so the first line
   // of the prompt is part of the preview request.
   const dialogTaskLine = useMemo(() => firstTaskLine(initialPrompt), [initialPrompt]);
   // The confirmed base, its short commit and the proposed branch are visible before
-  // anything is written. A keystroke only re-reads after a short pause, and the
-  // previous preview stays on screen meanwhile.
+  // anything is written. Initial selection reads immediately; typing re-reads after
+  // a short pause while keeping the previous preview on screen.
   useEffect(() => {
     if (!nativeAvailable || !newDialogOpen || dialogPlace !== 'worktree' || !dialogDirectory) {
+      basePreviewContext.current = '';
       setBasePreview(null);
       setBaseBusy(false);
       return;
@@ -2992,7 +2990,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     let cancelled = false;
     setBaseBusy(true);
     setBaseError('');
-    const timer = window.setTimeout(() => {
+    const contextKey = `${dialogDirectory}\n${JSON.stringify(baseChoice ?? null)}`;
+    const immediate = basePreviewContext.current !== contextKey;
+    basePreviewContext.current = contextKey;
+    const runPreview = () => {
       if (cancelled) return;
       void native.worktreeBasePreview(dialogDirectory, baseChoice, dialogTaskLine).then((value) => {
         if (cancelled || baseRequest.current !== request) return;
@@ -3004,9 +3005,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         setBaseBusy(false);
         setBaseError(formatFailure(error, t('sessions.worktreeBaseFailed'), t('sessions.failureHint')));
       });
-    }, 240);
+    };
+    if (immediate) {
+      runPreview();
+      return () => { cancelled = true; };
+    }
+    const timer = window.setTimeout(runPreview, 240);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [nativeAvailable, newDialogOpen, dialogPlace, dialogDirectory, baseChoice, dialogTaskLine, t]);
+  }, [nativeAvailable, newDialogOpen, dialogPlace, dialogDirectory, baseChoice, dialogTaskLine]);
   // The repository's setup command is shown and edited in the worktree panel itself,
   // so nothing has to be configured elsewhere before the first creation.
   useEffect(() => {
