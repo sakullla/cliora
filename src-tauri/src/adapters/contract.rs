@@ -298,6 +298,20 @@ pub struct SkillObservation {
     pub detail: &'static str,
 }
 
+/// One skill directory an adapter resolved from a native declaration
+/// manifest (for example agy 1.5.9 `<workspace>/.agents/skills.json`).
+/// The adapter owns the manifest semantics and name filters; the shared
+/// scan only reads the resolved directory, listed read-only with the
+/// declaration's own label. Declared directories never become write targets.
+#[derive(Clone, Debug)]
+pub struct SkillDeclaration {
+    /// A concrete skill directory (`<declared dir>/<name>`), already filtered
+    /// by the manifest's `include_only`/`exclude` name rules.
+    pub root: PathBuf,
+    /// Source label shown in the list, e.g. `skills.json · shared-skills`.
+    pub label: String,
+}
+
 /// Adapter-owned remote resource mappings. Absence is an unsupported capability;
 /// shared transports never substitute another CLI's native directory.
 #[derive(Clone, Copy, Debug, Default, Serialize)]
@@ -1353,6 +1367,34 @@ pub trait CliAdapter: Sync {
         _project: Option<&Path>,
     ) -> Vec<SkillObservation> {
         Vec::new()
+    }
+    /// Skill directories a native declaration manifest resolved for this
+    /// scope (agy 1.5.9 `.agents/skills.json`). They join the scan read-only
+    /// with their own source label and are never write targets. The default
+    /// keeps every adapter without a declaration manifest unchanged.
+    fn skill_declarations(
+        &self,
+        _scope: Scope,
+        _home: &Path,
+        _project: Option<&Path>,
+    ) -> Vec<SkillDeclaration> {
+        Vec::new()
+    }
+    /// Whether the shared scan marks skills whose name exists in several
+    /// discovered sources with the `duplicate_name` issue. The CLI's own
+    /// native precedence stays authoritative; the marker only states that
+    /// several sources carry the name. The default keeps every adapter's
+    /// listing unchanged.
+    fn skill_marks_duplicate_names(&self) -> bool {
+        false
+    }
+    /// When Some, enabling a package whose SKILL.md breaks the shared load
+    /// contract (frontmatter present and parseable, name valid and matching
+    /// the directory, description non-empty) is refused with this reason
+    /// instead of claiming the CLI will use it. The default keeps the shared
+    /// enable behavior.
+    fn skill_enable_requires_contract(&self) -> Option<&'static str> {
+        None
     }
     /// Remote POSIX inventory under the login home. The adapter's writable root
     /// is scanned by default; adapters add bundled/observed roots explicitly.

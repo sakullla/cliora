@@ -612,6 +612,8 @@ export default {
     stateExternal: 'Local directory',
     stateReadOnly: 'Read-only',
     stateUnreadable: 'Temporarily unreadable',
+    stateDuplicate: 'Shadowed by duplicate',
+    duplicateNote: 'The same skill name exists in several discovered sources; native precedence or merging may apply, and the native session decides which copy loads.',
     sourcePlugin: 'Plugin',
     pluginNotLoaded: 'Not currently loaded',
     pluginWillLoad: 'Loads with the plugin',

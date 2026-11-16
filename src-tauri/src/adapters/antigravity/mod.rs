@@ -38,9 +38,17 @@
 //!   mcp_config.json` is the runtime project scope: it loads in sessions but
 //!   `agy mcp` subcommands never list or write it, so Cliora manages it as a
 //!   native config file directly.
-//! * **Skills**: personal `antigravity-cli/skills/<dir>/SKILL.md` and the
-//!   open-standard project `.agents/skills/`; only the two brand roots are
-//!   managed here.
+//! * **Skills** (1.5.9 evidence run, see [`skills`]): writable roots stay the
+//!   personal `antigravity-cli/skills/<dir>/SKILL.md` and the open-standard
+//!   project `.agents/skills/<dir>/SKILL.md`. The product `/skills` panel
+//!   additionally discovers the Shared `~/.gemini/skills`, the config root
+//!   `~/.gemini/config/skills` and the builtin
+//!   `~/.gemini/antigravity-cli/builtin/skills` trees plus the explicit
+//!   `.agents/skills.json` declaration source; those appear as read-only
+//!   observations/declarations. Frontmatter `name` (matching the directory)
+//!   and `description` are required before agy loads a skill, so directories
+//!   without `SKILL.md` are not skills here and enabling a contract-breaking
+//!   package is refused.
 //! * **History/usage** ([RE] for 1.2.x plus the 1.5.9 remote capture, see
 //!   [`history`] and [`protobuf`]): the conversation index, transcripts and
 //!   per-conversation protobuf usage rows of both data roots are read-only
@@ -59,6 +67,7 @@
 pub(crate) mod history;
 pub(crate) mod memory;
 pub(crate) mod protobuf;
+pub(crate) mod skills;
 
 use std::path::{Path, PathBuf};
 
@@ -66,7 +75,7 @@ use serde_json::{json, Value};
 
 use super::{
     file, AdapterDescriptor, CliAdapter, Facet, InspectionFields, LaunchMode, ManagementCapabilities,
-    McpLocation, RuleSupport,
+    McpLocation, RuleSupport, SkillDeclaration, SkillObservation,
 };
 use crate::native::adapter::{NativeFile, Scope};
 use crate::native::format::FileKind;
@@ -298,6 +307,99 @@ impl CliAdapter for Antigravity {
             Scope::Project => project?.join(".agents").join("skills"),
         })
     }
+    // A skill is `<dir>/SKILL.md` on every verified install line; a directory
+    // without the file is not an enableable skill for agy (1.5.9 /skills and
+    // plugin validate both require the manifest).
+    fn skill_requires_manifest(&self) -> bool {
+        true
+    }
+    /// Additional read-only discovery roots of the product `/skills` panel:
+    /// the Shared `~/.gemini/skills`, the config root
+    /// `~/.gemini/config/skills` (labeled `From ~/.gemini/config` natively)
+    /// and the builtin tree. Only the brand roots above stay writable.
+    fn skill_observations(
+        &self,
+        scope: Scope,
+        home: &Path,
+        _project: Option<&Path>,
+    ) -> Vec<SkillObservation> {
+        if scope != Scope::Global {
+            return Vec::new();
+        }
+        let root = gemini_root(home);
+        vec![
+            SkillObservation {
+                root: root.join("skills"),
+                detail: "Shared 目录（~/.gemini/skills）",
+            },
+            SkillObservation {
+                root: root.join("config").join("skills"),
+                detail: "config 目录（~/.gemini/config/skills）",
+            },
+            SkillObservation {
+                root: root
+                    .join("antigravity-cli")
+                    .join("builtin")
+                    .join("skills"),
+                detail: "内置 Skill（builtin/skills）",
+            },
+        ]
+    }
+    /// Explicit declaration source `.agents/skills.json` (1.5.9 evidence):
+    /// non-standard workspace directories, resolved by the adapter with the
+    /// native containment and name-filter rules (see [`skills`]). Read-only
+    /// discovery rows; the writable roots are unchanged.
+    fn skill_declarations(
+        &self,
+        scope: Scope,
+        _home: &Path,
+        project: Option<&Path>,
+    ) -> Vec<SkillDeclaration> {
+        if scope != Scope::Project {
+            return Vec::new();
+        }
+        project.map(skills::declared_sources).unwrap_or_default()
+    }
+    // Same-name skills across the discovery roots: the native precedence is
+    // the CLI's own and was not observed, so every copy is marked instead of
+    // guessing a winner.
+    fn skill_marks_duplicate_names(&self) -> bool {
+        true
+    }
+    // Verified 1.5.9 frontmatter contract: `name` (matching the directory)
+    // and `description` are required before agy loads a skill, so enabling a
+    // contract-breaking package would claim a load that never happens.
+    fn skill_enable_requires_contract(&self) -> Option<&'static str> {
+        Some("此 Skill 的 SKILL.md 不符合 agy frontmatter 契约（name 需与目录一致且为规范形式、description 必填），agy 不会加载它；请先修正后再启用。问题：")
+    }
+    /// Remote POSIX inventory mirrors the local global discovery: the
+    /// writable brand root plus the Shared/config/builtin read-only trees
+    /// (Linux layout verified by the 1.5.9 evidence run). Project
+    /// `skills.json` declarations are workspace-relative and stay local.
+    fn remote_skill_directories(&self) -> Vec<super::RemoteSkillDirectory> {
+        vec![
+            super::RemoteSkillDirectory {
+                relative: ".gemini/antigravity-cli/skills",
+                read_only: false,
+                detail: "远程主机目录",
+            },
+            super::RemoteSkillDirectory {
+                relative: ".gemini/skills",
+                read_only: true,
+                detail: "Shared 目录",
+            },
+            super::RemoteSkillDirectory {
+                relative: ".gemini/config/skills",
+                read_only: true,
+                detail: "config 目录",
+            },
+            super::RemoteSkillDirectory {
+                relative: ".gemini/antigravity-cli/builtin/skills",
+                read_only: true,
+                detail: "内置 Skill",
+            },
+        ]
+    }
     /// The only documented headless credential channel is `GEMINI_API_KEY`
     /// (with `modelProvider: "gemini"`); a custom name would promise a
     /// variable the CLI ignores.
@@ -465,7 +567,7 @@ impl CliAdapter for Antigravity {
             },
             resources: Facet {
                 state: "available",
-                reason: "MCP（~/.gemini/config/mcp_config.json mcpServers：stdio command/args/env/cwd 与远程 serverUrl+headers/oauth；1.5+ 按实测写逐条 disabled（停用保留条目），1.3.x 停用移除条目且旧版 url/httpUrl 条目只读；项目 .agents/mcp_config.json 为运行时作用域，agy mcp 子命令不管理）与 Skills（antigravity-cli/skills 与项目 .agents/skills）由原生路径提供",
+                reason: "MCP（~/.gemini/config/mcp_config.json mcpServers：stdio command/args/env/cwd 与远程 serverUrl+headers/oauth；1.5+ 按实测写逐条 disabled（停用保留条目），1.3.x 停用移除条目且旧版 url/httpUrl 条目只读；项目 .agents/mcp_config.json 为运行时作用域，agy mcp 子命令不管理）与 Skills（可写根 antigravity-cli/skills 与项目 .agents/skills；只读发现 Shared ~/.gemini/skills、config 目录、builtin 与 skills.json 声明目录；SKILL.md frontmatter name/description 契约强制）由原生路径提供",
             },
             history: Facet {
                 state: "available",
@@ -1083,6 +1185,80 @@ mod tests {
                 .skill_root(Scope::Project, temp.path(), Some(&project))
                 .unwrap(),
             project.join(".agents").join("skills")
+        );
+        // A skill is `<dir>/SKILL.md` on both verified install lines; the
+        // 1.5.9 /skills panel and plugin validate both require the manifest.
+        assert!(Antigravity.skill_requires_manifest());
+        // The product panel's extra discovery roots are read-only
+        // observations of the global scope only.
+        assert!(Antigravity.skill_observations(Scope::Project, temp.path(), Some(&project)).is_empty());
+        let observations = Antigravity.skill_observations(Scope::Global, temp.path(), None);
+        let roots: Vec<String> = observations
+            .iter()
+            .map(|observation| observation.root.display().to_string().replace('\\', "/"))
+            .collect();
+        assert_eq!(
+            roots,
+            vec![
+                gemini_root(temp.path()).join("skills").display().to_string().replace('\\', "/"),
+                gemini_root(temp.path()).join("config").join("skills").display().to_string().replace('\\', "/"),
+                gemini_root(temp.path()).join("antigravity-cli").join("builtin").join("skills").display().to_string().replace('\\', "/"),
+            ]
+        );
+        // Same-name sources are marked, not guessed: the native precedence
+        // itself was never observed.
+        assert!(Antigravity.skill_marks_duplicate_names());
+        // Enabling a contract-breaking package is refused instead of claiming
+        // agy will load it (frontmatter name/description verified contract).
+        let reason = Antigravity.skill_enable_requires_contract().unwrap();
+        assert!(reason.contains("frontmatter"), "{reason}");
+    }
+
+    #[test]
+    fn skill_declarations_come_from_the_workspace_skills_json_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir_all(project.join(".agents")).unwrap();
+        // No manifest, no declared sources; the global scope never declares.
+        assert!(Antigravity.skill_declarations(Scope::Global, temp.path(), None).is_empty());
+        assert!(Antigravity.skill_declarations(Scope::Project, temp.path(), Some(&project)).is_empty());
+        std::fs::write(
+            project.join(".agents").join("skills.json"),
+            r#"{"entries":[{"path":"shared-skills","exclude":["experimental-.*"]}]}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(project.join("shared-skills").join("linter-skill")).unwrap();
+        std::fs::create_dir_all(project.join("shared-skills").join("experimental-mock")).unwrap();
+        let declarations = Antigravity.skill_declarations(Scope::Project, temp.path(), Some(&project));
+        assert_eq!(declarations.len(), 1, "{declarations:?}");
+        assert_eq!(
+            declarations[0].root,
+            project.join("shared-skills").join("linter-skill")
+        );
+        assert_eq!(declarations[0].label, "skills.json · shared-skills");
+    }
+
+    #[test]
+    fn remote_skill_directories_mirror_the_verified_global_discovery_roots() {
+        let directories = Antigravity.remote_skill_directories();
+        let writable: Vec<&str> = directories
+            .iter()
+            .filter(|directory| !directory.read_only)
+            .map(|directory| directory.relative)
+            .collect();
+        assert_eq!(writable, vec![".gemini/antigravity-cli/skills"]);
+        let read_only: Vec<&str> = directories
+            .iter()
+            .filter(|directory| directory.read_only)
+            .map(|directory| directory.relative)
+            .collect();
+        assert_eq!(
+            read_only,
+            vec![
+                ".gemini/skills",
+                ".gemini/config/skills",
+                ".gemini/antigravity-cli/builtin/skills",
+            ]
         );
     }
 

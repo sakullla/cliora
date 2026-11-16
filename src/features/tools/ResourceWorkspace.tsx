@@ -628,6 +628,8 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     const rawSummary = typeof item.detail === 'string' ? item.detail.trim() : '';
     const noteSplit = entryOrigin === 'read_only' ? rawSummary.indexOf(' · ') : -1;
     const summary = noteSplit >= 0 ? rawSummary.slice(noteSplit + 3).trim() : rawSummary;
+    const duplicate = item.issues?.includes('duplicate_name') ?? false;
+    const specIssues = (item.issues?.filter(code => code !== 'duplicate_name').length ?? 0) > 0;
     const tone: Tone = item.state === 'managed' || loadedWithPlugin ? 'success' : item.state === 'unreadable' || item.state === 'read_only' || (entryOrigin === 'plugin' && !loadedWithPlugin) ? 'warning' : 'neutral';
     return <button type="button" key={item.path} className={doc.row} aria-current={current || undefined} title={displayPath(item.path)} onClick={() => void openNative(item)}>
       <span className={doc.rowTitle}><strong>{item.name}</strong></span>
@@ -636,7 +638,8 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
         <Badge tone={tone}>{skillBadge(item)}</Badge>
         {entryOrigin === 'plugin' && <Badge>{t('tools.skills.sourcePlugin')}</Badge>}
         {entryOrigin === 'plugin' && item.pluginName && <span className={doc.rowNote}>{item.pluginName}</span>}
-        {(item.issues?.length ?? 0) > 0 && <Badge tone="warning">{t('tools.skills.specIssues')}</Badge>}
+        {duplicate && <Badge tone="warning" title={t('tools.skills.duplicateNote')}>{t('tools.skills.stateDuplicate')}</Badge>}
+        {specIssues && <Badge tone="warning">{t('tools.skills.specIssues')}</Badge>}
       </span>
     </button>;
   }
@@ -721,6 +724,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
         {origin === 'plugin' && <Badge><Icon name="package" size={11} />{t('tools.skills.sourcePlugin')}</Badge>}
         {origin === 'read_only' && <Badge><Icon name="lock" size={11} />{t('tools.skills.stateReadOnly')}</Badge>}
         {external && origin === 'writable' && <Badge>{t('tools.skills.stateExternal')}</Badge>}
+        {subject?.issues?.includes('duplicate_name') && <Badge tone="warning"><Icon name="alert" size={11} />{t('tools.skills.stateDuplicate')}</Badge>}
         {selected && canEditSkill && <Badge tone={installState.tone}>{installState.label}</Badge>}
       </>}
       tools={<>
@@ -741,6 +745,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
       {selected?.description && <p>{selected.description}</p>}
     </div>}
     {subject && !canEditSkill && !openedFile && !adding && subject.state !== 'unreadable' && <p className={doc.strip} data-tone="warn"><Icon name="lock" size={14} /><span>{origin === 'plugin' && subject.pluginName ? t('tools.skills.pluginReadonlyNote', { name: subject.pluginName }) : t('tools.skills.readonlyNote')}</span></p>}
+    {subject?.issues?.includes('duplicate_name') && subject.state !== 'unreadable' && <p className={doc.strip} data-tone="warn"><Icon name="alert" size={14} /><span>{t('tools.skills.duplicateNote')}</span></p>}
     {selected && canEditSkill && selected.compatibility && <label className={doc.strip} data-tone="warn"><input type="checkbox" checked={dependencyChecked} onChange={event => setDependencyChecked(event.target.checked)} /><span>{t('tools.skills.compatibilityChecked', { requirement: selected.compatibility })}</span></label>}
     {subject?.state === 'unreadable' && subject.detail && subject.detail !== error && <p className={doc.strip} data-tone="warn"><Icon name="alert" size={14} /><span>{subject.detail}</span></p>}
     {(outcome || error) && <div className={styles.docStatus}>{status}</div>}

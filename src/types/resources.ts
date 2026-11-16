@@ -47,8 +47,8 @@ export type RulePlacement = { contextId?: string | null; ruleId: string; toolId:
 export type RuleClientSelection = { toolIds: string[]; scope: Scope; projectPath: string | null; allowReplace?: boolean };
 export type RuleSyncResult = { toolId: string; path: string | null; status: 'written' | 'conflict' | 'failed' | 'unchanged'; detail: string; existing: string; proposed: string };
 
-/** Agent Skills specification issue codes reported by the backend reader. Display only; never blocking. */
-export type SkillIssueCode = 'frontmatter_missing' | 'yaml_invalid' | 'name_missing' | 'name_invalid' | 'name_mismatch' | 'description_missing' | 'description_too_long' | 'compatibility_empty' | 'compatibility_too_long' | 'metadata_invalid' | 'too_many_lines';
+/** Agent Skills specification issue codes reported by the backend reader. Display only; never blocking. `duplicate_name` is a scan-level marker: the same skill name exists in several discovered sources. */
+export type SkillIssueCode = 'frontmatter_missing' | 'yaml_invalid' | 'name_missing' | 'name_invalid' | 'name_mismatch' | 'description_missing' | 'description_too_long' | 'compatibility_empty' | 'compatibility_too_long' | 'metadata_invalid' | 'too_many_lines' | 'duplicate_name';
 export type SkillIssue = { code: SkillIssueCode; limit: number | null; actual: number | null };
 export type SkillManifestField = { key: string; value: string };
 /** SKILL.md read by `analyze_skill_document`; `bodyLine` is the zero-based line where Markdown starts (lines split on \n). */

@@ -612,6 +612,8 @@ export default {
     stateExternal: '本机目录',
     stateReadOnly: '只读',
     stateUnreadable: '暂不可读取',
+    stateDuplicate: '同名覆盖',
+    duplicateNote: '同名 Skill 存在多个已发现来源；原生优先级/合并可能生效，实际加载哪一份由原生会话决定。',
     sourcePlugin: '插件',
     pluginNotLoaded: '当前不会加载',
     pluginWillLoad: '会随插件加载',

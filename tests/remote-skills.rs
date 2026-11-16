@@ -223,3 +223,45 @@ fn blank_remote_failure_messages_are_nonempty_at_the_api_boundary_without_losing
         assert_eq!(remote.action, reference.remote.as_ref().unwrap().action);
     }
 }
+
+#[test]
+fn antigravity_remote_skills_scan_mirrors_the_159_global_discovery_roots() {
+    let adapter = &crate::adapters::ANTIGRAVITY;
+    validate_remote_skills(adapter).unwrap();
+    let roots = adapter_skill_roots(adapter);
+    let script = resource_bundle_script(&["antigravity".into()], "skills");
+    // The writable brand root stays the only write target; the Shared, config
+    // and builtin trees join the remote inventory as read-only roots (Linux
+    // layout verified by the 1.5.9 evidence run). Workspace skills.json
+    // declarations are project-relative and stay local.
+    assert_eq!(
+        roots
+            .iter()
+            .filter(|root| !root.read_only)
+            .map(|root| root.relative.as_str())
+            .collect::<Vec<_>>(),
+        vec![".gemini/antigravity-cli/skills"]
+    );
+    for read_only in [".gemini/skills", ".gemini/config/skills", ".gemini/antigravity-cli/builtin/skills"] {
+        assert!(
+            roots.iter().any(|root| root.relative == read_only && root.read_only),
+            "missing read-only root {read_only}"
+        );
+        assert!(script.contains(&format!("$HOME/{read_only}")));
+    }
+    // A builtin-tree file assembles as a read-only row with its own label.
+    let builtin = "/srv/home/.gemini/antigravity-cli/builtin/skills/migrate-agent-settings/SKILL.md";
+    let body = "---
+name: migrate-agent-settings
+description: builtin fixture
+---
+body";
+    let index = roots.iter().position(|root| root.relative == ".gemini/antigravity-cli/builtin/skills").unwrap();
+    let value = assemble_adapter_skill_store(adapter, &[(index, builtin.into())], &BTreeMap::from([(builtin.into(), body.into())]));
+    assert_eq!(value["entries"][0]["source"], "read_only");
+    assert_eq!(value["entries"][0]["state"], "read_only");
+    assert!(value["entries"][0]["detail"].as_str().unwrap().contains("内置 Skill"));
+    // Writing under a read-only discovery root stays refused.
+    let original = serde_json::json!({"documents": {builtin: "original"}});
+    assert!(materialize_adapter_skills(adapter, Some(&value), &original).is_err());
+}
