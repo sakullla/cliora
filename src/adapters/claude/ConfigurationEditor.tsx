@@ -5,11 +5,12 @@ import { useTranslation } from 'react-i18next';
 import { ConfigurationField, type FieldPresentation } from '../../components/configuration/ConfigurationField';
 import { ConnectionCredential } from '../../components/configuration/ConnectionCredential';
 import { ConfigurationStep, connectionMeta } from '../../components/configuration/ConfigurationStep';
+import { confirmAction } from '../../lib/confirm';
 import sharedStyles from '../../components/configuration/configuration.module.css';
 import type { ConfigurationContentProps } from '../contract';
 import styles from './ConfigurationEditor.module.css';
 
-type View = { values?: Record<string, unknown>; editTarget?: string; effortChoices?: string[]; effortWarnings?: string[]; effortOverride?: unknown; modelEffortOverride?: unknown; modelEfforts?: Record<string, unknown>; modelEffortChoices?: Record<string, string[]>; currentEffortModel?: string | null; capabilitySource?: string };
+type View = { values?: Record<string, unknown>; editTarget?: string; effortChoices?: string[]; effortWarnings?: string[]; effortOverride?: unknown; modelEffortOverride?: unknown; modelEfforts?: Record<string, unknown>; modelEffortChoices?: Record<string, string[]>; currentEffortModel?: string | null; roleFollowing?: Record<string, boolean>; baseUrlSource?: string | null; capabilitySource?: string };
 const roles = [['sonnet', 'Sonnet'], ['opus', 'Opus'], ['fable', 'Fable'], ['haiku', 'Haiku'], ['subagent', 'Subagent']] as const;
 function Editor({ draft, descriptor, disabled, onAction, onValidityChange, section, rawResetEpoch, catalog }: ConfigurationContentProps) {
   const { t } = useTranslation();
@@ -19,15 +20,36 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
   const [unifying, setUnifying] = useState(false);
   const [effortModel, setEffortModel] = useState(view?.currentEffortModel ?? '');
   const request = useRef(0);
+  const alive = useRef(true);
   const validity = useRef(onValidityChange);
   validity.current = onValidityChange;
   useEffect(() => { setEffortModel(view?.currentEffortModel ?? ''); }, [draft.sessionId, view?.currentEffortModel]);
   useEffect(() => () => { validity.current('modelEffortLevel', true); }, [draft.sessionId, effortModel]);
-  useEffect(() => () => {
-    request.current += 1;
-    for (const field of descriptor.fields) validity.current(field.id, true);
-    validity.current('unify', true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      request.current += 1;
+      for (const field of descriptor.fields) validity.current(field.id, true);
+      validity.current('unify', true);
+    };
   }, [draft.sessionId]);
+  // The native projection states which roles have no model key and therefore
+  // follow the default model. Missing data is treated conservatively from the
+  // displayed value so older drafts still render a truthful placeholder.
+  const followingOf = (role: string) => {
+    const value = values[`${role}.model`];
+    return view?.roleFollowing?.[role] ?? !(typeof value === 'string' && value.trim() !== '');
+  };
+  const defaultModel = values['default.model'];
+  const roleLabel = (role: string, label: string) => role === 'subagent' ? t('tools.adapters.claude.roleSubagent') : label;
+  const affectedRoles = () => roles.filter(([role]) => {
+    // A following role has no native key and will receive one; an explicit
+    // role only counts when its stored model differs from the target.
+    const value = values[`${role}.model`];
+    return typeof value !== 'string' || value !== defaultModel;
+  }).map(([role, label]) => roleLabel(role, label));
+  const affected = affectedRoles();
   const render = (id: string) => {
     const field = descriptor.fields.find(field => field.id === id);
     if (!field) return null;
@@ -39,11 +61,13 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
     const metadata = choices?.length ? { ...field, choices } : field;
     const role = roles.find(([key]) => id === `${key}.model` || id === `${key}.name`);
     const roleModel = role ? values[`${role[0]}.model`] : undefined;
+    const following = Boolean(role) && id.endsWith('.model') && followingOf(role![0]);
     const presentation: FieldPresentation = {
       ...claudeFieldPresentation(id),
       origin: draft.profile.editing?.intents.some(action => action.operation === 'set' && action.field === id && action.target === target) ? 'explicit' : field?.origin,
       ...(isModel ? { combobox: true, catalog: catalog ? { supported: catalog.supported, busy: catalog.busy, fetch: catalog.fetch, error: catalog.error } : undefined, suggestions: [...new Set([...(catalog?.models ?? []), ...roles.map(([key]) => values[`${key}.model`]), values['default.model']].filter((value): value is string => typeof value === 'string' && value.trim() !== ''))] } : {}),
       ...(id.endsWith('.name') && typeof roleModel === 'string' && roleModel.trim() ? { placeholder: t('tools.adapters.claude.sameAsModel', { model: roleModel }) } : {}),
+      ...(following && typeof defaultModel === 'string' && defaultModel.trim() ? { placeholder: t('tools.adapters.claude.followsDefaultWith', { model: defaultModel }) } : following ? { placeholder: t('tools.adapters.claude.followsDefault') } : {}),
     };
     return <ConfigurationField resetEpoch={rawResetEpoch} presentation={presentation} key={`${draft.sessionId}:${id}:${target}`} field={metadata} value={id === 'modelEffortLevel' ? view?.modelEfforts?.[effortModel] : values[id]} disabled={disabled || unifying || (id === 'modelEffortLevel' && !effortModel.trim())}
       issues={draft.issues.filter(issue => issue.field === id)}
@@ -52,9 +76,18 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
       onValidityChange={valid => onValidityChange(id, valid)} />;
   };
   const unify = async () => {
-    const token = ++request.current;
     const model = values['default.model'];
-    if (typeof model !== 'string' || !model.trim()) return;
+    const labels = affectedRoles();
+    if (typeof model !== 'string' || !model.trim() || !labels.length) return;
+    // A shared dialog states which roles change. Cancelling sends no action,
+    // and a stale answer authorizes nothing after the draft moved on.
+    const accepted = await confirmAction(
+      t('tools.adapters.claude.unifyConfirm', { roles: labels.join(t('tools.adapters.claude.roleListSeparator')), model }),
+      () => alive.current && values['default.model'] === model,
+      { title: t('tools.adapters.claude.unifyTitle'), confirmLabel: t('tools.adapters.claude.unify') },
+    );
+    if (!accepted) return;
+    const token = ++request.current;
     setUnifying(true); setUnifyError(null); onValidityChange('unify', false);
     try {
       await onAction({ version: descriptor.version, target: view?.editTarget ?? 'configuration', operation: 'unify', field: null, value: model + (values['default.longContext'] === true ? '[1m]' : '') });
@@ -63,20 +96,22 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
       if (token === request.current) { setUnifying(false); setUnifyError(error instanceof Error ? error.message : t('tools.adapters.claude.unifyFailed')); }
     }
   };
+  const customAddress = typeof values.base_url === 'string' && values.base_url.trim() !== '';
   return <section className={styles.editor} aria-label={t('tools.adapters.claude.label')}>
     <div hidden={section === 'settings'}>
       <ConfigurationStep step="connection" label={t('common.provider.title')} title={t('common.provider.title')} meta={connectionMeta(null, values.base_url)}>
         <div className={styles.fields}>{render('base_url')}</div>
+        {view?.baseUrlSource && <p className={styles.note}>{t('tools.adapters.claude.baseUrlSource', { source: view.baseUrlSource })}</p>}
       </ConfigurationStep>
       <ConnectionCredential />
-      <ConfigurationStep step="model" title={t('tools.config.modelStepTitle')} meta={t('tools.config.modelStepHint')}>
+      <ConfigurationStep step="model" title={t('tools.config.modelStepTitle')} meta={customAddress ? connectionMeta(null, values.base_url) : t('tools.config.modelStepHint')}>
         <div className={styles.fields}>{render('default.model')}</div>
       </ConfigurationStep>
     </div>
     <div hidden={section === 'models'}><details className={sharedStyles.disclosureCard} open={section === 'settings'}><summary>{t('tools.adapters.claude.rolesSummary')}</summary><div className={styles.fields}>
-      <div className={styles.unifyRow}><button type="button" className={sharedStyles.accent} disabled={disabled || unifying || !values['default.model']} onClick={() => { void unify(); }}>{unifying ? t('tools.adapters.claude.unifying') : t('tools.adapters.claude.unify')}</button>{unifyError && <p role="alert">{unifyError}</p>}<p className={styles.note}>{t('tools.adapters.claude.unifyNote')}</p></div>
+      <div className={styles.unifyRow}><button type="button" className={sharedStyles.accent} disabled={disabled || unifying || !values['default.model'] || !affected.length} onClick={() => { void unify(); }}>{unifying ? t('tools.adapters.claude.unifying') : t('tools.adapters.claude.unify')}</button>{unifyError && <p role="alert">{unifyError}</p>}<p className={styles.note}>{affected.length ? t('tools.adapters.claude.unifyNote') : t('tools.adapters.claude.unifyNoChanges')}</p></div>
       {render('default.longContext')}
-      <div className={styles.roleGrid}>{roles.map(([role, label]) => <fieldset className={styles.roleCard} key={role}><legend>{role === 'subagent' ? t('tools.adapters.claude.roleSubagent') : label}</legend>{render(`${role}.model`)}{render(`${role}.name`)}{render(`${role}.longContext`)}</fieldset>)}</div>
+      <div className={styles.roleGrid}>{roles.map(([role, label]) => <fieldset className={styles.roleCard} key={role}><legend>{roleLabel(role, label)}{followingOf(role) && <span className={styles.follow}>{t('tools.adapters.claude.followsDefault')}</span>}</legend>{render(`${role}.model`)}{render(`${role}.name`)}{render(`${role}.longContext`)}</fieldset>)}</div>
     </div></details>
     <details className={sharedStyles.disclosureCard}><summary>{t('tools.adapters.claude.effortSummary')}</summary><p className={styles.note}>{view?.capabilitySource}</p>{render('effortLevel')}
       {view?.effortWarnings?.map(message => <p key={message} className={styles.note}>{message}</p>)}

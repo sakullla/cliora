@@ -9,11 +9,13 @@ import sharedStyles from '../../components/configuration/configuration.module.cs
 import type { ConfigurationContentProps } from '../contract';
 import styles from './ConfigurationEditor.module.css';
 
-type View = { values?: Record<string, unknown>; defaultAddressReason?: string | null; effortChoices?: string[]; capabilitySource?: string };
+type View = { values?: Record<string, unknown>; defaultAddressReason?: string | null; effortChoices?: string[]; capabilitySource?: string; customConnection?: boolean };
 function Editor({ draft, descriptor, disabled, onAction, onValidityChange, section, rawResetEpoch, catalog }: ConfigurationContentProps) {
   const { t } = useTranslation();
   const view = draft.view as View | null;
   const values = view?.values ?? {};
+  const provider = typeof values.model_provider === 'string' && values.model_provider.trim() ? values.model_provider : 'openai';
+  const customConnection = view?.customConnection ?? (typeof values.base_url === 'string' && values.base_url.trim() !== '');
   const validity = useRef(onValidityChange);
   validity.current = onValidityChange;
   useEffect(() => () => { for (const field of descriptor.fields) validity.current(field.id, true); }, [draft.sessionId]);
@@ -36,7 +38,7 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
         {view?.defaultAddressReason && <p className={styles.note}>{view.defaultAddressReason}</p>}
       </ConfigurationStep>
       <ConnectionCredential />
-      <ConfigurationStep step="model" title={t('tools.config.modelStepTitle')} meta={t('tools.config.modelStepHint')}>
+      <ConfigurationStep step="model" title={t('tools.config.modelStepTitle')} meta={customConnection ? connectionMeta(provider, values.base_url) : t('tools.config.modelStepHint')}>
         <div className={styles.fields}>{render('model')}</div>
       </ConfigurationStep>
     </div>

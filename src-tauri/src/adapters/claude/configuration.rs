@@ -431,8 +431,21 @@ impl ConfigurationAdapter for Claude {
                 (model, choices)
             })
             .collect();
+        // A role without a native model key follows the default model in
+        // Claude Code. State that explicitly instead of letting the editor
+        // guess which role values can be overridden without a write.
+        let role_following: BTreeMap<_, _> = ROLES
+            .iter()
+            .filter(|(role, _)| *role != "default")
+            .map(|(role, key)| {
+                (
+                    (*role).to_string(),
+                    json!(raw_model(&settings, role, key).is_none()),
+                )
+            })
+            .collect();
         Ok(
-            json!({"values":values,"editTarget":if documents.contains_key("local_settings"){"local_configuration"}else{"configuration"},"effortChoices":choices,"effortWarnings":effort_warnings,"effortOverride":settings["env"].get("CLAUDE_CODE_EFFORT_LEVEL"),"modelEffortOverride":settings["modelSettings"][canonical].get("effortLevel"),"modelEfforts":model_efforts,"modelEffortChoices":model_effort_choices,"currentEffortModel":current_model,"capabilitySource":if choices.is_empty(){"未核验模型能力；展示 CLI 可持久化的原生档位"}else{"Claude 原生模型文档（2026-10-05）"}}),
+            json!({"values":values,"editTarget":if documents.contains_key("local_settings"){"local_configuration"}else{"configuration"},"effortChoices":choices,"effortWarnings":effort_warnings,"effortOverride":settings["env"].get("CLAUDE_CODE_EFFORT_LEVEL"),"modelEffortOverride":settings["modelSettings"][canonical].get("effortLevel"),"modelEfforts":model_efforts,"modelEffortChoices":model_effort_choices,"currentEffortModel":current_model,"roleFollowing":role_following,"baseUrlSource":settings["env"].get("ANTHROPIC_BASE_URL").map(|_|"env.ANTHROPIC_BASE_URL"),"capabilitySource":if choices.is_empty(){"未核验模型能力；展示 CLI 可持久化的原生档位"}else{"Claude 原生模型文档（2026-10-05）"}}),
         )
     }
     fn edit(
@@ -783,6 +796,65 @@ mod tests {
         assert_eq!(origin("effortLevel"), Some(FieldOrigin::Inherited));
         // Dynamic per-model fields have no static location and stay unclassified.
         assert_eq!(origin("modelEffortLevel"), None);
+    }
+    #[test]
+    fn claude_read_reports_role_following_without_unifying_existing_differences() {
+        let registry = Registry::with_adapters(vec![&Claude]).unwrap();
+        let draft = configuration::open(&registry, profile(), Scope::Global, "claude-follow".into())
+            .unwrap();
+        let following = &draft.view["roleFollowing"];
+        // The fixture writes sonnet, haiku and subagent models; the remaining
+        // roles have no native key and therefore follow the default model.
+        assert_eq!(following["sonnet"], false);
+        assert_eq!(following["haiku"], false);
+        assert_eq!(following["subagent"], false);
+        assert_eq!(following["opus"], true);
+        assert_eq!(following["fable"], true);
+        // Changing the default model never rewrites an explicit role.
+        let changed = configuration::edit(
+            &registry,
+            draft,
+            action("set", Some("default.model"), json!("claude-sonnet-4-6")),
+        )
+        .unwrap();
+        let parsed: Value = serde_json::from_str(&changed.profile.files["settings"]).unwrap();
+        assert_eq!(
+            parsed["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"],
+            "gateway-sonnet[1m]"
+        );
+        assert_eq!(parsed["env"]["CLAUDE_CODE_SUBAGENT_MODEL"], "gateway-subagent");
+        assert_eq!(changed.view["roleFollowing"]["sonnet"], false);
+        assert_eq!(changed.view["roleFollowing"]["opus"], true);
+        // A new draft with only a default model leaves every role following;
+        // following is represented by absent native keys, not duplicated values.
+        let fresh = BTreeMap::from([(
+            "settings".into(),
+            serde_json::from_str(include_str!(
+                "../../../../tests/fixtures/native/claude-following-default.json"
+            ))
+            .unwrap(),
+        )]);
+        let view = Claude.read(&fresh, &EditingState::default()).unwrap();
+        for role in ["sonnet", "opus", "fable", "haiku", "subagent"] {
+            assert_eq!(view["roleFollowing"][role], true);
+            assert!(view["values"].get(format!("{role}.model")).is_none());
+        }
+        assert_eq!(view["values"]["default.model"], "claude-sonnet-4-6");
+    }
+    #[test]
+    fn claude_read_marks_the_native_address_source() {
+        let documents = BTreeMap::from([(
+            "settings".into(),
+            json!({"env":{"ANTHROPIC_BASE_URL":"https://gateway.example.test/anthropic"},"model":"claude-sonnet-4-6"}),
+        )]);
+        let view = Claude.read(&documents, &EditingState::default()).unwrap();
+        assert_eq!(view["baseUrlSource"], "env.ANTHROPIC_BASE_URL");
+        let official = BTreeMap::from([(
+            "settings".into(),
+            json!({"model":"claude-sonnet-4-6"}),
+        )]);
+        let view = Claude.read(&official, &EditingState::default()).unwrap();
+        assert!(view["baseUrlSource"].is_null());
     }
     #[test]
     fn claude_roles_edit_independently_and_unify_is_explicit() {

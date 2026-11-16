@@ -339,8 +339,13 @@ impl ConfigurationAdapter for Codex {
             } else {
                 None
             };
+        // The official providers do not need a provider ID or address on the
+        // quick screen. Any other provider, or an explicit address under a
+        // built-in ID, is a real custom connection the user must be able to see.
+        let custom_connection = !RESERVED_MODEL_PROVIDERS.contains(&provider)
+            || definition.get("base_url").is_some();
         Ok(
-            json!({"values":values,"defaultAddressReason":default_address_reason,"effortChoices":choices,"capabilitySource":if choices.is_empty() {"未核验模型能力；允许手动原生值"} else {"Codex 公开原生模型目录（2026-10-05）"}}),
+            json!({"values":values,"customConnection":custom_connection,"defaultAddressReason":default_address_reason,"effortChoices":choices,"capabilitySource":if choices.is_empty() {"未核验模型能力；允许手动原生值"} else {"Codex 公开原生模型目录（2026-10-05）"}}),
         )
     }
     fn edit(
@@ -702,6 +707,40 @@ mod tests {
         assert_eq!(origin("model_verbosity"), Some(FieldOrigin::Inherited));
         assert_eq!(origin("model_context_window"), Some(FieldOrigin::Unset));
         assert_eq!(origin("model_reasoning_effort"), Some(FieldOrigin::Explicit));
+    }
+    #[test]
+    fn codex_read_separates_builtin_default_from_custom_connection() {
+        let builtin = BTreeMap::from([(
+            "settings".into(),
+            format::parse(
+                FileKind::Toml,
+                include_str!("../../../../tests/fixtures/native/codex-official-builtin.toml"),
+            )
+            .unwrap(),
+        )]);
+        let view = Codex.read(&builtin, &EditingState::default()).unwrap();
+        assert_eq!(view["customConnection"], false);
+        assert!(view["values"].get("base_url").is_none());
+        let custom = BTreeMap::from([(
+            "settings".into(),
+            json!({"model":"gpt-6.1-sol","model_provider":"gateway","model_providers":{"gateway":{"base_url":"https://gateway.example.test/v1","wire_api":"responses"}}}),
+        )]);
+        let view = Codex.read(&custom, &EditingState::default()).unwrap();
+        assert_eq!(view["customConnection"], true);
+        assert_eq!(view["values"]["base_url"], "https://gateway.example.test/v1");
+        // A built-in provider ID with an explicit address is no longer the
+        // untouched official default; its real address must stay visible.
+        let legacy = BTreeMap::from([(
+            "settings".into(),
+            format::parse(
+                FileKind::Toml,
+                include_str!("../../../../tests/fixtures/native/codex-legacy-openai-address.toml"),
+            )
+            .unwrap(),
+        )]);
+        let view = Codex.read(&legacy, &EditingState::default()).unwrap();
+        assert_eq!(view["customConnection"], true);
+        assert_eq!(view["values"]["base_url"], "https://legacy.example.test/v1");
     }
     #[test]
     fn codex_common_descriptor_origin_marks_explicit_and_unset_only() {

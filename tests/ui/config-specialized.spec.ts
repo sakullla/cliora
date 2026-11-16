@@ -14,10 +14,18 @@ test.beforeAll(async () => {
     import React from 'react';
     import { createRoot } from 'react-dom/client';
     import ${JSON.stringify(i18nEntry)};
+    import ${JSON.stringify(path.resolve('src/styles/tokens.css'))};
+    import ${JSON.stringify(path.resolve('src/styles/base.css'))};
+    import ${JSON.stringify(path.resolve('src/styles/components.css'))};
+    import shellStyles from ${JSON.stringify(path.resolve('src/features/tools/configuration/ConfigurationWorkspaceEditor.module.css'))};
+    import { ConfirmationHost } from ${JSON.stringify(path.resolve('src/components/ConfirmationHost.tsx'))};
     import { CodexConfigurationEditor } from ${JSON.stringify(path.resolve('src/adapters/codex/ConfigurationEditor.tsx'))};
     import { ClaudeConfigurationEditor } from ${JSON.stringify(path.resolve('src/adapters/claude/ConfigurationEditor.tsx'))};
-    const tool = new URL(location.href).searchParams.get('tool');
+    const search = new URL(location.href).searchParams;
+    const tool = search.get('tool');
     const codex = tool === 'codex';
+    const initialLevel = search.get('level') === 'quick' ? 'quick' : 'advanced';
+    const initialSection = search.get('section') ?? (initialLevel === 'quick' ? 'models' : undefined);
     const fields = (codex ? [
       ['model','当前模型','string'],['model_provider','供应商 ID','string'],['base_url','Responses 地址','string'],
       ['model_reasoning_effort','推理强度（Codex 原生）','string'],['model_context_window','上下文窗口（Token）','integer'],
@@ -29,28 +37,39 @@ test.beforeAll(async () => {
     ]).map(([id,label,kind,choices]) => ({ id,label,kind,choices:choices ?? [],required:false,advanced:false,minimum:kind==='integer'?1:null,defaultSource:'原生默认',unavailableReason:null }));
     const descriptor = { version:1,fields,operations:['set','reset','unify'] };
     window.__actions=[];window.__validity={};window.__fail=false;window.__delay=false;
+    const roleNames = ['sonnet','opus','fable','haiku','subagent'];
     function Harness() {
       const [draft,setDraft]=React.useState({sessionId:'editor-test',revision:0,scope:'global',profile:{connection:{baseUrl:'https://api.openai.com/v1'}},baselineFiles:{},issues:[],view:{
         values:codex?{model:'gpt-6.1-sol',model_provider:'gateway',model_reasoning_effort:'ultra',model_context_window:262144}:{'default.model':'claude-opus-4-8','sonnet.model':'gateway-sonnet',effortLevel:'xhigh'},
+        customConnection:codex?true:undefined,roleFollowing:codex?undefined:{sonnet:false,opus:true,fable:true,haiku:true,subagent:true},
         effortChoices:codex?['low','medium','high','xhigh','max','ultra']:['low','medium','high','xhigh'],
         currentEffortModel:'claude-opus-4-8',modelEfforts:{'claude-opus-4-8':'high'},modelEffortChoices:{'claude-opus-4-8':['low','medium','high','xhigh']},capabilitySource:'Native capability evidence',
       }});
       const [valid,setValid]=React.useState(true);
+      const [level,setLevel]=React.useState(initialLevel);
+      const [section,setSection]=React.useState(initialSection);
+      window.__setLevel=setLevel;window.__setSection=setSection;
+      window.__replaceView=fn=>setDraft(old=>({...old,revision:old.revision+1,view:fn(structuredClone(old.view))}));
       const onAction=async action=>{
         window.__actions.push(action);
         if(window.__delay) await new Promise(resolve=>{window.__release=resolve;});
         if(window.__fail) throw new Error('模拟写入失败');
         setDraft(old=>{
           const next=structuredClone(old);next.revision++;
+          const role = typeof action.field === 'string' ? action.field.split('.')[0] : '';
           if(action.field==='modelEffortLevel') {const model=action.target.slice(6);if(action.operation==='reset')delete next.view.modelEfforts[model];else next.view.modelEfforts[model]=action.value;}
-          else if(action.operation==='reset')delete next.view.values[action.field];
-          else if(action.operation==='unify')for(const role of ['default','sonnet','opus','fable','haiku','subagent'])next.view.values[role+'.model']=action.value;
-          else next.view.values[action.field]=action.value;
+          else if(action.operation==='reset'){delete next.view.values[action.field];if(roleNames.includes(role)&&action.field.endsWith('.model'))next.view.roleFollowing[role]=true;}
+          else if(action.operation==='unify')for(const item of ['default',...roleNames]){next.view.values[item+'.model']=action.value;if(item!=='default')next.view.roleFollowing[item]=false;}
+          else {next.view.values[action.field]=action.value;if(roleNames.includes(role)&&action.field.endsWith('.model'))next.view.roleFollowing[role]=false;}
           return next;
         });
       };
       const onValidityChange=(field,valid)=>{window.__validity[field]=valid;setValid(Object.values(window.__validity).every(value=>value));};
-      return React.createElement('div',null,React.createElement(codex?CodexConfigurationEditor:ClaudeConfigurationEditor,{draft,descriptor,onAction,onValidityChange}),React.createElement('button',{disabled:!valid},'保存配置'));
+      const editor = React.createElement(codex?CodexConfigurationEditor:ClaudeConfigurationEditor,{draft,descriptor,section:level==='quick'?'models':section,onAction,onValidityChange});
+      return React.createElement('div',null,
+        React.createElement('div',{className:level==='quick'?shellStyles.quickEditor:undefined},editor),
+        React.createElement('button',{disabled:!valid},'保存配置'),
+        React.createElement(ConfirmationHost));
     }
     createRoot(document.getElementById('root')).render(React.createElement(Harness));
   `;
@@ -129,8 +148,36 @@ test('Claude default model edits leave roles independent until explicit unify', 
   await page.getByText('角色、子代理与长上下文', { exact: true }).click();
   await expect(page.getByLabel('sonnet 模型', { exact: true })).toHaveValue('gateway-sonnet');
   await page.getByRole('button', { name: '将默认模型用于全部角色' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('Sonnet');
+  await expect(dialog).toContainText('Opus');
+  await dialog.getByRole('button', { name: '将默认模型用于全部角色' }).click();
   await expect(page.getByLabel('sonnet 模型', { exact: true })).toHaveValue('gateway-default');
   await expect(page.getByLabel('subagent 模型', { exact: true })).toHaveValue('gateway-default');
+});
+
+test('Claude following roles keep the default model and unify cancellation sends nothing', async ({ page }) => {
+  await page.goto('/__configuration_editor_test?tool=claude');
+  await page.getByLabel('默认模型', { exact: true }).fill('claude-sonnet-4-6');
+  await page.evaluate(() => (window as unknown as { __setSection: (value: string) => void }).__setSection('settings'));
+  const opus = page.getByLabel('opus 模型', { exact: true });
+  await expect(opus).toHaveValue('');
+  await expect(opus).toHaveAttribute('placeholder', '跟随默认模型 · claude-sonnet-4-6');
+  await expect(page.getByLabel('sonnet 模型', { exact: true })).toHaveValue('gateway-sonnet');
+  const unify = page.getByRole('button', { name: '将默认模型用于全部角色' });
+  await unify.focus();
+  await page.keyboard.press('Enter');
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('Sonnet');
+  await page.keyboard.press('Escape');
+  await expect(dialog).not.toBeVisible();
+  await expect(unify).toBeFocused();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __actions: unknown[] }).__actions)).toEqual([
+    { version: 1, target: 'configuration', operation: 'set', field: 'default.model', value: 'claude-sonnet-4-6' },
+  ]);
+  await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
+  await expect(page.getByLabel('sonnet 模型', { exact: true })).toHaveValue('gateway-sonnet');
 });
 
 test('Claude model effort edit and reset target the native model override', async ({ page }) => {
@@ -151,11 +198,97 @@ test('Claude explicit unify failure blocks save until retry succeeds', async ({ 
   await page.getByText('角色、子代理与长上下文', { exact: true }).click();
   await page.evaluate(() => { (window as unknown as { __fail: boolean }).__fail = true; });
   await page.getByRole('button', { name: '将默认模型用于全部角色' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '将默认模型用于全部角色' }).click();
   await expect(page.getByRole('alert')).toContainText('模拟写入失败');
   await expect(page.getByRole('button', { name: '保存配置' })).toBeDisabled();
   await expect(page.getByLabel('sonnet 模型', { exact: true })).toHaveValue('gateway-sonnet');
   await page.evaluate(() => { (window as unknown as { __fail: boolean }).__fail = false; });
   await page.getByRole('button', { name: '将默认模型用于全部角色' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '将默认模型用于全部角色' }).click();
   await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
   await expect(page.getByLabel('sonnet 模型', { exact: true })).toHaveValue('claude-opus-4-8');
+});
+
+test('Codex quick hides builtin provider fields and keeps a real custom summary', async ({ page }) => {
+  await page.goto('/__configuration_editor_test?tool=codex&level=quick');
+  await expect(page.getByLabel('模型', { exact: true })).toHaveValue('gpt-6.1-sol');
+  await expect(page.getByLabel('供应商 ID', { exact: true })).not.toBeVisible();
+  await expect(page.getByLabel('请求地址', { exact: true })).not.toBeVisible();
+  await expect(page.getByText('模型参数', { exact: true })).not.toBeVisible();
+  await expect(page.locator('[data-config-step="model"]').getByText('gateway', { exact: true })).toBeVisible();
+  await page.evaluate(() => (window as unknown as { __replaceView: (fn: (view: any) => any) => void }).__replaceView(view => {
+    view.values = { model: 'gpt-6.1-sol', model_provider: 'openai' };
+    view.customConnection = false;
+    return view;
+  }));
+  await expect(page.locator('[data-config-step="model"]').getByText('gateway', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('供应商 ID', { exact: true })).not.toBeVisible();
+  await page.evaluate(() => (window as unknown as { __replaceView: (fn: (view: any) => any) => void }).__replaceView(view => {
+    view.values.base_url = 'https://gateway.example.test/v1';
+    view.customConnection = true;
+    return view;
+  }));
+  await expect(page.locator('[data-config-step="model"]').getByText('openai', { exact: true })).toBeVisible();
+  await expect(page.locator('[data-config-step="model"]')).toContainText('https://gateway.example.test/v1');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __actions: unknown[] }).__actions)).toEqual([]);
+});
+
+test('Codex quick and advanced share one draft and the same native targets', async ({ page }) => {
+  await page.goto('/__configuration_editor_test?tool=codex&level=quick');
+  await page.getByLabel('模型', { exact: true }).fill('gpt-quick');
+  await page.evaluate(() => (window as unknown as { __setLevel: (value: string) => void }).__setLevel('advanced'));
+  await expect(page.getByLabel('供应商 ID', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('供应商 ID', { exact: true })).toHaveValue('gateway');
+  await expect(page.getByLabel('模型', { exact: true })).toHaveValue('gpt-quick');
+  await expect(page.getByText('模型参数', { exact: true })).not.toBeVisible();
+  await page.evaluate(() => (window as unknown as { __setSection: (value: string) => void }).__setSection('settings'));
+  await expect(page.getByLabel('推理强度（Codex 原生）')).toHaveValue('ultra');
+  await page.getByLabel('推理强度（Codex 原生）').selectOption('');
+  await page.getByLabel('上下文窗口（Token）').fill('131072');
+  await page.evaluate(() => (window as unknown as { __setLevel: (value: string) => void }).__setLevel('quick'));
+  await expect(page.getByLabel('模型', { exact: true })).toHaveValue('gpt-quick');
+  await expect(page.getByLabel('推理强度（Codex 原生）')).not.toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __actions: unknown[] }).__actions)).toEqual([
+    { version: 1, target: 'configuration', operation: 'set', field: 'model', value: 'gpt-quick' },
+    { version: 1, target: 'configuration', operation: 'reset', field: 'model_reasoning_effort', value: null },
+    { version: 1, target: 'configuration', operation: 'set', field: 'model_context_window', value: 131072 },
+  ]);
+});
+
+test('Claude quick keeps only credential, default model and the real custom address', async ({ page }) => {
+  await page.goto('/__configuration_editor_test?tool=claude&level=quick');
+  await expect(page.getByLabel('默认模型', { exact: true })).toHaveValue('claude-opus-4-8');
+  await expect(page.getByLabel('请求地址', { exact: true })).not.toBeVisible();
+  await expect(page.getByText('角色、子代理与长上下文', { exact: true })).not.toBeVisible();
+  await expect(page.getByText('推理参数', { exact: true })).not.toBeVisible();
+  await expect(page.locator('[data-config-step="model"]')).not.toContainText('gateway');
+  await page.evaluate(() => (window as unknown as { __replaceView: (fn: (view: any) => any) => void }).__replaceView(view => {
+    view.values.base_url = 'https://gateway.example.test/anthropic';
+    view.baseUrlSource = 'env.ANTHROPIC_BASE_URL';
+    return view;
+  }));
+  await expect(page.locator('[data-config-step="model"]').getByText('https://gateway.example.test/anthropic', { exact: true })).toBeVisible();
+  await page.getByLabel('默认模型', { exact: true }).fill('claude-quick');
+  await page.evaluate(() => (window as unknown as { __setLevel: (value: string) => void }).__setLevel('advanced'));
+  await expect(page.getByLabel('请求地址', { exact: true })).toHaveValue('https://gateway.example.test/anthropic');
+  await expect(page.getByText(/该地址来自原生配置 env.ANTHROPIC_BASE_URL/)).toBeVisible();
+  await expect(page.getByLabel('默认模型', { exact: true })).toHaveValue('claude-quick');
+  await page.evaluate(() => (window as unknown as { __setSection: (value: string) => void }).__setSection('settings'));
+  await expect(page.getByLabel('sonnet 模型', { exact: true })).toHaveValue('gateway-sonnet');
+  await expect(page.getByLabel('opus 模型', { exact: true })).toHaveAttribute('placeholder', '跟随默认模型 · claude-quick');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __actions: unknown[] }).__actions)).toEqual([
+    { version: 1, target: 'configuration', operation: 'set', field: 'default.model', value: 'claude-quick' },
+  ]);
+});
+
+test('Claude environment overrides state their real source', async ({ page }) => {
+  await page.goto('/__configuration_editor_test?tool=claude');
+  await page.evaluate(() => (window as unknown as { __replaceView: (fn: (view: any) => any) => void }).__replaceView(view => {
+    view.effortOverride = 'max';
+    view.modelEffortOverride = 'low';
+    return view;
+  }));
+  await page.getByText('推理参数', { exact: true }).click();
+  await expect(page.getByText(/CLAUDE_CODE_EFFORT_LEVEL 当前优先于 effortLevel（max）/)).toBeVisible();
+  await expect(page.getByText(/modelSettings effort（low）/)).toBeVisible();
 });
