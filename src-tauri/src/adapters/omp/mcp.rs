@@ -48,6 +48,11 @@ pub(crate) fn omp_config_root(home: &Path) -> PathBuf {
 /// Delegates the default/named profile rules to the configuration capability so
 /// MCP, Skills and Agents cannot disagree with the config editor.
 pub(crate) fn user_agent_directory(home: &Path) -> PathBuf {
+    user_agent_directory_checked(home)
+        .unwrap_or_else(|_| home.join(".cliora-unresolved-omp-profile"))
+}
+
+pub(crate) fn user_agent_directory_checked(home: &Path) -> Result<PathBuf, String> {
     let omp_profile = env::var_os("OMP_PROFILE").map(|value| value.to_string_lossy().into_owned());
     let pi_profile = if omp_profile.is_none() {
         env::var_os("PI_PROFILE").map(|value| value.to_string_lossy().into_owned())
@@ -55,10 +60,10 @@ pub(crate) fn user_agent_directory(home: &Path) -> PathBuf {
         None
     };
     let config_dir = env::var_os("PI_CONFIG_DIR")
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.to_string_lossy().trim().is_empty())
         .map(PathBuf::from);
     let coding_agent = env::var_os("PI_CODING_AGENT_DIR")
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.to_string_lossy().trim().is_empty())
         .map(PathBuf::from);
     user_agent_directory_from(
         home,
@@ -75,19 +80,18 @@ fn user_agent_directory_from(
     pi_profile: Option<&str>,
     config_dir: Option<&Path>,
     coding_agent: Option<&Path>,
-) -> PathBuf {
+) -> Result<PathBuf, String> {
     let resolved = super::configuration::resolve_agent_root(
         home,
         omp_profile,
         pi_profile,
         config_dir,
         coding_agent,
-    )
-    .map(|resolved| resolved.root)
-    .unwrap_or_else(|_| omp_config_root(home).join("agent"));
+    )?
+    .root;
     // An active OAuth/account context keeps resources inside its own root, the
     // same rule the configuration capability uses.
-    crate::accounts::selection::config_root(super::ID, || resolved)
+    Ok(crate::accounts::selection::config_root(super::ID, || resolved))
 }
 /// Project `.omp` directory. OMP does not walk to a parent `.omp` for writes;
 /// the selected project is the scope this adapter manages.
@@ -450,7 +454,12 @@ struct UserSources {
 }
 
 fn user_sources(home: &Path) -> Result<UserSources, (PathBuf, String)> {
-    let agent = user_agent_directory(home);
+    let agent = user_agent_directory_checked(home).map_err(|error| {
+        (
+            home.join(".cliora-unresolved-omp-profile").join("config.yml"),
+            error,
+        )
+    })?;
     let yml = agent.join("config.yml");
     let config = if yml.is_file() {
         yml
@@ -1173,30 +1182,37 @@ mod tests {
     fn shared_profile_resolution_matches_accounts_and_configuration() {
         let home = home();
         assert_eq!(
-            user_agent_directory_from(&home, Some(""), Some("work"), None, None),
+            user_agent_directory_from(&home, Some(""), Some("work"), None, None).unwrap(),
             home.join(".omp/agent")
         );
         assert_eq!(
-            user_agent_directory_from(&home, Some("  "), Some("work"), None, None),
+            user_agent_directory_from(&home, Some("  "), Some("work"), None, None).unwrap(),
             home.join(".omp/agent")
         );
         assert_eq!(
-            user_agent_directory_from(&home, Some("default"), Some("work"), None, None),
+            user_agent_directory_from(&home, Some("default"), Some("work"), None, None).unwrap(),
             home.join(".omp/agent")
         );
         assert_eq!(
-            user_agent_directory_from(&home, None, Some(" work "), None, None),
+            user_agent_directory_from(&home, None, Some(" work "), None, None).unwrap(),
             home.join(".omp/profiles/work/agent")
         );
+        let ignored = std::env::temp_dir().join("ignored-for-profile");
         assert_eq!(
             user_agent_directory_from(
                 &home,
                 None,
                 Some("work"),
                 Some(Path::new("custom-config")),
-                Some(Path::new("/tmp/ignored-for-profile")),
-            ),
+                Some(ignored.as_path()),
+            )
+            .unwrap(),
             home.join("custom-config/profiles/work/agent")
+        );
+        assert!(user_agent_directory_from(&home, Some("Work"), None, None, None).is_err());
+        assert!(
+            user_agent_directory_from(&home, None, None, None, Some(Path::new("relative")))
+                .is_err()
         );
     }
     #[test]

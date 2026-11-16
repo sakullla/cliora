@@ -89,14 +89,15 @@ fn default_named_and_project_roots_stay_isolated() {
     assert_eq!(explicit_empty.root, home.join(".omp/agent"));
 
     // PI_CODING_AGENT_DIR relocates only the default profile.
+    let absolute_agent = std::env::temp_dir().join("omp-agent");
     let relocated = resolve_root(&ResolutionInput {
         home,
         profile: None,
         config_dir: None,
-        coding_agent_dir: Some(Path::new("/tmp/omp-agent")),
+        coding_agent_dir: Some(&absolute_agent),
     })
     .unwrap();
-    assert_eq!(relocated.root, Path::new("/tmp/omp-agent"));
+    assert_eq!(relocated.root, absolute_agent);
 
     // Accounts and MCP pass the raw OMP/PI profile values through the same
     // resolver; a fallback profile is trimmed and a named profile ignores the
@@ -106,7 +107,7 @@ fn default_named_and_project_roots_stay_isolated() {
         None,
         Some(" work "),
         Some(Path::new("custom-config")),
-        Some(Path::new("/tmp/ignored-for-profile")),
+        Some(&absolute_agent),
     )
     .unwrap();
     assert_eq!(shared.kind, "profile");
@@ -116,7 +117,7 @@ fn default_named_and_project_roots_stay_isolated() {
         home,
         profile: Some("work"),
         config_dir: Some(Path::new("custom-config")),
-        coding_agent_dir: Some(Path::new("/tmp/ignored-for-profile")),
+        coding_agent_dir: Some(&absolute_agent),
     })
     .unwrap();
     assert_eq!(named.kind, "profile");
@@ -159,7 +160,9 @@ fn default_named_and_project_roots_stay_isolated() {
         "work name",
         "con",
         "CON.txt",
+        "com0",
         "com1",
+        "lpt0",
         "-work",
         "_work",
         too_long.as_str(),
@@ -185,6 +188,28 @@ fn default_named_and_project_roots_stay_isolated() {
             })
             .is_err(),
             "PI_CONFIG_DIR {invalid:?} 必须被拒绝"
+        );
+    }
+    for blank in ["", "   "] {
+        let outcome = resolve_root(&ResolutionInput {
+            home,
+            profile: None,
+            config_dir: Some(Path::new(blank)),
+            coding_agent_dir: None,
+        })
+        .unwrap();
+        assert_eq!(outcome.root, home.join(".omp/agent"), "{blank:?}");
+    }
+    for relative in ["relative-agent", "../agent"] {
+        assert!(
+            resolve_root(&ResolutionInput {
+                home,
+                profile: None,
+                config_dir: None,
+                coding_agent_dir: Some(Path::new(relative)),
+            })
+            .is_err(),
+            "PI_CODING_AGENT_DIR {relative:?} 必须被拒绝"
         );
     }
 }

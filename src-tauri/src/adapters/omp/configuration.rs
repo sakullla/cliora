@@ -185,11 +185,23 @@ fn valid_config_relative(path: &Path) -> bool {
 }
 
 pub(crate) fn resolve_root(input: &ResolutionInput<'_>) -> Result<ResolvedRoot, String> {
+    if input
+        .coding_agent_dir
+        .is_some_and(|path| !path.has_root())
+    {
+        return Err(
+            "PI_CODING_AGENT_DIR 必须是绝对路径；OMP 会按进程工作目录解析，Cliora 无法安全定位。请使用绝对路径，或从目标项目目录启动 OMP。"
+                .into(),
+        );
+    }
     // OMP joins `PI_CONFIG_DIR` under the home directory (`path.join(home,
     // PI_CONFIG_DIR)`); it is not an absolute root. Cliora rejects an absolute
     // or parent-traversing value instead of reproducing OMP's concatenated,
     // invalid path, and never writes outside the home directory.
-    let relative = input.config_dir.unwrap_or_else(|| Path::new(".omp"));
+    let relative = input
+        .config_dir
+        .filter(|path| !path.as_os_str().to_string_lossy().trim().is_empty())
+        .unwrap_or_else(|| Path::new(".omp"));
     if !valid_config_relative(relative) {
         return Err("PI_CONFIG_DIR 必须是 home 下的相对目录".into());
     }
@@ -277,8 +289,8 @@ fn windows_reserved_name(name: &str) -> bool {
     matches!(
         stem.as_str(),
         "CON" | "PRN" | "AUX" | "NUL"
-            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
-            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+            | "COM0" | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
+            | "LPT0" | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
     )
 }
 
