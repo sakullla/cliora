@@ -481,6 +481,16 @@ impl ConfigurationAdapter for Codex {
                 issue(key, "此值不符合 Codex 原生配置 schema");
             }
         }
+        // A selected provider, built-in or custom, may explicitly carry an
+        // unsupported protocol. Built-in IDs can still be defined in the
+        // model_providers table, so validate the selected definition directly.
+        let selected_provider = settings["model_provider"].as_str().unwrap_or("openai");
+        if settings["model_providers"][selected_provider]
+            .get("wire_api")
+            .is_some_and(|value| value != "responses")
+        {
+            issue("base_url", "Codex 仅支持 Responses 接口");
+        }
         if let Some(provider) = settings["model_provider"]
             .as_str()
             .filter(|id| !["openai", "ollama", "lmstudio"].contains(id))
@@ -497,12 +507,6 @@ impl ConfigurationAdapter for Codex {
                 })
             }) {
                 issue("base_url", "请输入有效 HTTP 或 HTTPS 供应商地址");
-            }
-            if definition
-                .get("wire_api")
-                .is_some_and(|value| value != "responses")
-            {
-                issue("base_url", "Codex 仅支持 Responses 接口");
             }
             if definition
                 .get("env_key")
@@ -764,6 +768,17 @@ mod tests {
             "chat"
         );
         let issues = Codex.validate(&documents, &EditingState::default(), Scope::Global);
+        assert!(issues.iter().any(|issue| {
+            issue.field.as_deref() == Some("base_url")
+                && issue.message == "Codex 仅支持 Responses 接口"
+        }));
+        // A built-in provider ID may also appear in model_providers; an
+        // explicit unsupported protocol must be visible and block save.
+        let builtin_chat = BTreeMap::from([(
+            "settings".into(),
+            json!({"model_provider":"openai","model_providers":{"openai":{"base_url":"https://legacy.example.test/v1","wire_api":"chat"}}}),
+        )]);
+        let issues = Codex.validate(&builtin_chat, &EditingState::default(), Scope::Global);
         assert!(issues.iter().any(|issue| {
             issue.field.as_deref() == Some("base_url")
                 && issue.message == "Codex 仅支持 Responses 接口"

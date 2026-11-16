@@ -69,6 +69,15 @@ fn paths(field: &str) -> Result<Vec<Vec<String>>, String> {
         _ => Err("不支持的 Claude 角色参数".into()),
     }
 }
+/// Non-default roles still defined by the global settings file. A local
+/// editor cannot remove these, so unify must not claim success.
+fn role_models_inherited(settings: &Value) -> Vec<&'static str> {
+    ROLES
+        .iter()
+        .filter(|(role, key)| *role != "default" && raw_model(settings, role, key).is_some())
+        .map(|(role, _)| *role)
+        .collect()
+}
 /// Unifying removes every explicit non-default role model so all roles follow
 /// the default model natively. Display names are labels, not model overrides.
 fn unify_paths() -> Vec<Vec<String>> {
@@ -349,9 +358,6 @@ impl ConfigurationAdapter for Claude {
                 &["low", "medium", "high", "xhigh"],
                 true,
             ),
-            // Validation key for the explicit all-roles action; the shared
-            // shell resolves this label instead of showing a raw id.
-            field("roleOverrides", "Claude 角色覆盖", "string", &[], true),
         ];
         for (role, _) in ROLES {
             if *role != "default" {
@@ -456,8 +462,16 @@ impl ConfigurationAdapter for Claude {
                 )
             })
             .collect();
+        // The local settings editor cannot remove global role overrides. List
+        // them so unify is blocked instead of reporting a no-op success.
+        let inherited_role_models: Vec<&str> = if documents.contains_key("local_settings") {
+            let settings_only = documents.get("settings").cloned().unwrap_or_else(|| json!({}));
+            role_models_inherited(&settings_only)
+        } else {
+            Vec::new()
+        };
         Ok(
-            json!({"values":values,"editTarget":if documents.contains_key("local_settings"){"local_configuration"}else{"configuration"},"effortChoices":choices,"effortWarnings":effort_warnings,"effortOverride":settings["env"].get("CLAUDE_CODE_EFFORT_LEVEL"),"modelEffortOverride":settings["modelSettings"][canonical].get("effortLevel"),"modelEfforts":model_efforts,"modelEffortChoices":model_effort_choices,"currentEffortModel":current_model,"roleFollowing":role_following,"baseUrlSource":settings["env"].get("ANTHROPIC_BASE_URL").map(|_|"env.ANTHROPIC_BASE_URL"),"capabilitySource":if choices.is_empty(){"未核验模型能力；展示 CLI 可持久化的原生档位"}else{"Claude 原生模型文档（2026-10-05）"}}),
+            json!({"values":values,"editTarget":if documents.contains_key("local_settings"){"local_configuration"}else{"configuration"},"effortChoices":choices,"effortWarnings":effort_warnings,"effortOverride":settings["env"].get("CLAUDE_CODE_EFFORT_LEVEL"),"modelEffortOverride":settings["modelSettings"][canonical].get("effortLevel"),"modelEfforts":model_efforts,"modelEffortChoices":model_effort_choices,"currentEffortModel":current_model,"roleFollowing":role_following,"inheritedRoleModels":inherited_role_models,"baseUrlSource":settings["env"].get("ANTHROPIC_BASE_URL").map(|_|"env.ANTHROPIC_BASE_URL"),"capabilitySource":if choices.is_empty(){"未核验模型能力；展示 CLI 可持久化的原生档位"}else{"Claude 原生模型文档（2026-10-05）"}}),
         )
     }
     fn edit(
@@ -483,6 +497,19 @@ impl ConfigurationAdapter for Claude {
             return Err("未知 Claude 配置目标".into());
         }
         let baseline = root(effective)?;
+        // Local settings can only remove local role overrides. If global
+        // settings still define a role model, report a locatable error
+        // instead of deleting nothing and claiming success.
+        if action.operation == "unify" && action.target == json!("local_configuration") {
+            let settings_only = documents.get("settings").cloned().unwrap_or_else(|| json!({}));
+            let inherited = role_models_inherited(&settings_only);
+            if !inherited.is_empty() {
+                return Err(format!(
+                    "{} 的模型覆盖来自全局 settings，需在全局配置统一",
+                    inherited.join("、")
+                ));
+            }
+        }
         let settings = documents
             .entry(action_role(action).into())
             .or_insert_with(|| json!({}));
@@ -823,10 +850,6 @@ mod tests {
         assert_eq!(origin("effortLevel"), Some(FieldOrigin::Inherited));
         // Dynamic per-model fields have no static location and stay unclassified.
         assert_eq!(origin("modelEffortLevel"), None);
-        // The shared shell resolves the unify failure through this label.
-        assert!(fields
-            .iter()
-            .any(|field| field.id == "roleOverrides" && field.label == "Claude 角色覆盖"));
     }
     #[test]
     fn claude_read_reports_role_following_without_unifying_existing_differences() {
@@ -1134,6 +1157,33 @@ mod tests {
             Claude.suppression_changes(&edit, &crate::adapters::configuration::EditingState::default()).unwrap()[0].role,
             "local_settings"
         );
+    }
+    #[test]
+    fn claude_local_unify_blocks_inherited_global_role_overrides() {
+        let documents = BTreeMap::from([
+            (
+                "settings".into(),
+                json!({"model":"claude-sonnet-4-6","env":{"ANTHROPIC_DEFAULT_SONNET_MODEL":"global-sonnet"}}),
+            ),
+            (
+                "local_settings".into(),
+                json!({"env":{"ANTHROPIC_DEFAULT_SONNET_MODEL":"local-sonnet","ANTHROPIC_DEFAULT_OPUS_MODEL":"local-opus"}}),
+            ),
+        ]);
+        let view = Claude.read(&documents, &EditingState::default()).unwrap();
+        assert_eq!(view["editTarget"], "local_configuration");
+        // Even when a local value shadows it, the global key remains after a
+        // local unify and would keep the role from following.
+        assert_eq!(view["inheritedRoleModels"], json!(["sonnet"]));
+        let mut own = documents.clone();
+        let mut edit = action("unify", None, json!("claude-sonnet-4-6"));
+        edit.target = json!("local_configuration");
+        let error = Claude
+            .edit_inherited(&mut own, &documents, &mut EditingState::default(), &edit)
+            .unwrap_err();
+        assert!(error.contains("全局"), "{error}");
+        assert_eq!(own["settings"], documents["settings"]);
+        assert_eq!(own["local_settings"], documents["local_settings"]);
     }
     #[test]
     fn claude_scalar_reset_does_not_claim_empty_native_containers() {

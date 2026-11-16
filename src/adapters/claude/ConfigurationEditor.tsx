@@ -10,7 +10,7 @@ import sharedStyles from '../../components/configuration/configuration.module.cs
 import type { ConfigurationContentProps } from '../contract';
 import styles from './ConfigurationEditor.module.css';
 
-type View = { values?: Record<string, unknown>; editTarget?: string; effortChoices?: string[]; effortWarnings?: string[]; effortOverride?: unknown; modelEffortOverride?: unknown; modelEfforts?: Record<string, unknown>; modelEffortChoices?: Record<string, string[]>; currentEffortModel?: string | null; roleFollowing?: Record<string, boolean>; baseUrlSource?: string | null; capabilitySource?: string };
+type View = { values?: Record<string, unknown>; editTarget?: string; effortChoices?: string[]; effortWarnings?: string[]; effortOverride?: unknown; modelEffortOverride?: unknown; modelEfforts?: Record<string, unknown>; modelEffortChoices?: Record<string, string[]>; currentEffortModel?: string | null; roleFollowing?: Record<string, boolean>; inheritedRoleModels?: string[]; baseUrlSource?: string | null; capabilitySource?: string };
 const roles = [['sonnet', 'Sonnet'], ['opus', 'Opus'], ['fable', 'Fable'], ['haiku', 'Haiku'], ['subagent', 'Subagent']] as const;
 function Editor({ draft, descriptor, disabled, onAction, onValidityChange, section, rawResetEpoch, catalog }: ConfigurationContentProps) {
   const { t } = useTranslation();
@@ -43,12 +43,12 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
   };
   const defaultModel = values['default.model'];
   const roleLabel = (role: string, label: string) => role === 'subagent' ? t('tools.adapters.claude.roleSubagent') : label;
-  const affectedRoles = () => roles.filter(([role]) => {
-    // Only explicit role overrides that differ from the default are affected;
-    // roles without a native key already follow the default and need no write.
-    const value = values[`${role}.model`];
-    return typeof value === 'string' && value.trim() !== '' && value !== defaultModel;
-  }).map(([role, label]) => roleLabel(role, label));
+  const roleDisplay = (role: string) => {
+    const entry = roles.find(([key]) => key === role);
+    return entry ? roleLabel(entry[0], entry[1]) : role;
+  };
+  const inheritedRoles = view?.inheritedRoleModels ?? [];
+  const affectedRoles = () => roles.filter(([role]) => !followingOf(role)).map(([role, label]) => roleLabel(role, label));
   const affected = affectedRoles();
   const render = (id: string) => {
     const field = descriptor.fields.find(field => field.id === id);
@@ -59,17 +59,22 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
     const choices = id === 'modelEffortLevel' ? view?.modelEffortChoices?.[effortModel] : undefined;
     const isModel = id === 'default.model' || id.endsWith('.model');
     const metadata = choices?.length ? { ...field, choices } : field;
-    const role = roles.find(([key]) => id === `${key}.model` || id === `${key}.name`);
+    const role = roles.find(([key]) => id === `${key}.model` || id === `${key}.name` || id === `${key}.longContext`);
     const roleModel = role ? values[`${role[0]}.model`] : undefined;
     const following = Boolean(role) && id.endsWith('.model') && followingOf(role![0]);
+    // A following role has no own long-context key; its checkbox reflects the
+    // default model and stays disabled instead of offering a failing write.
+    const followsLongContext = Boolean(role) && id.endsWith('.longContext') && followingOf(role![0]);
     const presentation: FieldPresentation = {
       ...claudeFieldPresentation(id),
+      ...(followsLongContext ? { description: t('tools.adapters.claude.followsDefaultLongContext') } : {}),
       origin: draft.profile.editing?.intents.some(action => action.operation === 'set' && action.field === id && action.target === target) ? 'explicit' : field?.origin,
       ...(isModel ? { combobox: true, catalog: catalog ? { supported: catalog.supported, busy: catalog.busy, fetch: catalog.fetch, error: catalog.error } : undefined, suggestions: [...new Set([...(catalog?.models ?? []), ...roles.map(([key]) => values[`${key}.model`]), values['default.model']].filter((value): value is string => typeof value === 'string' && value.trim() !== ''))] } : {}),
       ...(id.endsWith('.name') && typeof roleModel === 'string' && roleModel.trim() ? { placeholder: t('tools.adapters.claude.sameAsModel', { model: roleModel }) } : {}),
       ...(following && typeof defaultModel === 'string' && defaultModel.trim() ? { placeholder: t('tools.adapters.claude.followsDefaultWith', { model: defaultModel }) } : following ? { placeholder: t('tools.adapters.claude.followsDefault') } : {}),
     };
-    return <ConfigurationField resetEpoch={rawResetEpoch} presentation={presentation} key={`${draft.sessionId}:${id}:${target}`} field={metadata} value={id === 'modelEffortLevel' ? view?.modelEfforts?.[effortModel] : values[id]} disabled={disabled || unifying || (id === 'modelEffortLevel' && !effortModel.trim())}
+    const value = followsLongContext ? values['default.longContext'] === true : id === 'modelEffortLevel' ? view?.modelEfforts?.[effortModel] : values[id];
+    return <ConfigurationField resetEpoch={rawResetEpoch} presentation={presentation} key={`${draft.sessionId}:${id}:${target}`} field={metadata} value={value} disabled={disabled || unifying || followsLongContext || (id === 'modelEffortLevel' && !effortModel.trim())}
       issues={draft.issues.filter(issue => issue.field === id)}
       onChange={value => value === '' ? action('reset') : action('set', value)}
       onReset={id.endsWith('.longContext') ? undefined : () => action('reset')}
@@ -78,7 +83,7 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
   const unify = async () => {
     const model = values['default.model'];
     const labels = affectedRoles();
-    if (typeof model !== 'string' || !model.trim() || !labels.length) return;
+    if (inheritedRoles.length || typeof model !== 'string' || !model.trim() || !labels.length) return;
     // A shared dialog states which roles change. Cancelling sends no action,
     // and a stale answer authorizes nothing after the draft moved on.
     const accepted = await confirmAction(
@@ -109,9 +114,9 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
       </ConfigurationStep>
     </div>
     <div hidden={section === 'models'}><details className={sharedStyles.disclosureCard} open={section === 'settings'}><summary>{t('tools.adapters.claude.rolesSummary')}</summary><div className={styles.fields}>
-      <div className={styles.unifyRow}><button type="button" className={sharedStyles.accent} disabled={disabled || unifying || !values['default.model'] || !affected.length} onClick={() => { void unify(); }}>{unifying ? t('tools.adapters.claude.unifying') : t('tools.adapters.claude.unify')}</button>{unifyError && <p role="alert">{unifyError}</p>}<p className={styles.note}>{affected.length ? t('tools.adapters.claude.unifyNote') : t('tools.adapters.claude.unifyNoChanges')}</p></div>
+      <div className={styles.unifyRow}><button type="button" className={sharedStyles.accent} disabled={disabled || unifying || inheritedRoles.length > 0 || !values['default.model'] || !affected.length} onClick={() => { void unify(); }}>{unifying ? t('tools.adapters.claude.unifying') : t('tools.adapters.claude.unify')}</button>{unifyError && <p role="alert">{unifyError}</p>}<p className={styles.note}>{inheritedRoles.length ? t('tools.adapters.claude.unifyInheritedBlocked', { roles: inheritedRoles.map(roleDisplay).join(t('tools.adapters.claude.roleListSeparator')) }) : affected.length ? t('tools.adapters.claude.unifyNote') : t('tools.adapters.claude.unifyNoChanges')}</p></div>
       {render('default.longContext')}
-      <div className={styles.roleGrid}>{roles.map(([role, label]) => <fieldset className={styles.roleCard} key={role}><legend>{roleLabel(role, label)}{followingOf(role) && <span className={styles.follow}>{t('tools.adapters.claude.followsDefault')}</span>}</legend>{render(`${role}.model`)}{render(`${role}.name`)}{render(`${role}.longContext`)}</fieldset>)}</div>
+      <div className={styles.roleGrid}>{roles.map(([role, label]) => <fieldset className={styles.roleCard} key={role}><legend>{roleLabel(role, label)}{followingOf(role) && <span className={styles.follow}>{t('tools.adapters.claude.followsDefault')}</span>}{inheritedRoles.includes(role) && <span className={styles.inherited}>{t('tools.adapters.claude.inheritedGlobal')}</span>}</legend>{render(`${role}.model`)}{render(`${role}.name`)}{render(`${role}.longContext`)}</fieldset>)}</div>
     </div></details>
     <details className={sharedStyles.disclosureCard}><summary>{t('tools.adapters.claude.effortSummary')}</summary><p className={styles.note}>{view?.capabilitySource}</p>{render('effortLevel')}
       {view?.effortWarnings?.map(message => <p key={message} className={styles.note}>{message}</p>)}

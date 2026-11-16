@@ -466,6 +466,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     if (key.includes(':new-model:')) return t('tools.config.invalidNewModel');
     if (key.startsWith('common:')) return t('tools.config.invalidCommon', { label: labelFor(key.slice('common:'.length)) });
     const rest = key.startsWith(`${draft.sessionId}:`) ? key.slice(draft.sessionId.length + 1) : key;
+    if (rest === 'roleOverrides') return t('tools.config.invalidRoleOverrides');
     if (rest.startsWith('{')) {
       const sep = rest.indexOf('}:');
       if (sep > 0) try {

@@ -14,6 +14,7 @@
 .roleCard { display: grid; gap: var(--space-2); min-width: 0; border: 1px solid var(--line) !important; border-radius: var(--radius); padding: var(--space-2) var(--space-2_5) var(--space-2_5); }
 .roleCard legend { font-size: var(--fs-body); font-weight: var(--fw-semibold); padding: 0 var(--space-1); }
 .follow { display: inline-flex; align-items: center; margin-left: var(--space-1_5); padding: 0 var(--space-1_5); border-radius: var(--radius-pill); background: var(--accent-soft); color: var(--accent); font-size: var(--fs-micro); font-weight: var(--fw-semibold); line-height: 18px; vertical-align: 1px; }
+.inherited { display: inline-flex; align-items: center; margin-left: var(--space-1_5); padding: 0 var(--space-1_5); border-radius: var(--radius-pill); background: var(--warning-soft); color: var(--warning); font-size: var(--fs-micro); font-weight: var(--fw-semibold); line-height: 18px; vertical-align: 1px; }
 .roleCard > div { grid-template-columns: none !important; }
 .roleCard > div:has(input[type='checkbox']) { grid-column: auto !important; }
 @media (max-width: 720px) { .roleGrid { grid-template-columns: 1fr; } }

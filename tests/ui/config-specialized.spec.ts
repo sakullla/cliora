@@ -59,7 +59,7 @@ test.beforeAll(async () => {
           const role = typeof action.field === 'string' ? action.field.split('.')[0] : '';
           if(action.field==='modelEffortLevel') {const model=action.target.slice(6);if(action.operation==='reset')delete next.view.modelEfforts[model];else next.view.modelEfforts[model]=action.value;}
           else if(action.operation==='reset'){delete next.view.values[action.field];if(roleNames.includes(role)&&action.field.endsWith('.model'))next.view.roleFollowing[role]=true;}
-          else if(action.operation==='unify'){const value=String(action.value??'');next.view.values['default.model']=value.replace(/\[1m\]$/i,'');next.view.values['default.longContext']=/\[1m\]$/i.test(value);for(const item of roleNames){delete next.view.values[item+'.model'];next.view.roleFollowing[item]=true;}}
+          else if(action.operation==='unify'){const value=String(action.value??'');next.view.values['default.model']=value.replace(/\[1m\]$/i,'');next.view.values['default.longContext']=/\[1m\]$/i.test(value);for(const item of roleNames){delete next.view.values[item+'.model'];delete next.view.values[item+'.longContext'];next.view.roleFollowing[item]=true;}}
           else {next.view.values[action.field]=action.value;if(roleNames.includes(role)&&action.field.endsWith('.model'))next.view.roleFollowing[role]=false;}
           return next;
         });
@@ -172,6 +172,55 @@ test('Claude all-following roles disable unify and show the no-change note', asy
   await expect(page.getByText('所有角色都已跟随默认模型，无需统一。', { exact: true })).toBeVisible();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.getByLabel('sonnet 模型', { exact: true })).toHaveAttribute('placeholder', '跟随默认模型 · claude-opus-4-8');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __actions: unknown[] }).__actions)).toEqual([]);
+});
+
+test('Claude local settings block unify when global role overrides remain', async ({ page }) => {
+  await page.goto('/__configuration_editor_test?tool=claude');
+  await page.evaluate(() => (window as unknown as { __replaceView: (fn: (view: any) => any) => void }).__replaceView(view => {
+    view.editTarget = 'local_configuration';
+    view.inheritedRoleModels = ['sonnet'];
+    return view;
+  }));
+  await page.evaluate(() => (window as unknown as { __setSection: (value: string) => void }).__setSection('settings'));
+  const unify = page.getByRole('button', { name: '将默认模型用于全部角色' });
+  await expect(unify).toBeDisabled();
+  await expect(page.getByText(/Sonnet 的模型覆盖来自全局 settings/)).toBeVisible();
+  await expect(page.getByText('全局覆盖', { exact: true })).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __actions: unknown[] }).__actions)).toEqual([]);
+});
+
+test('Claude explicit-equal and long-context-only roles are listed and unified', async ({ page }) => {
+  await page.goto('/__configuration_editor_test?tool=claude');
+  await page.evaluate(() => (window as unknown as { __replaceView: (fn: (view: any) => any) => void }).__replaceView(view => {
+    view.values['haiku.model'] = 'claude-opus-4-8';
+    view.values['haiku.longContext'] = true;
+    view.roleFollowing.haiku = false;
+    return view;
+  }));
+  await page.evaluate(() => (window as unknown as { __setSection: (value: string) => void }).__setSection('settings'));
+  await page.getByRole('button', { name: '将默认模型用于全部角色' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('Haiku');
+  await expect(dialog).toContainText('Sonnet');
+  await dialog.getByRole('button', { name: '将默认模型用于全部角色' }).click();
+  await expect(page.getByLabel('haiku 模型', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('haiku 长上下文 [1m]', { exact: true })).not.toBeChecked();
+});
+
+test('Claude following roles show an inherited long-context checkbox without failing writes', async ({ page }) => {
+  await page.goto('/__configuration_editor_test?tool=claude');
+  await page.evaluate(() => (window as unknown as { __replaceView: (fn: (view: any) => any) => void }).__replaceView(view => {
+    delete view.values['sonnet.model'];
+    view.roleFollowing.sonnet = true;
+    view.values['default.longContext'] = true;
+    return view;
+  }));
+  await page.evaluate(() => (window as unknown as { __setSection: (value: string) => void }).__setSection('settings'));
+  const longContext = page.getByLabel('sonnet 长上下文 [1m]', { exact: true });
+  await expect(longContext).toBeChecked();
+  await expect(longContext).toBeDisabled();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __actions: unknown[] }).__actions)).toEqual([]);
 });
 
