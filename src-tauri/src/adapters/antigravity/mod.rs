@@ -77,6 +77,16 @@
 //!   surface read-only (the real machine's `swarm` is a ledger row without
 //!   an install directory). The contract is verified on the 1.5 line only,
 //!   so mutations are gated to `>=1.5.0, <2.0.0`.
+//! * **Rules** (1.5.9 evidence run, see [`rules`]): plain markdown only. The
+//!   single-file port manages the hierarchical AGENTS.md standard — global
+//!   `~/.gemini/config/AGENTS.md` and `<project>/AGENTS.md`, also the
+//!   long-term-rule distribution targets — and the catalog port covers both
+//!   scopes: trigger-frontmatter `.md` directory rules
+//!   (`<project>/.agents/rules/` and `~/.gemini/config/rules/`, removable
+//!   and toggleable through the `.cliora-disabled-rules` relocation slot)
+//!   plus every hierarchical `AGENTS.md`/`GEMINI.md` in the tree (editable,
+//!   never removed or toggled). Plugin rules stay plugin-detail read-only
+//!   resources; no formats are converted into each other.
 //! * Quota: no verified contract (`/usage` is a TUI subscription panel, not
 //!   a local statistic) — that port stays absent by design.
 
@@ -85,6 +95,7 @@ pub(crate) mod history;
 pub(crate) mod memory;
 pub(crate) mod plugins;
 pub(crate) mod protobuf;
+pub(crate) mod rules;
 pub(crate) mod skills;
 
 use std::path::{Path, PathBuf};
@@ -93,7 +104,7 @@ use serde_json::{json, Value};
 
 use super::{
     file, AdapterDescriptor, CliAdapter, Facet, InspectionFields, LaunchMode, ManagementCapabilities,
-    McpLocation, RuleSupport, SkillDeclaration, SkillObservation,
+    McpLocation, RuleFileSpec, RuleKindPolicy, RuleSupport, SkillDeclaration, SkillObservation,
 };
 use crate::native::adapter::{NativeFile, Scope};
 use crate::native::format::FileKind;
@@ -495,6 +506,70 @@ impl CliAdapter for Antigravity {
     fn plugins(&self) -> Option<&dyn super::plugins::PluginAdapter> {
         Some(self)
     }
+    /// Single-file port: the hierarchical AGENTS.md standard the CLI always
+    /// reads on both scopes (see [`rules`]). This is also the long-term-rule
+    /// distribution target through the shared service.
+    fn rule_path(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Option<PathBuf> {
+        rules::rule_path(scope, home, project)
+    }
+    // The catalog port covers both scopes: the evidence-verified directory
+    // rules exist per project (`.agents/rules/`) and globally
+    // (`~/.gemini/config/rules/`), so the shared project-only default is
+    // widened by declaration here instead of by the shared service.
+    fn uses_rule_catalog(&self, _scope: Scope) -> bool {
+        true
+    }
+    fn rule_file_specs(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Result<Vec<RuleFileSpec>, String> {
+        rules::list_specs(scope, home, project)
+    }
+    fn rule_kind_policy(&self, kind: &str) -> RuleKindPolicy {
+        rules::kind_policy(kind)
+    }
+    fn rule_create_path_scoped(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+        name: &str,
+    ) -> Result<PathBuf, String> {
+        rules::create_path(scope, home, project, name)
+    }
+    fn rule_relocate_scoped(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+        path: &Path,
+        enabled: bool,
+    ) -> Result<PathBuf, String> {
+        rules::relocate(scope, home, project, path, enabled)
+    }
+    // Created rules carry the verified `always_on` trigger frontmatter so
+    // agy actually loads them; the historical heading-only default would
+    // produce a file whose load behavior is unverified.
+    fn rule_create_template(&self, path: &Path, name: &str) -> String {
+        rules::create_template(path, name)
+    }
+    fn rule_support(&self) -> RuleSupport {
+        RuleSupport {
+            global: true,
+            project: true,
+            global_reason: "",
+            project_reason: "",
+            catalog: true,
+            catalog_global: true,
+        }
+    }
     /// Verified on 1.5.9 (`agy --help`: `--agent <name>`; the roster holds
     /// main agents only, see [`agents`]). The version-less form is the
     /// capability declaration used by the descriptor and remote launches.
@@ -616,7 +691,7 @@ impl CliAdapter for Antigravity {
             },
             resources: Facet {
                 state: "available",
-                reason: "MCP（~/.gemini/config/mcp_config.json mcpServers：stdio command/args/env/cwd 与远程 serverUrl+headers/oauth；1.5+ 按实测写逐条 disabled（停用保留条目），1.3.x 停用移除条目且旧版 url/httpUrl 条目只读；项目 .agents/mcp_config.json 为运行时作用域，agy mcp 子命令不管理）、Skills（可写根 antigravity-cli/skills 与项目 .agents/skills；只读发现 Shared ~/.gemini/skills、config 目录、builtin 与 skills.json 声明目录；SKILL.md frontmatter name/description 契约强制）、Agents（独立定义 <project>/.agents/agents/{name}/agent.md 与 ~/.gemini/config/agents/{name}/agent.md；mainAgent/subagent 决定 --agent 启动名单；插件 Agent 随插件只读管理）与 Plugins（~/.gemini/config/plugins/ 目录 + config.json plugins.<目录>.enabled 分类账；安装/卸载走原生命令，启停写分类账（重装后保留用户选择）；详情列出 Skills/Agents/规则/MCP/Hooks 五类资源；内置插件只读，1.5 以下安装线拒绝写入）由原生路径提供",
+                reason: "MCP（~/.gemini/config/mcp_config.json mcpServers：stdio command/args/env/cwd 与远程 serverUrl+headers/oauth；1.5+ 按实测写逐条 disabled（停用保留条目），1.3.x 停用移除条目且旧版 url/httpUrl 条目只读；项目 .agents/mcp_config.json 为运行时作用域，agy mcp 子命令不管理）、Skills（可写根 antigravity-cli/skills 与项目 .agents/skills；只读发现 Shared ~/.gemini/skills、config 目录、builtin 与 skills.json 声明目录；SKILL.md frontmatter name/description 契约强制）、Agents（独立定义 <project>/.agents/agents/{name}/agent.md 与 ~/.gemini/config/agents/{name}/agent.md；mainAgent/subagent 决定 --agent 启动名单；插件 Agent 随插件只读管理）、Plugins（~/.gemini/config/plugins/ 目录 + config.json plugins.<目录>.enabled 分类账；安装/卸载走原生命令，启停写分类账（重装后保留用户选择）；详情列出 Skills/Agents/规则/MCP/Hooks 五类资源；内置插件只读，1.5 以下安装线拒绝写入）与 Rules（纯 Markdown：单文件端口管理全局 ~/.gemini/config/AGENTS.md 与项目 <project>/AGENTS.md；目录端口覆盖全局 ~/.gemini/config/rules/ 与项目 .agents/rules/ 触发式 .md 规则及全部层级 AGENTS.md/GEMINI.md，目录规则可删除/启停，层级文件只编辑；插件规则随插件详情只读）由原生路径提供",
             },
             history: Facet {
                 state: "available",
@@ -632,7 +707,7 @@ impl CliAdapter for Antigravity {
                     .plugins()
                     .is_some_and(|adapter| !adapter.capability().actions.is_empty()),
                 project_plugins: self.plugins().is_some_and(|adapter| adapter.capability().project),
-                rules: RuleSupport::bare(false, false),
+                rules: self.rule_support(),
                 memory: self.published_memory(),
                 memory_reason: "",
             },
@@ -1425,7 +1500,152 @@ mod tests {
         assert!(descriptor.management.agents);
         assert!(descriptor.management.plugins);
         assert!(!descriptor.management.project_plugins);
-        assert!(!descriptor.management.rules.global && !descriptor.management.rules.project);
+        // Rules (1.5.9 evidence run): the hierarchical AGENTS.md single-file
+        // port on both scopes plus the dual-scope trigger-rule catalog.
+        assert!(descriptor.management.rules.global && descriptor.management.rules.project);
+        assert!(descriptor.management.rules.catalog && descriptor.management.rules.catalog_global);
+    }
+
+    #[test]
+    fn rules_ports_map_the_agents_standard_and_dual_scope_catalog() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let project = home.join("project");
+        std::fs::create_dir_all(project.join(".agents").join("rules")).unwrap();
+        // Single-file port: the hierarchical AGENTS.md documents on both
+        // scopes, which are also the long-term-rule distribution targets.
+        assert_eq!(
+            Antigravity.rule_path(Scope::Global, home, None).unwrap(),
+            gemini_root(home).join("config").join("AGENTS.md")
+        );
+        assert_eq!(
+            Antigravity.rule_path(Scope::Project, home, Some(&project)).unwrap(),
+            project.join("AGENTS.md")
+        );
+        assert_eq!(
+            Antigravity.remote_rule_relative(Scope::Global).as_deref(),
+            Some(".gemini/config/AGENTS.md")
+        );
+        assert_eq!(
+            Antigravity.remote_rule_relative(Scope::Project).as_deref(),
+            Some("AGENTS.md")
+        );
+        // The catalog is declared for both scopes; the kind policy keeps
+        // structural operations on the evidence-verified directory rules.
+        assert!(Antigravity.uses_rule_catalog(Scope::Global));
+        assert!(Antigravity.uses_rule_catalog(Scope::Project));
+        let md = Antigravity.rule_kind_policy("md");
+        assert!(md.removable && md.toggleable);
+        for kind in ["agents", "gemini"] {
+            let hierarchical = Antigravity.rule_kind_policy(kind);
+            assert!(!hierarchical.removable && !hierarchical.toggleable, "{kind}");
+        }
+        // Created rules carry the verified always_on trigger frontmatter.
+        let created = Antigravity.rule_create_path_scoped(
+            Scope::Project,
+            home,
+            Some(&project),
+            "review",
+        )
+        .unwrap();
+        assert_eq!(created, project.join(".agents").join("rules").join("review.md"));
+        let template = Antigravity.rule_create_template(&created, "review");
+        assert!(template.contains("trigger: always_on"), "{template}");
+        let global_created = Antigravity
+            .rule_create_path_scoped(Scope::Global, home, None, "style")
+            .unwrap();
+        assert_eq!(
+            global_created,
+            gemini_root(home).join("config").join("rules").join("style.md")
+        );
+        // Invalid names and duplicates stay rejected on both scopes.
+        assert!(Antigravity
+            .rule_create_path_scoped(Scope::Project, home, Some(&project), "bad name")
+            .is_err());
+        std::fs::write(&created, "exists").unwrap();
+        assert!(Antigravity
+            .rule_create_path_scoped(Scope::Project, home, Some(&project), "review")
+            .is_err());
+        // Relocation swaps the scan directory and the disabled slot (a pure
+        // path plan; the shared transaction performs the move).
+        let disabled = Antigravity
+            .rule_relocate_scoped(Scope::Project, home, Some(&project), &created, false)
+            .unwrap();
+        assert_eq!(
+            disabled,
+            project.join(".agents").join(".cliora-disabled-rules").join("review.md")
+        );
+        std::fs::create_dir_all(disabled.parent().unwrap()).unwrap();
+        std::fs::rename(&created, &disabled).unwrap();
+        let restored = Antigravity
+            .rule_relocate_scoped(Scope::Project, home, Some(&project), &disabled, true)
+            .unwrap();
+        assert_eq!(restored, created);
+        // Hierarchical documents and foreign paths are never relocated.
+        assert!(Antigravity
+            .rule_relocate_scoped(Scope::Project, home, Some(&project), &project.join("AGENTS.md"), false)
+            .is_err());
+        assert!(Antigravity
+            .rule_relocate_scoped(Scope::Project, home, Some(&project), Path::new("/outside/review.md"), false)
+            .is_err());
+    }
+
+    #[test]
+    fn rule_specs_list_directory_and_hierarchical_files_per_scope() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let project = home.join("project");
+        let rules = project.join(".agents").join("rules");
+        std::fs::create_dir_all(&rules).unwrap();
+        std::fs::create_dir_all(project.join(".agents").join(".cliora-disabled-rules")).unwrap();
+        std::fs::create_dir_all(project.join("sub")).unwrap();
+        std::fs::write(rules.join("review.md"), "---\ntrigger: manual\n---\nbody").unwrap();
+        std::fs::write(rules.join("notes.txt"), "not a rule").unwrap();
+        std::fs::write(
+            project.join(".agents").join(".cliora-disabled-rules").join("old.md"),
+            "parked",
+        )
+        .unwrap();
+        std::fs::write(project.join("AGENTS.md"), "root agents").unwrap();
+        std::fs::write(project.join("GEMINI.md"), "root gemini").unwrap();
+        std::fs::write(project.join("sub").join("AGENTS.md"), "sub agents").unwrap();
+        let specs = Antigravity
+            .rule_file_specs(Scope::Project, home, Some(&project))
+            .unwrap();
+        let summary: Vec<(&str, &str, bool, bool)> = specs
+            .iter()
+            .map(|spec| (spec.kind, spec.id.as_str(), spec.enabled, spec.writable))
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                ("agents", "agents:AGENTS.md", true, true),
+                ("agents", "agents:sub/AGENTS.md", true, true),
+                ("gemini", "gemini:GEMINI.md", true, true),
+                ("md", "md:.agents/.cliora-disabled-rules/old.md", false, true),
+                ("md", "md:.agents/rules/review.md", true, true),
+            ],
+            "{specs:?}"
+        );
+        // Global catalog: the config-root rules folder and the two
+        // hierarchical documents the changelog names as global customizations.
+        let config = gemini_root(home).join("config");
+        std::fs::create_dir_all(config.join("rules")).unwrap();
+        std::fs::write(config.join("rules").join("style.md"), "global style").unwrap();
+        std::fs::write(config.join("AGENTS.md"), "global agents").unwrap();
+        std::fs::write(config.join("GEMINI.md"), "global gemini").unwrap();
+        let global_specs = Antigravity.rule_file_specs(Scope::Global, home, None).unwrap();
+        let ids: Vec<&str> = global_specs.iter().map(|spec| spec.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "agents:AGENTS.md",
+                "gemini:GEMINI.md",
+                "md:rules/style.md",
+            ],
+            "{global_specs:?}"
+        );
+        assert!(global_specs.iter().all(|spec| spec.enabled));
     }
 
     #[test]

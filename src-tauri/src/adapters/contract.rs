@@ -261,6 +261,12 @@ pub struct RuleSupport {
     pub project_reason: &'static str,
     #[serde(default, skip_serializing_if = "is_false")]
     pub catalog: bool,
+    /// The catalog port also covers the global scope (adapter-declared
+    /// through `uses_rule_catalog(Scope::Global)`). Absent keeps the
+    /// historical project-only catalog surface, so every existing adapter
+    /// serializes exactly as before.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub catalog_global: bool,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -275,6 +281,7 @@ impl RuleSupport {
             global_reason: "",
             project_reason: "",
             catalog: false,
+            catalog_global: false,
         }
     }
 }
@@ -289,6 +296,29 @@ pub struct RuleFileSpec {
     pub enabled: bool,
     pub writable: bool,
     pub detail: &'static str,
+}
+
+/// Catalog operations one adapter's rule kind supports, declared next to
+/// `rule_file_specs`. Editability stays the per-file `writable` flag; this
+/// policy covers the destructive/structural operations of the shared
+/// catalog service (`delete_file`, `set_file_enabled`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RuleKindPolicy {
+    /// The kind's files may be removed through the catalog delete port.
+    pub removable: bool,
+    /// The kind's files may be switched on/off through relocation.
+    pub toggleable: bool,
+}
+
+/// Historical shared create template: the Cursor `.mdc` frontmatter, and a
+/// plain heading for layouts whose native files are plain markdown. It is
+/// the default of [`CliAdapter::rule_create_template`].
+fn default_rule_create_template(path: &Path, name: &str) -> String {
+    if path.extension().and_then(|ext| ext.to_str()) == Some("mdc") {
+        "---\ndescription: \"\"\nalwaysApply: false\n---\n".to_owned()
+    } else {
+        format!("# {name}\n")
+    }
 }
 
 /// A skill directory that can be listed but not written by this CLI.
@@ -1458,6 +1488,48 @@ pub trait CliAdapter: Sync {
     fn rule_relocate(&self, _project: &Path, _path: &Path, _enabled: bool) -> Result<PathBuf, String> {
         Err("此 CLI 不能启停目录型规则".into())
     }
+    /// Catalog operations one rule kind supports. The default pins the
+    /// historical shared-service whitelist — only `mdc` rules are removable
+    /// or toggleable — so every existing adapter keeps today's behavior.
+    /// Adapters whose verified native contract covers other kinds (for
+    /// example plain-markdown directory rules) override this together with
+    /// `rule_file_specs`.
+    fn rule_kind_policy(&self, kind: &str) -> RuleKindPolicy {
+        let historical = kind == "mdc";
+        RuleKindPolicy { removable: historical, toggleable: historical }
+    }
+    /// Scope-aware create target for catalog rules. The default keeps the
+    /// project-only port; the shared service calls it only for scopes the
+    /// adapter declared through `uses_rule_catalog`.
+    fn rule_create_path_scoped(
+        &self,
+        _scope: Scope,
+        _home: &Path,
+        project: Option<&Path>,
+        name: &str,
+    ) -> Result<PathBuf, String> {
+        self.rule_create_path(project.ok_or("请选择项目目录")?, name)
+    }
+    /// Scope-aware relocation target for catalog enable/disable. The default
+    /// keeps the project-only port.
+    fn rule_relocate_scoped(
+        &self,
+        _scope: Scope,
+        _home: &Path,
+        project: Option<&Path>,
+        path: &Path,
+        enabled: bool,
+    ) -> Result<PathBuf, String> {
+        self.rule_relocate(project.ok_or("请选择项目目录")?, path, enabled)
+    }
+    /// Body for a newly created catalog rule when the caller passes no text.
+    /// The default keeps the historical template (Cursor `.mdc` frontmatter;
+    /// a plain heading for plain-markdown layouts); adapters whose native
+    /// rule files carry required frontmatter of their own override this so a
+    /// created file is actually loaded by the CLI.
+    fn rule_create_template(&self, path: &Path, name: &str) -> String {
+        default_rule_create_template(path, name)
+    }
     fn rule_unavailable_reason(&self, _scope: Scope) -> Option<&'static str> {
         None
     }
@@ -1469,6 +1541,7 @@ pub trait CliAdapter: Sync {
             self.rule_path(Scope::Project, home, Some(project)).is_some() || self.uses_rule_catalog(Scope::Project),
         );
         support.catalog = self.uses_rule_catalog(Scope::Global) || self.uses_rule_catalog(Scope::Project);
+        support.catalog_global = self.uses_rule_catalog(Scope::Global);
         support
     }
     fn published_memory(&self) -> Option<super::memory::MemoryManagement> {

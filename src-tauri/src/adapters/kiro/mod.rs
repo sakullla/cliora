@@ -304,6 +304,7 @@ impl CliAdapter for Kiro {
             global_reason: rules::GLOBAL_CATALOG_REASON,
             project_reason: "",
             catalog: true,
+            catalog_global: false,
         }
     }
     fn mcp_location(

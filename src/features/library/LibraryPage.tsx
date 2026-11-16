@@ -13,6 +13,7 @@ import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { PluginTarget, RulePlacement, RuleSyncResult } from '../../types/resources';
 import { LibraryResources } from './LibraryResources';
 import { LibraryMcp } from './LibraryMcp';
+import { NativeRuleEditor } from './NativeRuleEditor';
 import { FilterSelect } from '../../components/FilterSelect';
 import { SearchField } from '../../components/SearchField';
 import { GuideDialog } from '../../components/GuideDialog';
@@ -745,6 +746,10 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     {section === 'skill' && <div id="library-skill-panel" role="tabpanel" aria-labelledby="library-skill-tab" className={styles.tabPanel}><LibraryResources active={active} tools={scopedTools} projects={projects} remoteTargetId={remoteTargetId === 'local' ? null : remoteTargetId} createSignal={createSignal} onCountChange={(count) => childCount('skill', count)} /></div>}
     {(section === 'prompt' || section === 'rule') && <div id={`library-${section}-panel`} role="tabpanel" aria-labelledby={`library-${section}-tab`} className={styles.tabPanel}>
     {section === 'rule' && bindingFeedback()}
+    {/* 修改当前 CLI 规则 reaches the native per-file rule editors. The entry
+        follows the descriptors (only shown when some managed CLI publishes
+        rule support) and stays local: per-file editing has no remote surface. */}
+    {section === 'rule' && remoteTargetId === 'local' && scopedTools.some((tool) => tool.management?.rules && (tool.management.rules.global || tool.management.rules.project)) && <NativeRuleEditor tools={scopedTools} projects={projects} />}
     <div className={styles.filters}>
       <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.page.searchPlaceholder')} />
       <div className={styles.filterPicks}>

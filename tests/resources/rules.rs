@@ -242,3 +242,166 @@ fn empty_create_bodies_follow_the_native_file_layout() {
     assert!(names.contains(&"security.md"), "{names:?}");
     assert!(files.iter().all(|file| file.kind != "inert"));
 }
+
+#[test]
+fn catalog_policy_defaults_keep_cursor_and_kiro_on_the_historical_whitelist() {
+    let temp = tempfile::tempdir().unwrap(); let home = temp.path();
+    let project = home.join("project"); std::fs::create_dir_all(&project).unwrap();
+    let db = Database::open(&home.join("policy.db")).unwrap();
+    let registry = Registry::builtins(); let store = MemoryStore(Mutex::new(HashMap::new()));
+    const TEMPLATE: &str = "---\ndescription: \"\"\nalwaysApply: false\n---\n";
+    // Service calls compare canonicalized spec paths, so every operation
+    // below addresses files through the paths the listing itself returned.
+    let catalog_path = |files: &Vec<NativeRuleFile>, name: &str| {
+        files.iter().find(|file| file.name == name).unwrap().path.clone()
+    };
+    // Cursor: the .mdc lifecycle keeps delete + toggle; the hierarchical
+    // AGENTS.md entry stays editable only.
+    let cursor = RuleTarget { context_id: None, tool_id: "cursor".into(), scope: Scope::Project, project_path: Some(project.display().to_string()), baseline_hash: None };
+    create_file(&db, &store, &registry, home, &cursor, "lifecycle", "").unwrap();
+    let mdc = catalog_path(&list_files(&db, &registry, home, &cursor).unwrap(), "lifecycle.mdc");
+    set_file_enabled(&db, &store, &registry, home, &cursor, &mdc, false, TEMPLATE).unwrap();
+    let parked = catalog_path(&list_files(&db, &registry, home, &cursor).unwrap(), "lifecycle.mdc");
+    assert!(parked.replace('\\', "/").contains(".cliora-disabled-rules"), "停用移入 Cliora 槽位：{parked}");
+    set_file_enabled(&db, &store, &registry, home, &cursor, &parked, true, TEMPLATE).unwrap();
+    let restored = catalog_path(&list_files(&db, &registry, home, &cursor).unwrap(), "lifecycle.mdc");
+    assert!(restored.replace('\\', "/").ends_with(".cursor/rules/lifecycle.mdc"), "{restored}");
+    delete_file(&db, &store, &registry, home, &cursor, &restored, TEMPLATE).unwrap();
+    assert!(list_files(&db, &registry, home, &cursor).unwrap().iter().all(|file| file.name != "lifecycle.mdc"));
+    std::fs::write(project.join("AGENTS.md"), "cursor agents").unwrap();
+    let agents = list_files(&db, &registry, home, &cursor).unwrap()
+        .into_iter().find(|file| file.kind == "agents").unwrap();
+    assert!(agents.writable && !agents.removable && !agents.toggleable);
+    assert!(delete_file(&db, &store, &registry, home, &cursor, &agents.path, "cursor agents")
+        .unwrap_err()
+        .contains("不支持删除"));
+    assert!(set_file_enabled(&db, &store, &registry, home, &cursor, &agents.path, false, "cursor agents")
+        .unwrap_err()
+        .contains("不支持启停"));
+    // Kiro: the steering .md and permissions entries never delete/toggle.
+    let kiro = RuleTarget { context_id: None, tool_id: "kiro".into(), scope: Scope::Project, project_path: Some(project.display().to_string()), baseline_hash: None };
+    create_file(&db, &store, &registry, home, &kiro, "security", "").unwrap();
+    let steering = list_files(&db, &registry, home, &kiro).unwrap()
+        .into_iter().find(|file| file.name == "security.md").unwrap();
+    assert!(steering.writable && !steering.removable && !steering.toggleable);
+    assert!(delete_file(&db, &store, &registry, home, &kiro, &steering.path, "# security\n")
+        .unwrap_err()
+        .contains("不支持删除"));
+    // The global catalog stays project-only where not declared: cursor and
+    // kiro keep their recorded global reasons instead of a global listing.
+    for tool in ["cursor", "kiro"] {
+        let global = RuleTarget { context_id: None, tool_id: tool.into(), scope: Scope::Global, project_path: None, baseline_hash: None };
+        assert!(list_files(&db, &registry, home, &global).is_err(), "{tool} 全局目录必须被拒绝");
+    }
+}
+
+#[test]
+fn antigravity_catalog_rules_follow_the_native_directories() {
+    let temp = tempfile::tempdir().unwrap(); let home = temp.path();
+    let project = home.join("project");
+    let rules = project.join(".agents").join("rules");
+    std::fs::create_dir_all(&rules).unwrap();
+    std::fs::write(rules.join("review.md"), "---\ntrigger: manual\n---\n先跑测试。").unwrap();
+    std::fs::write(project.join("AGENTS.md"), "root agents").unwrap();
+    let db = Database::open(&home.join("agy-rules.db")).unwrap();
+    let registry = Registry::builtins(); let store = MemoryStore(Mutex::new(HashMap::new()));
+    let target = RuleTarget { context_id: None, tool_id: "antigravity".into(), scope: Scope::Project, project_path: Some(project.display().to_string()), baseline_hash: None };
+    // The listing carries the adapter-declared per-kind operation policy.
+    let files = list_files(&db, &registry, home, &target).unwrap();
+    let review = files.iter().find(|file| file.kind == "md").unwrap();
+    assert_eq!(review.name, "review.md");
+    assert!(review.enabled && review.writable && review.removable && review.toggleable);
+    let agents = files.iter().find(|file| file.kind == "agents").unwrap();
+    assert!(agents.writable && !agents.removable && !agents.toggleable);
+    // Saving goes through the shared transaction with baseline checks.
+    let updated = "---\ntrigger: manual\n---\n先跑测试，再提交。";
+    save_file(&db, &store, &registry, home, &target, &review.path, &review.text, updated).unwrap();
+    assert_eq!(std::fs::read_to_string(rules.join("review.md")).unwrap(), updated);
+    std::fs::write(rules.join("review.md"), "外部进程改过").unwrap();
+    let conflict = save_file(&db, &store, &registry, home, &target, &review.path, &review.text, "再写一次").unwrap_err();
+    assert!(conflict.contains("外部修改"), "{conflict}");
+    // Disable/enable relocates between the scan directory and the Cliora
+    // slot; the content itself never changes. Operations address files
+    // through the paths the listing returned (canonicalized on the service
+    // side), never through locally re-joined paths.
+    set_file_enabled(&db, &store, &registry, home, &target, &review.path, false, "外部进程改过").unwrap();
+    assert!(!rules.join("review.md").exists());
+    let parked = list_files(&db, &registry, home, &target).unwrap()
+        .into_iter().find(|file| file.name == "review.md").unwrap();
+    assert!(!parked.enabled, "槽位中的规则不加载");
+    assert_eq!(parked.text, "外部进程改过");
+    set_file_enabled(&db, &store, &registry, home, &target, &parked.path, true, "外部进程改过").unwrap();
+    assert_eq!(std::fs::read_to_string(rules.join("review.md")).unwrap(), "外部进程改过");
+    // Delete removes the directory rule; the hierarchical document refuses.
+    delete_file(&db, &store, &registry, home, &target, &review.path, "外部进程改过").unwrap();
+    assert!(!rules.join("review.md").exists());
+    assert!(delete_file(&db, &store, &registry, home, &target, &agents.path, "root agents")
+        .unwrap_err()
+        .contains("不支持删除"));
+    // Created rules carry the verified always_on trigger frontmatter on both
+    // scopes; the global create lands in ~/.gemini/config/rules/.
+    create_file(&db, &store, &registry, home, &target, "style", "").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(rules.join("style.md")).unwrap(),
+        "---\ntrigger: always_on\n---\n# style\n"
+    );
+    let global = RuleTarget { context_id: None, tool_id: "antigravity".into(), scope: Scope::Global, project_path: None, baseline_hash: None };
+    create_file(&db, &store, &registry, home, &global, "globalstyle", "").unwrap();
+    let global_rules = home.join(".gemini").join("config").join("rules");
+    assert_eq!(
+        std::fs::read_to_string(global_rules.join("globalstyle.md")).unwrap(),
+        "---\ntrigger: always_on\n---\n# globalstyle\n"
+    );
+    // The global catalog lists the rules folder plus the config-root
+    // hierarchical documents the changelog names as global customizations.
+    std::fs::write(home.join(".gemini").join("config").join("AGENTS.md"), "global agents").unwrap();
+    std::fs::write(home.join(".gemini").join("config").join("GEMINI.md"), "global gemini").unwrap();
+    let global_files = list_files(&db, &registry, home, &global).unwrap();
+    let summary: Vec<(&str, bool)> = global_files.iter().map(|file| (file.kind.as_str(), file.enabled)).collect();
+    assert_eq!(
+        summary,
+        vec![("agents", true), ("gemini", true), ("md", true)],
+        "{global_files:?}"
+    );
+    assert!(global_files.iter().all(|file| file.writable));
+}
+
+#[test]
+fn antigravity_long_term_rules_distribute_to_the_agents_standard_documents() {
+    let temp = tempfile::tempdir().unwrap(); let home = temp.path();
+    let project = home.join("project"); std::fs::create_dir_all(&project).unwrap();
+    let config = home.join(".gemini").join("config");
+    std::fs::create_dir_all(&config).unwrap();
+    let db = Database::open(&home.join("agy-distribute.db")).unwrap();
+    let registry = Registry::builtins(); let store = MemoryStore(Mutex::new(HashMap::new()));
+    // The single-file port resolves the hierarchical AGENTS.md documents.
+    let global = RuleTarget { context_id: None, tool_id: "antigravity".into(), scope: Scope::Global, project_path: None, baseline_hash: None };
+    let global_path = home.join(".gemini").join("config").join("AGENTS.md");
+    let scoped = RuleTarget { context_id: None, tool_id: "antigravity".into(), scope: Scope::Project, project_path: Some(project.display().to_string()), baseline_hash: None };
+    assert_eq!(path_for(&db, &registry, home, &global).unwrap(), global_path);
+    assert_eq!(
+        path_for(&db, &registry, home, &scoped).unwrap(),
+        project.canonicalize().unwrap().join("AGENTS.md")
+    );
+    // Distribution composes into the global document with the shared
+    // conflict gate; an external edit blocks the write until confirmed.
+    let first = library::save(&db, library::LibraryDraft { id: None, kind: LibraryKind::Rule, title: "测试".into(), body: "先跑测试。".into(), category: String::new(), project_id: None, expected_version: None }).unwrap();
+    let selection = RuleClientSelection { tool_ids: vec!["antigravity".into()], scope: Scope::Global, project_path: None, allow_replace: false };
+    let written = sync_clients(&db, &store, &registry, home, &first.id, first.version, selection.clone()).unwrap();
+    assert_eq!(written[0].status, "written");
+    let text = std::fs::read_to_string(&global_path).unwrap();
+    assert!(text.contains("# 测试") && text.contains("先跑测试。"), "{text}");
+    std::fs::write(&global_path, "外部改过\n").unwrap();
+    let blocked = sync_clients(&db, &store, &registry, home, &first.id, first.version, selection.clone()).unwrap();
+    assert_eq!(blocked[0].status, "conflict");
+    assert_eq!(std::fs::read_to_string(&global_path).unwrap(), "外部改过\n");
+    let replaced = RuleClientSelection { tool_ids: vec!["antigravity".into()], scope: Scope::Global, project_path: None, allow_replace: true };
+    let confirmed = sync_clients(&db, &store, &registry, home, &first.id, first.version, replaced).unwrap();
+    assert_eq!(confirmed[0].status, "written");
+    assert!(std::fs::read_to_string(&global_path).unwrap().contains("# 测试"));
+    // Editing the document directly keeps the same shared protections.
+    let current = read_current(&db, &registry, home, &global).unwrap();
+    save_current(&db, &store, &registry, home, &global, &current.text, "直接编辑").unwrap();
+    assert!(save_current(&db, &store, &registry, home, &global, "旧正文", "覆盖").is_err());
+    assert_eq!(std::fs::read_to_string(&global_path).unwrap(), "直接编辑");
+}

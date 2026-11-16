@@ -28,7 +28,11 @@ export function NativeRuleEditor({ tools, projects }: { tools: AdapterDescriptor
   const [status, setStatus] = useState('');
   const [failure, setFailure] = useState('');
   const descriptor = tools.find(item => item.id === tool);
-  const catalog = !!descriptor?.management?.rules?.catalog && scope === 'project';
+  // Catalog mode follows the adapter declaration: every catalog covers the
+  // project scope, and only adapters that declared a global catalog (for
+  // example agy's ~/.gemini/config/rules/) switch it on for the global scope.
+  const rulesSupport = descriptor?.management?.rules;
+  const catalog = !!rulesSupport?.catalog && (scope === 'project' || !!rulesSupport.catalogGlobal);
   const context = JSON.stringify([tool, scope, project, catalog]);
   const latest = useRef({ context, text }); latest.current = { context, text };
   const mounted = useRef(true);
@@ -50,7 +54,9 @@ export function NativeRuleEditor({ tools, projects }: { tools: AdapterDescriptor
   }
   useEffect(() => {
     setLoaded(null); setText(''); setFiles([]); setSelectedId(''); setConflict(null); clearResult();
-    if (!tool || scope === 'project' && !project) return;
+    // Nothing is read until the dialog opens: mounting the entry point must
+    // not probe native files for a tool the user never picked.
+    if (!open || !tool || scope === 'project' && !project) return;
     let live = true;
     if (catalog) {
       void native.listNativeRuleFiles(target).then(value => {
@@ -64,7 +70,7 @@ export function NativeRuleEditor({ tools, projects }: { tools: AdapterDescriptor
       void native.readNativeRule(target).then(value => { if (live) { setLoaded(value); setText(value.text); setEnabled(!!value.text); } }).catch(value => { if (live) showFailure(value, t('library.nativeRule.readFailed'), t('library.nativeRule.readFailedNext')); });
     }
     return () => { live = false; };
-  }, [context]);
+  }, [context, open]);
   function chooseFile(id: string) {
     const file = files.find(item => item.id === id);
     void change(() => { setSelectedId(id); setText(file?.text ?? ''); setConflict(null); });
@@ -117,7 +123,7 @@ export function NativeRuleEditor({ tools, projects }: { tools: AdapterDescriptor
     const started = latest.current.context; setBusy(true); clearResult();
     try {
       if (catalog) {
-        if (!selected || selected.kind !== 'mdc') return;
+        if (!selected || !selected.toggleable) return;
         await native.setNativeRuleFileEnabled({ ...target }, selected.path, next, selected.text);
         if (latest.current.context === started) await reloadFiles();
       } else {
@@ -149,7 +155,7 @@ export function NativeRuleEditor({ tools, projects }: { tools: AdapterDescriptor
     } finally { setBusy(false); }
   }
   async function removeRule() {
-    if (!selected || selected.kind !== 'mdc') return;
+    if (!selected || !selected.removable) return;
     if (!await confirmAction(t('library.nativeRule.confirmDelete', { name: selected.name }))) return;
     setBusy(true); clearResult();
     try {
@@ -164,6 +170,7 @@ export function NativeRuleEditor({ tools, projects }: { tools: AdapterDescriptor
     : kind === 'md' ? t('library.nativeRule.kindMd')
     : kind === 'permissions' ? t('library.nativeRule.kindPermissions')
     : kind === 'agents' ? t('library.nativeRule.kindAgents')
+    : kind === 'gemini' ? t('library.nativeRule.kindGemini')
     : t('library.nativeRule.kindInert');
   return <>
     <Button className="native-rule-open" onClick={() => setOpen(true)}>{t('library.nativeRule.open')}</Button>
@@ -175,14 +182,14 @@ export function NativeRuleEditor({ tools, projects }: { tools: AdapterDescriptor
       {scope === 'project' && <label>{t('library.nativeRule.project')}<select aria-label={t('library.nativeRule.projectAria')} value={project} onChange={event => { const value = event.target.value; void change(() => setProject(value)); }}><option value="">{t('library.distribute.projectPlaceholder')}</option>{projects.filter(item => item.available && item.path).map(item => <option key={item.id} value={item.path!}>{item.name}</option>)}</select></label>}</div>
     {catalog && <div className="native-rule-controls"><label>{t('library.nativeRule.file')}<select aria-label={t('library.nativeRule.fileAria')} value={selectedId} onChange={event => chooseFile(event.target.value)}><option value="">{files.length ? t('library.nativeRule.pickFile') : t('library.nativeRule.emptyCatalog')}</option>{files.map(file => <option key={file.id} value={file.id}>{file.name} · {kindLabel(file.kind)}</option>)}</select></label>
       <label>{t('library.nativeRule.createName')}<input aria-label={t('library.nativeRule.createName')} value={createName} placeholder={t('library.nativeRule.createPlaceholder')} onChange={event => setCreateName(event.target.value)} /></label>
-      <Button disabled={busy || !project || !createName.trim()} onClick={() => void createRule()}>{t('library.nativeRule.create')}</Button></div>}
+      <Button disabled={busy || scope === 'project' && !project || !createName.trim()} onClick={() => void createRule()}>{t('library.nativeRule.create')}</Button></div>}
     {catalog && selected && <>
-      {selected.kind === 'mdc' && <label className="native-rule-enabled"><input type="checkbox" checked={selected.enabled} disabled={busy} onChange={event => void toggle(event.target.checked)} />{t('library.nativeRule.enable')}</label>}
+      {selected.toggleable && <label className="native-rule-enabled"><input type="checkbox" checked={selected.enabled} disabled={busy} onChange={event => void toggle(event.target.checked)} />{t('library.nativeRule.enable')}</label>}
       {selected.detail && <p className="native-rule-message" role="status">{selected.detail}</p>}
-      {selected.kind === 'agents' && <p className="native-rule-message">{t('library.nativeRule.agentsNote')}</p>}
+      {(selected.kind === 'agents' || selected.kind === 'gemini') && <p className="native-rule-message">{t(selected.kind === 'agents' ? 'library.nativeRule.agentsNote' : 'library.nativeRule.geminiNote')}</p>}
       <p className="native-rule-path" title={selected.path}><strong>{selected.name}</strong><small>{selected.path}</small></p>
       <CodeEditor label={t('library.nativeRule.editorLabel')} value={text} onChange={setText} format="markdown" readOnly={!selected.writable || busy} />
-      <div className="native-rule-actions"><span>{dirty ? t('library.nativeRule.unsaved') : ''}</span>{selected.kind === 'mdc' && <Button disabled={busy} onClick={() => void removeRule()}>{t('library.nativeRule.delete')}</Button>}<Button variant="primary" data-dialog-save title={t('library.nativeRule.saveTitle', { mod: modLabel })} disabled={busy || !dirty || !selected.writable} onClick={() => void save()}>{t('library.nativeRule.save')}</Button></div>
+      <div className="native-rule-actions"><span>{dirty ? t('library.nativeRule.unsaved') : ''}</span>{selected.removable && <Button disabled={busy} onClick={() => void removeRule()}>{t('library.nativeRule.delete')}</Button>}<Button variant="primary" data-dialog-save title={t('library.nativeRule.saveTitle', { mod: modLabel })} disabled={busy || !dirty || !selected.writable} onClick={() => void save()}>{t('library.nativeRule.save')}</Button></div>
     </>}
     {!catalog && loaded && <><label className="native-rule-enabled"><input type="checkbox" checked={enabled} disabled={busy} onChange={event => void toggle(event.target.checked)} />{t('library.nativeRule.enable')}</label><p className="native-rule-path" title={loaded.path}><strong>{loaded.path.split(/[\\/]/).pop()}</strong><small>{loaded.path}</small></p><CodeEditor label={t('library.nativeRule.editorLabel')} value={text} onChange={setText} format="markdown" /><div className="native-rule-actions"><span>{dirty ? t('library.nativeRule.unsaved') : ''}</span><Button variant="primary" data-dialog-save title={t('library.nativeRule.saveTitle', { mod: modLabel })} disabled={busy || !dirty} onClick={() => void save()}>{t('library.nativeRule.save')}</Button></div></>}
     {conflict !== null && <ConflictCompare title={t('library.nativeRule.conflictTitle')} banner={t('home.conflict.banner')} currentContent={conflict} nextContent={text} format="markdown" busy={busy} onKeepCurrent={() => { if (catalog && selected) { setFiles(old => old.map(file => file.id === selected.id ? { ...file, text: conflict } : file)); setText(conflict); } else { setLoaded(old => old ? { ...old, text: conflict } : old); setText(conflict); } setConflict(null); }} onUseNext={() => void save(conflict)} />}

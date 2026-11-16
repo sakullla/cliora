@@ -889,6 +889,40 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
             .unwrap(),
         ["plugin".to_string(), "uninstall".to_string(), "probe-kit".to_string()]
     );
+    // Rules (1.5.9 evidence run, evidence/rules.json): the single-file port
+    // manages the hierarchical AGENTS.md standard on both scopes and the
+    // catalog covers global (~/.gemini/config/rules/) and project
+    // (.agents/rules/) trigger rules plus hierarchical AGENTS.md/GEMINI.md
+    // entries — the adapter-declared widening of the shared catalog policy.
+    // Only the .md directory kinds are removable/toggleable; hierarchical
+    // documents stay edit-only.
+    assert_eq!(
+        antigravity
+            .rule_path(crate::native::adapter::Scope::Global, home, None)
+            .unwrap(),
+        home.join(".gemini").join("config").join("AGENTS.md")
+    );
+    assert_eq!(
+        antigravity
+            .rule_path(crate::native::adapter::Scope::Project, home, Some(work))
+            .unwrap(),
+        work.join("AGENTS.md")
+    );
+    assert_eq!(
+        antigravity.remote_rule_relative(crate::native::adapter::Scope::Global).as_deref(),
+        Some(".gemini/config/AGENTS.md")
+    );
+    assert!(antigravity.uses_rule_catalog(crate::native::adapter::Scope::Global));
+    assert!(antigravity.uses_rule_catalog(crate::native::adapter::Scope::Project));
+    let agy_rules = &antigravity.descriptor().management.rules;
+    assert!(agy_rules.global && agy_rules.project && agy_rules.catalog);
+    assert!(agy_rules.catalog_global, "agy 目录规则覆盖全局范围");
+    let agy_md_policy = antigravity.rule_kind_policy("md");
+    assert!(agy_md_policy.removable && agy_md_policy.toggleable);
+    for kind in ["agents", "gemini"] {
+        let policy = antigravity.rule_kind_policy(kind);
+        assert!(!policy.removable && !policy.toggleable, "agy {kind} 只编辑");
+    }
     // kiro (official docs + real local install %LOCALAPPDATA%\kiro-cli,
     // 2.34.2/V3): cli.json editing, --resume-id, dual-scope MCP, Skills
     // (~/.kiro/skills + .kiro/skills), agents (~/.kiro/agents + .kiro/agents
@@ -909,6 +943,17 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
     assert!(kiro_management.skills);
     assert!(kiro_management.agents);
     assert!(kiro_management.rules.global && kiro_management.rules.project);
+    // Rules policy pins: the steering catalog stays project-scope only and
+    // the kind policy keeps the historical mdc-only delete/toggle whitelist
+    // — kiro's declarations are unchanged by the shared policy extension.
+    assert!(!kiro.uses_rule_catalog(crate::native::adapter::Scope::Global));
+    assert!(!kiro_management.rules.catalog_global);
+    let kiro_mdc = kiro.rule_kind_policy("mdc");
+    assert!(kiro_mdc.removable && kiro_mdc.toggleable);
+    for kind in ["md", "permissions"] {
+        let policy = kiro.rule_kind_policy(kind);
+        assert!(!policy.removable && !policy.toggleable, "kiro {kind} 不可删除/启停");
+    }
     assert!(kiro_management.plugins);
     assert!(kiro.descriptor().yolo_available);
     assert!(kiro
@@ -1045,6 +1090,16 @@ fn cursor_and_minimax_code_stay_separate_from_the_minimax_quota_provider() {
     assert!(!cursor.descriptor().management.rules.global);
     assert!(cursor.descriptor().management.rules.project);
     assert!(cursor.descriptor().management.rules.catalog);
+    // Rules policy pins: the .cursor catalog stays project-scope only and
+    // keeps the historical mdc-only delete/toggle whitelist.
+    assert!(!cursor.uses_rule_catalog(crate::native::adapter::Scope::Global));
+    assert!(!cursor.descriptor().management.rules.catalog_global);
+    let cursor_mdc = cursor.rule_kind_policy("mdc");
+    assert!(cursor_mdc.removable && cursor_mdc.toggleable);
+    for kind in ["agents", "inert"] {
+        let policy = cursor.rule_kind_policy(kind);
+        assert!(!policy.removable && !policy.toggleable, "cursor {kind} 不可删除/启停");
+    }
     assert_eq!(cursor.descriptor().history.state, "available");
     assert!(cursor.descriptor().resume.state == "unsupported");
     assert!(cursor.history_supported());
