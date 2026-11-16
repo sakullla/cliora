@@ -8,10 +8,14 @@
 //!
 //! * **Paths**: config root `~/.gemini` — settings
 //!   `antigravity-cli/settings.json` (plain JSON), MCP
-//!   `config/mcp_config.json`, skills `antigravity-cli/skills/`; data root
-//!   `~/.gemini/antigravity` — `conversation_summaries.db`,
-//!   `conversations/<id>.db`, `brain/<id>/.system_generated/logs/
-//!   transcript_full.jsonl` (see [`history`]).
+//!   `config/mcp_config.json`, skills `antigravity-cli/skills/`; data roots
+//!   `~/.gemini/antigravity` (agy ≤1.3) and, since the 1.5.9 migration,
+//!   `~/.gemini/antigravity-cli/` (the CLI settings directory, which then
+//!   also holds the session stores; the legacy root stays empty with a
+//!   `~/.gemini/config/.migrated` marker) — each with
+//!   `conversation_summaries.db`, `conversations/<id>.db`,
+//!   `brain/<id>/.system_generated/logs/transcript_full.jsonl` (see
+//!   [`history`]; session ids are deduplicated across the two roots).
 //! * **Launch/resume** (`agy --help`, local 1.3.1): interactive `agy`;
 //!   `--conversation <id>` resumes a previous conversation,
 //!   `-c/--continue` the most recent one; `--dangerously-skip-permissions`
@@ -37,10 +41,11 @@
 //! * **Skills**: personal `antigravity-cli/skills/<dir>/SKILL.md` and the
 //!   open-standard project `.agents/skills/`; only the two brand roots are
 //!   managed here.
-//! * **History/usage** ([RE], see [`history`] and [`protobuf`]): the
-//!   conversation index, transcripts and per-conversation protobuf usage rows
-//!   are read-only indexed; any schema drift skips the row and degrades the
-//!   session to partial instead of guessing.
+//! * **History/usage** ([RE] for 1.2.x plus the 1.5.9 remote capture, see
+//!   [`history`] and [`protobuf`]): the conversation index, transcripts and
+//!   per-conversation protobuf usage rows of both data roots are read-only
+//!   indexed and deduplicated by native session id; any schema drift skips
+//!   the row and degrades the session to partial instead of guessing.
 //! * **Credentials**: the OS-keyring browser login is never adopted or logged
 //!   out. Only the documented headless env channel `GEMINI_API_KEY` may be
 //!   managed: the value stays in the system credential store and is injected
@@ -73,10 +78,21 @@ fn gemini_root(home: &Path) -> PathBuf {
     crate::accounts::selection::config_root("antigravity", || home.join(".gemini"))
 }
 
-/// Conversation data root: `~/.gemini/antigravity` with
+/// Conversation data root, legacy layout: `~/.gemini/antigravity` with
 /// `conversation_summaries.db`, `conversations/` and `brain/`.
 pub(crate) fn data_root(home: &Path) -> PathBuf {
     crate::accounts::selection::history_root("antigravity", || home.join(".gemini").join("antigravity"))
+}
+
+/// Conversation data root, 1.5.9 layout: `~/.gemini/antigravity-cli/`. After
+/// the native migration the CLI settings directory also holds the session
+/// stores (`conversation_summaries.db` with the `conversation_id` column
+/// set, `conversations/`, `brain/`), while the legacy root stays behind —
+/// empty on the evidence machine, with a `~/.gemini/config/.migrated`
+/// marker. Read-only like [`data_root`]; both roots are scanned and
+/// deduplicated by session id (see [`history`]).
+pub(crate) fn cli_data_root(home: &Path) -> PathBuf {
+    gemini_root(home).join("antigravity-cli")
 }
 
 pub struct Antigravity;
@@ -389,7 +405,7 @@ impl CliAdapter for Antigravity {
     fn history_association(&self) -> Option<Facet> {
         Some(Facet {
             state: "available",
-            reason: "直接 parent_conversation_id 子行挂到父会话；用量库或记录缺失时该子节点不可读",
+            reason: "直接 parent_conversation_id 子行挂到父会话（1.5.9 另含 conversation_parents 表链接）；用量库或记录缺失时该子节点不可读",
         })
     }
     fn history_resume_version_supported(&self, version: &str) -> bool {
@@ -453,7 +469,7 @@ impl CliAdapter for Antigravity {
             },
             history: Facet {
                 state: "available",
-                reason: "只读索引 conversation_summaries.db 与 brain/<id>/transcript_full.jsonl；用量来自 conversations/<id>.db gen_metadata protobuf（[RE] 证据，字段不符时按行跳过并降级 partial，不猜测）",
+                reason: "只读双根索引 conversation_summaries.db（1.3 ~/.gemini/antigravity 与 1.5.9 ~/.gemini/antigravity-cli，按会话 ID 去重）与 brain/<id>/transcript_full.jsonl；用量来自 conversations/<id>.db gen_metadata protobuf，1.5.9 缺用量库时以转录行计数降级补充（字段不符时按行跳过并降级 partial，不猜测）",
             },
             login: None,
             management: ManagementCapabilities {
@@ -1031,6 +1047,26 @@ mod tests {
         let stdio = Antigravity.mcp_entry_view(&entries["fixture-stdio"]);
         assert_eq!(stdio["command"], "/bin/cat");
         assert_eq!(stdio["env"]["FIXTURE_MODE"], "sanitized");
+    }
+
+    #[test]
+    fn dual_history_roots_follow_the_documented_layouts() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let gemini = home.join(".gemini");
+        assert_eq!(data_root(home), gemini.join("antigravity"));
+        assert_eq!(cli_data_root(home), gemini.join("antigravity-cli"));
+        // Resume targets the chosen conversation id on either layout, never
+        // an implicit "latest" continuation.
+        let cli_id = "conv_159_root_0000000000000000000000000a1";
+        assert_eq!(
+            Antigravity.launch_args(Some(cli_id), LaunchMode::Normal).unwrap(),
+            vec!["--conversation", cli_id]
+        );
+        assert_eq!(
+            Antigravity.launch_args(Some(cli_id), LaunchMode::Yolo).unwrap(),
+            vec!["--conversation", cli_id, "--dangerously-skip-permissions"]
+        );
     }
 
     #[test]

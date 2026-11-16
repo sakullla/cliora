@@ -155,6 +155,16 @@ pub(crate) mod encode {
         out
     }
 
+    /// Concatenated varints without a field tag: the payload of a packed
+    /// repeated field (the 1.5.9 encoding of gen_metadata field 2).
+    pub(crate) fn packed_varints(values: &[u64]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for value in values {
+            push_varint(*value, &mut out);
+        }
+        out
+    }
+
     pub(crate) fn bytes_field(number: u64, payload: &[u8]) -> Vec<u8> {
         let mut out = tag(number, 2);
         push_varint(payload.len() as u64, &mut out);

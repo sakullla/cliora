@@ -1,47 +1,81 @@
 //! Antigravity session sources: `conversation_summaries.db` index,
 //! `brain/<id>/transcript_full.jsonl` transcripts and per-conversation
-//! `conversations/<id>.db` usage rows.
+//! `conversations/<id>.db` usage rows, read from two native layouts.
 //!
 //! [RE] evidence: third-party reverse engineering (codeburn against `agy`
 //! 1.2.x; the local machine runs 1.3.1 but has never produced data, so every
-//! fixture is hand-built from the documented schema — 02 ADR-2 evidence
-//! policy). Layout under the `~/.gemini/antigravity` data root:
+//! legacy fixture is hand-built from the documented schema — 02 ADR-2
+//! evidence policy) plus the 1.5.9 layout captured on the authorized remote
+//! (`docs/verification/remote-workflow/agy-1.5.9/`, fixture
+//! `tests/fixtures/history/antigravity-cli-1.5.9/sessions.json`).
 //!
-//! * `conversation_summaries.db` — SQLite index with `conversation_summaries`
-//!   rows (`id`, `title`, `workspace`, `status`, `parent_conversation_id`);
-//!   a direct `parent_conversation_id` is attached to that parent and is not
-//!   an independent session. The child transcript is readable on its own.
-//!   A missing, unreadable, or failed usage database omits that child's
-//!   usage and leaves an already read transcript in place. A missing,
-//!   symlinked, or unreadable transcript keeps the node unreadable with an
-//!   empty body. The parent remains either way. Deeper descendants are not
-//!   merged.
-//! * `brain/<conversation-id>/.system_generated/logs/transcript_full.jsonl` —
-//!   one JSON object per line: `{step_index, source, type, status,
-//!   created_at, content, thinking?}` with `type` ∈ `USER_INPUT` /
-//!   `PLANNER_RESPONSE` / `AGENT_RESPONSE`. The three documented row types
-//!   map to user/assistant/assistant; other types and `thinking` stay out of
-//!   the timeline.
-//! * `conversations/<id>.db` — SQLite with a `gen_metadata` table of protobuf
-//!   blobs (see [`protobuf`]): field 1 `ChatModel` → field 4
+//! Data roots, both read-only and deduplicated by native conversation id
+//! (the 1.5.9 root is scanned first, so an id stored in both roots keeps its
+//! live copy and each source stays attributed to its own root's index):
+//!
+//! * legacy `~/.gemini/antigravity/` — `conversation_summaries` rows
+//!   (`id`, `title`, `workspace`, `status`, `parent_conversation_id`).
+//! * 1.5.9 `~/.gemini/antigravity-cli/` (the CLI settings directory after
+//!   the native migration; the legacy root then stays empty with a
+//!   `~/.gemini/config/.migrated` marker) — the index renames `id` to
+//!   `conversation_id` and `workspace` to `workspace_uris` (a JSON array of
+//!   paths), stamps `CASCADE_RUN_STATUS_*` statuses, adds columns
+//!   (`preview`, `step_count`, `agent_name`, `nesting_depth`, …) and a
+//!   `conversation_parents(conversation_id, parent_id)` table next to FTS5
+//!   search tables; per-conversation databases add executor/trajectory
+//!   tables beside `gen_metadata`.
+//!
+//! Sessions: a direct parent link (`parent_conversation_id`, plus the 1.5.9
+//! `conversation_parents` table) attaches the child to that parent; it is
+//! never an independent session. The child transcript is readable on its
+//! own. A missing, unreadable, or failed usage database omits that child's
+//! usage and leaves an already read transcript in place. A missing,
+//! symlinked, or unreadable transcript keeps the node unreadable with an
+//! empty body. The parent remains either way. Deeper descendants are not
+//! merged.
+//!
+//! * `brain/<conversation-id>/.system_generated/logs/transcript_full.jsonl`
+//!   — one JSON object per line: `{step_index, source, type, status,
+//!   created_at, content, thinking?}`. Legacy rows type ∈ `USER_INPUT` /
+//!   `PLANNER_RESPONSE` / `AGENT_RESPONSE`; 1.5.9 rows type ∈ `USER_INPUT` /
+//!   `PLANNER_RESPONSE` / `GENERIC` / `SYSTEM_MESSAGE` / `ERROR_MESSAGE` /
+//!   `CHECKPOINT`. Only the documented user/planner rows of each layout map
+//!   to the timeline; the 1.5.9-only types have no verified timeline
+//!   meaning and stay out rather than being guessed in. `thinking` stays
+//!   out on both layouts.
+//! * `conversations/<id>.db` — SQLite with a `gen_metadata` table of
+//!   protobuf blobs (see [`protobuf`]): field 1 `ChatModel` → field 4
 //!   `ModelUsageStats` (`exa.codeium_common_pb`: 2 input_tokens UNCACHED,
 //!   3 output_tokens = 9 + 10, 4 cache_write_tokens, 5 cache_read_tokens,
 //!   9 thinking_output_tokens, 10 response_output_tokens, 11 response_id),
 //!   ChatModel 19 model config id, 21 display name, 9 → 4 timestamp; row
-//!   field 2 stepIndices varint, field 4 generation uuid.
+//!   field 4 generation uuid. Field 2 (stepIndices) is a bare varint in the
+//!   legacy [RE] shape and length-delimited (packed/repeated) in every
+//!   sampled 1.5.9 row; the value is unused, but the wire shape proves the
+//!   row matches its layout. 1.5.9 also stamps a new unknown top-level
+//!   field 8 (~0.3 KB submessage), skipped as an ordinary unknown field.
+//! * 1.5.9 transcripts carry a second, transcript-side usage source:
+//!   `PLANNER_RESPONSE` rows hold `input_tokens`, `output_tokens`,
+//!   `cache_read_tokens` and `model`. Those counters substitute for
+//!   `gen_metadata` only when the conversation's usage database is missing,
+//!   so one call is never counted from both sources; a present-but-drifted
+//!   database degrades partial instead of being silently replaced.
 //!
 //! Usage semantics: stored `input_tokens` EXCLUDES cache read/write →
 //! `input_includes_cache` is false on every event; stored `output_tokens`
 //! already includes thinking output (field 3 = field 9 + field 10,
 //! verified per row and treated as drift when it disagrees); duplicates are
-//! dropped by `response_id`. Strict degradation per the [RE] policy: any
-//! structural mismatch (missing stats/response_id, unexpected wire type,
-//! truncated blob, malformed transcript line, missing own conversation
-//! database) skips that row and marks the session partial. A direct child's
-//! missing usage database omits only that child's events. Fields are never
-//! guessed.
+//! dropped by `response_id`. Transcript-side events mirror the captured
+//! counter semantics (the sanitized fixture records the same call with the
+//! same three counters in both sources); they carry no cache-write field,
+//! so that bucket stays unknown instead of zero. Strict degradation per the
+//! [RE] policy: any structural mismatch (missing stats/response_id,
+//! unexpected wire type, truncated blob, malformed transcript line, missing
+//! own conversation database) skips that row and marks the session partial.
+//! A direct child's missing usage database omits only that child's events.
+//! Fields are never guessed.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags};
@@ -55,6 +89,18 @@ use crate::history::{
 
 const MAX_TRANSCRIPT_LINES: usize = 4_000;
 
+/// Which native layout an index (and its rows) follows. Detected from the
+/// index columns, never from a version probe: `conversation_summaries` uses
+/// `id`/`workspace` through 1.3.x and `conversation_id`/`workspace_uris`
+/// since 1.5.9.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Layout {
+    /// Legacy `~/.gemini/antigravity/` ([RE] agy 1.2.x schema).
+    Legacy,
+    /// 1.5.9 `~/.gemini/antigravity-cli/` (remote-evidenced schema).
+    Cli,
+}
+
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
     sources_controlled(home, &|| false)
 }
@@ -64,17 +110,106 @@ pub fn sources_controlled(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Vec<HistorySource>, String> {
     check_cancelled(cancelled)?;
-    let root = super::data_root(home);
+    let mut out = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    // The 1.5.9 root is scanned first: a migrated machine keeps its live ids
+    // there while the legacy root stays empty, and one id stored in both
+    // roots keeps the live copy — never two entries. Each source's path
+    // attributes it to the root's own index.
+    let cli_root = super::cli_data_root(home);
+    let legacy_root = super::data_root(home);
+    scan_root(&cli_root, cancelled, &mut out, &mut seen)?;
+    if legacy_root != cli_root {
+        scan_root(&legacy_root, cancelled, &mut out, &mut seen)?;
+    }
+    Ok(out)
+}
+
+fn scan_root(
+    root: &Path,
+    cancelled: &dyn Fn() -> bool,
+    out: &mut Vec<HistorySource>,
+    seen: &mut HashSet<String>,
+) -> Result<(), String> {
     let index = root.join("conversation_summaries.db");
     if !index.is_file() {
-        return Ok(Vec::new());
+        return Ok(());
     }
-    let connection = open_summaries(&index)?;
-    let mut statement = connection
-        .prepare(
-            "SELECT id, title, workspace, status, parent_conversation_id
+    let (connection, layout) = open_summaries(&index)?;
+    let summaries = read_summaries(&connection, layout, cancelled)?;
+    let children_of = children_map(&connection, layout, &summaries)?;
+    // Every id linked as a direct child (column or parents table) stays with
+    // its parent instead of listing independently.
+    let linked_children: HashSet<&str> = children_of
+        .values()
+        .flatten()
+        .map(|(id, _)| id.as_str())
+        .collect();
+    for row in &summaries {
+        check_cancelled(cancelled)?;
+        if row.parent.is_some()
+            || linked_children.contains(row.id.as_str())
+            || !valid_native_id(&row.id)
+        {
+            continue;
+        }
+        if !seen.insert(row.id.clone()) {
+            // Already listed from the earlier (live) root: a duplicate id
+            // must not appear twice.
+            continue;
+        }
+        if out.len() >= MAX_SOURCES {
+            return Err("Antigravity 会话源超过 5000 个，本次未删除旧索引".into());
+        }
+        let id = &row.id;
+        let title = &row.title;
+        let workspace = &row.workspace;
+        let status = &row.status;
+        // Discovery reads only revisions, never every transcript/protobuf blob.
+        // Only this conversation's own transcript and usage database can set
+        // fingerprint_error. A direct child's stamp or open failure stays in
+        // the parent stamp so the scan still parses the parent.
+        let prefix = match layout {
+            Layout::Legacy => "antigravity-session-v3",
+            Layout::Cli => "antigravity-session-cli-v1",
+        };
+        let checked = (|| -> Result<String, String> {
+            let transcript = crate::history::source_cache::optional_stamp(&transcript_path(root, id), cancelled)?;
+            let usage = usage_stamp(root, id, cancelled)?;
+            let mut children = Vec::new();
+            for (child_id, child_title) in children_of.get(id).into_iter().flatten() {
+                children.push(child_revision(child_id, child_title, root, cancelled)?);
+            }
+            children.sort();
+            Ok(format!(
+                "{prefix}|{id}|{title:?}|{workspace:?}|{status:?}|{transcript}|{usage}|{}",
+                children.join(",")
+            ))
+        })();
+        out.push(HistorySource {
+            native_title: title.clone().filter(|title| !title.trim().is_empty()),
+            path: index.clone(),
+            native_id: Some(id.clone()),
+            fingerprint: checked.as_ref().cloned().unwrap_or_default(),
+            fingerprint_error: checked.err(),
+        });
+    }
+    Ok(())
+}
+
+fn read_summaries(
+    connection: &Connection,
+    layout: Layout,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<SummaryRow>, String> {
+    let sql = match layout {
+        Layout::Legacy => "SELECT id, title, workspace, status, parent_conversation_id
              FROM conversation_summaries ORDER BY rowid DESC",
-        )
+        Layout::Cli => "SELECT conversation_id, title, workspace_uris, status, parent_conversation_id
+             FROM conversation_summaries ORDER BY rowid DESC",
+    };
+    let mut statement = connection
+        .prepare(sql)
         .map_err(|error| format!("Antigravity 会话索引结构无法识别：{error}"))?;
     let rows = statement
         .query_map([], |row| {
@@ -92,53 +227,73 @@ pub fn sources_controlled(
         check_cancelled(cancelled)?;
         summaries.push(row.map_err(|error| error.to_string())?);
     }
-    let mut children_of: std::collections::HashMap<String, Vec<(String, Option<String>)>> =
-        std::collections::HashMap::new();
-    for row in &summaries {
+    Ok(summaries)
+}
+
+/// Parent id → direct children (id, title), built from one index.
+type ChildLinks = HashMap<String, Vec<(String, Option<String>)>>;
+
+/// Direct-child map for one index. Both layouts link through the
+/// `parent_conversation_id` column; 1.5.9 additionally records links in the
+/// `conversation_parents(conversation_id, parent_id)` table (empty on the
+/// evidence machine, but a native link wherever present). A child linked in
+/// both places is attached once.
+fn children_map(
+    connection: &Connection,
+    layout: Layout,
+    summaries: &[SummaryRow],
+) -> Result<ChildLinks, String> {
+    let mut children_of: ChildLinks = HashMap::new();
+    for row in summaries {
         if let Some(parent) = linked_parent(row.parent.as_deref()) {
             if valid_native_id(&row.id) && valid_native_id(parent) {
-                children_of.entry(parent.to_owned()).or_default().push((row.id.clone(), row.title.clone()));
+                children_of
+                    .entry(parent.to_owned())
+                    .or_default()
+                    .push((row.id.clone(), row.title.clone()));
             }
         }
     }
-    let mut out = Vec::new();
-    for row in &summaries {
-        if row.parent.is_some() || !valid_native_id(&row.id) {
+    if layout != Layout::Cli {
+        return Ok(children_of);
+    }
+    for (child, parent) in parent_links(connection)? {
+        if !valid_native_id(&child) || !valid_native_id(&parent) {
             continue;
         }
-        if out.len() >= MAX_SOURCES {
-            return Err("Antigravity 会话源超过 5000 个，本次未删除旧索引".into());
+        let entry = children_of.entry(parent).or_default();
+        if entry.iter().any(|(id, _)| id == &child) {
+            continue;
         }
-        let id = &row.id;
-        let title = &row.title;
-        let workspace = &row.workspace;
-        let status = &row.status;
-        // Discovery reads only revisions, never every transcript/protobuf blob.
-        // Only this conversation's own transcript and usage database can set
-        // fingerprint_error. A direct child's stamp or open failure stays in
-        // the parent stamp so the scan still parses the parent.
-        let checked = (|| -> Result<String, String> {
-            let transcript = crate::history::source_cache::optional_stamp(&transcript_path(&root, id), cancelled)?;
-            let usage = usage_stamp(&root, id, cancelled)?;
-            let mut children = Vec::new();
-            for (child_id, child_title) in children_of.get(id).into_iter().flatten() {
-                children.push(child_revision(child_id, child_title, &root, cancelled)?);
-            }
-            children.sort();
-            Ok(format!(
-                "antigravity-session-v3|{id}|{title:?}|{workspace:?}|{status:?}|{transcript}|{usage}|{}",
-                children.join(",")
-            ))
-        })();
-        out.push(HistorySource {
-            native_title: title.clone().filter(|title| !title.trim().is_empty()),
-            path: index.clone(),
-            native_id: Some(id.clone()),
-            fingerprint: checked.as_ref().cloned().unwrap_or_default(),
-            fingerprint_error: checked.err(),
-        });
+        let title = summaries
+            .iter()
+            .find(|row| row.id == child)
+            .and_then(|row| row.title.clone());
+        entry.push((child, title));
     }
-    Ok(out)
+    Ok(children_of)
+}
+
+/// All rows of the 1.5.9 `conversation_parents` table; an absent table is no
+/// extra links, not an error.
+fn parent_links(connection: &Connection) -> Result<Vec<(String, String)>, String> {
+    let exists = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='conversation_parents'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| format!("Antigravity 会话索引结构无法识别：{error}"))?;
+    if exists != 1 {
+        return Ok(Vec::new());
+    }
+    let mut statement = connection
+        .prepare("SELECT conversation_id, parent_id FROM conversation_parents ORDER BY conversation_id, parent_id")
+        .map_err(|error| format!("Antigravity 会话索引结构无法识别：{error}"))?;
+    let rows = statement
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .map_err(|error| format!("Antigravity 会话索引结构无法识别：{error}"))?;
+    Ok(rows.flatten().collect())
 }
 
 struct SummaryRow {
@@ -287,7 +442,7 @@ fn conversation_db(root: &Path, id: &str) -> PathBuf {
     root.join("conversations").join(format!("{id}.db"))
 }
 
-fn open_summaries(path: &Path) -> Result<Connection, String> {
+fn open_summaries(path: &Path) -> Result<(Connection, Layout), String> {
     let connection = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -306,7 +461,34 @@ fn open_summaries(path: &Path) -> Result<Connection, String> {
     if tables != 1 {
         return Err("Antigravity 会话索引缺少 conversation_summaries 表".into());
     }
-    Ok(connection)
+    let layout = detect_layout(&connection)?;
+    Ok((connection, layout))
+}
+
+/// Layout by index shape: the 1.5.9 index renamed `id` to
+/// `conversation_id`. An index with neither or both shapes is drift and is
+/// not guessed onto either parser.
+fn detect_layout(connection: &Connection) -> Result<Layout, String> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(conversation_summaries)")
+        .map_err(|error| format!("Antigravity 会话索引结构无法识别：{error}"))?;
+    let names = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| format!("Antigravity 会话索引结构无法识别：{error}"))?;
+    let mut legacy = false;
+    let mut cli = false;
+    for name in names.flatten() {
+        match name.as_str() {
+            "id" => legacy = true,
+            "conversation_id" => cli = true,
+            _ => {}
+        }
+    }
+    match (legacy, cli) {
+        (true, false) => Ok(Layout::Legacy),
+        (false, true) => Ok(Layout::Cli),
+        _ => Err("Antigravity 会话索引缺少已知的会话 ID 列（id/conversation_id）".into()),
+    }
 }
 
 fn open_conversation(path: &Path) -> Result<Connection, String> {
@@ -344,15 +526,28 @@ pub fn parse_controlled(
         .native_id
         .clone()
         .ok_or("Antigravity 会话缺少 conversation id")?;
-    let connection = open_summaries(&source.path)?;
-    let (title, workspace): (Option<String>, Option<String>) = connection
-        .query_row(
-            "SELECT title, workspace FROM conversation_summaries
-             WHERE id = ?1 AND parent_conversation_id IS NULL",
-            [&id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .map_err(|_| "Antigravity 会话索引行缺失或结构变化".to_string())?;
+    let (connection, layout) = open_summaries(&source.path)?;
+    let (title, workspace): (Option<String>, Option<String>) = match layout {
+        Layout::Legacy => connection
+            .query_row(
+                "SELECT title, workspace FROM conversation_summaries
+                 WHERE id = ?1 AND parent_conversation_id IS NULL",
+                [&id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|_| "Antigravity 会话索引行缺失或结构变化".to_string())?,
+        Layout::Cli => {
+            let (title, uris): (Option<String>, Option<String>) = connection
+                .query_row(
+                    "SELECT title, workspace_uris FROM conversation_summaries
+                     WHERE conversation_id = ?1 AND parent_conversation_id IS NULL",
+                    [&id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(|_| "Antigravity 会话索引行缺失或结构变化".to_string())?;
+            (title, uris.and_then(first_workspace_uri))
+        }
+    };
     let mut session = ParsedSession::new();
     session.native_id = Some(id.clone());
     if let Some(title) = title.filter(|title| !title.trim().is_empty()) {
@@ -366,9 +561,11 @@ pub fn parse_controlled(
         .parent()
         .ok_or("Antigravity 会话索引路径无效")?
         .to_path_buf();
-    // Transcript: only the three documented row types enter the timeline.
+    // Transcript: only each layout's documented user/planner rows enter the
+    // timeline; 1.5.9 PLANNER_RESPONSE rows also expose their counters.
     let transcript = transcript_path(&root, &id);
-    match read_transcript(&id, &transcript, cancelled) {
+    let mut transcript_usage = Vec::new();
+    match read_transcript(&id, &transcript, layout, &mut transcript_usage, cancelled) {
         Ok(body) => {
             session.partial |= body.partial;
             session.messages = body.messages;
@@ -382,17 +579,52 @@ pub fn parse_controlled(
     let usage_db = conversation_db(&root, &id);
     if !usage_db.is_file() {
         session.partial = true;
+        if layout == Layout::Cli {
+            // The 1.5.9 transcript counters stand in only for a missing
+            // database, so a readable gen_metadata source is never
+            // double-counted.
+            record_transcript_usage(&mut session, &mut seen, &id, &transcript_usage, None);
+        }
     } else {
         // A root usage database that cannot be opened is still a parse failure.
         // A child database omits that child's usage and keeps its transcript.
-        append_usage(&mut session, &usage_db, &mut seen, None, cancelled)?;
+        append_usage(&mut session, &usage_db, layout, &mut seen, None, cancelled)?;
     }
-    attach_direct_children(&mut session, &connection, &root, &id, &mut seen, cancelled)?;
+    attach_direct_children(&mut session, &connection, layout, &root, &id, &mut seen, cancelled)?;
     check_cancelled(cancelled)?;
     session.finish(source)
 }
 
-fn read_transcript(id: &str, transcript: &Path, cancelled: &dyn Fn() -> bool) -> Result<ParsedSession, String> {
+/// 1.5.9 stores workspaces as a JSON array of path strings. Only the first
+/// non-empty entry becomes the working directory; an empty, non-array, or
+/// unparseable value is no cwd rather than a guess.
+fn first_workspace_uri(value: String) -> Option<String> {
+    let parsed: Value = serde_json::from_str(&value).ok()?;
+    parsed.as_array()?.iter().find_map(|item| {
+        item.as_str()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_owned)
+    })
+}
+
+/// The 1.5.9 transcript-side counters of one PLANNER_RESPONSE row.
+struct TranscriptUsage {
+    line: usize,
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    model: Option<String>,
+    timestamp: Option<i64>,
+}
+
+fn read_transcript(
+    id: &str,
+    transcript: &Path,
+    layout: Layout,
+    usage: &mut Vec<TranscriptUsage>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<ParsedSession, String> {
     if !transcript.is_file() {
         return Err("missing".into());
     }
@@ -412,10 +644,25 @@ fn read_transcript(id: &str, transcript: &Path, cancelled: &dyn Fn() -> bool) ->
             session.partial = true;
             continue;
         };
-        let role = match row.get("type").and_then(Value::as_str) {
-            Some("USER_INPUT") => "user",
-            Some("PLANNER_RESPONSE") | Some("AGENT_RESPONSE") => "assistant",
-            _ => continue,
+        let kind = row.get("type").and_then(Value::as_str);
+        // Each layout admits only its documented row types; the 1.5.9-only
+        // GENERIC/SYSTEM_MESSAGE/ERROR_MESSAGE/CHECKPOINT rows have no
+        // verified timeline meaning and stay out of it.
+        let role = match (layout, kind) {
+            (_, Some("USER_INPUT")) => Some("user"),
+            (_, Some("PLANNER_RESPONSE")) | (Layout::Legacy, Some("AGENT_RESPONSE")) => {
+                Some("assistant")
+            }
+            _ => None,
+        };
+        if layout == Layout::Cli && kind == Some("PLANNER_RESPONSE") {
+            match transcript_usage_row(&row, index) {
+                Ok(event) => usage.push(event),
+                Err(Mismatch) => session.partial = true,
+            }
+        }
+        let Some(role) = role else {
+            continue;
         };
         let content = row.get("content").cloned().unwrap_or(Value::Null);
         session.add_message(
@@ -428,9 +675,65 @@ fn read_transcript(id: &str, transcript: &Path, cancelled: &dyn Fn() -> bool) ->
     Ok(session)
 }
 
+/// All three documented counter fields are required on a 1.5.9
+/// PLANNER_RESPONSE row; a partial or non-numeric block is drift (partial
+/// degrade, no guessed values). `model` is absent on one observed row shape
+/// and stays None then.
+fn transcript_usage_row(row: &Value, line: usize) -> Result<TranscriptUsage, Mismatch> {
+    let counter = |name: &str| -> Result<u64, Mismatch> {
+        row.get(name).and_then(Value::as_u64).ok_or(Mismatch)
+    };
+    Ok(TranscriptUsage {
+        line,
+        input: counter("input_tokens")?,
+        output: counter("output_tokens")?,
+        cache_read: counter("cache_read_tokens")?,
+        model: row
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        timestamp: row.get("created_at").and_then(parse_timestamp),
+    })
+}
+
+/// Records the transcript-side counters as usage events. They substitute for
+/// gen_metadata only when that database is missing, so the same call is
+/// never counted twice. There is no cache-write field on the transcript
+/// side; that bucket stays unknown instead of zero.
+fn record_transcript_usage(
+    session: &mut ParsedSession,
+    seen: &mut HashSet<String>,
+    conversation: &str,
+    usage: &[TranscriptUsage],
+    attribution: Option<UsageAttribution>,
+) {
+    for event in usage {
+        record_usage(
+            session,
+            seen,
+            UsageEvent {
+                native_usage: None,
+                request_count: Some(1),
+                id: format!("{conversation}:tr:{}", event.line),
+                model: event.model.clone(),
+                timestamp: event.timestamp,
+                input: Some(event.input),
+                output: Some(event.output),
+                cache_read: Some(event.cache_read),
+                cache_write: None,
+                // The captured transcript counters mirror the gen_metadata
+                // split: input excludes the separately reported cache read.
+                input_includes_cache: false,
+                attributions: attribution.clone().into_iter().collect(),
+            },
+        );
+    }
+}
+
 fn append_usage(
     session: &mut ParsedSession,
     usage_db: &Path,
+    layout: Layout,
     seen: &mut HashSet<String>,
     attribution: Option<UsageAttribution>,
     cancelled: &dyn Fn() -> bool,
@@ -444,7 +747,7 @@ fn append_usage(
         .map_err(|error| error.to_string())?;
     for blob in rows.flatten() {
         check_cancelled(cancelled)?;
-        match parse_generation(&blob) {
+        match parse_generation(&blob, layout) {
             Ok(None) => {}
             Ok(Some(event)) => {
                 let response_id = event.response_id.clone();
@@ -492,24 +795,57 @@ fn record_usage(session: &mut ParsedSession, seen: &mut HashSet<String>, event: 
 
 fn attach_direct_children(
     session: &mut ParsedSession,
-    connection: &Connection,
+    conversation_index: &Connection,
+    layout: Layout,
     root: &Path,
     parent: &str,
     seen: &mut HashSet<String>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<(), String> {
-    let mut statement = connection
-        .prepare(
-            "SELECT id, title FROM conversation_summaries
+    let sql = match layout {
+        Layout::Legacy => "SELECT id, title FROM conversation_summaries
              WHERE parent_conversation_id = ?1 ORDER BY id",
-        )
+        Layout::Cli => "SELECT conversation_id, title FROM conversation_summaries
+             WHERE parent_conversation_id = ?1 ORDER BY conversation_id",
+    };
+    let mut statement = conversation_index
+        .prepare(sql)
         .map_err(|_| "Antigravity 会话索引行缺失或结构变化".to_string())?;
     let rows = statement
         .query_map([parent], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)))
         .map_err(|error| error.to_string())?;
+    let mut children: Vec<(String, Option<String>)> = Vec::new();
     for row in rows {
         check_cancelled(cancelled)?;
-        let (id, title) = row.map_err(|error| error.to_string())?;
+        children.push(row.map_err(|error| error.to_string())?);
+    }
+    if layout == Layout::Cli {
+        // 1.5.9 also links children through conversation_parents; a child
+        // linked in both places is attached once.
+        let mut extra = conversation_index
+            .prepare(
+                "SELECT p.conversation_id, s.title FROM conversation_parents p
+                 LEFT JOIN conversation_summaries s
+                   ON s.conversation_id = p.conversation_id
+                 WHERE p.parent_id = ?1 ORDER BY p.conversation_id",
+            )
+            .map_err(|_| "Antigravity 会话索引行缺失或结构变化".to_string())?;
+        let linked = extra
+            .query_map([parent], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })
+            .map_err(|error| error.to_string())?;
+        for row in linked {
+            check_cancelled(cancelled)?;
+            let (id, title) = row.map_err(|error| error.to_string())?;
+            if !children.iter().any(|(existing, _)| existing == &id) {
+                children.push((id, title));
+            }
+        }
+    }
+    children.sort_by(|a, b| a.0.cmp(&b.0));
+    for (id, title) in children {
+        check_cancelled(cancelled)?;
         if !valid_native_id(&id) {
             continue;
         }
@@ -523,8 +859,9 @@ fn attach_direct_children(
         // was already read, and a missing usage database adds no events.
         let mut readable = false;
         let mut messages = Vec::new();
+        let mut child_usage = Vec::new();
         if regular_child_file(&transcript) {
-            match read_transcript(&id, &transcript, cancelled) {
+            match read_transcript(&id, &transcript, layout, &mut child_usage, cancelled) {
                 Ok(body) => {
                     session.partial |= body.partial;
                     messages = body.messages;
@@ -540,13 +877,23 @@ fn attach_direct_children(
                 name: name.clone(),
                 session_key: Some(id.clone()),
             };
-            match append_usage(session, &usage_db, seen, Some(attribution), cancelled) {
+            match append_usage(session, &usage_db, layout, seen, Some(attribution), cancelled) {
                 Ok(()) => {}
                 Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
                 Err(_) => session.partial = true,
             }
         } else if child_usage_unreadable(&usage_db) {
             session.partial = true;
+        } else if layout == Layout::Cli {
+            // Missing 1.5.9 child database: the child transcript's own
+            // PLANNER_RESPONSE counters attribute its calls; there is no
+            // gen_metadata copy to double-count against.
+            let attribution = UsageAttribution {
+                kind: AgentKind::Subagent,
+                name: name.clone(),
+                session_key: Some(id.clone()),
+            };
+            record_transcript_usage(session, seen, &id, &child_usage, Some(attribution));
         }
         session.children.push(ChildSession {
             key: id,
@@ -574,22 +921,31 @@ struct GenerationUsage {
 /// Walks one `gen_metadata` blob. `Ok(None)` means the row carries no usage
 /// stats; `Err(Mismatch)` means structural drift — the caller skips the row
 /// and marks the session partial, never guessing a field.
-fn parse_generation(blob: &[u8]) -> Result<Option<GenerationUsage>, Mismatch> {
+fn parse_generation(blob: &[u8], layout: Layout) -> Result<Option<GenerationUsage>, Mismatch> {
     let mut chat_model: Option<&[u8]> = None;
     let mut reader = Reader::new(blob);
     while !reader.done() {
         let (number, _, field) = reader.next()?;
-        // Documented row fields: 1 ChatModel (message), 2 stepIndices
-        // (varint), 4 generation uuid (string). A documented number arriving
-        // with the wrong wire type is drift even when the value is unused.
+        // Documented row fields: 1 ChatModel (message), 2 stepIndices, 4
+        // generation uuid (string). Field 2 is a bare varint in the legacy
+        // [RE] shape and packed (length-delimited) in every sampled 1.5.9
+        // row; the value is unused, but a documented number arriving with
+        // the layout's wrong wire type is drift even then.
         match number {
             1 => chat_model = Some(field.as_bytes()?),
-            2 => {
-                field.as_varint()?;
-            }
+            2 => match layout {
+                Layout::Legacy => {
+                    field.as_varint()?;
+                }
+                Layout::Cli => {
+                    field.as_bytes()?;
+                }
+            },
             4 => {
                 field.as_bytes()?;
             }
+            // Unknown numbers (1.5.9's new field 8 among them) are skipped
+            // by wire type.
             _ => {}
         }
     }
@@ -703,11 +1059,25 @@ mod tests {
     const ROWS_FIXTURE: &str =
         include_str!("../../../../tests/fixtures/history/antigravity-cli-1.3/sessions.json");
 
+    /// Sanitized 1.5.9 row set captured on the authorized remote; the rebuild
+    /// mirrors the observed index schema (conversation_id/workspace_uris
+    /// columns, conversation_parents table), gen_metadata wire shapes
+    /// (packed field 2, unknown field 8) and transcript row shape.
+    const CLI_ROWS_FIXTURE: &str =
+        include_str!("../../../../tests/fixtures/history/antigravity-cli-1.5.9/sessions.json");
+
     const ROOT_ID: &str = "conv_root_20261005_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6";
     const CHILD_ID: &str = "conv_child_20261005_z9y8x7w6v5u4t3s2r1q0p1o2n3m2l1k0";
+    const CLI_ROOT_ID: &str = "conv_159_root_0000000000000000000000000a1";
+    const CLI_CHILD_ID: &str = "conv_159_subagent_00000000000000000000b2";
+    const CLI_RUNNING_ID: &str = "conv_159_running_0000000000000000000c3";
 
     fn fixture() -> Value {
         serde_json::from_str(ROWS_FIXTURE).unwrap()
+    }
+
+    fn cli_fixture() -> Value {
+        serde_json::from_str(CLI_ROWS_FIXTURE).unwrap()
     }
 
     /// Encodes one structured fixture generation into its protobuf blob.
@@ -729,7 +1099,9 @@ mod tests {
         encode_well_formed_generation(row)
     }
 
-    fn encode_well_formed_generation(row: &Value) -> Vec<u8> {
+    /// The ChatModel submessage both layouts share (stats counters, 9→4
+    /// timestamp wrapper, 19 model config id, 21 display name).
+    fn chat_model_payload(row: &Value) -> Vec<u8> {
         let mut stats = Vec::new();
         if let Some(value) = row["input_tokens"].as_u64() {
             stats.extend(encode::varint_field(2, value));
@@ -758,7 +1130,7 @@ mod tests {
             if let Some(value) = row["display_name"].as_str() {
                 chat_model.extend(encode::string_field(21, value));
             }
-            return encode::bytes_field(1, &chat_model);
+            return chat_model;
         }
         let mut chat_model = encode::bytes_field(4, &stats);
         if let Some(value) = row["timestamp"].as_u64() {
@@ -770,7 +1142,11 @@ mod tests {
         if let Some(value) = row["display_name"].as_str() {
             chat_model.extend(encode::string_field(21, value));
         }
-        let mut blob = encode::bytes_field(1, &chat_model);
+        chat_model
+    }
+
+    fn encode_well_formed_generation(row: &Value) -> Vec<u8> {
+        let mut blob = encode::bytes_field(1, &chat_model_payload(row));
         if let Some(indices) = row["step_indices"].as_array() {
             for index in indices {
                 blob.extend(encode::varint_field(2, index.as_u64().unwrap()));
@@ -778,6 +1154,41 @@ mod tests {
         }
         if let Some(value) = row["generation_uuid"].as_str() {
             blob.extend(encode::string_field(4, value));
+        }
+        blob
+    }
+
+    /// Encodes one 1.5.9 fixture generation with the observed top-level wire
+    /// shapes: field 1 ChatModel, field 2 packed step indices
+    /// (length-delimited), field 4 uuid string, and the new unknown field 8
+    /// submessage.
+    fn encode_cli_generation(row: &Value) -> Vec<u8> {
+        if row["malformed"] == "wrong_wire" {
+            // Field 4 is documented length-delimited (36-byte uuid); a varint
+            // there is drift. The rest of the row stays well formed.
+            let mut blob = encode::bytes_field(1, &chat_model_payload(row));
+            blob.extend(encode::varint_field(4, 7));
+            return blob;
+        }
+        let mut blob = encode::bytes_field(1, &chat_model_payload(row));
+        let indices = row["step_indices"]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|index| index.as_u64().unwrap())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        blob.extend(encode::bytes_field(2, &encode::packed_varints(&indices)));
+        if let Some(value) = row["generation_uuid"].as_str() {
+            blob.extend(encode::string_field(4, value));
+        }
+        if row["top_fields"]
+            .as_array()
+            .is_some_and(|fields| fields.contains(&json!(8)))
+        {
+            blob.extend(encode::bytes_field(8, b"unknown-1.5.9-submessage"));
         }
         blob
     }
@@ -833,6 +1244,95 @@ mod tests {
             }
             if let Some(lines) = row["transcript"].as_array() {
                 let transcript = transcript_path(&root, row["id"].as_str().unwrap());
+                std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+                let text = lines
+                    .iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                std::fs::write(&transcript, format!("{text}\n")).unwrap();
+            }
+        }
+    }
+
+    /// Rebuilds the 1.5.9 layout under the antigravity-cli data root: the
+    /// full conversation_summaries column set, the conversation_parents table
+    /// (empty, as on the evidence machine — the parent column carries the
+    /// fixture link), conversations/<uuid>.db gen_metadata rows in the
+    /// observed wire shapes and native transcript rows.
+    fn write_cli_fixture(home: &std::path::Path) {
+        let rows = cli_fixture();
+        let root = super::super::cli_data_root(home);
+        std::fs::create_dir_all(&root).unwrap();
+        let index = Connection::open(root.join("conversation_summaries.db")).unwrap();
+        index
+            .execute_batch(
+                "CREATE TABLE conversation_summaries (
+                    conversation_id TEXT PRIMARY KEY, title TEXT, preview TEXT,
+                    step_count INTEGER, last_modified_time TEXT, workspace_uris TEXT,
+                    status TEXT, source TEXT, project_id TEXT, agent_name TEXT,
+                    parent_conversation_id TEXT, nesting_depth INTEGER, battle_id TEXT,
+                    winning_conversation_id TEXT, not_fully_idle INTEGER, killed INTEGER,
+                    last_user_input_time TEXT, last_user_input_step_index INTEGER,
+                    app_data_dir TEXT, raw_summary BLOB, group_id TEXT);
+                 CREATE TABLE conversation_parents (conversation_id TEXT, parent_id TEXT);",
+            )
+            .unwrap();
+        for row in rows["conversations"].as_array().unwrap() {
+            index
+                .execute(
+                    "INSERT INTO conversation_summaries
+                        (conversation_id, title, preview, step_count, last_modified_time,
+                         workspace_uris, status, source, project_id, agent_name,
+                         parent_conversation_id, nesting_depth, battle_id,
+                         winning_conversation_id, not_fully_idle, killed,
+                         last_user_input_time, last_user_input_step_index, app_data_dir,
+                         group_id)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
+                    params![
+                        row["conversation_id"].as_str().unwrap(),
+                        row["title"].as_str(),
+                        row["preview"].as_str(),
+                        row["step_count"].as_i64(),
+                        row["last_modified_time"].as_str(),
+                        serde_json::to_string(&row["workspace_uris"]).unwrap(),
+                        row["status"].as_str(),
+                        row["source"].as_str(),
+                        row["project_id"].as_str(),
+                        row["agent_name"].as_str(),
+                        row["parent_conversation_id"].as_str(),
+                        row["nesting_depth"].as_i64(),
+                        row["battle_id"].as_str(),
+                        row["winning_conversation_id"].as_str(),
+                        row["not_fully_idle"].as_i64(),
+                        row["killed"].as_i64(),
+                        row["last_user_input_time"].as_str(),
+                        row["last_user_input_step_index"].as_i64(),
+                        row["app_data_dir"].as_str(),
+                        row["group_id"].as_str(),
+                    ],
+                )
+                .unwrap();
+            if let Some(generations) = row["generations"].as_array() {
+                let db = conversation_db(&root, row["conversation_id"].as_str().unwrap());
+                std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+                let usage = Connection::open(&db).unwrap();
+                usage
+                    .execute_batch(
+                        "CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB, size INTEGER);",
+                    )
+                    .unwrap();
+                for (position, generation) in generations.iter().enumerate() {
+                    usage
+                        .execute(
+                            "INSERT INTO gen_metadata (idx, data, size) VALUES (?1, ?2, ?3)",
+                            params![position as i64, encode_cli_generation(generation), 0],
+                        )
+                        .unwrap();
+                }
+            }
+            if let Some(lines) = row["transcript"].as_array() {
+                let transcript = transcript_path(&root, row["conversation_id"].as_str().unwrap());
                 std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
                 let text = lines
                     .iter()
@@ -1092,22 +1592,265 @@ mod tests {
             "response_id": "resp_drift", "input_tokens": 10, "output_tokens": 9,
             "thinking_output_tokens": 4, "response_output_tokens": 6
         }));
-        assert_eq!(parse_generation(&drifted), Err(Mismatch));
+        assert_eq!(parse_generation(&drifted, Layout::Legacy), Err(Mismatch));
+        assert_eq!(parse_generation(&drifted, Layout::Cli), Err(Mismatch));
         // Missing response_id: no dedup key, no event.
         let no_id = encode_well_formed_generation(&json!({
             "input_tokens": 10, "output_tokens": 5
         }));
-        assert_eq!(parse_generation(&no_id), Err(Mismatch));
+        assert_eq!(parse_generation(&no_id, Layout::Legacy), Err(Mismatch));
         // A blob without the ChatModel wrapper is not a usage row.
-        assert_eq!(parse_generation(&encode::varint_field(2, 7)), Ok(None));
+        assert_eq!(parse_generation(&encode::varint_field(2, 7), Layout::Legacy), Ok(None));
         // Truncated and wrong-wire blobs fail as mismatches.
         let truncated = encode_well_formed_generation(&json!({
             "response_id": "resp_cut", "input_tokens": 10, "output_tokens": 5
         }));
         assert_eq!(
-            parse_generation(&truncated[..truncated.len() - 3]),
+            parse_generation(&truncated[..truncated.len() - 3], Layout::Legacy),
             Err(Mismatch)
         );
+    }
+
+    #[test]
+    fn gen_metadata_field_two_wire_shape_follows_the_layout() {
+        // Legacy [RE] shape: field 2 is a bare varint; the 1.5.9 packed form
+        // is drift there (the 1.3 fixture's wrong_wire sample).
+        assert_eq!(parse_generation(&encode::varint_field(2, 7), Layout::Legacy), Ok(None));
+        assert_eq!(parse_generation(&encode::bytes_field(2, b"150"), Layout::Legacy), Err(Mismatch));
+        // 1.5.9 shape: field 2 is packed/length-delimited and the new
+        // unknown field 8 rides along; the bare varint is drift there (the
+        // 1.5.9 fixture's wrong_wire sample uses field 4, same rule).
+        let mut cli_blob = encode::bytes_field(2, &encode::packed_varints(&[1]));
+        cli_blob.extend(encode::bytes_field(8, b"unknown-1.5.9-submessage"));
+        assert_eq!(parse_generation(&cli_blob, Layout::Cli), Ok(None));
+        assert_eq!(parse_generation(&encode::varint_field(2, 7), Layout::Cli), Err(Mismatch));
+        // Field 4 stays a length-delimited uuid on both layouts.
+        assert_eq!(parse_generation(&encode::varint_field(4, 7), Layout::Cli), Err(Mismatch));
+        assert_eq!(parse_generation(&encode::varint_field(4, 7), Layout::Legacy), Err(Mismatch));
+    }
+
+    #[test]
+    fn cli_layout_sources_dedup_across_both_roots_with_attribution() {
+        let home = tempfile::tempdir().unwrap();
+        write_fixture(home.path());
+        write_cli_fixture(home.path());
+        let found = sources(home.path()).unwrap();
+        // The cli root is scanned first (its two roots by rowid DESC), then
+        // the legacy root; ids never repeat and the child never lists.
+        let ids: Vec<&str> = found
+            .iter()
+            .map(|source| source.native_id.as_deref().unwrap())
+            .collect();
+        assert_eq!(ids, vec![CLI_RUNNING_ID, CLI_ROOT_ID, ROOT_ID], "{found:?}");
+        let cli_root = super::super::cli_data_root(home.path());
+        let legacy_root = super::super::data_root(home.path());
+        for source in &found {
+            let from_cli = [CLI_ROOT_ID, CLI_RUNNING_ID].contains(&source.native_id.as_deref().unwrap_or(""));
+            let expected = if from_cli { &cli_root } else { &legacy_root };
+            assert_eq!(source.path, expected.join("conversation_summaries.db"));
+            if from_cli {
+                assert!(source.fingerprint.starts_with("antigravity-session-cli-v1|"));
+            } else {
+                // The legacy prefix keeps existing cached indexes valid.
+                assert!(source.fingerprint.starts_with("antigravity-session-v3|"));
+            }
+        }
+        assert!(found.iter().all(|source| source.native_id.as_deref() != Some(CLI_CHILD_ID)));
+        // The same id stored in both roots keeps the live (cli) copy only,
+        // still attributed to the cli index.
+        let index = Connection::open(cli_root.join("conversation_summaries.db")).unwrap();
+        index
+            .execute(
+                "INSERT INTO conversation_summaries (conversation_id, title, parent_conversation_id)
+                 VALUES (?1, ?2, NULL)",
+                params![ROOT_ID, "旧根 id 的 1.5.9 副本"],
+            )
+            .unwrap();
+        drop(index);
+        let deduped = sources(home.path()).unwrap();
+        assert_eq!(deduped.len(), 3, "{deduped:?}");
+        let copies: Vec<_> = deduped
+            .iter()
+            .filter(|source| source.native_id.as_deref() == Some(ROOT_ID))
+            .collect();
+        assert_eq!(copies.len(), 1);
+        assert_eq!(copies[0].path, cli_root.join("conversation_summaries.db"));
+        assert_eq!(copies[0].native_title.as_deref(), Some("旧根 id 的 1.5.9 副本"));
+    }
+
+    #[test]
+    fn cli_root_conversation_parses_timeline_gen_usage_and_child_fallback() {
+        let home = tempfile::tempdir().unwrap();
+        write_cli_fixture(home.path());
+        let found = sources(home.path()).unwrap();
+        let root_source = found
+            .iter()
+            .find(|source| source.native_id.as_deref() == Some(CLI_ROOT_ID))
+            .unwrap();
+        let session = parse(root_source).unwrap();
+        assert_eq!(session.native_id.as_deref(), Some(CLI_ROOT_ID));
+        assert_eq!(session.title, "把探针脚本改成幂等版本");
+        assert_eq!(session.cwd.as_deref(), Some("/home/example/fixture-project"));
+        // Only USER_INPUT and PLANNER_RESPONSE enter the 1.5.9 timeline; the
+        // GENERIC and SYSTEM_MESSAGE rows stay out.
+        let roles: Vec<&str> = session.messages.iter().map(|message| message.role.as_str()).collect();
+        assert_eq!(roles, vec!["user", "assistant"]);
+        assert!(session.messages.iter().all(|message| !message.text.contains("GENERIC")));
+        assert!(session.messages.iter().all(|message| !message.text.contains("系统提示行")));
+        // gen_metadata stays the usage source while present: the packed
+        // field 2 and unknown field 8 rows parse; the wrong-wire field 4 row
+        // skips with partial.
+        assert!(session.partial, "错型行必须降级 partial");
+        assert_eq!(session.model.as_deref(), Some("gemini-4-carbon-medium"));
+        let first = session.usage.iter().find(|event| event.id == "resp_1590001_agy_fixture").unwrap();
+        assert_eq!(first.input, Some(1_200));
+        assert_eq!(first.output, Some(300));
+        assert_eq!(first.cache_read, Some(8_000));
+        assert_eq!(first.cache_write, Some(3_000));
+        assert!(!first.input_includes_cache);
+        assert_eq!(first.timestamp, Some(1_791_000_010_000));
+        let second = session.usage.iter().find(|event| event.id == "resp_1590002_agy_fixture").unwrap();
+        assert_eq!(second.input, Some(500));
+        assert_eq!(second.model.as_deref(), Some("Gemini 4 Carbon (Medium)"));
+        // The root transcript row carrying the same counters adds nothing
+        // while the gen database exists.
+        assert!(!session.usage.iter().any(|event| event.id == format!("{CLI_ROOT_ID}:tr:1")));
+        // Child: transcript attached; its missing usage database falls back
+        // to the transcript counters with subagent attribution.
+        assert_eq!(session.children.len(), 1);
+        assert_eq!(session.children[0].key, CLI_CHILD_ID);
+        assert_eq!(session.children[0].name.as_deref(), Some("research: 检查重复资源"));
+        assert!(session.children[0].readable);
+        assert_eq!(session.children[0].messages.len(), 1);
+        assert!(session.children[0].messages[0].text.contains("子会话时间线"));
+        assert!(session.messages.iter().all(|message| !message.text.contains("子会话时间线")));
+        let child_event = session
+            .usage
+            .iter()
+            .find(|event| event.id == format!("{CLI_CHILD_ID}:tr:0"))
+            .unwrap();
+        assert_eq!(child_event.input, Some(2_100));
+        assert_eq!(child_event.output, Some(90));
+        assert_eq!(child_event.cache_read, Some(11_000));
+        assert_eq!(child_event.cache_write, None, "转录侧无 cache_write 字段，保持未知");
+        assert_eq!(child_event.model.as_deref(), Some("gemini-4-carbon-medium"));
+        assert!(!child_event.input_includes_cache);
+        assert_eq!(child_event.attributions.len(), 1);
+        assert_eq!(child_event.attributions[0].kind, AgentKind::Subagent);
+        assert_eq!(child_event.attributions[0].session_key.as_deref(), Some(CLI_CHILD_ID));
+        assert_eq!(session.usage.len(), 3, "{:?}", session.usage.iter().map(|event| event.id.as_str()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn cli_missing_usage_database_falls_back_to_transcript_counters() {
+        let home = tempfile::tempdir().unwrap();
+        write_cli_fixture(home.path());
+        let found = sources(home.path()).unwrap();
+        std::fs::remove_file(conversation_db(&super::super::cli_data_root(home.path()), CLI_ROOT_ID))
+            .unwrap();
+        let root_source = found
+            .iter()
+            .find(|source| source.native_id.as_deref() == Some(CLI_ROOT_ID))
+            .unwrap();
+        let session = parse(root_source).unwrap();
+        assert!(session.partial, "缺用量库仍是 partial");
+        assert_eq!(session.messages.len(), 2);
+        assert!(session.usage.iter().all(|event| !event.id.contains("resp_")));
+        let root_event = session
+            .usage
+            .iter()
+            .find(|event| event.id == format!("{CLI_ROOT_ID}:tr:1"))
+            .unwrap();
+        assert_eq!(root_event.input, Some(1_200));
+        assert_eq!(root_event.output, Some(300));
+        assert_eq!(root_event.cache_read, Some(8_000));
+        assert_eq!(root_event.cache_write, None);
+        assert_eq!(root_event.model.as_deref(), Some("gemini-4-carbon-medium"));
+        assert_eq!(root_event.timestamp, Some(1_791_000_010_000));
+        assert!(root_event.attributions.is_empty());
+        // The child fallback keeps its subagent attribution.
+        let child_event = session
+            .usage
+            .iter()
+            .find(|event| event.id == format!("{CLI_CHILD_ID}:tr:0"))
+            .unwrap();
+        assert_eq!(child_event.input, Some(2_100));
+        assert_eq!(child_event.attributions[0].session_key.as_deref(), Some(CLI_CHILD_ID));
+        assert_eq!(session.usage.len(), 2, "{:?}", session.usage);
+    }
+
+    #[test]
+    fn cli_running_conversation_without_materials_stays_partial_but_readable() {
+        let home = tempfile::tempdir().unwrap();
+        write_cli_fixture(home.path());
+        let found = sources(home.path()).unwrap();
+        let running = found
+            .iter()
+            .find(|source| source.native_id.as_deref() == Some(CLI_RUNNING_ID))
+            .unwrap();
+        let session = parse(running).unwrap();
+        assert_eq!(session.native_id.as_deref(), Some(CLI_RUNNING_ID));
+        assert_eq!(session.title, "仍在运行的探针会话");
+        assert_eq!(session.cwd.as_deref(), Some("/home/example/another-fixture"));
+        assert!(session.messages.is_empty());
+        assert!(session.usage.is_empty());
+        assert!(session.partial, "缺失转录与用量库都降级 partial");
+        assert!(session.children.is_empty());
+    }
+
+    #[test]
+    fn cli_conversation_parents_table_links_a_child_without_the_column() {
+        let home = tempfile::tempdir().unwrap();
+        write_cli_fixture(home.path());
+        let root = super::super::cli_data_root(home.path());
+        let linked = "conv_159_linked_0000000000000000000d4";
+        let index = Connection::open(root.join("conversation_summaries.db")).unwrap();
+        index
+            .execute(
+                "INSERT INTO conversation_summaries (conversation_id, title, parent_conversation_id)
+                 VALUES (?1, ?2, NULL)",
+                params![linked, "task: 表链接的子会话"],
+            )
+            .unwrap();
+        index
+            .execute(
+                "INSERT INTO conversation_parents (conversation_id, parent_id) VALUES (?1, ?2)",
+                params![linked, CLI_ROOT_ID],
+            )
+            .unwrap();
+        drop(index);
+        let transcript = transcript_path(&root, linked);
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        std::fs::write(
+            &transcript,
+            "{\"step_index\":0,\"type\":\"PLANNER_RESPONSE\",\"source\":\"MODEL\",\"status\":\"DONE\",\
+             \"created_at\":1791000060000,\"content\":\"表链接子会话正文\",\
+             \"model\":\"gemini-4-carbon-medium\",\"input_tokens\":5,\"output_tokens\":2,\"cache_read_tokens\":9}\n",
+        )
+        .unwrap();
+        let found = sources(home.path()).unwrap();
+        assert!(
+            found.iter().all(|source| source.native_id.as_deref() != Some(linked)),
+            "conversation_parents 链接的子行不独立列出：{found:?}"
+        );
+        let root_source = found
+            .iter()
+            .find(|source| source.native_id.as_deref() == Some(CLI_ROOT_ID))
+            .unwrap();
+        let session = parse(root_source).unwrap();
+        let child = session.children.iter().find(|child| child.key == linked).unwrap();
+        assert!(child.readable);
+        assert_eq!(child.name.as_deref(), Some("task: 表链接的子会话"));
+        assert_eq!(child.messages.len(), 1);
+        let event = session
+            .usage
+            .iter()
+            .find(|event| event.id == format!("{linked}:tr:0"))
+            .unwrap();
+        assert_eq!(event.input, Some(5));
+        assert_eq!(event.output, Some(2));
+        assert_eq!(event.cache_read, Some(9));
+        assert_eq!(event.attributions[0].session_key.as_deref(), Some(linked));
     }
 
     fn write_child_usage(root: &std::path::Path, id: &str, response_id: &str, input: u64) {
