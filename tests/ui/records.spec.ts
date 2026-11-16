@@ -1480,7 +1480,7 @@ test('an OMP session keeps its native --resume command and shows only local usag
   await page.addInitScript(({ id }) => {
     const usage = { id: 'usage-1', requestCount: 1, attributions: [], model: 'fixture/fixture-model', timestamp: 1794700816828, input: 1000, output: 340, cacheRead: 200, cacheWrite: 0, inputIncludesCache: false };
     const session = { id: 'omp-record', toolId: 'omp', nativeId: id, title: 'Explain the fixture project in one sentence.', cwd: 'C:/fixture/project', model: 'fixture/fixture-model', projectId: 'project-a', startedAt: 1794700800000, updatedAt: 1794700817000, favorite: false, partial: false, stale: false, messageCount: 2, usageCount: 1 };
-    const report = { generatedAt: 1794700817000, from: null, to: null, bucket: 'day', currency: 'USD', totals: { requests: 1, usageRecords: 1, unknownRequestRecords: 0, sessions: 1, input: 1000, cacheRead: 200, cacheWrite: 0, output: 340, total: 1540, cost: null, unpricedTokens: 1540 }, previous: null, timeline: [], byModel: [], byTool: [], byProject: [], topSessions: [], models: [], untimedRequests: 0, duplicateRequests: 0, partialSessions: 0, staleSessions: 0, mixedCurrency: false, latestEventAt: 1794700816828, priceSources: [], scans: [] };
+    const report = { generatedAt: 1794700817000, from: null, to: null, bucket: 'day', currency: 'USD', totals: { requests: 1, usageRecords: 1, unknownRequestRecords: 0, sessions: 1, input: 1000, cacheRead: 200, cacheWrite: 0, output: 340, total: 1540, cost: 1.5, unpricedTokens: 0 }, previous: null, timeline: [], byModel: [], byTool: [], byProject: [], topSessions: [], models: [], untimedRequests: 0, duplicateRequests: 0, partialSessions: 0, staleSessions: 0, mixedCurrency: false, latestEventAt: 1794700816828, priceSources: [], scans: [] };
     Object.assign(window, {
       isTauri: true, __ompResume: null,
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, unknown> = {}) => {
@@ -1512,7 +1512,41 @@ test('an OMP session keeps its native --resume command and shows only local usag
   await expect.poll(() => page.evaluate(() => (window as any).__ompResume?.command)).toBe(`omp --resume ${nativeId}`);
   await page.getByRole('tab', { name: '用量', exact: true }).click();
   await expect(page.getByText('查看本机记录中的 Token、费用与调用次数。')).toBeVisible();
+  await expect(page.getByText('估算费用', { exact: false })).toBeVisible();
   await expect(page.getByText('无限', { exact: true })).toHaveCount(0);
   await expect(page.getByText('零余额', { exact: false })).toHaveCount(0);
   await expect(page.getByText('订阅', { exact: false })).toHaveCount(0);
+});
+
+test('failed history sources expose their native reason instead of only a failed count', async ({ page }) => {
+  const detail = [
+    '/home/fixture/.omp/agent/sessions/--fixture-project--/future-a.jsonl：不支持的 OMP session 版本：4',
+    '/home/fixture/.omp/agent/sessions/--fixture-project--/future-b.jsonl：无法识别的 OMP 会话头',
+  ].join('\n');
+  await page.addInitScript((failureDetail) => {
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['omp'], theme: 'system' }, tools: [{ id: 'omp', name: 'oh-my-pi (OMP)' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'omp', name: 'oh-my-pi (OMP)', launchForm: 'terminal', yoloAvailable: false, history: { state: 'available', reason: '' } }], managedIds: ['omp'], preservedUnknown: [] };
+        if (command === 'list_history_scans') return [{ toolId: 'omp', scannedAt: Date.now(), sourceCount: 2, failedCount: 2, incomplete: true, detail: failureDetail }];
+        if (command === 'list_history_sessions') return [];
+        if (command === 'list_projects' || command === 'list_history_prices' || command === 'refresh_history') return [];
+        if (command === 'get_usage_report') return { generatedAt: 0, from: null, to: null, bucket: 'day', currency: 'USD', totals: { requests: 0, usageRecords: 0, unknownRequestRecords: 0, sessions: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, total: 0, cost: null, unpricedTokens: 0 }, previous: null, timeline: [], byModel: [], byTool: [], byProject: [], topSessions: [], models: [], untimedRequests: 0, duplicateRequests: 0, partialSessions: 0, staleSessions: 0, mixedCurrency: false, latestEventAt: null, priceSources: [], scans: [] };
+        if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        return null;
+      } },
+    });
+  }, detail);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
+  const coverage = page.locator('details').filter({ hasText: '2 个失败' });
+  await coverage.locator('summary').click();
+  await expect(coverage).toContainText('oh-my-pi (OMP) · 2 个来源 · 2 个失败');
+  await expect(coverage).toContainText('不支持的 OMP session 版本：4');
+  await expect(coverage).toContainText('无法识别的 OMP 会话头');
+  await expect(coverage).toContainText('future-a.jsonl');
+  await expect(coverage).toContainText('future-b.jsonl');
 });

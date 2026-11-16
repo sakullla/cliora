@@ -1307,9 +1307,31 @@ fn scan_adapter_sources_controlled(db: &Database, adapter: &dyn CliAdapter, disc
     }
     failures.extend(parsed.unwrap_or_default().into_iter().filter(|(_, error)| error != EMPTY_SESSION));
     report.failed_count = failures.len();
-    if let Some((_, error)) = failures.first() {
+    if !failures.is_empty() {
         report.incomplete = true;
-        report.detail = error.clone();
+        // The records page shows every failed source, not only the first one.
+        // `key` is `path#native-id`; parse errors do not name the file, while a
+        // fingerprint error already starts with its path.
+        const MAX_FAILURE_DETAILS: usize = 40;
+        let mut lines: Vec<String> = failures
+            .iter()
+            .take(MAX_FAILURE_DETAILS)
+            .map(|(key, error)| {
+                let path = key.split('#').next().unwrap_or(key);
+                if error.contains(path) {
+                    error.clone()
+                } else {
+                    format!("{path}：{error}")
+                }
+            })
+            .collect();
+        if failures.len() > MAX_FAILURE_DETAILS {
+            lines.push(format!(
+                "另有 {} 个失败来源未展开",
+                failures.len() - MAX_FAILURE_DETAILS
+            ));
+        }
+        report.detail = lines.join("\n");
     }
     if let Err(error) = db.with_connection(|conn| {
         let transaction = conn.transaction().map_err(|error| error.to_string())?;

@@ -899,6 +899,25 @@ mod tests {
     }
 
     #[test]
+    fn auto_and_user_title_slots_are_distinguished() {
+        let auto_bytes = fs::read(fixture_path("omp-v3-auto-title.jsonl")).unwrap();
+        let auto_slot = parse_slot(
+            &serde_json::from_str::<Value>(std::str::from_utf8(&auto_bytes[..255]).unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(auto_slot.title, "Auto fixture title");
+        assert_eq!(auto_slot.source.as_deref(), Some("auto"));
+        assert_eq!(parse_fixture("omp-v3-auto-title.jsonl").title, "Auto fixture title");
+
+        let user_bytes = fs::read(fixture_path("omp-v3-branch-compaction.jsonl")).unwrap();
+        let user_slot = parse_slot(
+            &serde_json::from_str::<Value>(std::str::from_utf8(&user_bytes[..255]).unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(user_slot.source.as_deref(), Some("user"));
+    }
+
+    #[test]
     fn empty_slot_title_clears_the_header_title_instead_of_falling_back() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("slot-empty.jsonl");
@@ -1165,6 +1184,57 @@ mod tests {
             ]
         );
         assert_eq!(plan.directory, project.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn unknown_version_reasons_reach_scan_detail_for_every_failed_source() {
+        use crate::adapters::Registry;
+        use crate::database::Database;
+        use crate::history::{list, refresh_controlled, scans, HistoryFilter};
+
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let sessions = home.join(".omp/agent/sessions/--fixture-project--");
+        fs::create_dir_all(&sessions).unwrap();
+        for name in ["future-a.jsonl", "future-b.jsonl"] {
+            fs::write(
+                sessions.join(name),
+                r#"{"type":"session","version":4,"id":"0190f4a2-0000-7000-8000-000000000099","timestamp":"2026-11-15T00:00:00Z","cwd":"/fixture/project"}
+{"type":"message","id":"a1","parentId":null,"timestamp":"2026-11-15T00:00:01Z","message":{"role":"user","content":[{"type":"text","text":"future"}]}}
+"#,
+            )
+            .unwrap();
+        }
+        let db = Database::open(&temp.path().join("index.db")).unwrap();
+        let registry = Registry::with_adapters(vec![&crate::adapters::omp::Omp]).unwrap();
+        let reports = refresh_controlled(
+            &db,
+            &registry,
+            &home,
+            &[crate::adapters::omp::ID.to_owned()],
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].failed_count, 2);
+        assert!(reports[0].incomplete);
+        assert_eq!(
+            reports[0].detail.lines().filter(|line| !line.is_empty()).count(),
+            2,
+            "{}",
+            reports[0].detail
+        );
+        for name in ["future-a.jsonl", "future-b.jsonl"] {
+            assert!(reports[0].detail.contains(name), "{}", reports[0].detail);
+        }
+        assert!(reports[0]
+            .detail
+            .contains("不支持的 OMP session 版本：4"), "{}", reports[0].detail);
+        assert!(list(&db, &HistoryFilter::default()).unwrap().is_empty());
+        // The persisted scan state must carry the same reason back on a later visit.
+        let persisted = scans(&db).unwrap();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].detail, reports[0].detail);
     }
 
     #[test]

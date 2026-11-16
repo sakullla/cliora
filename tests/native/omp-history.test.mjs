@@ -32,9 +32,11 @@ test('OMP history fixtures are declared in the history capability directory', as
   const names = cases.filter(item => item.fixture.case.fixture).map(item => item.fixture.case.fixture);
   assert.ok(names.includes('omp-18.20.2-v3.jsonl'));
   assert.ok(names.includes('omp-v3-branch-compaction.jsonl'));
+  assert.ok(names.includes('omp-v3-auto-title.jsonl'));
 });
 
 test('the title slot is one physical 256-byte JSONL line', async () => {
+  const sources = new Set();
   for (const name of await sessionFiles()) {
     const bytes = await readFile(path.join(historyDirectory, name));
     const newline = bytes.indexOf(0x0a);
@@ -46,9 +48,13 @@ test('the title slot is one physical 256-byte JSONL line', async () => {
     assert.equal(typeof slot.title, 'string');
     assert.equal(typeof slot.pad, 'string');
     assert.ok(slot.pad.length > 0);
-    if (slot.source !== undefined) assert.ok(['auto', 'user'].includes(slot.source));
+    if (slot.source !== undefined) {
+      assert.ok(['auto', 'user'].includes(slot.source));
+      sources.add(slot.source);
+    }
     assert.ok(bytes.toString('utf8', 256).includes('"type":"session"'), `${name} 槽后必须是 session 头`);
   }
+  assert.deepEqual([...sources].sort(), ['auto', 'user'], '自动与用户标题来源都要有 fixture');
 });
 
 test('the real 18.20.2 fixture keeps the observed wire fields and resume append', async () => {
