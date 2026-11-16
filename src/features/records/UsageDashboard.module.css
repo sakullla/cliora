@@ -29,11 +29,11 @@
 
 /* Summary */
 .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3); }
-.primary, .metric { position: relative; display: grid; align-content: start; gap: var(--space-2_5); min-width: 0; padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: none; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease); }
-.primary { border-color: var(--accent-line); background: var(--accent-soft); box-shadow: none; }
+.primary, .metric { position: relative; display: grid; align-content: start; gap: var(--space-2); min-width: 0; padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-card); transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--medium) var(--ease); }
+.primary { border-color: var(--accent-line); background: color-mix(in srgb, var(--accent-soft) 65%, var(--surface)); }
 .primary[data-interactive], .metric[data-interactive] { cursor: pointer; user-select: none; -webkit-user-select: none; }
-.metric[data-interactive]:hover:not([data-focus]) { border-color: var(--line-strong); background: var(--surface-hover); }
-.primary[data-interactive]:hover:not([data-focus]) { border-color: var(--accent); }
+.metric[data-interactive]:hover:not([data-focus]) { border-color: var(--line-strong); background: var(--surface-hover); box-shadow: var(--shadow-card-hover); }
+.primary[data-interactive]:hover:not([data-focus]) { border-color: var(--accent); box-shadow: var(--shadow-card-hover); }
 .primary > small, .metric > small { display: flex; align-items: center; gap: var(--space-1_5); }
 .primary > small { color: var(--accent); }
 .currency { margin-left: auto; font-size: var(--fs-micro); letter-spacing: .5px; }
@@ -68,7 +68,7 @@ button.metricNote:hover:not(:disabled) { background: none; color: var(--text); t
 .composition li small { text-align: right; }
 .composition li strong { color: var(--text); font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
 .composition li small { color: var(--text-3); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
-.composition li i, .legend i, .tooltip i { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 0; align-self: center; }
+.composition li i, .legend i, .tooltip i { display: inline-block; flex: none; width: 9px; height: 9px; border-radius: var(--radius-2xs); align-self: center; }
 
 .dashboard [data-key="input"] { background: var(--chart-input); }
 .dashboard [data-key="cacheRead"] { background: var(--chart-read); }

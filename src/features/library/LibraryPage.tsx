@@ -723,6 +723,11 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
       {listLoaded && <div className={styles.resultBar}>
         {/* Stale rows belong to the last successful query, which may not be the current search: no hit count for them. */}
         {!listStale && <Badge tone={shown.length < listTotal ? 'accent' : 'neutral'}>{t('library.page.countFiltered', { filtered: shown.length, total: listTotal })}</Badge>}
+        {!listStale && categoryFilter === '*' && categories.length > 1 && categories.slice(0, 5).map((tag) => <button type="button" key={tag} className={styles.quickTag} aria-label={t('library.page.filterByTag', { tag })} title={t('library.page.filterByTag', { tag })} onClick={() => setCategoryFilter(tag)}>#{tag}</button>)}
+        {search.trim() && <button type="button" className={styles.filterChip} title={t('library.page.removeFilter')} onClick={() => setSearch('')}><span>{t('library.page.activeSearchChip', { query: search.trim() })}</span><Icon name="close" size={12} /></button>}
+        {projectFilter !== '*' && <button type="button" className={styles.filterChip} title={t('library.page.removeFilter')} onClick={() => setProjectFilter('*')}><span>{t('library.page.activeProjectChip', { name: projectFilter === 'global' ? t('library.page.globalItems') : projects.find((project) => project.id === projectFilter)?.name ?? projectFilter })}</span><Icon name="close" size={12} /></button>}
+        {categoryFilter !== '*' && <button type="button" className={styles.filterChip} title={t('library.page.removeFilter')} onClick={() => setCategoryFilter('*')}><span>{t('library.page.activeTagChip', { tag: categoryFilter })}</span><Icon name="close" size={12} /></button>}
+        {filtering && shown.length > 0 && <Button variant="ghost" size="sm" className={styles.clearFiltersInline} onClick={clearFilters}>{t('library.page.clearFilters')}</Button>}
         <span className={styles.resultNote}>{t(remoteTargetId === 'local' ? 'library.page.sourceLocal' : 'library.page.sourceRemote')}</span>
       </div>}
       <div className={styles.list} aria-label={t('library.page.listAria', { kind: kindName(kind) })}>
@@ -740,7 +745,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
           </div>
           <p className={styles.cardBody}>{item.body ? item.body.length > 200 ? `${item.body.slice(0, 200)}…` : item.body : t('library.page.emptyBody')}</p>
           {(tagsOf(item.category).length > 0 || item.projectId || item.updatedAt) && <div className={styles.cardMeta}>
-            {tagsOf(item.category).map((tag) => <Badge className={styles.metaBadge} tone="accent" key={tag}>{tag}</Badge>)}
+            {tagsOf(item.category).map((tag) => <Badge key={tag} className={styles.metaBadge} tone="accent">{tag}</Badge>)}
             {item.projectId && <Badge className={styles.metaBadge}>{projects.find((project) => project.id === item.projectId)?.name ?? t('library.page.originalProject')}</Badge>}
             {!!item.updatedAt && <span className={styles.cardTime} title={fullTime(item.updatedAt)}><Icon name="clock" size={12} />{shortTime(item.updatedAt)}</span>}
           </div>}

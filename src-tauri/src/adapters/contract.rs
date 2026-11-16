@@ -401,7 +401,8 @@ pub struct RemoteNativeDocument {
 }
 
 /// Which copy of a remote history tree is kept when the archive is bounded.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RemoteHistoryOrder {
     /// Newest path first. Use this when the file name already contains the date.
     PathDesc,
@@ -411,10 +412,12 @@ pub enum RemoteHistoryOrder {
 
 /// Files under the remote login home that this CLI's history parser can read.
 /// The shared archiver copies this declaration and does not match on a CLI id.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct RemoteHistoryLayout {
     /// Directory under the login home, for example `.claude/projects`.
     pub relative: &'static str,
+    /// Older roots with the same layout; exported paths are mirrored to `relative`.
+    pub fallbacks: &'static [&'static str],
     /// Basename globs copied in full, such as an index or a state database.
     pub pinned: &'static [&'static str],
     /// Basename globs of session transcripts. The archive keeps a bounded set.
@@ -423,6 +426,32 @@ pub struct RemoteHistoryLayout {
     /// Files there that match `sessions` are copied with that transcript.
     pub companion: Option<&'static str>,
     pub order: RemoteHistoryOrder,
+    /// Optional bounded SQLite projection. SQL and relationships belong to the adapter.
+    pub sqlite: Option<RemoteHistorySqlite>,
+    /// Bounded projections for optional pinned SQLite catalogs in a file layout.
+    pub catalogs: &'static [RemoteHistoryTable],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct RemoteHistorySqlite {
+    pub index: &'static str,
+    pub tables: &'static [RemoteHistoryTable],
+    /// Relative file templates for the selected native ids; only `{id}` is substituted.
+    pub files: &'static [&'static str],
+    /// Only these tables are copied from per-session databases named in `files`.
+    pub file_tables: &'static [&'static str],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct RemoteHistoryTable {
+    pub name: &'static str,
+    /// Index selection query with `:limit`; for linked tables, an optional row predicate.
+    pub query: &'static str,
+    pub required_columns: &'static [&'static str],
+    /// Index id column (collected for linked tables/files).
+    pub id: Option<&'static str>,
+    /// Copy rows whose value is one of the selected index ids.
+    pub link: Option<&'static str>,
 }
 
 /// How a registered CLI is started: an interactive terminal session or the

@@ -1,7 +1,9 @@
 //! Antigravity CLI (Google, `agy`) adapter.
 //!
 //! Registered default-off through the non-enumerated stable id `antigravity`.
-//! Version 1.3.1 verified on this machine via read-only probes
+//! History layout and packed usage fields verified against native agy 1.5.9
+//! on Linux (2026-11-16); legacy 1.2/1.3 fixtures remain supported.
+//! Version 1.3.1 command capabilities verified on this machine via read-only probes
 //! (`agy --version`, `agy --help`); the remaining storage evidence is
 //! third-party reverse engineering ([RE], codeburn against agy 1.2.x — 02
 //! ADR-2 evidence policy: strict degradation, never guessed fields):
@@ -9,7 +11,7 @@
 //! * **Paths**: config root `~/.gemini` — settings
 //!   `antigravity-cli/settings.json` (plain JSON), MCP
 //!   `config/mcp_config.json`, skills `antigravity-cli/skills/`; data root
-//!   `~/.gemini/antigravity` — `conversation_summaries.db`,
+//!   `~/.gemini/antigravity-cli` (legacy `~/.gemini/antigravity`) — `conversation_summaries.db`,
 //!   `conversations/<id>.db`, `brain/<id>/.system_generated/logs/
 //!   transcript_full.jsonl` (see [`history`]).
 //! * **Launch/resume** (`agy --help`, local 1.3.1): interactive `agy`;
@@ -61,10 +63,16 @@ fn gemini_root(home: &Path) -> PathBuf {
     crate::accounts::selection::config_root("antigravity", || home.join(".gemini"))
 }
 
-/// Conversation data root: `~/.gemini/antigravity` with
+/// Current CLI data root with a legacy fallback; both use
 /// `conversation_summaries.db`, `conversations/` and `brain/`.
 pub(crate) fn data_root(home: &Path) -> PathBuf {
-    crate::accounts::selection::history_root("antigravity", || home.join(".gemini").join("antigravity"))
+    crate::accounts::selection::history_root("antigravity", || {
+        let current = home.join(".gemini/antigravity-cli");
+        match std::fs::symlink_metadata(current.join("conversation_summaries.db")) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => home.join(".gemini/antigravity"),
+            _ => current,
+        }
+    })
 }
 
 pub struct Antigravity;
@@ -341,6 +349,29 @@ impl CliAdapter for Antigravity {
     ) -> Result<crate::history::ParsedSession, String> {
         history::parse_controlled(source, cancelled)
     }
+    fn remote_history_layout(&self) -> Option<super::RemoteHistoryLayout> {
+        Some(super::RemoteHistoryLayout {
+            relative: ".gemini/antigravity-cli", fallbacks: &[".gemini/antigravity"], pinned: &[], sessions: &["transcript_full.jsonl"], companion: None,
+            order: super::RemoteHistoryOrder::MtimeDesc, catalogs: &[],
+            sqlite: Some(super::RemoteHistorySqlite {
+                index: "conversation_summaries.db",
+                files: &["brain/{id}/.system_generated/logs/transcript_full.jsonl", "conversations/{id}.db"],
+                file_tables: &["gen_metadata"],
+                tables: &[
+                    super::RemoteHistoryTable {
+                        name: "conversation_summaries",
+                        query: "WITH roots AS (SELECT conversation_id FROM conversation_summaries WHERE parent_conversation_id IS NULL OR trim(parent_conversation_id) = '' ORDER BY last_modified_time DESC LIMIT :limit) SELECT conversation_id,title,workspace_uris,status,parent_conversation_id,last_modified_time FROM conversation_summaries WHERE conversation_id IN roots OR parent_conversation_id IN roots",
+                        required_columns: &["conversation_id", "workspace_uris", "last_modified_time", "parent_conversation_id"], id: Some("conversation_id"), link: None,
+                    },
+                    super::RemoteHistoryTable {
+                        name: "conversation_summaries",
+                        query: "WITH roots AS (SELECT id FROM conversation_summaries WHERE parent_conversation_id IS NULL OR trim(parent_conversation_id) = '' ORDER BY rowid DESC LIMIT :limit) SELECT id,title,workspace,status,parent_conversation_id FROM conversation_summaries WHERE id IN roots OR parent_conversation_id IN roots",
+                        required_columns: &["id", "workspace", "parent_conversation_id"], id: Some("id"), link: None,
+                    },
+                ],
+            }),
+        })
+    }
     fn history_supported(&self) -> bool {
         true
     }
@@ -411,7 +442,7 @@ impl CliAdapter for Antigravity {
             },
             history: Facet {
                 state: "available",
-                reason: "只读索引 conversation_summaries.db 与 brain/<id>/transcript_full.jsonl；用量来自 conversations/<id>.db gen_metadata protobuf（[RE] 证据，字段不符时按行跳过并降级 partial，不猜测）",
+                reason: "已核对 agy 1.5.9 原生索引、正文及用量；兼容旧目录与索引字段。字段不符时保留可读记录并标记部分内容。",
             },
             login: None,
             management: ManagementCapabilities {

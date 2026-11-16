@@ -228,6 +228,12 @@ test('long conversations defer distant Markdown and render it when jumping to la
   await expect(reader.getByRole('heading', { name: 'Result 159', exact: true })).toHaveCount(0);
   await reader.getByRole('button', { name: '最新', exact: true }).click();
   await expect(reader.getByRole('heading', { name: 'Result 159', exact: true })).toBeVisible();
+  await reader.getByRole('button', { name: '上一问', exact: true }).click();
+  await expect(reader.getByText('请补充回归测试', { exact: true })).toBeInViewport();
+  await reader.getByRole('button', { name: '上一问', exact: true }).click();
+  await expect(reader.getByText('请检查缓存策略', { exact: true })).toBeInViewport();
+  await reader.getByRole('button', { name: '下一问', exact: true }).click();
+  await expect(reader.getByText('请补充回归测试', { exact: true })).toBeInViewport();
   await reader.getByRole('button', { name: '开头', exact: true }).click();
   await expect(reader.getByText('请检查缓存策略', { exact: true })).toBeInViewport();
   await page.getByRole('button', { name: 'demo', exact: true }).click();

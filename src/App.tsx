@@ -204,6 +204,7 @@ export default function App() {
   openSettingsRef.current = openSettings;
   const [helpOpen, setHelpOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [liveSessionCount, setLiveSessionCount] = useState(0);
   const [paletteProjects, setPaletteProjects] = useState<Project[]>([]);
   const [paletteLiveSessions, setPaletteLiveSessions] = useState<WorkbenchSession[]>([]);
   const [paletteSessions, setPaletteSessions] = useState<HistorySession[]>([]);
@@ -212,7 +213,7 @@ export default function App() {
   const [paletteReload, setPaletteReload] = useState(0);
   const [spotlight, setSpotlight] = useState<Spotlight | null>(null);
   const [librarySectionIntent, setLibrarySectionIntent] = useState<{ section: 'mcp' | 'skill'; token: number } | null>(null);
-  const [recordsTabIntent, setRecordsTabIntent] = useState<{ tab: 'sessions' | 'usage'; token: number } | null>(null);
+  const [recordsTabIntent, setRecordsTabIntent] = useState<{ tab: 'sessions' | 'usage'; sessionId?: string; token: number } | null>(null);
   const [trayRepair, setTrayRepair] = useState<TrayRepairTarget | null>(null);
   const [remoteWorkbenchIntent, setRemoteWorkbenchIntent] = useState<RemoteWorkbenchIntent | null>(null);
   const [workbenchFocus, setWorkbenchFocus] = useState<string | null>(null);
@@ -828,6 +829,7 @@ export default function App() {
     id: `project-${project.id}`,
     group: t('common.palette.groupProjects'),
     label: project.name,
+    subtitle: project.path ? shortPath(displayPath(project.path)) : undefined,
     hint: project.available ? t('common.palette.hintLocateProject') : t('common.palette.hintRebindProject'),
     keywords: project.path ?? '',
     icon: 'folder' as const,
@@ -849,19 +851,23 @@ export default function App() {
       run: () => openWorkbenchSession(session.id),
     };
   });
-  const sessionCommands: CommandItem[] = paletteSessions.map((session, index) => ({
-    id: `session-${session.id}`,
-    group: t('common.palette.groupSessions'),
-    label: session.title.trim() || t('common.palette.untitledSession'),
-    hint: t('common.palette.hintResumeSession'),
-    keywords: `${session.toolId} ${session.cwd ?? ''} ${session.model ?? ''}`,
-    toolId: session.toolId,
-    contextBoost: session.toolId === selectedTool ? 6 : 4,
-    searchOnly: index >= 5,
-    run: () => { void resumePaletteSession(session.id); },
-    secondaryLabel: t('common.palette.hintOpenRecords'),
-    onSecondary: () => { setRecordsTabIntent({ tab: 'sessions', token: Date.now() }); void go('records'); },
-  }));
+  const sessionCommands: CommandItem[] = paletteSessions.map((session, index) => {
+    const sessionPlace = session.cwd ? shortPath(displayPath(session.cwd)) : '';
+    return {
+      id: `session-${session.id}`,
+      group: t('common.palette.groupSessions'),
+      label: session.title.trim() || t('common.palette.untitledSession'),
+      subtitle: [sessionPlace, session.model].filter(Boolean).join(' · ') || undefined,
+      hint: t('common.palette.hintResumeSession'),
+      keywords: `${session.toolId} ${session.cwd ?? ''} ${session.model ?? ''}`,
+      toolId: session.toolId,
+      contextBoost: session.toolId === selectedTool ? 6 : 4,
+      searchOnly: index >= 5,
+      run: () => { void resumePaletteSession(session.id); },
+      secondaryLabel: t('common.palette.hintOpenRecords'),
+      onSecondary: () => { setRecordsTabIntent({ tab: 'sessions', sessionId: session.id, token: Date.now() }); void go('records'); },
+    };
+  });
   const pageCommands: CommandItem[] = [
     ...pages.map((item) => {
       const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id);
@@ -937,17 +943,21 @@ export default function App() {
       run: () => { setLibrarySectionIntent({ section: 'skill', token: Date.now() }); void go('library'); },
     },
   ];
-  const libraryCommands: CommandItem[] = paletteLibrary.map(({ item, searchOnly }) => ({
-    id: `library-${item.id}`,
-    group: t('common.palette.groupLibrary'),
-    label: item.title,
-    hint: t('common.palette.hintOpenItem'),
-    keywords: `${libraryKindLabel(item.kind)} ${item.category ?? ''}`,
-    icon: 'library' as const,
-    contextBoost: page === 'library' ? 5 : 2,
-    searchOnly,
-    run: () => { void revealLibraryItem(item.kind, item.id); },
-  }));
+  const libraryCommands: CommandItem[] = paletteLibrary.map(({ item, searchOnly }) => {
+    const tags = (item.category ?? '').split(/[,，]/).map((tag) => tag.trim()).filter(Boolean).slice(0, 2).join(' · ');
+    return {
+      id: `library-${item.id}`,
+      group: t('common.palette.groupLibrary'),
+      label: item.title,
+      subtitle: [libraryKindLabel(item.kind), tags].filter(Boolean).join(' · '),
+      hint: t('common.palette.hintOpenItem'),
+      keywords: `${libraryKindLabel(item.kind)} ${item.category ?? ''}`,
+      icon: 'library' as const,
+      contextBoost: page === 'library' ? 5 : 2,
+      searchOnly,
+      run: () => { void revealLibraryItem(item.kind, item.id); },
+    };
+  });
   const toolCommands: CommandItem[] = visible.map((item) => {
     const canWorkbench = nativeAvailable && (!('launchForm' in item) || item.launchForm !== 'desktop');
     return {
@@ -1081,7 +1091,7 @@ export default function App() {
             aria-keyshortcuts={shortcutAria}
             title={shortcutLabel ? t('common.nav.itemTitle', { label, shortcut: shortcutLabel }) : label}
             onClick={() => { if (isSettings) openSettings(); else void go(item.id as Page); }}
-          ><span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{label}</span></button></Fragment>;
+          ><span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{label}</span>{item.id === 'sessions' && !railDocked && liveSessionCount > 0 && <span className="nav-live-pill" aria-hidden="true"><span className="nav-live-dot" />{liveSessionCount}</span>}</button></Fragment>;
         })}</div>)}
         {railDocked && overflowNavPages.length > 0 && <div className="nav-group" data-group="more"><RowMenu label={t('common.nav.more')} title={t('common.nav.more')} className="nav-more" side={sidebarCollapsed} icon={<span className="nav-glyph" aria-hidden="true"><Icon name="more" /></span>}>{overflowNavPages.map((item) => {
           const isSettings = item.id === 'settings';
@@ -1108,7 +1118,7 @@ export default function App() {
       {!nativeAvailable && <div className="environment-banner" role="status"><span className="banner-icon"><Icon name="info" size={16} /></span><span>{t('common.shell.previewBanner')}</span></div>}
       {(error || writeRecoveryFallback) && <div className="error-banner" role="alert"><span className="banner-icon"><Icon name="alert" size={16} /></span><div className="error-copy"><strong>{error?.message ?? t('common.remoteWrite.unknown')}</strong>{error && <span>{error.action}</span>}{writeRecoveryFallback && error && error.message !== t('common.remoteWrite.unknown') && <span>{t('common.remoteWrite.unknown')}</span>}{error?.data_directory && <code>{error.data_directory}</code>}</div>{writeRecoveryFallback && <IconButton size="sm" icon={<Icon name="refresh" size={14} />} onClick={() => requestWriteRecovery(remoteTargetId)} aria-label={t('common.remoteWrite.open')} title={t('common.remoteWrite.open')} />}{error && loaded && <button type="button" onClick={() => setError(null)} aria-label={t('common.dismissError')}><Icon name="close" size={14} /></button>}</div>}
       {page === 'home' && <PageHeader title={title[0]} subtitle={title[1]} eyebrow={<><span className="page-eyebrow-dot" aria-hidden="true" />{t(`home.hero.${greetingPart()}`)}<span aria-hidden="true">·</span><time>{new Intl.DateTimeFormat(i18n.language?.startsWith('en') ? 'en-US' : 'zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }).format(new Date())}</time></>} actions={nativeAvailable && visibleDescriptors.some((item) => item.launchForm !== 'desktop') ? <Button variant="primary" icon={<Icon name="plus" size={15} />} title={`${t('home.hero.newSessionTitle')} (Alt+N)`} aria-keyshortcuts="Alt+N" onClick={startNewSession}>{t('home.hero.newSession')}</Button> : undefined} />}
-      {page !== 'sessions' && page !== 'home' && <PageHeader title={title[0]} subtitle={title[1]} compact={page === 'records' || page === 'connections'} />}
+      {page !== 'sessions' && page !== 'home' && <PageHeader title={title[0]} subtitle={title[1]} compact={page === 'records' || page === 'connections' || page === 'library'} />}
       {loading ? <PageSkeleton /> : !loaded ? <EmptyState icon="alert" title={t('common.shell.loadFailedTitle')} detail={t('common.shell.loadFailedDetail')} action={<Button variant="primary" size="sm" className="empty-state-action" onClick={loadBootstrap}>{t('common.shell.loadFailedRetry')}</Button>} /> : <>
         {page === 'home' && onboardingVisible && <OnboardingCard
           doneTools={managed.length > 0}
@@ -1120,7 +1130,7 @@ export default function App() {
           onClose={closeOnboarding}
         />}
         {page === 'home' && <div className="home-band">
-          {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} projectQuery={projectQueries[remoteIdentity] ?? ''} onQueryChange={query => setProjectQueries(old => ({ ...old, [remoteIdentity]: query }))} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} repair={trayRepair?.page === 'home' ? trayRepair : null} spotlight={page === 'home' && spotlight?.target === 'project' ? spotlight : null} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /> : <section className="home-secondary"><div className="section-heading"><h2>{t('home.projects.title')}</h2></div><div className="subtle-panel"><span className="empty-symbol" aria-hidden="true"><Icon name="folder" size={20} /></span><strong>{t('home.projects.panelTitle')}</strong><p>{t('home.projects.panelDetail')}</p></div></section>}          {nativeAvailable && remoteTargetId === 'local' && <RecentSessions tools={visibleDescriptors} active={page === 'home'} onResume={(session) => resumePaletteSession(session.id, session.toolId)} onOpenRecords={() => { void go('records'); }} />}
+          {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} projectQuery={projectQueries[remoteIdentity] ?? ''} onQueryChange={query => setProjectQueries(old => ({ ...old, [remoteIdentity]: query }))} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} repair={trayRepair?.page === 'home' ? trayRepair : null} spotlight={page === 'home' && spotlight?.target === 'project' ? spotlight : null} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /> : <section className="home-secondary"><div className="section-heading"><h2>{t('home.projects.title')}</h2></div><div className="subtle-panel"><span className="empty-symbol" aria-hidden="true"><Icon name="folder" size={20} /></span><strong>{t('home.projects.panelTitle')}</strong><p>{t('home.projects.panelDetail')}</p></div></section>}          {nativeAvailable && remoteTargetId === 'local' && <RecentSessions tools={visibleDescriptors} active={page === 'home'} onResume={(session) => resumePaletteSession(session.id, session.toolId)} onOpenSession={(session) => { setRecordsTabIntent({ tab: 'sessions', sessionId: session.id, token: Date.now() }); void go('records'); }} onOpenRecords={() => { void go('records'); }} />}
           <section className="home-tools" data-home-section="tools">
             <div className="section-heading"><h2 id="home-tools-title">{t('home.managed.title')}<Badge className="heading-count" aria-hidden="true">{visible.length}</Badge></h2><Button variant="ghost" size="sm" onClick={() => openSettings({ tab: 'tools', anchor: 'settings-managed' })}>{t('home.managed.adjust')} <span aria-hidden="true">→</span></Button></div>
             <p className="home-section-hint">{t('home.managed.hint')}</p>
@@ -1133,7 +1143,7 @@ export default function App() {
         </div>}
         <div hidden={page !== 'library'}>{hasVisited('library') && <Suspense fallback={<PageSkeleton />}><LibraryPage key={remoteIdentity} managedTools={visibleDescriptors} remoteTargetId={remoteTargetId} active={page === 'library'} spotlight={page === 'library' && spotlight?.target === 'library' ? spotlight : null} mcpSpotlight={page === 'library' && spotlight?.target === 'mcp' ? spotlight : null} sectionIntent={page === 'library' ? librarySectionIntent : null} onOpenConnections={() => { setSpotlight(null); void go('connections'); }} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
         <div className="records-shell" hidden={page !== 'records'}>{hasVisited('records') && <Suspense fallback={<PageSkeleton />}><RecordsPage key={remoteIdentity} active={page === 'records'} remoteTargetId={remoteTargetId} tools={visibleDescriptors} tabIntent={page === 'records' ? recordsTabIntent : null} onOpenProjects={() => go('home')} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
-        <div className={sessionStyles.shell} hidden={page !== 'sessions'}>{(page === 'sessions' || hasVisited('sessions')) && <Suspense fallback={<PageSkeleton />}><SessionWorkbench remoteIntent={remoteWorkbenchIntent} active={page === 'sessions'} tools={visibleDescriptors} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} syncedRemoteTargets={remoteTargets} onRemoteTargetChange={changeRemoteTarget} focusSessionId={workbenchFocus} focusToken={workbenchToken} reviewSignal={reviewSignal} failure={workbenchFailure} onFailure={setWorkbenchFailure} onOpenHome={() => { void go('home'); }} railHost={page === 'sessions' && wideShell ? railHost : null} railSlim={navCollapsed.workbench} onToggleRailSlim={toggleNavCollapsed} onRailLayout={onRailLayout} railToggleRef={workbenchRailToggle} windowChrome={windowChrome} captionSlotRef={windowChrome && wideShell ? setCaptionSlot : undefined} /></Suspense>}</div>
+        <div className={sessionStyles.shell} hidden={page !== 'sessions'}>{(page === 'sessions' || hasVisited('sessions')) && <Suspense fallback={<PageSkeleton />}><SessionWorkbench remoteIntent={remoteWorkbenchIntent} active={page === 'sessions'} tools={visibleDescriptors} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} syncedRemoteTargets={remoteTargets} onRemoteTargetChange={changeRemoteTarget} focusSessionId={workbenchFocus} focusToken={workbenchToken} reviewSignal={reviewSignal} failure={workbenchFailure} onFailure={setWorkbenchFailure} onOpenHome={() => { void go('home'); }} railHost={page === 'sessions' && wideShell ? railHost : null} railSlim={navCollapsed.workbench} onToggleRailSlim={toggleNavCollapsed} onRailLayout={onRailLayout} onLiveCountChange={setLiveSessionCount} railToggleRef={workbenchRailToggle} windowChrome={windowChrome} captionSlotRef={windowChrome && wideShell ? setCaptionSlot : undefined} /></Suspense>}</div>
       </>}
     </div></main>
   </div>

@@ -1,6 +1,6 @@
 [package]
 name = "cliora"
-version = "0.4.136"
+version = "0.4.142"
 description = "Cliora desktop CLI manager"
 edition = "2021"
 rust-version = "1.90"
@@ -18,7 +18,7 @@ tauri-build = { version = "2.5", features = [] }
 
 [dependencies]
 tauri = { version = "2.10", features = ["tray-icon"] }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 indexmap = { version = "2", features = ["serde"] }
 semver = "1"
@@ -39,6 +39,8 @@ reqwest = { version = "0.13", default-features = false, features = ["blocking", 
 httpdate = "1"
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
 url = "2"
+percent-encoding = "2"
+flate2 = "1"
 base64 = "0.22"
 chacha20poly1305 = "0.10"
 rand = "0.9"
@@ -64,7 +66,6 @@ security-framework = "3.7"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_JobObjects", "Win32_System_Diagnostics_ProcessSnapshotting", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_Registry", "Win32_System_Threading"] }
 
 [dev-dependencies]
-flate2 = "1"
 
 # Keep the real 64 MiB / 3-pass KDF in tests; optimize only its CPU-bound dependencies.
 [profile.test.package.argon2]

@@ -28,4 +28,4 @@ export type UsageReport = {
 export type ResumeMode = LaunchMode;
 export type ResumeResult = LaunchResult;
 
-export type RemoteHistorySnapshot = { sessions: HistorySession[]; sourceFailures: { toolId: string; message: string; remote?: import('./remote').RemoteFailure | null }[] };
+export type RemoteHistorySnapshot = { availableSources?: string[]; sessions: HistorySession[]; sourceFailures: { toolId: string; message: string; remote?: import('./remote').RemoteFailure | null }[] };

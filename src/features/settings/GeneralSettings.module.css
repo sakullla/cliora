@@ -155,27 +155,41 @@
 
 /* Distinct surface cues for Light, Dark, and System cards using semantic tokens only */
 .themePreview[data-preview='light'] {
-  background: var(--surface);
+  background: var(--theme-preview-light-bg);
+  border-color: var(--theme-preview-light-line);
+}
+.themePreview[data-preview='light'] .previewRail {
+  background: var(--theme-preview-light-rail);
+  border-right-color: var(--theme-preview-light-line);
+}
+.themePreview[data-preview='light'] .previewMain > b {
+  background: var(--theme-preview-light-ink);
+}
+.themePreview[data-preview='light'] .previewMain > s,
+.themePreview[data-preview='light'] .previewRail > i:not(:first-child) {
+  background: var(--theme-preview-light-muted);
 }
 .themePreview[data-preview='dark'] {
-  background: color-mix(in srgb, var(--text) 86%, var(--surface));
+  background: var(--theme-preview-dark-bg);
+  border-color: var(--theme-preview-dark-line);
 }
 .themePreview[data-preview='dark'] .previewRail {
-  background: color-mix(in srgb, var(--text) 92%, var(--surface));
-  border-right-color: color-mix(in srgb, var(--surface) 16%, transparent);
+  background: var(--theme-preview-dark-rail);
+  border-right-color: var(--theme-preview-dark-line);
 }
 .themePreview[data-preview='dark'] .previewMain > b {
-  background: color-mix(in srgb, var(--surface) 84%, transparent);
+  background: var(--theme-preview-dark-ink);
 }
 .themePreview[data-preview='dark'] .previewMain > s,
 .themePreview[data-preview='dark'] .previewRail > i:not(:first-child) {
-  background: color-mix(in srgb, var(--surface) 30%, transparent);
+  background: var(--theme-preview-dark-muted);
 }
 .themePreview[data-preview='system'] .previewRail {
-  background: color-mix(in srgb, var(--text) 88%, var(--surface));
+  background: var(--theme-preview-dark-rail);
+  border-right-color: var(--theme-preview-dark-line);
 }
 .themePreview[data-preview='system'] .previewRail > i:not(:first-child) {
-  background: color-mix(in srgb, var(--surface) 32%, transparent);
+  background: var(--theme-preview-dark-muted);
 }
 
 .themeMeta {

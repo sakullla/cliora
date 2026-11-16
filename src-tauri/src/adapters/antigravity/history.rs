@@ -2,20 +2,14 @@
 //! `brain/<id>/transcript_full.jsonl` transcripts and per-conversation
 //! `conversations/<id>.db` usage rows.
 //!
-//! [RE] evidence: third-party reverse engineering (codeburn against `agy`
-//! 1.2.x; the local machine runs 1.3.1 but has never produced data, so every
-//! fixture is hand-built from the documented schema — 02 ADR-2 evidence
-//! policy). Layout under the `~/.gemini/antigravity` data root:
+//! Native agy 1.5.9 Linux evidence (2026-11-16): data lives in
+//! `~/.gemini/antigravity-cli`; the index uses `conversation_id`, JSON
+//! `workspace_uris`, empty parent ids and `last_modified_time`. Legacy
+//! `~/.gemini/antigravity` / `id` / `workspace` fixtures remain supported.
+//! Metadata is cached by DB and WAL revision; transcripts are streamed.
 //!
-//! * `conversation_summaries.db` — SQLite index with `conversation_summaries`
-//!   rows (`id`, `title`, `workspace`, `status`, `parent_conversation_id`);
-//!   a direct `parent_conversation_id` is attached to that parent and is not
-//!   an independent session. The child transcript is readable on its own.
-//!   A missing, unreadable, or failed usage database omits that child's
-//!   usage and leaves an already read transcript in place. A missing,
-//!   symlinked, or unreadable transcript keeps the node unreadable with an
-//!   empty body. The parent remains either way. Deeper descendants are not
-//!   merged.
+//! * `conversation_summaries.db` — root rows and direct child relationships;
+//!   missing child material preserves the parent and is reported as partial.
 //! * `brain/<conversation-id>/.system_generated/logs/transcript_full.jsonl` —
 //!   one JSON object per line: `{step_index, source, type, status,
 //!   created_at, content, thinking?}` with `type` ∈ `USER_INPUT` /
@@ -28,7 +22,7 @@
 //!   3 output_tokens = 9 + 10, 4 cache_write_tokens, 5 cache_read_tokens,
 //!   9 thinking_output_tokens, 10 response_output_tokens, 11 response_id),
 //!   ChatModel 19 model config id, 21 display name, 9 → 4 timestamp; row
-//!   field 2 stepIndices varint, field 4 generation uuid.
+//!   field 2 stepIndices (packed or unpacked varints), field 4 generation uuid.
 //!
 //! Usage semantics: stored `input_tokens` EXCLUDES cache read/write →
 //! `input_includes_cache` is false on every event; stored `output_tokens`
@@ -41,7 +35,9 @@
 //! missing usage database omits only that child's events. Fields are never
 //! guessed.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::io::{BufRead, BufReader, Read};
+use std::sync::{Arc, OnceLock};
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags};
@@ -66,35 +62,16 @@ pub fn sources_controlled(
     check_cancelled(cancelled)?;
     let root = super::data_root(home);
     let index = root.join("conversation_summaries.db");
-    if !index.is_file() {
-        return Ok(Vec::new());
+    match std::fs::symlink_metadata(&index) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("Antigravity 会话索引不可读取：{error}")),
+        Ok(metadata) if !metadata.is_file() || metadata.file_type().is_symlink() => return Err("Antigravity 会话索引必须是普通文件".into()),
+        Ok(_) => {}
     }
-    let connection = open_summaries(&index)?;
-    let mut statement = connection
-        .prepare(
-            "SELECT id, title, workspace, status, parent_conversation_id
-             FROM conversation_summaries ORDER BY rowid DESC",
-        )
-        .map_err(|error| format!("Antigravity 会话索引结构无法识别：{error}"))?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok(SummaryRow {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                workspace: row.get(2)?,
-                status: row.get(3)?,
-                parent: row.get(4)?,
-            })
-        })
-        .map_err(|error| format!("Antigravity 会话索引结构无法识别：{error}"))?;
-    let mut summaries = Vec::new();
-    for row in rows {
-        check_cancelled(cancelled)?;
-        summaries.push(row.map_err(|error| error.to_string())?);
-    }
-    let mut children_of: std::collections::HashMap<String, Vec<(String, Option<String>)>> =
-        std::collections::HashMap::new();
-    for row in &summaries {
+    let catalog = summary_catalog(&index, cancelled)?;
+    let summaries = &catalog.rows;
+    let mut children_of: HashMap<String, Vec<(String, Option<String>)>> = HashMap::new();
+    for row in summaries {
         if let Some(parent) = linked_parent(row.parent.as_deref()) {
             if valid_native_id(&row.id) && valid_native_id(parent) {
                 children_of.entry(parent.to_owned()).or_default().push((row.id.clone(), row.title.clone()));
@@ -102,8 +79,8 @@ pub fn sources_controlled(
         }
     }
     let mut out = Vec::new();
-    for row in &summaries {
-        if row.parent.is_some() || !valid_native_id(&row.id) {
+    for row in summaries {
+        if linked_parent(row.parent.as_deref()).is_some() || !valid_native_id(&row.id) {
             continue;
         }
         if out.len() >= MAX_SOURCES {
@@ -113,6 +90,8 @@ pub fn sources_controlled(
         let title = &row.title;
         let workspace = &row.workspace;
         let status = &row.status;
+        let updated = row.updated;
+        let partial = row.partial;
         // Discovery reads only revisions, never every transcript/protobuf blob.
         // Only this conversation's own transcript and usage database can set
         // fingerprint_error. A direct child's stamp or open failure stays in
@@ -126,7 +105,7 @@ pub fn sources_controlled(
             }
             children.sort();
             Ok(format!(
-                "antigravity-session-v3|{id}|{title:?}|{workspace:?}|{status:?}|{transcript}|{usage}|{}",
+                "antigravity-session-v4|{id}|{title:?}|{workspace:?}|{status:?}|{updated:?}|{partial}|{transcript}|{usage}|{}",
                 children.join(",")
             ))
         })();
@@ -147,6 +126,62 @@ struct SummaryRow {
     workspace: Option<String>,
     status: Option<String>,
     parent: Option<String>,
+    updated: Option<i64>,
+    partial: bool,
+}
+
+struct SummaryCatalog {
+    rows: Vec<SummaryRow>,
+    by_id: HashMap<String, usize>,
+    children: HashMap<String, Vec<usize>>,
+}
+
+fn summary_catalog(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<Arc<SummaryCatalog>, String> {
+    static CACHE: OnceLock<crate::history::source_cache::RevisionCache<Arc<SummaryCatalog>>> = OnceLock::new();
+    CACHE.get_or_init(crate::history::source_cache::RevisionCache::new).read(path, cancelled, || {
+        let connection = open_summaries(path)?;
+        let mut columns = connection.prepare("PRAGMA table_info(conversation_summaries)").map_err(|error| error.to_string())?;
+        let columns = columns.query_map([], |row| row.get::<_, String>(1)).map_err(|error| error.to_string())?
+            .collect::<Result<HashSet<_>, _>>().map_err(|error| error.to_string())?;
+        let modern = columns.contains("conversation_id") && columns.contains("workspace_uris");
+        let (id, workspace) = if modern { ("conversation_id", "workspace_uris") }
+            else if columns.contains("id") && columns.contains("workspace") { ("id", "workspace") }
+            else { return Err("Antigravity 会话索引结构无法识别".into()); };
+        let updated = if columns.contains("last_modified_time") { "CAST(last_modified_time AS TEXT)" } else { "NULL" };
+        let mut statement = connection.prepare(&format!("SELECT {id}, title, {workspace}, status, parent_conversation_id, {updated} FROM conversation_summaries ORDER BY rowid DESC LIMIT 20001"))
+            .map_err(|error| format!("Antigravity 会话索引结构无法识别：{error}"))?;
+        let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, Option<String>>(4)?, row.get::<_, Option<String>>(5)?)))
+            .map_err(|error| error.to_string())?;
+        let mut catalog = SummaryCatalog { rows: Vec::new(), by_id: HashMap::new(), children: HashMap::new() };
+        for row in rows {
+            check_cancelled(cancelled)?;
+            if catalog.rows.len() >= 20_000 { return Err("Antigravity 会话索引超过读取上限，原索引已保留".into()); }
+            let (id, title, workspace, status, parent, updated) = row.map_err(|error| error.to_string())?;
+            let (workspace, partial) = if modern {
+                match workspace.as_deref().map(workspace_uri).transpose() { Ok(value) => (value.flatten(), false), Err(_) => (None, true) }
+            } else { (workspace, false) };
+            let updated = updated.and_then(|time| parse_timestamp(&Value::String(time.replace(' ', "T"))));
+            let index = catalog.rows.len();
+            if let Some(parent) = linked_parent(parent.as_deref()) { catalog.children.entry(parent.to_owned()).or_default().push(index); }
+            catalog.by_id.insert(id.clone(), index);
+            catalog.rows.push(SummaryRow { id, title, workspace, status, parent, updated, partial });
+        }
+        Ok(Arc::new(catalog))
+    })
+}
+
+fn workspace_uri(raw: &str) -> Result<Option<String>, String> {
+    if raw.trim().is_empty() { return Ok(None); }
+    let uris: Vec<String> = serde_json::from_str(raw).map_err(|_| "Antigravity workspace_uris 格式无法识别")?;
+    for uri in uris {
+        let parsed = url::Url::parse(&uri).map_err(|_| "Antigravity 工作区 URI 无法识别")?;
+        if parsed.scheme() != "file" { continue; }
+        let path = percent_encoding::percent_decode_str(parsed.path()).decode_utf8().map_err(|_| "Antigravity 工作区路径无法识别")?;
+        if let Some(host) = parsed.host_str().filter(|host| !host.is_empty() && *host != "localhost") { return Ok(Some(format!("//{host}{path}"))); }
+        let path = if path.starts_with('/') && path.as_bytes().get(2) == Some(&b':') { &path[1..] } else { &path };
+        if !path.is_empty() { return Ok(Some(path.to_owned())); }
+    }
+    Ok(None)
 }
 
 fn linked_parent(parent: Option<&str>) -> Option<&str> {
@@ -344,21 +379,18 @@ pub fn parse_controlled(
         .native_id
         .clone()
         .ok_or("Antigravity 会话缺少 conversation id")?;
-    let connection = open_summaries(&source.path)?;
-    let (title, workspace): (Option<String>, Option<String>) = connection
-        .query_row(
-            "SELECT title, workspace FROM conversation_summaries
-             WHERE id = ?1 AND parent_conversation_id IS NULL",
-            [&id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .map_err(|_| "Antigravity 会话索引行缺失或结构变化".to_string())?;
+    let catalog = summary_catalog(&source.path, cancelled)?;
+    let row = catalog.by_id.get(&id).map(|index| &catalog.rows[*index])
+        .filter(|row| linked_parent(row.parent.as_deref()).is_none())
+        .ok_or("Antigravity 会话索引行缺失或结构变化")?;
     let mut session = ParsedSession::new();
     session.native_id = Some(id.clone());
-    if let Some(title) = title.filter(|title| !title.trim().is_empty()) {
+    if let Some(title) = row.title.as_deref().filter(|title| !title.trim().is_empty()) {
         session.title = title.chars().take(96).collect();
     }
-    session.cwd = workspace.filter(|workspace| !workspace.trim().is_empty());
+    session.cwd = row.workspace.clone().filter(|workspace| !workspace.trim().is_empty());
+    session.updated_at = row.updated;
+    session.partial = row.partial;
     // The source path is <data root>/conversation_summaries.db; transcripts and
     // the usage database live beside it under the same root.
     let root = source
@@ -368,10 +400,13 @@ pub fn parse_controlled(
         .to_path_buf();
     // Transcript: only the three documented row types enter the timeline.
     let transcript = transcript_path(&root, &id);
+    let mut step_times = HashMap::new();
     match read_transcript(&id, &transcript, cancelled) {
-        Ok(body) => {
+        Ok((body, times)) => {
+            step_times = times;
             session.partial |= body.partial;
             session.messages = body.messages;
+            session.model = body.model;
         }
         Err(error) if error == "missing" => session.partial = true,
         Err(error) => return Err(format!("Antigravity 会话记录无法读取：{error}")),
@@ -385,20 +420,28 @@ pub fn parse_controlled(
     } else {
         // A root usage database that cannot be opened is still a parse failure.
         // A child database omits that child's usage and keeps its transcript.
-        append_usage(&mut session, &usage_db, &mut seen, None, cancelled)?;
+        append_usage(&mut session, &usage_db, &mut seen, None, &step_times, cancelled)?;
     }
-    attach_direct_children(&mut session, &connection, &root, &id, &mut seen, cancelled)?;
+    attach_direct_children(&mut session, &catalog, &root, &id, &mut seen, cancelled)?;
     check_cancelled(cancelled)?;
     session.finish(source)
 }
 
-fn read_transcript(id: &str, transcript: &Path, cancelled: &dyn Fn() -> bool) -> Result<ParsedSession, String> {
+type Transcript = (ParsedSession, HashMap<u64, i64>);
+fn read_transcript(id: &str, transcript: &Path, cancelled: &dyn Fn() -> bool) -> Result<Transcript, String> {
     if !transcript.is_file() {
         return Err("missing".into());
     }
-    let text = std::fs::read_to_string(transcript).map_err(|error| error.to_string())?;
+    let file = std::fs::File::open(transcript).map_err(|error| error.to_string())?;
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
     let mut session = ParsedSession::new();
-    for (index, line) in text.lines().enumerate() {
+    let mut step_times = HashMap::new();
+    for index in 0..=MAX_TRANSCRIPT_LINES {
+        line.clear();
+        let count = reader.by_ref().take(1024 * 1024 + 1).read_line(&mut line).map_err(|error| error.to_string())?;
+        if count == 0 { break; }
+        if count > 1024 * 1024 { session.partial = true; break; }
         check_cancelled(cancelled)?;
         if index >= MAX_TRANSCRIPT_LINES {
             session.partial = true;
@@ -412,11 +455,13 @@ fn read_transcript(id: &str, transcript: &Path, cancelled: &dyn Fn() -> bool) ->
             session.partial = true;
             continue;
         };
+        if let (Some(step), Some(time)) = (row.get("step_index").and_then(Value::as_u64), row.get("created_at").and_then(parse_timestamp)) { step_times.insert(step, time); }
         let role = match row.get("type").and_then(Value::as_str) {
             Some("USER_INPUT") => "user",
             Some("PLANNER_RESPONSE") | Some("AGENT_RESPONSE") => "assistant",
             _ => continue,
         };
+        if let Some(model) = row.get("model").and_then(Value::as_str).filter(|model| !model.is_empty()) { session.model = Some(model.to_owned()); }
         let content = row.get("content").cloned().unwrap_or(Value::Null);
         session.add_message(
             format!("{id}:{index}"),
@@ -425,7 +470,7 @@ fn read_transcript(id: &str, transcript: &Path, cancelled: &dyn Fn() -> bool) ->
             row.get("created_at").and_then(parse_timestamp),
         );
     }
-    Ok(session)
+    Ok((session, step_times))
 }
 
 fn append_usage(
@@ -433,6 +478,7 @@ fn append_usage(
     usage_db: &Path,
     seen: &mut HashSet<String>,
     attribution: Option<UsageAttribution>,
+    step_times: &HashMap<u64, i64>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<(), String> {
     let usage = open_conversation(usage_db)?;
@@ -453,7 +499,7 @@ fn append_usage(
                     request_count: Some(1),
                     id: response_id,
                     model: event.model,
-                    timestamp: event.timestamp,
+                    timestamp: event.timestamp.or_else(|| event.steps.iter().filter_map(|step| step_times.get(step).copied()).min()),
                     input: Some(event.input),
                     output: Some(event.output),
                     cache_read: Some(event.cache_read),
@@ -492,24 +538,18 @@ fn record_usage(session: &mut ParsedSession, seen: &mut HashSet<String>, event: 
 
 fn attach_direct_children(
     session: &mut ParsedSession,
-    connection: &Connection,
+    catalog: &SummaryCatalog,
     root: &Path,
     parent: &str,
     seen: &mut HashSet<String>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<(), String> {
-    let mut statement = connection
-        .prepare(
-            "SELECT id, title FROM conversation_summaries
-             WHERE parent_conversation_id = ?1 ORDER BY id",
-        )
-        .map_err(|_| "Antigravity 会话索引行缺失或结构变化".to_string())?;
-    let rows = statement
-        .query_map([parent], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)))
-        .map_err(|error| error.to_string())?;
-    for row in rows {
+    let mut children = catalog.children.get(parent).into_iter().flatten().map(|index| &catalog.rows[*index]).collect::<Vec<_>>();
+    children.sort_by(|left, right| left.id.cmp(&right.id));
+    for row in children {
         check_cancelled(cancelled)?;
-        let (id, title) = row.map_err(|error| error.to_string())?;
+        let id = row.id.clone();
+        let title = row.title.clone();
         if !valid_native_id(&id) {
             continue;
         }
@@ -523,9 +563,11 @@ fn attach_direct_children(
         // was already read, and a missing usage database adds no events.
         let mut readable = false;
         let mut messages = Vec::new();
+        let mut step_times = HashMap::new();
         if regular_child_file(&transcript) {
             match read_transcript(&id, &transcript, cancelled) {
-                Ok(body) => {
+                Ok((body, times)) => {
+                    step_times = times;
                     session.partial |= body.partial;
                     messages = body.messages;
                     readable = true;
@@ -540,7 +582,7 @@ fn attach_direct_children(
                 name: name.clone(),
                 session_key: Some(id.clone()),
             };
-            match append_usage(session, &usage_db, seen, Some(attribution), cancelled) {
+            match append_usage(session, &usage_db, seen, Some(attribution), &step_times, cancelled) {
                 Ok(()) => {}
                 Err(error) if cancelled() || scan_cancelled(&error) => return Err(error),
                 Err(_) => session.partial = true,
@@ -569,6 +611,7 @@ struct GenerationUsage {
     cache_write: u64,
     model: Option<String>,
     timestamp: Option<i64>,
+    steps: Vec<u64>,
 }
 
 /// Walks one `gen_metadata` blob. `Ok(None)` means the row carries no usage
@@ -576,16 +619,18 @@ struct GenerationUsage {
 /// and marks the session partial, never guessing a field.
 fn parse_generation(blob: &[u8]) -> Result<Option<GenerationUsage>, Mismatch> {
     let mut chat_model: Option<&[u8]> = None;
+    let mut steps = Vec::new();
     let mut reader = Reader::new(blob);
     while !reader.done() {
         let (number, _, field) = reader.next()?;
         // Documented row fields: 1 ChatModel (message), 2 stepIndices
-        // (varint), 4 generation uuid (string). A documented number arriving
+        // (packed/unpacked varints), 4 generation uuid (string). A documented number arriving
         // with the wrong wire type is drift even when the value is unused.
         match number {
             1 => chat_model = Some(field.as_bytes()?),
             2 => {
-                field.as_varint()?;
+                steps.extend(field.as_varints()?);
+                if steps.len() > 4096 { return Err(Mismatch); }
             }
             4 => {
                 field.as_bytes()?;
@@ -680,6 +725,7 @@ fn parse_generation(blob: &[u8]) -> Result<Option<GenerationUsage>, Mismatch> {
         cache_write: cache_write_tokens.unwrap_or(0),
         model,
         timestamp,
+        steps,
     }))
 }
 
@@ -713,8 +759,8 @@ mod tests {
     /// Encodes one structured fixture generation into its protobuf blob.
     fn encode_generation(row: &Value) -> Vec<u8> {
         if row["malformed"] == "wrong_wire" {
-            // Documented varint field 2 arrives length-delimited: drift.
-            let mut blob = encode::bytes_field(2, b"150");
+            // Repeated field 2 accepts packed varints, but not fixed32.
+            let mut blob = vec![0x15, 0, 0, 0, 0];
             blob.extend(encode::string_field(
                 4,
                 row["generation_uuid"].as_str().unwrap_or(""),
@@ -845,6 +891,56 @@ mod tests {
     }
 
     #[test]
+    fn cli_159_packed_step_indices_keep_usage_and_native_step_time() {
+        let row = json!({"response_id":"fixture-response", "input_tokens":2312, "output_tokens":114, "thinking_output_tokens":31, "response_output_tokens":83, "cache_read_tokens":6682, "model_id":"fixture-model"});
+        let mut blob = encode_well_formed_generation(&row);
+        blob.extend(encode::bytes_field(2, &[3,4]));
+        let parsed = parse_generation(&blob).unwrap().unwrap();
+        assert_eq!(parsed.steps, vec![3,4]);
+        assert_eq!(parsed.input, 2312);
+        assert_eq!(parsed.cache_read, 6682);
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("usage.db");
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch("CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY,data BLOB,size INTEGER)").unwrap();
+        db.execute("INSERT INTO gen_metadata VALUES (1,?1,?2)", params![blob,blob.len() as i64]).unwrap();
+        let mut session = ParsedSession::new();
+        append_usage(&mut session, &path, &mut HashSet::new(), None, &HashMap::from([(3,1794750000000)]), &|| false).unwrap();
+        assert_eq!(session.usage[0].timestamp, Some(1794750000000));
+        assert!(!session.partial);
+        let mut invalid = encode_well_formed_generation(&row);
+        invalid.extend(encode::bytes_field(2, &[0x80]));
+        assert_eq!(parse_generation(&invalid), Err(Mismatch));
+    }
+
+    #[test]
+    fn cli_159_index_uses_cli_root_empty_parent_uri_and_wal_cache() {
+        let home = tempfile::tempdir().unwrap();
+        write_fixture(home.path());
+        let legacy = super::super::data_root(home.path());
+        let root = home.path().join(".gemini/antigravity-cli");
+        std::fs::rename(legacy, &root).unwrap();
+        let path = root.join("conversation_summaries.db");
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch("PRAGMA journal_mode=WAL; ALTER TABLE conversation_summaries RENAME COLUMN id TO conversation_id; ALTER TABLE conversation_summaries RENAME COLUMN workspace TO workspace_uris; ALTER TABLE conversation_summaries ADD COLUMN last_modified_time TEXT; UPDATE conversation_summaries SET parent_conversation_id='' WHERE parent_conversation_id IS NULL;").unwrap();
+        db.execute("UPDATE conversation_summaries SET workspace_uris=?1,last_modified_time=?2", params!["[\"file:///srv/fixture%20project\"]", "2026-11-15 12:21:13.849955646+00:00"]).unwrap();
+        let catalog = summary_catalog(&path, &|| false).unwrap();
+        assert!(Arc::ptr_eq(&catalog, &summary_catalog(&path, &|| false).unwrap()));
+        let found = sources(home.path()).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].path, path);
+        let parsed = parse(&found[0]).unwrap();
+        assert_eq!(parsed.cwd.as_deref(), Some("/srv/fixture project"));
+        assert!(parsed.updated_at.is_some());
+        assert!(!parsed.messages.is_empty());
+        assert!(!parsed.children.is_empty());
+        db.execute("UPDATE conversation_summaries SET title='changed while WAL is live' WHERE conversation_id=?1", [ROOT_ID]).unwrap();
+        assert!(!Arc::ptr_eq(&catalog, &summary_catalog(&path, &|| false).unwrap()));
+        assert_ne!(found[0].fingerprint, sources(home.path()).unwrap()[0].fingerprint);
+        assert_eq!(parse(&sources(home.path()).unwrap()[0]).unwrap().title, "changed while WAL is live");
+    }
+
+    #[test]
     fn fixture_index_lists_root_conversations_with_fingerprinted_sources() {
         let home = tempfile::tempdir().unwrap();
         write_fixture(home.path());
@@ -857,7 +953,7 @@ mod tests {
             .all(|source| source.native_id.as_deref() != Some(CHILD_ID)));
         assert_eq!(found[0].native_id.as_deref(), Some(ROOT_ID));
         assert_eq!(found[0].native_title.as_deref(), Some("帮我把部署脚本改成幂等版本"));
-        assert!(found[0].fingerprint.starts_with("antigravity-session-v3|"));
+        assert!(found[0].fingerprint.starts_with("antigravity-session-v4|"));
         let before = found[0].fingerprint.clone();
         // A new usage row in the conversation database changes the fingerprint.
         let usage = Connection::open(conversation_db(

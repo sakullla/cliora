@@ -33,6 +33,24 @@ impl<'a> Field<'a> {
             _ => Err(Mismatch),
         }
     }
+    /// Repeated varints may be unpacked (legacy) or packed (current CLI).
+    pub(crate) fn as_varints(&self) -> Result<Vec<u64>, Mismatch> {
+        match self {
+            Field::Varint(value) => Ok(vec![*value]),
+            Field::Bytes(bytes) => {
+                let mut values = Vec::new();
+                let mut rest = *bytes;
+                while !rest.is_empty() {
+                    if values.len() >= 4096 { return Err(Mismatch); }
+                    let (value, used) = read_varint(rest)?;
+                    values.push(value);
+                    rest = &rest[used..];
+                }
+                Ok(values)
+            }
+            _ => Err(Mismatch),
+        }
+    }
     /// Documented submessage/string fields must arrive length-delimited. The
     /// returned slice borrows the underlying buffer, not the field handle.
     pub(crate) fn as_bytes(&self) -> Result<&'a [u8], Mismatch> {

@@ -5,9 +5,11 @@ use serde_json::Value;
 
 use crate::history::usage::{self, RequestUsage};
 use crate::history::{
-    discover_jsonl_controlled, read_jsonl_controlled, text_content, timestamp, valid_native_id,
+    discover_jsonl_controlled, read_jsonl_fields, text_content, timestamp, valid_native_id,
     HistorySource, ParsedSession, UsageEvent,
 };
+
+const HISTORY_FIELDS: &[&str] = &["type", "timestamp", "version", "id", "cwd", "name", "modelId", "message", "usage", "model"];
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
     sources_controlled(home, &|| false)
@@ -67,7 +69,7 @@ pub fn parse_controlled(
     let mut session = ParsedSession::new();
     let mut events = BTreeMap::<String, RequestUsage>::new();
     let mut model: Option<String> = None;
-    let partial = read_jsonl_controlled(source, cancelled, |line, row| {
+    let partial = read_jsonl_fields(source, cancelled, |_| false, Some(HISTORY_FIELDS), |line, row| {
         let time = row.get("timestamp").and_then(timestamp);
         match row.get("type").and_then(Value::as_str) {
             Some("session") => {

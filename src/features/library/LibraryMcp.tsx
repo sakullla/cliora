@@ -1,6 +1,6 @@
 import { useRemoteReads, RemoteReadStatus } from '../../lib/remoteReads';
 import { removalContext, useAccountLabels } from './resourceContexts';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { GuideDialog } from '../../components/GuideDialog';
 import { ConflictCompare } from '../../components/configuration/ConflictCompare';
@@ -367,8 +367,16 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   }
 
   const needle = search.trim().toLowerCase();
-  const library = definitions.filter((item) => item.inLibrary !== false).sort(byName);
-  const shown = library.filter((item) => !needle || `${item.name} ${item.command} ${item.args.join(' ')} ${item.cwd ?? ''} ${item.url ?? ''}`.toLowerCase().includes(needle));
+  const library = useMemo(() => definitions.filter((item) => item.inLibrary !== false).sort(byName), [definitions]);
+  const shown = useMemo(() => library.filter((item) => !needle || `${item.name} ${item.command} ${item.args.join(' ')} ${item.cwd ?? ''} ${item.url ?? ''}`.toLowerCase().includes(needle)), [library, needle]);
+  const placementsByDefinition = useMemo(() => {
+    const grouped = new Map<string, McpPlacement[]>();
+    for (const place of placements) {
+      const group = grouped.get(place.definitionId);
+      if (group) group.push(place); else grouped.set(place.definitionId, [place]);
+    }
+    return grouped;
+  }, [placements]);
 
   const handledSpotlight = useRef<number | null>(null);
   useEffect(() => {
@@ -409,7 +417,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
       </div>}
       {empty ?? <ul className={styles.list} aria-label={t('library.resources.mcpListAria')}>
         {shown.map((item) => {
-          const places = placements.filter(entry => entry.definitionId === item.id);
+          const places = placementsByDefinition.get(item.id) ?? [];
           const summary = mcpSummary(item);
           return <li className={styles.row} data-mcp-id={item.id} data-placed={places.length > 0 || undefined} data-spotlight={spotlight?.id === item.id || undefined} key={item.id}>
             <span className={styles.glyph} data-transport={item.transport} aria-hidden="true"><Icon name={isRemoteMcp(item.transport) ? 'globe' : 'terminal'} size={18} /></span>

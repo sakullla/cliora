@@ -1539,6 +1539,10 @@ test('recent sessions expose empty and failed reads, then recover to a resumable
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0);
     await expect(recent.getByRole('button', { name: /继续会话「一段很长/ })).toBeVisible();
   }
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await recent.getByRole('button', { name: '在记录中查看「第二个最近会话」', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '记录', level: 1 })).toBeVisible();
+  await expect(page.locator('[data-session-id="recent-2"][aria-current="true"]')).toBeVisible();
 });
 
 

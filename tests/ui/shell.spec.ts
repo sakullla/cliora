@@ -812,9 +812,10 @@ test('command palette library entry jumps to the library page and opens the item
   await expect.poll(async () => (await dialog.locator('.command-group').allTextContents()).slice(0, 2)).toEqual(['开始', '最近会话']);
   const groups = await dialog.locator('.command-group').allTextContents();
   expect(groups.indexOf('最近会话')).toBeLessThan(groups.indexOf('页面'));
-  // Secondary action on a recent session jumps to Records instead of resuming.
-  await dialog.getByRole('button', { name: '面板会话1 · 在记录中查看' }).click();
+  // Secondary action on a recent session jumps to Records and focuses that exact session instead of defaulting to s1.
+  await dialog.getByRole('button', { name: '面板会话2 · 在记录中查看' }).click();
   await expect(page.getByRole('heading', { name: '记录', level: 1 })).toBeVisible();
+  await expect(page.locator('[data-session-id="s2"][aria-current="true"]')).toBeVisible();
 
   await page.keyboard.press('Control+K');
   await dialog.getByRole('combobox', { name: '搜索页面、工具或项目' }).fill('面板规则2');

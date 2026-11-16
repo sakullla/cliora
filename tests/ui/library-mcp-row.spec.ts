@@ -28,8 +28,9 @@ async function installLibrary(page: Page, definitions: Array<Record<string, unkn
         if (command === 'list_cli_adapters') return { registered, managedIds: toolList.map((tool) => tool.id), preservedUnknown: [] };
         if (command === 'list_projects') return [];
         if (command === 'list_accounts') return [];
-        if (command === 'list_mcp_definitions') return definitions;
-        if (command === 'list_mcp_placements') return placements;
+        // Native IPC returns independent snapshots, not aliases of the mock's mutable store.
+        if (command === 'list_mcp_definitions') return structuredClone(definitions);
+        if (command === 'list_mcp_placements') return structuredClone(placements);
         if (command === 'list_native_mcp') return [];
         if (command === 'preview_mcp_targets') return args.targets.map((target: Record<string, unknown>) => ({ ...target, status: 'ready', detail: '将创建 CLI 原生条目', path: '/tmp/config.toml', baselineHash: 'hash-empty', previewToken: 'bound-token', existing: null, proposed: { command: 'npx' } }));
         if (command === 'preview_mcp_draft') return { draft: args.draft, targets: args.targets.map((target: Record<string, unknown>) => ({ ...target, status: 'ready', detail: '将移除当前受管理的原生条目', path: '/tmp/config.toml', baselineHash: 'hash-remove', previewToken: 'bound-remove-token', existing: { command: 'npx' }, proposed: null })) };

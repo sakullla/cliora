@@ -4,7 +4,10 @@
 //! Parsed sessions stay in memory; they are not written into the local index.
 
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::io::Read;
+use std::sync::Arc;
+use base64::Engine;
+use std::path::{Component, Path};
 
 use sha2::{Digest, Sha256};
 
@@ -22,7 +25,20 @@ pub struct SourceFailure { pub tool_id: String, pub message: String, pub remote:
 
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct HistorySnapshot { pub sessions: Vec<HistorySession>, pub source_failures: Vec<SourceFailure> }
+pub struct HistorySnapshot { pub sessions: Vec<HistorySession>, pub source_failures: Vec<SourceFailure>, pub available_sources: Vec<String> }
+
+#[derive(Clone, serde::Serialize)]
+struct SourceSnapshot {
+    fingerprint: String,
+    details: Arc<Vec<HistoryDetail>>,
+    warning: Option<String>,
+}
+
+impl From<Vec<HistoryDetail>> for SourceSnapshot {
+    fn from(details: Vec<HistoryDetail>) -> Self {
+        Self { fingerprint: String::new(), details: Arc::new(details), warning: None }
+    }
+}
 
 pub fn list(registry: &Registry, target: &RemoteTarget, refresh: bool) -> Result<Vec<HistorySession>, String> {
     let snapshot = list_snapshot(registry, target, refresh)?;
@@ -34,7 +50,8 @@ pub fn list(registry: &Registry, target: &RemoteTarget, refresh: bool) -> Result
 
 pub fn list_snapshot(registry: &Registry, target: &RemoteTarget, refresh: bool) -> Result<HistorySnapshot, String> {
     let (sessions, source_failures) = snapshot(registry, target, refresh)?;
-    Ok(HistorySnapshot { sessions, source_failures })
+    let available_sources = registry.iter().filter(|adapter| adapter.history_supported() && adapter.remote_history_layout().is_some()).map(|adapter| adapter.id().to_owned()).collect();
+    Ok(HistorySnapshot { sessions, source_failures, available_sources })
 }
 
 pub fn detail(registry: &Registry, target: &RemoteTarget, id: &str) -> Result<HistoryDetail, String> {
@@ -44,14 +61,54 @@ pub fn detail(registry: &Registry, target: &RemoteTarget, id: &str) -> Result<Hi
     let details = crate::remote::read_cache::read_shared(target, &format!("history:{}", adapter.id()), false, move || {
         fetch_source(adapter, &owned).map_err(crate::remote::RemoteError::Storage)
     }).map_err(|error| error.to_string())?;
-    details.iter().find(|item| item.session.id == id).cloned().ok_or_else(|| "会话已从当前主机的记录中移除".to_owned())
+    details.details.iter().find(|item| item.session.id == id).cloned().ok_or_else(|| "会话已从当前主机的记录中移除".to_owned())
 }
 
 fn snapshot(registry: &Registry, target: &RemoteTarget, refresh: bool) -> Result<(Vec<HistorySession>, Vec<SourceFailure>), String> {
-    snapshot_with_loader(registry, target, refresh, std::sync::Arc::new(fetch_source))
+    // One small read excludes absent roots, rather than opening an SSH channel
+    // per installed adapter just to discover that it has no data on this host.
+    let present = source_presence(registry, target, refresh).unwrap_or_default();
+    snapshot_with_loader(registry, target, refresh, Arc::new(move |adapter, target| {
+        if present.get(adapter.id()) == Some(&false) { Ok(Vec::new().into()) }
+        else { fetch_source(adapter, target) }
+    }))
 }
 
-type SourceLoader = std::sync::Arc<dyn Fn(&dyn CliAdapter, &RemoteTarget) -> Result<Vec<HistoryDetail>, String> + Send + Sync>;
+fn source_presence(registry: &Registry, target: &RemoteTarget, refresh: bool) -> Result<std::collections::HashMap<String, bool>, String> {
+    let roots = registry.iter().filter(|adapter| adapter.history_supported()).filter_map(|adapter| adapter.remote_history_layout().map(|layout| (adapter.id(), std::iter::once(layout.relative).chain(layout.fallbacks.iter().copied()).collect::<Vec<_>>()))).collect::<Vec<_>>();
+    if roots.iter().any(|(_, paths)| paths.iter().any(|relative| !valid_relative(relative))) { return Err("远程历史来源无效".into()); }
+    if roots.is_empty() { return Ok(Default::default()); }
+    let encoded = base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&roots).map_err(|error| error.to_string())?);
+    let script = r#"import base64,json,os,stat,sys
+result={}
+for name,alternatives in json.loads(base64.b64decode(sys.argv[1])):
+    result[name]=False
+    for relative in alternatives:
+        current=os.path.expanduser('~')
+        present=True
+        for segment in relative.split('/'):
+            current=os.path.join(current,segment)
+            try:
+                info=os.lstat(current)
+                if not stat.S_ISDIR(info.st_mode) or not os.access(current,os.R_OK|os.X_OK): break
+            except FileNotFoundError:
+                present=False
+                break
+            except OSError: break
+        if present:
+            result[name]=True
+            break
+print(json.dumps(result))"#;
+    let code = base64::engine::general_purpose::STANDARD.encode(script);
+    let command = format!("if command -v python3 >/dev/null 2>&1; then python3 -c {} {}; else printf '{{}}'; fi", crate::remote::shell_quote(&format!("import base64;exec(base64.b64decode('{code}'))")), crate::remote::shell_quote(&encoded));
+    let owned = target.clone();
+    crate::remote::read_cache::read(target, "history:source-presence", refresh, move || {
+        let result = crate::remote::run_command(&owned, &command)?;
+        serde_json::from_str(&result.stdout).map_err(|_| crate::remote::RemoteError::Storage("远程历史目录响应无效".into()))
+    }).map_err(|error| error.to_string())
+}
+
+type SourceLoader = std::sync::Arc<dyn Fn(&dyn CliAdapter, &RemoteTarget) -> Result<SourceSnapshot, String> + Send + Sync>;
 fn snapshot_with_loader(registry: &Registry, target: &RemoteTarget, refresh: bool, loader: SourceLoader) -> Result<(Vec<HistorySession>, Vec<SourceFailure>), String> {
     let context = crate::remote::operations::current().unwrap_or_else(|| crate::remote::operations::Context::local(crate::remote::operations::Kind::Read, std::time::Duration::from_secs(40)));
     context.bind(target).map_err(|error| error.to_string())?;
@@ -76,11 +133,14 @@ fn snapshot_with_loader(registry: &Registry, target: &RemoteTarget, refresh: boo
             jobs.into_iter().map(|job| job.join().unwrap_or_else(|_| Err("历史来源读取意外中断".into()))).collect::<Vec<_>>()
         });
         for (adapter, result) in batch.iter().zip(results) {
-            match result { Ok(rows) => details.extend(rows.iter().map(|row| row.session.clone())), Err(message) => {
+            match result { Ok(rows) => {
+                details.extend(rows.details.iter().map(|row| row.session.clone()));
+                if let Some(message) = &rows.warning { failures.push(SourceFailure { tool_id: adapter.id().into(), message: message.clone(), remote: None }); }
+            }, Err(message) => {
                 let remote = message.strip_prefix("cliora:remote:").and_then(|encoded| serde_json::from_str::<crate::remote::operations::Failure>(encoded).ok());
                 let message = remote.as_ref().map(|failure| format!("{} {}", failure.message, failure.action)).unwrap_or(message);
-                if let Some(previous) = crate::remote::read_cache::previous_shared::<Vec<HistoryDetail>>(target, &format!("history:{}", adapter.id())) {
-                    details.extend(previous.iter().map(|detail| { let mut session = detail.session.clone(); session.stale = true; session }));
+                if let Some(previous) = crate::remote::read_cache::previous_shared::<SourceSnapshot>(target, &format!("history:{}", adapter.id())) {
+                    details.extend(previous.details.iter().map(|detail| { let mut session = detail.session.clone(); session.stale = true; session }));
                 }
                 failures.push(SourceFailure { tool_id: adapter.id().into(), message, remote });
             } }
@@ -91,25 +151,72 @@ fn snapshot_with_loader(registry: &Registry, target: &RemoteTarget, refresh: boo
     Ok((details, failures))
 }
 
-fn fetch_source(adapter: &dyn CliAdapter, target: &RemoteTarget) -> Result<Vec<HistoryDetail>, String> {
-    let home = std::env::temp_dir().join(format!("cliora-remote-history-{}", uuid::Uuid::new_v4()));
-    fs::create_dir_all(&home).map_err(|error| format!("无法准备远程历史临时目录：{error}"))?;
-    let _cleanup = TempHome(home.clone());
+fn fetch_source(adapter: &dyn CliAdapter, target: &RemoteTarget) -> Result<SourceSnapshot, String> {
     let layout = adapter.remote_history_layout().ok_or("未声明远程历史来源")?;
-    let command = archive_command(layout)?;
+    let previous = crate::remote::read_cache::previous_shared::<SourceSnapshot>(target, &format!("history:{}", adapter.id()));
+    let stamp = previous.as_ref().filter(|previous| previous.warning.is_none()).map(|previous| previous.fingerprint.as_str()).unwrap_or("");
+    let command = export_command(layout, stamp)?;
     let bytes = crate::remote::run_command_bytes(target, &command).map_err(|error| error.to_string())?;
-    let files = decode_archive(&bytes, layout.relative)?;
-    write_tree(&home, &files)?;
-    drop(files);
-    drop(bytes);
-    sessions_from_home(adapter, &home, &target.id)
+    decode_source(adapter, target, &bytes, previous.as_deref())
 }
 
-struct TempHome(PathBuf);
-impl Drop for TempHome {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+fn export_command(layout: RemoteHistoryLayout, previous: &str) -> Result<String, String> {
+    if !valid_relative(layout.relative) || layout.fallbacks.len() > 4 || layout.fallbacks.iter().any(|path| !valid_relative(path)) || previous.len() > 64 || !previous.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("远程历史来源无效".into());
     }
+    let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let script = encode(include_bytes!("remote_export.py"));
+    let spec = encode(&serde_json::to_vec(&layout).map_err(|error| error.to_string())?);
+    let fallback = if layout.sqlite.is_some() {
+        "printf 'Remote SQLite history requires python3\\n' >&2; exit 127".to_owned()
+    } else { archive_command(layout)? };
+    let command = format!("if command -v python3 >/dev/null 2>&1; then python3 -c {} {} {}; else {fallback}; fi",
+        crate::remote::shell_quote(&format!("import base64;exec(base64.b64decode('{script}'))")),
+        crate::remote::shell_quote(&spec), crate::remote::shell_quote(previous));
+    if command.len() > 32_000 || command.chars().any(char::is_control) { return Err("远程历史脚本超出上限".into()); }
+    Ok(command)
+}
+
+#[derive(serde::Deserialize)]
+struct ExportMetadata { fingerprint: String, partial: Vec<String>, #[serde(default)] unread: Vec<String> }
+
+fn decode_source(adapter: &dyn CliAdapter, target: &RemoteTarget, bytes: &[u8], previous: Option<&SourceSnapshot>) -> Result<SourceSnapshot, String> {
+    if let Some(stamp) = bytes.strip_prefix(b"U\n") {
+        let stamp = std::str::from_utf8(stamp).map_err(|_| "远程历史版本无效")?.trim();
+        return previous.filter(|previous| previous.fingerprint == stamp).cloned().ok_or_else(|| "远程历史缓存已失效，请刷新".into());
+    }
+    let mut archive = Vec::new();
+    let mut fingerprint = String::new();
+    let mut partial = Vec::new();
+    let mut unread = Vec::new();
+    let payload = if let Some(rest) = bytes.strip_prefix(b"V\n") {
+        let end = rest.iter().position(|byte| *byte == b'\n').filter(|end| *end < 32_768).ok_or("远程历史归档头无效")?;
+        let metadata: ExportMetadata = serde_json::from_slice(&rest[..end]).map_err(|_| "远程历史归档头无效")?;
+        if metadata.fingerprint.len() != 64 || !metadata.fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()) { return Err("远程历史版本无效".into()); }
+        fingerprint = metadata.fingerprint;
+        partial = metadata.partial;
+        unread = metadata.unread;
+        let limit = ARCHIVE_CAP + 1024 * 1024;
+        flate2::read::GzDecoder::new(&rest[end + 1..]).take(limit as u64 + 1).read_to_end(&mut archive).map_err(|error| format!("远程历史解压失败：{error}"))?;
+        if archive.len() > limit { return Err("远程历史解压超出上限".into()); }
+        &archive[..]
+    } else { bytes };
+    let home = tempfile::Builder::new().prefix("cliora-remote-history-").tempdir().map_err(|error| error.to_string())?;
+    let layout = adapter.remote_history_layout().ok_or("未声明远程历史来源")?;
+    let files = decode_archive(payload, layout.relative)?;
+    write_tree(home.path(), &files)?;
+    let (mut details, errors) = sessions_from_home_report(adapter, home.path(), &target.id, &partial)?;
+    if !errors.is_empty() {
+        if let Some(previous) = previous {
+            let found = details.iter().map(|detail| detail.session.id.clone()).collect::<std::collections::HashSet<_>>();
+            details.extend(previous.details.iter().filter(|detail| !found.contains(&detail.session.id)).map(|detail| {
+                let mut retained = detail.clone();
+                retained.session.stale = true;
+                retained
+            }));
+        }
+    }
+    Ok(SourceSnapshot { fingerprint, details: Arc::new(details), warning: errors.first().map(|error| format!("{} 条会话读取失败：{error}", errors.len())).or_else(|| unread.first().map(|path| format!("{} 个历史附属文件未能读取：{path}", unread.len()))) })
 }
 
 pub(crate) fn archive_command(layout: RemoteHistoryLayout) -> Result<String, String> {
@@ -277,29 +384,45 @@ fn write_tree(home: &Path, files: &[(String, &[u8])]) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
 fn sessions_from_home(adapter: &dyn CliAdapter, home: &Path, target_id: &str) -> Result<Vec<HistoryDetail>, String> {
+    sessions_from_home_report(adapter, home, target_id, &[]).map(|(details, _)| details)
+}
+
+fn sessions_from_home_report(adapter: &dyn CliAdapter, home: &Path, target_id: &str, truncated: &[String]) -> Result<(Vec<HistoryDetail>, Vec<String>), String> {
+    // A local account context must never redirect a remote mirror into local files.
+    let _account_context = crate::accounts::selection::enter(None);
     let context = crate::remote::operations::current();
     let cancelled = || context.as_ref().is_some_and(|context| context.check().is_err());
     let sources = adapter.history_sources_controlled(home, &cancelled)?;
     let mut details = Vec::new();
+    let mut errors = Vec::new();
     for source in sources {
         if let Some(context) = &context {
             context.check().map_err(|error| error.to_string())?;
         }
-        if !source.path.starts_with(home) || source.fingerprint_error.is_some() {
-            continue;
-        }
+        if !source.path.starts_with(home) { errors.push("会话源不属于远程快照".into()); continue; }
+        if let Some(error) = &source.fingerprint_error { errors.push(error.clone()); continue; }
         let parsed = adapter.parse_history_controlled(&source, &cancelled);
         if let Some(context) = &context {
             context.check().map_err(|error| error.to_string())?;
         }
-        let parsed = match parsed {
+        let mut parsed = match parsed {
             Ok(parsed) => parsed,
             Err(error) if error == EMPTY_SESSION => continue,
-            Err(_) => continue,
+            Err(error) => { errors.push(error); continue; },
         };
         let relative = source.path.strip_prefix(home).unwrap_or(source.path.as_path());
-        let key = parsed.native_id.clone().unwrap_or_else(|| relative.to_string_lossy().into_owned());
+        let relative_key = relative.components().map(|part| part.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
+        let identities = parsed.native_id.iter().map(String::as_str).chain(parsed.children.iter().map(|child| child.key.as_str())).collect::<Vec<_>>();
+        let clipped = truncated.iter().any(|path| path == &relative_key
+            || path.split('/').any(|segment| identities.contains(&segment) || identities.contains(&segment.trim_end_matches(".db"))));
+        parsed.partial |= clipped;
+        // A clipped JSONL can lose model switches and cumulative baselines.
+        // Never turn its head/tail into invented per-model billing. Separate,
+        // complete SQLite usage rows (e.g. agy) remain authoritative.
+        if clipped && adapter.remote_history_layout().is_some_and(|layout| layout.sqlite.is_none()) { parsed.usage.clear(); }
+        let key = parsed.native_id.clone().unwrap_or(relative_key);
         let digest = format!("{:x}", Sha256::digest(format!("{}:{key}", adapter.id()).as_bytes()));
         let id = format!("remote-native:{target_id}:{}:{digest}", adapter.id());
         let message_count = parsed.messages.len();
@@ -329,7 +452,7 @@ fn sessions_from_home(adapter: &dyn CliAdapter, home: &Path, target_id: &str) ->
             totals,
         });
     }
-    Ok(details)
+    Ok((details, errors))
 }
 
 fn totals_of(usage: &[super::UsageEvent]) -> UsageTotals {
@@ -359,6 +482,223 @@ fn totals_of(usage: &[super::UsageEvent]) -> UsageTotals {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn exported(layout: RemoteHistoryLayout, home: &Path, previous: &str) -> Vec<u8> {
+        let spec = base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&layout).unwrap());
+        let output = std::process::Command::new("python3").args(["-c", include_str!("remote_export.py"), &spec, previous])
+            .env("HOME", home).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        output.stdout
+    }
+
+    #[cfg(unix)]
+    fn fixture_target() -> RemoteTarget {
+        RemoteTarget { id: uuid::Uuid::new_v4().to_string(), name: "history fixture".into(), host: "fixture.invalid".into(), port: 22, user: "fixture".into(), auth_method: "key".into(), identity_file: None, ssh_config: None, default_path: None, enabled: true, created_at: 1, updated_at: 1 }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn modern_agy_snapshot_reads_live_wal_and_reuses_unchanged_parsed_content() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join(".gemini/antigravity-cli");
+        fs::create_dir_all(root.join("brain/fixture-id/.system_generated/logs")).unwrap();
+        fs::create_dir_all(root.join("conversations")).unwrap();
+        fs::write(root.join("antigravity-oauth-token"), "must never be exported").unwrap();
+        let db = rusqlite::Connection::open(root.join("conversation_summaries.db")).unwrap();
+        db.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT, workspace_uris TEXT, status TEXT, parent_conversation_id TEXT, last_modified_time TEXT); INSERT INTO conversation_summaries VALUES ('fixture-id','Modern fixture','[\"file:///srv/demo%20project\"]','CASCADE_RUN_STATUS_IDLE','','2026-11-15 16:00:00+00:00');").unwrap();
+        let usage = rusqlite::Connection::open(root.join("conversations/fixture-id.db")).unwrap();
+        usage.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB, size INTEGER); CREATE TABLE unrelated_private(value TEXT); INSERT INTO unrelated_private VALUES ('must never be exported');").unwrap();
+        fs::write(root.join("brain/fixture-id/.system_generated/logs/transcript_full.jsonl"), "{\"type\":\"USER_INPUT\",\"content\":\"fixture question\",\"created_at\":\"2026-11-15T16:00:00Z\"}\n{\"type\":\"PLANNER_RESPONSE\",\"content\":\"fixture answer\",\"model\":\"fixture-model\",\"created_at\":\"2026-11-15T16:00:01Z\"}\n").unwrap();
+        let adapter = &crate::adapters::ANTIGRAVITY;
+        let target = fixture_target();
+        let layout = adapter.remote_history_layout().unwrap();
+        let cold = exported(layout, home.path(), "");
+        let snapshot = decode_source(adapter, &target, &cold, None).unwrap();
+        assert_eq!(snapshot.details.len(), 1);
+        assert_eq!(snapshot.details[0].messages.len(), 2);
+        assert_eq!(snapshot.details[0].session.cwd.as_deref(), Some("/srv/demo project"));
+        assert_eq!(snapshot.details[0].session.model.as_deref(), Some("fixture-model"));
+        assert!(snapshot.warning.is_none());
+        let hot = exported(layout, home.path(), &snapshot.fingerprint);
+        assert!(hot.len() < 80 && hot.len() < cold.len());
+        let reused = decode_source(adapter, &target, &hot, Some(&snapshot)).unwrap();
+        assert!(Arc::ptr_eq(&snapshot.details, &reused.details));
+        db.execute("UPDATE conversation_summaries SET title='changed in WAL'", []).unwrap();
+        let changed = decode_source(adapter, &target, &exported(layout, home.path(), &snapshot.fingerprint), Some(&snapshot)).unwrap();
+        assert_eq!(changed.details[0].session.title, "changed in WAL");
+        assert_ne!(changed.fingerprint, snapshot.fingerprint);
+        assert!(!Arc::ptr_eq(&changed.details, &snapshot.details));
+        drop(usage);
+        drop(db);
+        fs::rename(&root, home.path().join(".gemini/antigravity")).unwrap();
+        let legacy_root = decode_source(adapter, &target, &exported(layout, home.path(), ""), None).unwrap();
+        assert_eq!(legacy_root.details[0].session.id, snapshot.details[0].session.id);
+        assert_eq!(legacy_root.details[0].session.title, "changed in WAL");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn file_exports_cover_registered_jsonl_sources_and_unchanged_reads_are_small() {
+        for (adapter, relative, fixture) in [
+            (&crate::adapters::CODEX as &dyn CliAdapter, ".codex/sessions/rollout-fixture.jsonl", include_str!("../../../tests/fixtures/history/codex-0.158.jsonl")),
+            (&crate::adapters::CLAUDE, ".claude/projects/demo/fixture.jsonl", include_str!("../../../tests/fixtures/history/claude-2.1.jsonl")),
+            (&crate::adapters::CODEBUDDY, ".codebuddy/projects/demo/11111111-2222-3333-4444-555555555555.jsonl", include_str!("../../../tests/fixtures/history/codebuddy-2.161.1-session.jsonl")),
+            (&crate::adapters::PI, ".pi/agent/sessions/demo/fixture.jsonl", include_str!("../../../tests/fixtures/history/pi-0.87-v3.jsonl")),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let path = home.path().join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, fixture).unwrap();
+            let target = fixture_target();
+            let layout = adapter.remote_history_layout().unwrap();
+            let bytes = exported(layout, home.path(), "");
+            let snapshot = decode_source(adapter, &target, &bytes, None).unwrap();
+            assert_eq!(snapshot.details.len(), 1, "{}: {:?}", adapter.id(), snapshot.warning);
+            assert!(!snapshot.details[0].messages.is_empty(), "{}", adapter.id());
+            let hot = exported(layout, home.path(), &snapshot.fingerprint);
+            assert!(hot.len() < 80, "{}", adapter.id());
+            assert!(export_command(layout, &snapshot.fingerprint).unwrap().len() < 32_000);
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn malformed_remote_record_retains_last_readable_body_until_clean_refresh() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join(".codex/sessions");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("rollout-fixture.jsonl");
+        fs::write(&path, include_str!("../../../tests/fixtures/history/codex-0.158.jsonl")).unwrap();
+        let adapter = &crate::adapters::CODEX;
+        let target = fixture_target();
+        let layout = adapter.remote_history_layout().unwrap();
+        let previous = decode_source(adapter, &target, &exported(layout, home.path(), ""), None).unwrap();
+        fs::write(&path, "{broken JSON").unwrap();
+        let failed = decode_source(adapter, &target, &exported(layout, home.path(), ""), Some(&previous)).unwrap();
+        assert!(failed.warning.is_some());
+        assert_eq!(failed.details.len(), 1);
+        assert!(failed.details[0].session.stale);
+        assert_eq!(failed.details[0].messages.len(), previous.details[0].messages.len());
+        fs::remove_file(path).unwrap();
+        let removed = decode_source(adapter, &target, &exported(layout, home.path(), ""), Some(&failed)).unwrap();
+        assert!(removed.warning.is_none());
+        assert!(removed.details.is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unreadable_optional_catalog_keeps_codex_transcripts_and_reports_the_gap() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join(".codex");
+        fs::create_dir_all(root.join("sessions")).unwrap();
+        fs::write(root.join("sessions/rollout-fixture.jsonl"), include_str!("../../../tests/fixtures/history/codex-0.158.jsonl")).unwrap();
+        fs::write(root.join("state_5.sqlite"), "broken optional catalog").unwrap();
+        let adapter = &crate::adapters::CODEX;
+        let snapshot = decode_source(adapter, &fixture_target(), &exported(adapter.remote_history_layout().unwrap(), home.path(), ""), None).unwrap();
+        assert_eq!(snapshot.details.len(), 1);
+        assert!(!snapshot.details[0].messages.is_empty());
+        assert!(snapshot.warning.as_deref().unwrap().contains("state_5.sqlite"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn oversized_jsonl_keeps_readable_context_without_inventing_usage_totals() {
+        use std::io::Write;
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join(".codex/sessions");
+        fs::create_dir_all(&root).unwrap();
+        let fixture = include_str!("../../../tests/fixtures/history/codex-0.158.jsonl");
+        let mut file = fs::File::create(root.join("rollout-large.jsonl")).unwrap();
+        file.write_all(fixture.as_bytes()).unwrap();
+        file.write_all(b"\n{\"type\":\"debug\",\"blob\":\"").unwrap();
+        for _ in 0..13 { file.write_all(&vec![b'x'; 1024 * 1024]).unwrap(); }
+        file.write_all(b"\"}\n").unwrap();
+        file.write_all(fixture.as_bytes()).unwrap();
+        drop(file);
+        let adapter = &crate::adapters::CODEX;
+        let snapshot = decode_source(adapter, &fixture_target(), &exported(adapter.remote_history_layout().unwrap(), home.path(), ""), None).unwrap();
+        assert_eq!(snapshot.details.len(), 1);
+        assert!(!snapshot.details[0].messages.is_empty());
+        assert!(snapshot.details[0].session.partial);
+        assert!(snapshot.details[0].usage.is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn sqlite_projection_keeps_recent_opencode_sessions_and_related_rows() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join(".local/share/opencode");
+        fs::create_dir_all(&root).unwrap();
+        let db = rusqlite::Connection::open(root.join("opencode.db")).unwrap();
+        db.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE session_v2 (id TEXT PRIMARY KEY,title TEXT,directory TEXT,time_created INTEGER,time_updated INTEGER,version TEXT,model TEXT); CREATE TABLE session_message (id TEXT PRIMARY KEY,session_id TEXT,type TEXT,seq INTEGER,data TEXT,time_created INTEGER,time_updated INTEGER); CREATE TABLE private_credentials (value TEXT); INSERT INTO private_credentials VALUES ('never export');").unwrap();
+        for index in 0..65 {
+            let id = format!("session-{index}");
+            db.execute("INSERT INTO session_v2 VALUES (?1,?1,'/srv/project',?2,?2,'2.0.29','{\"id\":\"fixture-model\"}')", rusqlite::params![id, index + 100]).unwrap();
+            db.execute("INSERT INTO session_message VALUES (?1,?2,'user',1,'{\"text\":\"fixture question\"}',100,100)", rusqlite::params![format!("message-{index}"), id]).unwrap();
+        }
+        let adapter = &crate::adapters::OPENCODE;
+        let bytes = exported(adapter.remote_history_layout().unwrap(), home.path(), "");
+        let snapshot = decode_source(adapter, &fixture_target(), &bytes, None).unwrap();
+        assert_eq!(snapshot.details.len(), 60, "{:?}", snapshot.warning);
+        assert!(snapshot.details.iter().all(|detail| !detail.messages.is_empty()));
+        assert!(snapshot.details.iter().all(|detail| detail.session.native_id.as_deref() != Some("session-0")));
+        assert!(snapshot.details.iter().any(|detail| detail.session.native_id.as_deref() == Some("session-64")));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn sqlite_export_contract_accepts_new_table_names_without_service_dispatch() {
+        use crate::adapters::{RemoteHistorySqlite, RemoteHistoryTable};
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join(".extension/history");
+        fs::create_dir_all(&root).unwrap();
+        let db = rusqlite::Connection::open(root.join("catalog.db")).unwrap();
+        db.execute_batch("CREATE TABLE runs (run_key TEXT PRIMARY KEY,updated INTEGER,unused_secret TEXT); CREATE TABLE wires (run_key TEXT,body TEXT); CREATE TABLE credentials (secret TEXT); INSERT INTO runs VALUES ('one',1,'never export'); INSERT INTO wires VALUES ('one','selected'),('unselected','excluded'); INSERT INTO credentials VALUES ('never export');").unwrap();
+        let layout = RemoteHistoryLayout { relative: ".extension/history", fallbacks: &[], pinned: &[], sessions: &["catalog.db"], companion: None, order: RemoteHistoryOrder::MtimeDesc, catalogs: &[], sqlite: Some(RemoteHistorySqlite { index: "catalog.db", files: &[], file_tables: &[], tables: &[
+            RemoteHistoryTable { name: "runs", query: "SELECT run_key,updated FROM runs ORDER BY updated DESC LIMIT :limit", required_columns: &["run_key", "updated"], id: Some("run_key"), link: None },
+            RemoteHistoryTable { name: "wires", query: "", required_columns: &["run_key"], id: None, link: Some("run_key") },
+        ] }) };
+        let bytes = exported(layout, home.path(), "");
+        let rest = bytes.strip_prefix(b"V\n").unwrap();
+        let start = rest.iter().position(|byte| *byte == b'\n').unwrap() + 1;
+        let mut raw = Vec::new();
+        flate2::read::GzDecoder::new(&rest[start..]).read_to_end(&mut raw).unwrap();
+        let mirror = tempfile::tempdir().unwrap();
+        write_tree(mirror.path(), &decode_archive(&raw, layout.relative).unwrap()).unwrap();
+        let copied = rusqlite::Connection::open(mirror.path().join(".extension/history/catalog.db")).unwrap();
+        assert_eq!(copied.query_row("SELECT body FROM wires", [], |row| row.get::<_, String>(0)).unwrap(), "selected");
+        assert_eq!(copied.query_row("SELECT count(*) FROM sqlite_master WHERE name='credentials'", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        assert!(copied.prepare("SELECT unused_secret FROM runs").is_err());
+    }
+
+    #[test]
+    #[ignore = "explicit read-only native SSH history measurement; set CLIORA_HISTORY_HOST and CLIORA_HISTORY_USER"]
+    #[cfg(unix)]
+    fn performance_remote_history_readonly() {
+        let mut target = fixture_target();
+        target.host = std::env::var("CLIORA_HISTORY_HOST").expect("explicit host required");
+        target.user = std::env::var("CLIORA_HISTORY_USER").expect("explicit user required");
+        for adapter in Registry::builtins().iter().filter(|adapter| adapter.remote_history_layout().is_some()) {
+            let layout = adapter.remote_history_layout().unwrap();
+            let start = std::time::Instant::now();
+            let command = export_command(layout, "").unwrap();
+            let bytes = crate::remote::operations::scoped(crate::remote::operations::Context::local(crate::remote::operations::Kind::Read, std::time::Duration::from_secs(40)), || crate::remote::run_command_bytes(&target, &command)).unwrap();
+            let parsed = decode_source(adapter, &target, &bytes, None).unwrap();
+            eprintln!("remote history {} cold: {}ms wire_bytes={} sessions={} messages={} usage={} partial={} warnings={}", adapter.id(), start.elapsed().as_millis(), bytes.len(), parsed.details.len(), parsed.details.iter().map(|item| item.messages.len()).sum::<usize>(), parsed.details.iter().map(|item| item.usage.len()).sum::<usize>(), parsed.details.iter().filter(|item| item.session.partial).count(), parsed.warning.is_some());
+            let start = std::time::Instant::now();
+            let command = export_command(layout, &parsed.fingerprint).unwrap();
+            let bytes = crate::remote::operations::scoped(crate::remote::operations::Context::local(crate::remote::operations::Kind::Read, std::time::Duration::from_secs(40)), || crate::remote::run_command_bytes(&target, &command)).unwrap();
+            let warmed = decode_source(adapter, &target, &bytes, Some(&parsed)).unwrap();
+            eprintln!("remote history {} warm: {}ms wire_bytes={} reused={}", adapter.id(), start.elapsed().as_millis(), bytes.len(), Arc::ptr_eq(&parsed.details, &warmed.details));
+        }
+        for refresh in [true, false] {
+            let start = std::time::Instant::now();
+            let snapshot = list_snapshot(&Registry::builtins(), &target, refresh).unwrap();
+            eprintln!("remote history whole-list refresh={refresh}: {}ms sessions={} failures={}", start.elapsed().as_millis(), snapshot.sessions.len(), snapshot.source_failures.len());
+            assert!(snapshot.source_failures.is_empty());
+        }
+    }
+
     #[test]
     fn independent_sources_keep_success_report_failure_reuse_detail_and_reject_replaced_host() {
         use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
@@ -374,8 +714,9 @@ mod tests {
         let codex_calls = codex.clone(); let claude_calls = claude.clone();
         let path = home.path().to_owned();
         let loader: SourceLoader = Arc::new(move |adapter, target| {
-            if adapter.id() == "codex" { codex_calls.fetch_add(1, Ordering::SeqCst); sessions_from_home(adapter, &path, &target.id) }
-            else { claude_calls.fetch_add(1, Ordering::SeqCst); Err("fixture permission failure".into()) }
+            if adapter.id() == "codex" { codex_calls.fetch_add(1, Ordering::SeqCst); sessions_from_home(adapter, &path, &target.id).map(Into::into) }
+            else if adapter.id() == "claude_code" { claude_calls.fetch_add(1, Ordering::SeqCst); Err("fixture permission failure".into()) }
+            else { Ok(Vec::new().into()) }
         });
         let registry = Registry::builtins();
         let (cold, failures) = snapshot_with_loader(&registry, &target, false, loader.clone()).unwrap();
@@ -387,12 +728,12 @@ mod tests {
         assert_eq!(hot.len(), 1); assert_eq!(codex.load(Ordering::SeqCst), 1); assert_eq!(claude.load(Ordering::SeqCst), 2);
         let failing: SourceLoader = Arc::new(|_, _| Err("refresh failed".into()));
         let (stale, failed) = snapshot_with_loader(&registry, &target, true, failing).unwrap();
-        assert_eq!(stale.len(), 1); assert!(stale[0].stale); assert_eq!(failed.len(), 2);
+        assert_eq!(stale.len(), 1); assert!(stale[0].stale); assert_eq!(failed.len(), registry.iter().filter(|adapter| adapter.remote_history_layout().is_some()).count());
         let mut changed = target.clone(); changed.host = "replacement.invalid".into(); changed.updated_at += 1;
         let (replaced, _) = snapshot_with_loader(&registry, &changed, false, Arc::new(|_, _| Err("offline replacement".into()))).unwrap();
         assert!(replaced.is_empty(), "same ID cannot expose the old host's cached history");
         crate::remote::read_cache::invalidate(&target.id);
-        assert!(crate::remote::read_cache::previous::<Vec<HistoryDetail>>(&target, "history:codex").is_none());
+        assert!(crate::remote::read_cache::previous::<SourceSnapshot>(&target, "history:codex").is_none());
     }
 
     #[test]
@@ -414,7 +755,7 @@ mod tests {
                 Err(context.failure(reason, "source denied").to_string())
             });
             let (_, failures) = operations::scoped(lease.context.clone(), || snapshot_with_loader(&Registry::builtins(), &target, true, loader)).unwrap();
-            assert_eq!(failures.len(), 2);
+            assert_eq!(failures.len(), Registry::builtins().iter().filter(|adapter| adapter.remote_history_layout().is_some()).count());
             for source in failures {
                 let failure = source.remote.expect("structured source failure");
                 assert_eq!(failure.stage, reason); assert_eq!(failure.reason, reason);

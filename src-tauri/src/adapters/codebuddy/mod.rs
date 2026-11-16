@@ -389,6 +389,9 @@ impl CliAdapter for CodeBuddy {
     ) -> Result<crate::history::ParsedSession, String> {
         history::parse_controlled(source, cancelled)
     }
+    fn remote_history_layout(&self) -> Option<super::RemoteHistoryLayout> {
+        Some(super::RemoteHistoryLayout { relative: ".codebuddy/projects", fallbacks: &[], pinned: &[], sessions: &["*.jsonl"], companion: Some("subagents"), order: super::RemoteHistoryOrder::MtimeDesc, sqlite: None, catalogs: &[] })
+    }
     fn history_supported(&self) -> bool {
         true
     }

@@ -372,4 +372,20 @@ test('an externally discovered MCP is read-only and names its source', async ({ 
   const write = await lastCall(page, 'set_external_mcp_enabled');
   expect(write.args).toEqual(expect.objectContaining({ name: 'github', enabled: true, target: expect.objectContaining({ toolId: 'codex', scope: 'global' }) }));
   await expect(detail.getByRole('switch', { name: '启用' })).toBeChecked();
+
+});
+
+
+test('MCP listing is read once and draft switches do not rescan native files', async ({ page }) => {
+  await install(page);
+  await expect(list(page).getByRole('listitem')).toHaveCount(3);
+  await row(page, 'remote-service').click();
+  await expect(card(page, 'remote-service')).toBeVisible();
+  await card(page, 'remote-service').getByRole('button', { name: '编辑', exact: true }).click();
+  const toggle = card(page, 'remote-service').getByRole('checkbox', { name: '启用', exact: true });
+  await toggle.check();
+  await toggle.uncheck();
+  await search(page).fill('remote');
+  await expect(list(page).getByRole('listitem')).toHaveCount(1);
+  expect((await calls(page)).filter(call => call.command === 'list_native_mcp')).toHaveLength(1);
 });

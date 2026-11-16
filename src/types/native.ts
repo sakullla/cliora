@@ -145,6 +145,8 @@ export type RegisteredToolWorkspace = Omit<ToolWorkspace, 'probe' | 'profiles' |
   profiles: RegisteredProfile[];
   common: RegisteredCommon | null;
   profileModelSummaries?: Record<string, ModelSummary | null>;
+  /** Advisory check of the last committed non-secret fields; absent on older hosts. */
+  appliedFileState?: 'unchecked' | 'unchanged' | 'changed' | 'unknown';
 };
 export type ModelSummary = { providerId: string | null; model: string };
 /** Lightweight scope lookup; does not probe installations or read native documents. */

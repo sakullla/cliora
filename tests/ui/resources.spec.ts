@@ -45,8 +45,9 @@ async function mockResources(page: Page) {
             interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '', installCommand: null, upgradeCommand: null },
           profiles: [], common: null, binding: null, effectiveContextId: null, snapshots: [], recoveryNeeded: [], customPath: null,
         };
-        if (command === 'list_mcp_definitions') return definitions;
-        if (command === 'list_mcp_placements') return placements;
+        // Match the independent snapshots returned by native IPC.
+        if (command === 'list_mcp_definitions') return structuredClone(definitions);
+        if (command === 'list_mcp_placements') return structuredClone(placements);
         if (command === 'get_managed_mcp_enabled') return managed[`${args.definitionId}:${args.target.toolId}:${args.target.scope}:${args.target.projectPath}`] ?? null;
         if (command === 'save_mcp_definition') {
           const item = { ...args.draft, id: args.draft.id ?? `mcp-${definitions.length + 1}`, version: (args.draft.expectedVersion ?? 0) + 1 };

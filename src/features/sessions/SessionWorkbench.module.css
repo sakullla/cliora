@@ -33,24 +33,25 @@
   /* Fixed artwork inks: the theme swatches mirror the terminal palettes below, and the
      empty-state glyph is a small dark terminal in every app theme. */
   --wb-preview-dark-bg: #0b0e0d;
-  --wb-preview-dark-line: #3d4c44;
-  --wb-preview-dark-accent: #7fe0aa;
+  --wb-preview-dark-line: #334155;
+  --wb-preview-dark-accent: #34d399;
   --wb-preview-light-bg: #fdfdfc;
-  --wb-preview-light-frame: #dce4de;
-  --wb-preview-light-line: #c6d1ca;
-  --wb-preview-light-accent: #0e6b43;
-  --wb-preview-auto-line: #6f8a7b;
-  --wb-preview-auto-accent: #2f9d6b;
-  --wb-glyph-top: #18271f;
-  --wb-glyph-bottom: #0a110e;
-  --wb-glyph-shadow: 0 30px 60px -30px rgb(14 70 40 / 75%), 0 0 0 6px rgb(34 160 107 / 7%), inset 0 1px 0 rgb(255 255 255 / 9%);
-  --wb-glyph-dot: rgb(255 255 255 / 18%);
-  --wb-glyph-red: #f38a84;
-  --wb-glyph-yellow: #e5c07b;
-  --wb-glyph-green: #82dba8;
-  --wb-glyph-ink: #98f0c2;
+  --wb-preview-light-frame: #dce3ee;
+  --wb-preview-light-line: #cbd5e1;
+  --wb-preview-light-accent: #057a55;
+  --wb-preview-auto-line: #64748b;
+  --wb-preview-auto-accent: #10b981;
+  --wb-glyph-top: #172030;
+  --wb-glyph-bottom: #0c1019;
+  --wb-glyph-border: rgb(255 255 255 / 12%);
+  --wb-glyph-shadow: 0 24px 48px -24px rgb(15 23 42 / 55%), 0 0 0 1px rgb(255 255 255 / 8%) inset;
+  --wb-glyph-dot: rgb(255 255 255 / 20%);
+  --wb-glyph-red: #f87171;
+  --wb-glyph-yellow: #fbbf24;
+  --wb-glyph-green: #34d399;
+  --wb-glyph-ink: #6ee7b7;
   --wb-raise-highlight: rgb(255 255 255 / 6%);
-  --wb-grid-dot: rgb(18 40 28 / 9%);
+  --wb-grid-dot: rgb(15 23 42 / 8%);
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -65,71 +66,71 @@
   --wb-rail-bg: color-mix(in srgb, var(--sidebar) 70%, var(--bg));
   --wb-row-hover: color-mix(in srgb, var(--text) 6%, transparent);
   --wb-row-selected: var(--surface-2);
-  --wb-row-selected-line: color-mix(in srgb, var(--text) 9%, transparent);
+  --wb-row-selected-line: color-mix(in srgb, var(--text) 10%, transparent);
   --wb-divider: color-mix(in srgb, var(--line) 90%, transparent);
 }
 :global([data-theme='dark']) .root { --wb-grid-dot: rgb(255 255 255 / 6%); }
 :global([data-theme='dark']) .rail[data-docked] { --wb-rail-bg: var(--sidebar); }
 
 .root[data-term-theme='dark'] {
-  /* Neutral graphite with a trace of green; the xterm background in terminalTheme.ts is the same value. */
+  /* Neutral graphite; the xterm background in terminalTheme.ts is the same value. */
   --term-bg: #0b0e0d;
   /* Chrome tint around the terminal card; matches the dark app sidebar. */
-  --term-chrome: #111412;
-  --term-bar: #121614;
-  --term-raise: #181d1b;
-  --term-well: rgb(255 255 255 / 4.5%);
-  --term-fg: #edf2ee;
-  --term-text-2: #b9c3bc;
-  --term-text-3: #86928a;
-  --term-line: rgb(255 255 255 / 7%);
-  --term-frame: rgb(255 255 255 / 11%);
-  --term-cursor: #7fe0aa;
+  --term-chrome: #0c0f16;
+  --term-bar: #10141e;
+  --term-raise: #161c28;
+  --term-well: rgb(255 255 255 / 5%);
+  --term-fg: #f1f5f9;
+  --term-text-2: #cbd5e1;
+  --term-text-3: #8fa2bc;
+  --term-line: rgb(255 255 255 / 8%);
+  --term-frame: rgb(255 255 255 / 12%);
+  --term-cursor: #34d399;
   --term-hover: rgb(255 255 255 / 7%);
   --term-press: rgb(255 255 255 / 11%);
   --term-thumb: rgb(255 255 255 / 20%);
-  --term-float: #1a201d;
-  --term-float-line: rgb(255 255 255 / 12%);
-  --term-accent: #7fe0aa;
-  --term-accent-2: #5fd3c0;
-  --term-on-accent: #06130b;
-  --term-success: #8ee2b3;
-  --term-warning: #ecc983;
-  --term-danger: #f2a399;
+  --term-float: #171d2a;
+  --term-float-line: rgb(255 255 255 / 13%);
+  --term-accent: #34d399;
+  --term-accent-2: #38bdf8;
+  --term-on-accent: #04130d;
+  --term-success: #4ade80;
+  --term-warning: #fbbf24;
+  --term-danger: #f87171;
   --term-on-danger: #1d0c0a;
-  --term-shadow: rgb(0 0 0 / 55%);
-  --term-glow: rgb(127 224 170 / 20%);
-  --term-card-shadow: 0 1px 0 rgb(255 255 255 / 4%) inset, 0 18px 40px -28px rgb(0 0 0 / 90%);
+  --term-shadow: rgb(0 0 0 / 60%);
+  --term-glow: rgb(52 211 153 / 20%);
+  --term-card-shadow: 0 1px 0 rgb(255 255 255 / 5%) inset, 0 20px 44px -26px rgb(0 0 0 / 90%);
 }
 
 .root[data-term-theme='light'] {
   --term-bg: #fdfdfc;
   /* Chrome tint around the terminal card; matches the light app sidebar. */
-  --term-chrome: #eef0ed;
-  --term-bar: #f8f9f7;
+  --term-chrome: #f1f4f9;
+  --term-bar: #f8fafc;
   --term-raise: #ffffff;
-  --term-well: rgb(20 36 28 / 4%);
-  --term-fg: #17201b;
-  --term-text-2: #3e4a43;
-  --term-text-3: #5c6a62;
-  --term-line: #e5e8e3;
-  --term-frame: #d6dbd5;
-  --term-cursor: #0f7a48;
-  --term-hover: rgb(20 36 28 / 6%);
-  --term-press: rgb(20 36 28 / 10%);
-  --term-thumb: rgb(20 36 28 / 20%);
+  --term-well: rgb(15 23 42 / 4.5%);
+  --term-fg: #0f172a;
+  --term-text-2: #334155;
+  --term-text-3: #526075;
+  --term-line: #e2e8f0;
+  --term-frame: #cbd5e1;
+  --term-cursor: #057a55;
+  --term-hover: rgb(15 23 42 / 5.5%);
+  --term-press: rgb(15 23 42 / 9.5%);
+  --term-thumb: rgb(15 23 42 / 20%);
   --term-float: #ffffff;
-  --term-float-line: #d6dbd5;
-  --term-accent: #0b6e45;
-  --term-accent-2: #13857a;
-  --term-on-accent: #f4fbf6;
-  --term-success: #146b42;
-  --term-warning: #8a5600;
-  --term-danger: #a62f2a;
+  --term-float-line: #cbd5e1;
+  --term-accent: #057a55;
+  --term-accent-2: #0284c7;
+  --term-on-accent: #ffffff;
+  --term-success: #15803d;
+  --term-warning: #a16207;
+  --term-danger: #dc2626;
   --term-on-danger: #ffffff;
-  --term-shadow: rgb(26 44 34 / 18%);
-  --term-glow: rgb(11 110 69 / 14%);
-  --term-card-shadow: 0 1px 2px rgb(20 40 30 / 5%), 0 14px 32px -24px rgb(20 40 30 / 32%);
+  --term-shadow: rgb(15 23 42 / 16%);
+  --term-glow: rgb(5 122 85 / 14%);
+  --term-card-shadow: 0 1px 2px rgb(15 23 42 / 5%), 0 16px 36px -22px rgb(15 23 42 / 26%);
 }
 
 .srOnly {
@@ -1601,10 +1602,10 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
   width: 92px;
   height: 66px;
   overflow: hidden;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-lg);
-  background: var(--wb-glyph-bottom);
-  box-shadow: none;
+  border: 1px solid var(--wb-glyph-border);
+  border-radius: var(--radius-xl);
+  background: linear-gradient(180deg, var(--wb-glyph-top), var(--wb-glyph-bottom));
+  box-shadow: var(--wb-glyph-shadow);
 }
 .emptyGlyphBar { display: flex; gap: var(--space-1); padding: var(--space-2) var(--space-2_5) 0; }
 .emptyGlyphBar i { width: 6px; height: 6px; border-radius: 50%; background: var(--wb-glyph-dot); }
@@ -1613,7 +1614,11 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .emptyGlyphBar i:nth-child(3) { background: var(--wb-glyph-green); opacity: .75; }
 .emptyGlyphLine { display: flex; align-items: center; gap: var(--space-1); padding: 0 var(--space-3); color: var(--wb-glyph-ink); font-family: var(--font-mono); font-size: 22px; }
 .emptyGlyphLine b { font-weight: var(--fw-semibold); }
-.emptyGlyphCursor { width: 10px; height: 18px; border-radius: 0; background: currentColor; opacity: .85; }
+.emptyGlyphCursor { width: 10px; height: 18px; border-radius: 0; background: currentColor; opacity: .85; animation: wbCursorPulse 1.25s steps(2, end) infinite; }
+@keyframes wbCursorPulse { 0%, 49% { opacity: .85; } 50%, 100% { opacity: .28; } }
+@media (prefers-reduced-motion: reduce) {
+  .emptyGlyphCursor { animation: none; }
+}
 .emptyHero h2 { margin: var(--space-5) 0 0; color: var(--text); font-family: var(--font-display); font-size: clamp(26px, 2.6vw, 34px); font-weight: var(--fw-bold); letter-spacing: -.8px; line-height: 1.2; text-wrap: balance; }
 .emptyHero > p { max-width: min(640px, 100%); margin: var(--space-2_5) 0 0; color: var(--text-2); font-size: var(--fs-body); line-height: 1.7; text-wrap: pretty; }
 .emptyActions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--space-2_5); margin-top: var(--space-3); }
@@ -1634,15 +1639,15 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
   margin-top: var(--space-6);
   padding: var(--space-2_5) var(--space-3) var(--space-2_5) var(--space-2_5);
   border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   background: var(--surface);
   color: var(--text);
   text-align: left;
   white-space: normal;
   box-shadow: none;
-  transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease);
+  transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
-.launcherBar:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); }
+.launcherBar:hover:not(:disabled) { border-color: var(--accent-line); background: var(--surface); box-shadow: var(--shadow-card-hover); }
 .launcherBar:active:not(:disabled) { transform: none; }
 .launcherBar:focus-visible { outline: var(--focus-ring); outline-offset: 3px; border-color: var(--accent); }
 .launcherGlyph { display: grid; flex: none; place-items: center; width: 44px; height: 44px; border-radius: var(--radius); background: var(--accent-soft); color: var(--accent); box-shadow: none; }
@@ -1679,7 +1684,9 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .toolChipName strong { overflow: hidden; font-size: var(--fs-control); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
 .toolChipName small { overflow: hidden; color: var(--text-3); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
 .toolChipAction { position: absolute; top: 50%; right: 10px; display: grid; place-items: center; width: 26px; height: 26px; margin-top: calc(var(--space-3) * -1); border-radius: var(--radius-sm); color: var(--text-3); opacity: 0; transform: translateX(-4px); transition: opacity var(--fast) var(--ease), transform var(--fast) var(--ease), background-color var(--fast) var(--ease); }
-.toolChip:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); box-shadow: none; }
+.toolChip:hover:not(:disabled),
+.toolChip:focus-visible { border-color: var(--accent-line); background: var(--accent-soft); box-shadow: none; }
+.toolChip:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
 .toolChip:hover:not(:disabled) .toolChipAction,
 .toolChip:focus-visible .toolChipAction { background: var(--accent); color: var(--on-accent); opacity: 1; transform: none; }
 .toolChip[data-more] { border-style: dashed; background: transparent; box-shadow: none; color: var(--text-2); }
@@ -1687,14 +1694,17 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .toolChip[data-more] .toolChipAction { display: none; }
 .recentsGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2_5); }
 .recentCard { display: flex; align-items: center; gap: var(--space-3); min-width: 0; min-height: 56px; padding: var(--space-2) var(--space-3) var(--space-2) var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); text-align: left; white-space: normal; box-shadow: none; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease); }
-.recentCard:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); box-shadow: none; }
+.recentCard:hover:not(:disabled),
+.recentCard:focus-visible { border-color: var(--accent-line); background: var(--accent-soft); box-shadow: none; }
+.recentCard:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
 .recentIcon { display: grid; flex: none; place-items: center; width: 38px; height: 38px; border-radius: var(--radius-lg); background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-line); }
 .recentCopy { display: grid; flex: 1 1 auto; gap: 1px; min-width: 0; }
 .recentCopy strong { overflow: hidden; font-size: var(--fs-control); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
 .recentCopy small { overflow: hidden; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
 .recentTool { display: grid; flex: none; place-items: center; width: 28px; height: 28px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
 .recentAction { display: grid; flex: none; color: var(--text-3); transition: color var(--fast) var(--ease), transform var(--fast) var(--ease); }
-.recentCard:hover .recentAction { color: var(--accent); transform: translateX(2px); }
+.recentCard:hover .recentAction,
+.recentCard:focus-visible .recentAction { color: var(--accent); transform: translateX(2px); }
 .emptyFoot { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--space-2) var(--space-4); padding-top: var(--space-1); }
 .shortcutsHint { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-0_5); color: var(--text-3); font-size: var(--fs-micro); }
 .shortcutsHint > span:not(.shortcutSep) { margin-right: var(--space-1); }

@@ -1412,7 +1412,8 @@ pub fn connection_args(target: &RemoteTarget) -> Vec<String> {
     // Unix. Windows has no equivalent socket, so each command is its own
     // connection; `run_ssh` keeps that burst inside sshd's unauthenticated
     // connection limit and retries a handshake the server closes.
-    if let Some(path) = control_path(target) {
+    let socket = control_path(target);
+    if let Some(path) = &socket {
         args.extend([
             "-o".into(),
             "ControlMaster=auto".into(),
@@ -1421,6 +1422,10 @@ pub fn connection_args(target: &RemoteTarget) -> Vec<String> {
             "-o".into(),
             format!("ControlPath={path}"),
         ]);
+    }
+    #[cfg(not(windows))]
+    if socket.is_none() {
+        args.extend(["-o".into(), "ControlMaster=no".into(), "-o".into(), "ControlPath=none".into()]);
     }
     args.push(format!("{}@{}", target.user, target.host));
     args
@@ -1432,20 +1437,37 @@ pub fn connection_args(target: &RemoteTarget) -> Vec<String> {
 #[cfg(windows)]
 fn control_path(_target: &RemoteTarget) -> Option<String> { None }
 
+// OpenSSH also binds a temporary socket with a 17-byte suffix before rename.
+// Leave room for that suffix and the NUL on macOS's 104-byte sockaddr_un path.
+#[cfg(not(windows))]
+fn control_socket_path(root: &Path, target: &RemoteTarget) -> Option<String> {
+    let identity = serde_json::to_vec(&(
+        &target.user, &target.host, target.port, &target.auth_method,
+        &target.ssh_config, &target.identity_file,
+    )).ok()?;
+    let digest = format!("{:x}", Sha256::digest(identity));
+    // 128 bits keeps the filename short without sharing different credentials.
+    let path = root.join(format!("ctl-{}", &digest[..32]));
+    let path = path.to_str()?;
+    if path.len() > 80 { return None; }
+    // A percent sign in a user's home is literal, not an OpenSSH % token.
+    Some(path.replace('%', "%%"))
+}
+
 #[cfg(not(windows))]
 fn control_path(target: &RemoteTarget) -> Option<String> {
-    let root = dirs::cache_dir().or_else(|| Some(std::env::temp_dir()))?.join("cliora").join("ssh");
-    if std::fs::create_dir_all(&root).is_err() {
-        return None;
-    }
+    let root = dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("cliora").join("ssh");
+    // Check before touching the filesystem; an unusually long home can still use ordinary SSH.
+    let path = control_socket_path(&root, target)?;
+    std::fs::create_dir_all(&root).ok()?;
+    let metadata = std::fs::symlink_metadata(&root).ok()?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() { return None; }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700));
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).ok()?;
     }
-    let identity = format!("{}@{}:{}|{}|{}", target.user, target.host, target.port, target.ssh_config.as_deref().unwrap_or_default(), target.identity_file.as_deref().unwrap_or_default());
-    let digest = Sha256::digest(identity.as_bytes());
-    Some(root.join(format!("ctl-{:x}", digest)).to_string_lossy().into_owned())
+    Some(path)
 }
 
 fn classify_ssh_failure(stderr: &str, exit_code: Option<i32>) -> &'static str {
@@ -2124,6 +2146,17 @@ pub(crate) fn run_session_control(binary: &Path, args: &[String], environment: &
     })
 }
 
+/// The child was spawned with process_group(0), so this id names our own group.
+/// Use the OS primitive instead of spawning `kill` for every completed SSH read.
+#[cfg(unix)]
+fn kill_owned_process_group(child_id: u32) {
+    let Ok(group) = i32::try_from(child_id) else { return; };
+    if group <= 1 { return; }
+    unsafe extern "C" { fn kill(pid: i32, signal: i32) -> i32; }
+    // SIGKILL is 9 on supported Unix targets. A group already gone is normal.
+    unsafe { kill(-group, 9); }
+}
+
 fn wait_for_output_with_stdin(command: &mut Command, deadline: Duration, stdin_payload: Option<Vec<u8>>) -> Result<std::process::Output, RemoteError> {
     let context = operations::current().unwrap_or_else(|| operations::Context::local(operations::Kind::Write, deadline));
     context.check()?;
@@ -2192,7 +2225,7 @@ fn wait_for_output_with_stdin(command: &mut Command, deadline: Duration, stdin_p
             #[cfg(windows)]
             let cleaned = process_job.take().is_none_or(|job| job.terminate_and_wait());
             #[cfg(unix)]
-            { let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())]).status(); }
+            kill_owned_process_group(child.id());
             let _ = child.kill(); let _ = child.wait();
             if let Some(task) = stdin_task.take() { let _ = task.join(); }
             let _ = stdout_task.join(); let _ = stderr_task.join();
@@ -2207,7 +2240,7 @@ fn wait_for_output_with_stdin(command: &mut Command, deadline: Duration, stdin_p
                 #[cfg(windows)]
                 let cleaned = process_job.take().is_none_or(|job| job.terminate_and_wait());
                 #[cfg(unix)]
-                { let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())]).status(); }
+                kill_owned_process_group(child.id());
                 let _ = child.kill(); let _ = child.wait();
                 if let Some(task) = stdin_task.take() { let _ = task.join(); }
                 let _ = stdout_task.join(); let _ = stderr_task.join();
@@ -2222,7 +2255,7 @@ fn wait_for_output_with_stdin(command: &mut Command, deadline: Duration, stdin_p
     #[cfg(windows)]
     let cleaned = process_job.take().is_none_or(|job| job.terminate_and_wait());
     #[cfg(unix)]
-    { let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())]).status(); }
+    kill_owned_process_group(child.id());
     if let Some(task) = stdin_task.take() { let _ = task.join(); }
     let output = std::process::Output {
         status,
@@ -3227,6 +3260,39 @@ mod tests {
 
     fn has_option(args: &[String], option: &str) -> bool {
         args.windows(2).any(|pair| pair[0] == "-o" && pair[1] == option)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn control_socket_paths_fit_macos_including_openssh_temporary_suffix() {
+        use std::os::unix::net::UnixListener;
+        let target = gate_target("socket-fixture.invalid");
+        let reported_root = Path::new("/Users/testuser/Library/Caches/cliora/ssh");
+        let path = control_socket_path(reported_root, &target).unwrap();
+        assert!(path.len() + 17 < 104);
+        let root = tempfile::Builder::new().prefix("cliora-ssh-test-").tempdir_in("/tmp").unwrap();
+        let path = control_socket_path(root.path(), &target).unwrap();
+        let temporary = format!("{path}.abcdefghijklmnop");
+        let listener = UnixListener::bind(&temporary).unwrap();
+        drop(listener);
+        std::fs::rename(&temporary, &path).unwrap();
+        assert_eq!(control_socket_path(root.path(), &target).unwrap(), path);
+        assert!(control_socket_path(Path::new(&format!("/{}", "x".repeat(100))), &target).is_none());
+        assert!(control_socket_path(Path::new(&format!("/{}", "界".repeat(20))), &target).is_none());
+        let escaped = control_socket_path(Path::new("/tmp/100%user"), &target).unwrap();
+        assert!(escaped.contains("100%%user"));
+        for change in ["password", "port", "key", "config", "user", "host"] {
+            let mut other = target.clone();
+            match change {
+                "password" => other.auth_method = "password".into(),
+                "port" => other.port += 1,
+                "key" => other.identity_file = Some("/keys/other".into()),
+                "config" => other.ssh_config = Some("/config/other".into()),
+                "user" => other.user = "other".into(),
+                _ => other.host = "other.invalid".into(),
+            }
+            assert_ne!(control_socket_path(root.path(), &other).unwrap(), path);
+        }
     }
 
     #[test]

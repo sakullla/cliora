@@ -2223,6 +2223,7 @@ pub struct RegisteredToolWorkspace {
     pub effective_context_id: Option<String>,
     pub native_context_error: Option<String>,
     pub snapshots: Vec<NativeSnapshot>,
+    pub applied_file_state: apply::AppliedFileState,
     pub recovery_needed: Vec<String>,
 }
 
@@ -2323,7 +2324,7 @@ pub async fn get_registered_tool_workspace(
                 Scope::Global => "global".into(),
                 Scope::Project => format!("project:{}", project.as_ref().unwrap().display()),
             };
-            let saved =
+            let mut saved =
                 crate::native::workspace::saved_workspace(&registry, database, &tool_id, &key)
                     .map_err(native_error)?;
             let (_context, context_error) = match crate::accounts::selection::enter_bound(
@@ -2375,6 +2376,14 @@ pub async fn get_registered_tool_workspace(
             } else {
                 probe.native_files.iter().map(native_snapshot).collect()
             };
+            let applied_file_state = if summary {
+                apply::AppliedFileState::Unchecked
+            } else if context_error.is_some() {
+                apply::AppliedFileState::Unknown
+            } else {
+                apply::applied_file_state(saved.binding.as_ref(), &probe.native_files)
+            };
+            if let Some(binding) = &mut saved.binding { binding.managed.clear(); }
             Ok(RegisteredToolWorkspace {
                 effective_context_id: crate::accounts::selection::current(&tool_id)
                     .map(|context| context.id),
@@ -2385,6 +2394,7 @@ pub async fn get_registered_tool_workspace(
                 profile_model_summaries: saved.profile_model_summaries,
                 common: saved.common,
                 binding: saved.binding,
+                applied_file_state,
                 snapshots,
                 recovery_needed,
             })
