@@ -59,7 +59,7 @@ test.beforeAll(async () => {
           const role = typeof action.field === 'string' ? action.field.split('.')[0] : '';
           if(action.field==='modelEffortLevel') {const model=action.target.slice(6);if(action.operation==='reset')delete next.view.modelEfforts[model];else next.view.modelEfforts[model]=action.value;}
           else if(action.operation==='reset'){delete next.view.values[action.field];if(roleNames.includes(role)&&action.field.endsWith('.model'))next.view.roleFollowing[role]=true;}
-          else if(action.operation==='unify')for(const item of ['default',...roleNames]){next.view.values[item+'.model']=action.value;if(item!=='default')next.view.roleFollowing[item]=false;}
+          else if(action.operation==='unify'){const value=String(action.value??'');next.view.values['default.model']=value.replace(/\[1m\]$/i,'');next.view.values['default.longContext']=/\[1m\]$/i.test(value);for(const item of roleNames){delete next.view.values[item+'.model'];next.view.roleFollowing[item]=true;}}
           else {next.view.values[action.field]=action.value;if(roleNames.includes(role)&&action.field.endsWith('.model'))next.view.roleFollowing[role]=false;}
           return next;
         });
@@ -151,10 +151,28 @@ test('Claude default model edits leave roles independent until explicit unify', 
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText('Sonnet');
-  await expect(dialog).toContainText('Opus');
+  await expect(dialog).not.toContainText('Opus');
   await dialog.getByRole('button', { name: '将默认模型用于全部角色' }).click();
-  await expect(page.getByLabel('sonnet 模型', { exact: true })).toHaveValue('gateway-default');
-  await expect(page.getByLabel('subagent 模型', { exact: true })).toHaveValue('gateway-default');
+  await expect(page.getByLabel('sonnet 模型', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('sonnet 模型', { exact: true })).toHaveAttribute('placeholder', '跟随默认模型 · gateway-default');
+  await expect(page.getByLabel('subagent 模型', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('subagent 模型', { exact: true })).toHaveAttribute('placeholder', '跟随默认模型 · gateway-default');
+});
+
+test('Claude all-following roles disable unify and show the no-change note', async ({ page }) => {
+  await page.goto('/__configuration_editor_test?tool=claude');
+  await page.evaluate(() => (window as unknown as { __replaceView: (fn: (view: any) => any) => void }).__replaceView(view => {
+    delete view.values['sonnet.model'];
+    view.roleFollowing = { sonnet: true, opus: true, fable: true, haiku: true, subagent: true };
+    return view;
+  }));
+  await page.evaluate(() => (window as unknown as { __setSection: (value: string) => void }).__setSection('settings'));
+  const unify = page.getByRole('button', { name: '将默认模型用于全部角色' });
+  await expect(unify).toBeDisabled();
+  await expect(page.getByText('所有角色都已跟随默认模型，无需统一。', { exact: true })).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByLabel('sonnet 模型', { exact: true })).toHaveAttribute('placeholder', '跟随默认模型 · claude-opus-4-8');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __actions: unknown[] }).__actions)).toEqual([]);
 });
 
 test('Claude following roles keep the default model and unify cancellation sends nothing', async ({ page }) => {
@@ -170,6 +188,7 @@ test('Claude following roles keep the default model and unify cancellation sends
   await page.keyboard.press('Enter');
   const dialog = page.getByRole('dialog');
   await expect(dialog).toContainText('Sonnet');
+  await expect(dialog).not.toContainText('Opus');
   await page.keyboard.press('Escape');
   await expect(dialog).not.toBeVisible();
   await expect(unify).toBeFocused();
@@ -206,7 +225,8 @@ test('Claude explicit unify failure blocks save until retry succeeds', async ({ 
   await page.getByRole('button', { name: '将默认模型用于全部角色' }).click();
   await page.getByRole('dialog').getByRole('button', { name: '将默认模型用于全部角色' }).click();
   await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
-  await expect(page.getByLabel('sonnet 模型', { exact: true })).toHaveValue('claude-opus-4-8');
+  await expect(page.getByLabel('sonnet 模型', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('sonnet 模型', { exact: true })).toHaveAttribute('placeholder', '跟随默认模型 · claude-opus-4-8');
 });
 
 test('Codex quick hides builtin provider fields and keeps a real custom summary', async ({ page }) => {
@@ -240,7 +260,13 @@ test('Codex quick and advanced share one draft and the same native targets', asy
   await expect(page.getByLabel('供应商 ID', { exact: true })).toBeVisible();
   await expect(page.getByLabel('供应商 ID', { exact: true })).toHaveValue('gateway');
   await expect(page.getByLabel('模型', { exact: true })).toHaveValue('gpt-quick');
+  await expect(page.getByText(/接口协议：responses/)).toBeVisible();
   await expect(page.getByText('模型参数', { exact: true })).not.toBeVisible();
+  await page.evaluate(() => (window as unknown as { __replaceView: (fn: (view: any) => any) => void }).__replaceView(view => {
+    view.wireProtocol = 'chat';
+    return view;
+  }));
+  await expect(page.getByText(/接口协议：chat/)).toBeVisible();
   await page.evaluate(() => (window as unknown as { __setSection: (value: string) => void }).__setSection('settings'));
   await expect(page.getByLabel('推理强度（Codex 原生）')).toHaveValue('ultra');
   await page.getByLabel('推理强度（Codex 原生）').selectOption('');

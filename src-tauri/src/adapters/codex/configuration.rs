@@ -344,8 +344,9 @@ impl ConfigurationAdapter for Codex {
         // built-in ID, is a real custom connection the user must be able to see.
         let custom_connection = !RESERVED_MODEL_PROVIDERS.contains(&provider)
             || definition.get("base_url").is_some();
+        let wire_protocol = definition.get("wire_api").cloned().unwrap_or(Value::Null);
         Ok(
-            json!({"values":values,"customConnection":custom_connection,"defaultAddressReason":default_address_reason,"effortChoices":choices,"capabilitySource":if choices.is_empty() {"未核验模型能力；允许手动原生值"} else {"Codex 公开原生模型目录（2026-10-05）"}}),
+            json!({"values":values,"customConnection":custom_connection,"wireProtocol":wire_protocol,"defaultAddressReason":default_address_reason,"effortChoices":choices,"capabilitySource":if choices.is_empty() {"未核验模型能力；允许手动原生值"} else {"Codex 公开原生模型目录（2026-10-05）"}}),
         )
     }
     fn edit(
@@ -394,12 +395,10 @@ impl ConfigurationAdapter for Codex {
                         .as_str()
                         .ok_or("缺少供应商")?
                         .to_owned();
-                    // Responses is the only supported Codex wire protocol.
-                    crate::native::apply::set_json(
-                        settings,
-                        &["model_providers", &provider, "wire_api"],
-                        json!("responses"),
-                    );
+                    // Codex only accepts the Responses protocol, but an
+                    // existing wire_api value is user-owned: an address edit
+                    // must not silently rewrite it. Validation blocks other
+                    // values with an explicit fix path.
                     if settings["model_providers"][&provider].get("name").is_none() {
                         crate::native::apply::set_json(
                             settings,
@@ -728,6 +727,7 @@ mod tests {
         let view = Codex.read(&custom, &EditingState::default()).unwrap();
         assert_eq!(view["customConnection"], true);
         assert_eq!(view["values"]["base_url"], "https://gateway.example.test/v1");
+        assert_eq!(view["wireProtocol"], "responses");
         // A built-in provider ID with an explicit address is no longer the
         // untouched official default; its real address must stay visible.
         let legacy = BTreeMap::from([(
@@ -741,6 +741,33 @@ mod tests {
         let view = Codex.read(&legacy, &EditingState::default()).unwrap();
         assert_eq!(view["customConnection"], true);
         assert_eq!(view["values"]["base_url"], "https://legacy.example.test/v1");
+    }
+    #[test]
+    fn codex_address_edit_preserves_existing_wire_api_and_validation_blocks_it() {
+        let mut documents = BTreeMap::from([(
+            "settings".into(),
+            json!({"model":"gpt-6.1-sol","model_provider":"gateway","model_providers":{"gateway":{"name":"Gateway","base_url":"https://old.example.test/v1","wire_api":"chat"}}}),
+        )]);
+        let mut edit = action("set", "base_url", json!("https://new.example.test/v1"));
+        edit.target = json!("gateway");
+        Codex
+            .edit(&mut documents, &mut EditingState::default(), &edit)
+            .unwrap();
+        assert_eq!(
+            documents["settings"]["model_providers"]["gateway"]["base_url"],
+            "https://new.example.test/v1"
+        );
+        // An existing protocol is user-owned; the address edit must not
+        // silently normalize it to responses.
+        assert_eq!(
+            documents["settings"]["model_providers"]["gateway"]["wire_api"],
+            "chat"
+        );
+        let issues = Codex.validate(&documents, &EditingState::default(), Scope::Global);
+        assert!(issues.iter().any(|issue| {
+            issue.field.as_deref() == Some("base_url")
+                && issue.message == "Codex 仅支持 Responses 接口"
+        }));
     }
     #[test]
     fn codex_common_descriptor_origin_marks_explicit_and_unset_only() {

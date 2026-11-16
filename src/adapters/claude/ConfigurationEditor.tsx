@@ -31,7 +31,7 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
       alive.current = false;
       request.current += 1;
       for (const field of descriptor.fields) validity.current(field.id, true);
-      validity.current('unify', true);
+      validity.current('roleOverrides', true);
     };
   }, [draft.sessionId]);
   // The native projection states which roles have no model key and therefore
@@ -44,10 +44,10 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
   const defaultModel = values['default.model'];
   const roleLabel = (role: string, label: string) => role === 'subagent' ? t('tools.adapters.claude.roleSubagent') : label;
   const affectedRoles = () => roles.filter(([role]) => {
-    // A following role has no native key and will receive one; an explicit
-    // role only counts when its stored model differs from the target.
+    // Only explicit role overrides that differ from the default are affected;
+    // roles without a native key already follow the default and need no write.
     const value = values[`${role}.model`];
-    return typeof value !== 'string' || value !== defaultModel;
+    return typeof value === 'string' && value.trim() !== '' && value !== defaultModel;
   }).map(([role, label]) => roleLabel(role, label));
   const affected = affectedRoles();
   const render = (id: string) => {
@@ -88,10 +88,10 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
     );
     if (!accepted) return;
     const token = ++request.current;
-    setUnifying(true); setUnifyError(null); onValidityChange('unify', false);
+    setUnifying(true); setUnifyError(null); onValidityChange('roleOverrides', false);
     try {
       await onAction({ version: descriptor.version, target: view?.editTarget ?? 'configuration', operation: 'unify', field: null, value: model + (values['default.longContext'] === true ? '[1m]' : '') });
-      if (token === request.current) { setUnifying(false); onValidityChange('unify', true); }
+      if (token === request.current) { setUnifying(false); onValidityChange('roleOverrides', true); }
     } catch (error) {
       if (token === request.current) { setUnifying(false); setUnifyError(error instanceof Error ? error.message : t('tools.adapters.claude.unifyFailed')); }
     }

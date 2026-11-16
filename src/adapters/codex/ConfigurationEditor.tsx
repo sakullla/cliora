@@ -9,13 +9,14 @@ import sharedStyles from '../../components/configuration/configuration.module.cs
 import type { ConfigurationContentProps } from '../contract';
 import styles from './ConfigurationEditor.module.css';
 
-type View = { values?: Record<string, unknown>; defaultAddressReason?: string | null; effortChoices?: string[]; capabilitySource?: string; customConnection?: boolean };
+type View = { values?: Record<string, unknown>; defaultAddressReason?: string | null; effortChoices?: string[]; capabilitySource?: string; customConnection?: boolean; wireProtocol?: unknown };
 function Editor({ draft, descriptor, disabled, onAction, onValidityChange, section, rawResetEpoch, catalog }: ConfigurationContentProps) {
   const { t } = useTranslation();
   const view = draft.view as View | null;
   const values = view?.values ?? {};
   const provider = typeof values.model_provider === 'string' && values.model_provider.trim() ? values.model_provider : 'openai';
   const customConnection = view?.customConnection ?? (typeof values.base_url === 'string' && values.base_url.trim() !== '');
+  const wireProtocol = typeof view?.wireProtocol === 'string' && view.wireProtocol.trim() ? view.wireProtocol : 'responses';
   const validity = useRef(onValidityChange);
   validity.current = onValidityChange;
   useEffect(() => () => { for (const field of descriptor.fields) validity.current(field.id, true); }, [draft.sessionId]);
@@ -35,6 +36,7 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
     <div hidden={section === 'settings'}>
       <ConfigurationStep step="connection" label={t('common.provider.title')} title={t('common.provider.title')} meta={connectionMeta(values.model_provider, values.base_url)}>
         <div className={styles.fields}>{render('model_provider')}{render('base_url')}</div>
+        <p className={styles.note} role="note">{t('tools.adapters.codex.protocolBoundary', { protocol: wireProtocol })}</p>
         {view?.defaultAddressReason && <p className={styles.note}>{view.defaultAddressReason}</p>}
       </ConfigurationStep>
       <ConnectionCredential />
