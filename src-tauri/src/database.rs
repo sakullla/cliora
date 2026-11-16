@@ -23,7 +23,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 31 {
+        if version > 32 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -631,6 +631,48 @@ impl Database {
                    data TEXT NOT NULL
                  );
                  PRAGMA user_version = 31;",
+            )?;
+            tx.commit()?;
+        }
+        if version < 32 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE workspace_projects (
+                   id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1,
+                   manifest_path TEXT, manifest_revision INTEGER, manifest_digest TEXT,
+                   manifest_json TEXT, last_error TEXT
+                 );
+                 CREATE TABLE workspace_repositories (
+                   id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL
+                 );
+                 CREATE TABLE workspace_members (
+                   workspace_id TEXT NOT NULL REFERENCES workspace_projects(id) ON DELETE CASCADE,
+                   repository_id TEXT NOT NULL REFERENCES workspace_repositories(id),
+                   favorite INTEGER NOT NULL DEFAULT 0,
+                   PRIMARY KEY(workspace_id, repository_id)
+                 );
+                 CREATE TABLE workspace_locations (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   repository_id TEXT NOT NULL REFERENCES workspace_repositories(id),
+                   host_id TEXT NOT NULL, path TEXT, native_project_id TEXT, target_id TEXT,
+                   kind TEXT NOT NULL DEFAULT 'legacy',
+                   UNIQUE(host_id, path)
+                 );
+                 CREATE TABLE workspace_member_locations (
+                   workspace_id TEXT NOT NULL REFERENCES workspace_projects(id) ON DELETE CASCADE,
+                   repository_id TEXT NOT NULL REFERENCES workspace_repositories(id),
+                   location_id TEXT NOT NULL REFERENCES workspace_locations(id),
+                   PRIMARY KEY(workspace_id, repository_id, location_id)
+                 );
+                 CREATE TABLE workspace_legacy_map (
+                   project_id TEXT PRIMARY KEY NOT NULL, workspace_id TEXT NOT NULL,
+                   repository_id TEXT NOT NULL
+                 );
+                 CREATE TABLE workspace_sessions (
+                   session_id TEXT PRIMARY KEY NOT NULL, workspace_id TEXT NOT NULL,
+                   repository_id TEXT NOT NULL, host_id TEXT NOT NULL, directory TEXT NOT NULL
+                 );
+                 PRAGMA user_version = 32;",
             )?;
             tx.commit()?;
         }

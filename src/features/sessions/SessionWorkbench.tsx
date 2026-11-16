@@ -1,3 +1,5 @@
+import { WorkspaceBrowser, WORKSPACES_CHANGED } from '../workspaces/WorkspaceBrowser';
+import type { BusinessWorkspace, WorkspaceSelection, WorkspaceSessionContext } from '../../types/workspaces';
 import { useRemoteIdentity } from '../../lib/remoteReads';
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -428,6 +430,29 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const allSessionsRef = useRef(sessions);
   allSessionsRef.current = sessions;
   const [projects, setProjects] = useState<Project[]>([]);
+  const [businessWorkspaces, setBusinessWorkspaces] = useState<BusinessWorkspace[]>([]);
+  const [businessContexts, setBusinessContexts] = useState<WorkspaceSessionContext[]>([]);
+  const [businessContextError, setBusinessContextError] = useState('');
+  const [businessFilter, setBusinessFilter] = useState('*');
+  const [businessSelection, setBusinessSelection] = useState<WorkspaceSelection | null>(null);
+  const businessSessionKey = sessions.map(item => item.id).join('|');
+  useEffect(() => {
+    if (!active || !nativeAvailable) return;
+    let live = true;
+    let generation = 0;
+    const reload = () => {
+      const request = ++generation;
+      void Promise.allSettled([native.listBusinessWorkspaces(), native.listWorkspaceSessionContexts()]).then(([workspaces, contexts]) => {
+        if (!live || request !== generation) return;
+        if (workspaces.status === 'fulfilled') setBusinessWorkspaces(Array.isArray(workspaces.value) ? workspaces.value : []);
+        if (contexts.status === 'fulfilled') setBusinessContexts(Array.isArray(contexts.value) ? contexts.value : []);
+        const failure = workspaces.status === 'rejected' ? workspaces.reason : contexts.status === 'rejected' ? contexts.reason : null;
+        setBusinessContextError(failure ? formatFailure(failure, t('workspaces.loadFailed'), t('workspaces.retry')) : '');
+      });
+    };
+    reload(); window.addEventListener(WORKSPACES_CHANGED, reload);
+    return () => { live = false; generation++; window.removeEventListener(WORKSPACES_CHANGED, reload); };
+  }, [active, businessSessionKey, t]);
   const [remoteProjects, setRemoteProjects] = useState<RemoteProject[]>([]);
   const [loadedRemoteTargets, setLoadedRemoteTargets] = useState<RemoteTarget[] | null>(null);
   const remoteTargets = loadedRemoteTargets ?? syncedRemoteTargets;
@@ -1763,6 +1788,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
 
   function placeOf(session: WorkbenchSession): string {
+    const context = businessContexts.find(item => item.sessionId === session.id);
+    const workspace = context && businessWorkspaces.find(item => item.id === context.workspaceId);
+    const repository = workspace?.repositories.find(item => item.id === context?.repositoryId);
+    if (workspace && repository) return `${workspace.name} / ${repository.name}`;
     const project = session.projectId ? projects.find((item) => item.id === session.projectId) : undefined;
     if (project?.name) return project.name;
     if (session.directory) return shortPath(displayPath(session.directory));
@@ -1932,6 +1961,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   function openNewSessionDialog(prefill?: { toolId?: string; projectId?: string; directory?: string; place?: 'worktree' }, targetOverride?: string) {
     setDialogError('');
+    setBusinessSelection(null);
     // Each opening starts from the saved preference; the dialog decides this launch.
     // An entry that asked for a worktree is an explicit choice, not the preference.
     dialogPlaceTouched.current = !!prefill?.place;
@@ -2050,6 +2080,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       // Cancelling the dialog resolves null and needs no feedback.
       if (typeof picked === 'string' && picked.trim()) {
         const clean = picked.trim();
+        setBusinessSelection(null);
         setCustomFolderPath(clean);
         setWorkspaceValue(`custom:${clean}`);
         setDialogError('');
@@ -2139,6 +2170,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         ? { ...(preview ? { base: baseOf(preview) } : {}), ...(explicitBranch ? { branch: explicitBranch } : {}) }
         : {};
       const request: LaunchRequest = {
+        ...(businessSelection && !remoteLaunch ? { workspaceId: businessSelection.workspaceId, repositoryId: businessSelection.repositoryId } : {}),
         toolId: effectiveLaunchToolId,
         projectId,
         sessionId: null,
@@ -2523,13 +2555,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const filteredSessions = useMemo(() => {
     const query = railSearch.trim().toLowerCase();
     return scopedSessions.filter((session) => {
+      if (businessFilter !== '*' && !businessContexts.some(context => context.sessionId === session.id && context.workspaceId === businessFilter)) return false;
       if (!query) return true;
       return toolName(session).toLowerCase().includes(query)
         || (titles.get(session.id) ?? '').toLowerCase().includes(query)
         || placeOf(session).toLowerCase().includes(query)
         || (session.directory ?? '').toLowerCase().includes(query);
     });
-  }, [scopedSessions, railSearch, projects, tools, titles]);
+  }, [scopedSessions, railSearch, projects, tools, titles, businessFilter, businessContexts, businessWorkspaces]);
 
   const arrangedSessions = useMemo(() => {
     const present = new Set(filteredSessions.map((session) => session.id));
@@ -3291,6 +3324,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   return <div ref={rootRef} className={styles.root} data-focus-mode={focusMode || undefined} data-empty={(showEmpty && !listError) || undefined} data-term-theme={terminalMode} data-narrow={narrowFrame || undefined} data-compact={compactFrame || undefined} data-tight={tightFrame || undefined} data-rail-docked={railDocked || undefined}>
     {(focusMode || (showEmpty && !listError)) && <h1 className={styles.srOnly} tabIndex={-1}>{t('common.pages.sessions.title')}</h1>}
+    {businessContextError && <div className={styles.banner} role="alert"><p>{businessContextError}</p><Button size="sm" onClick={() => window.dispatchEvent(new Event(WORKSPACES_CHANGED))}>{t('workspaces.retry')}</Button></div>}
+    {businessWorkspaces.length > 0 && <div className={styles.businessScope}><FilterSelect label={t('workspaces.recentSessions')} value={businessFilter} options={[{ value: '*', label: t('workspaces.allProjects') }, ...businessWorkspaces.map(item => ({ value: item.id, label: item.name }))]} onChange={setBusinessFilter} /></div>}
     {listError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><strong>{t('sessions.listFailed')}</strong><p>{listError}</p></div><Button size="sm" onClick={() => setReload((value) => value + 1)}>{t('sessions.retry')}</Button></div>}
 
     <div className={styles.layout} data-strip={(!railDocked && showRail) || undefined}>
@@ -3727,6 +3762,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     </GuideDialog>
     <GuideDialog open={newDialogOpen} title={t('sessions.newSessionDialogTitle')} hint={t('sessions.newSessionDialogHint')} wide onClose={() => setNewDialogOpen(false)}>
       <div className={styles.dialogForm}>
+        {!activeRemoteTarget && <WorkspaceBrowser compact onPick={selection => { setBusinessSelection(selection); setWorkspaceValue(`custom:${selection.directory}`); setCustomFolderPath(selection.directory); setDialogPlace('direct'); dialogPlaceTouched.current = true; setDialogError(''); }} />}
+        {businessSelection && !activeRemoteTarget && <p role="status">{t('workspaces.picked', { label: businessSelection.label })}</p>}
         {dialogError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{dialogError}</p></div></div>}
         <div className={styles.dialogPrimaryGrid}>
           <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.pickToolLabel')}</span><FilterSelect label={t('sessions.pickToolLabel')} value={effectiveLaunchToolId} options={cliSelectOptions} placeholder={t('home.launcher.pickTool')} searchLabel={t('sessions.searchCliTool')} onChange={pickLaunchTool} />
@@ -3735,6 +3772,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           </div>
           <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.pickWorkspaceLabel')}</span><FilterSelect label={t('sessions.pickWorkspaceLabel')} value={workspaceValue} options={workspaceSelectOptions} searchable searchLabel={t('sessions.searchWorkspace')} onPickFolder={() => void pickCustomWorkspaceFolder()} pickFolderLabel={t('sessions.pickFolder')} onChange={(value) => {
             setWorkspaceValue(value);
+            setBusinessSelection(null);
             if (value.startsWith('project:')) {
               const project = availableProjects.find((item) => 'project:' + item.id === value);
               if (project?.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)) setLaunchToolId(project.preferredTool);

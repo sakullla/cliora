@@ -421,6 +421,11 @@ fn restore_items(
             let baseline = saved_baseline(db, &session.id)?;
             let result = launch::spawn_with_baseline(db, plan, Some(baseline))?;
             let id = result.session_id.ok_or("未创建恢复终端")?;
+            if let Err(error) = crate::workspaces::restore_session_context(db, &session.id, &id) {
+                let _ = crate::session_host::close(&id);
+                let _ = forget(db, &id);
+                return Err(error);
+            }
             let cleanup = if live.contains_key(&session.id) { crate::session_host::close(&session.id) } else { Ok(()) };
             if let Err(error) = cleanup.and_then(|()| forget(db, &session.id)) {
                 let _ = crate::session_host::close(&id);

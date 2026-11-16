@@ -1,3 +1,4 @@
+import { installWorkspaceFixtures } from './capture-workspace-fixtures.mjs';
 import { settleCapture, previousCaptureCleanup } from './capture-ready.mjs';
 /** Synthetic, populated native-IPC fixtures for visual inspection; never platform acceptance evidence. */
 import fs from 'node:fs';
@@ -35,11 +36,11 @@ if(process.argv.includes('--list')){console.log([...selectedPages,...selectedSce
 const pagesOnly=process.argv.includes('--only')&&selectedPages.length>0&&selectedScenarios.length===0;
 const root=fileURLToPath(new URL('../',import.meta.url)).replace(/\\/g,'/').replace(/\/$/,'');
 const workflowsOnly=process.argv.includes('--features')||process.argv.includes('--workflows');
-const scopedCapture=process.argv.some(arg=>['--full','--only','--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules','--remote-hosts','--write-recovery','--home'].includes(arg));
+const scopedCapture=process.argv.some(arg=>['--full','--only','--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules','--remote-hosts','--write-recovery','--home','--projects'].includes(arg));
 const quickCapture=process.argv.includes('--quick')||!scopedCapture;
-const fullCapture=!quickCapture&&!pagesOnly&&!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules','--remote-hosts','--write-recovery','--home'].includes(arg));
-const captureMode=homeCapture?'home':process.argv.includes('--write-recovery')?'write-recovery':process.argv.includes('--remote-hosts')?'remote-hosts':workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':process.argv.includes('--skills')?'skills':process.argv.includes('--mcp')?'mcp':process.argv.includes('--rules')?'rules':'full';
-const manifestName=`capture-ui${['features','sessions','records','connections','skills','mcp','rules','remote-hosts','write-recovery','home'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
+const fullCapture=!quickCapture&&!pagesOnly&&!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules','--remote-hosts','--write-recovery','--home','--projects'].includes(arg));
+const captureMode=process.argv.includes('--projects')?'projects':homeCapture?'home':process.argv.includes('--write-recovery')?'write-recovery':process.argv.includes('--remote-hosts')?'remote-hosts':workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':process.argv.includes('--skills')?'skills':process.argv.includes('--mcp')?'mcp':process.argv.includes('--rules')?'rules':'full';
+const manifestName=`capture-ui${['features','sessions','records','connections','skills','mcp','rules','remote-hosts','write-recovery','home','projects'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
 const acceptanceNote='Playwright 与合成 IPC 截图仅用于浏览器界面检查，不是 WebView2、真实桌面主题/焦点/键盘或原生 CLI/文件写入验收；未执行的平台行为均为未验证。';
 const acceptance={kind:'playwright-synthetic-ipc',nativePlatform:'unverified',webview2:'unverified',desktopThemeFocusKeyboard:'unverified',nativeCliAndFileWrites:'unverified',note:acceptanceNote};
 const out=process.env.CLIORA_CAPTURE_OUT ?? root+'/docs/verification/ui'; fs.mkdirSync(out,{recursive:true});
@@ -224,7 +225,7 @@ async function captureImage(page,name,theme,width,metadata={}){
  await settleCapture(page);
  const file=`${name}-${theme}-${width}.png`;
  const path=`${out}/${file}`;
- await page.screenshot({path});
+ await page.screenshot({path,animations:'disabled'});
  captures.push({name,theme,width,height:page.viewportSize().height,path,file,category:'general_ui',state:name,...metadata});
  const over=await page.evaluate(findOverflow);
  if(over.length)failures.push({name,theme,width,over});
@@ -727,7 +728,7 @@ async function captureHomeScreens(page,capture){
 
 if(!workflowsOnly){
 for(const width of widths)for(const theme of themes){
- const page=await browser.newPage({viewport:{width,height:1000},locale:process.env.CLIORA_CAPTURE_LOCALE??'zh-CN'});page.on('pageerror',e=>failures.push({type:'pageerror',theme,width,message:e.message}));await page.addInitScript(mock,homeCapture?{theme,home:true}:process.argv.includes('--write-recovery')?{theme,remoteHosts:true,writeRecovery:true}:process.argv.includes('--remote-hosts')?{theme,remoteHosts:true}:process.argv.includes('--rules')?{theme,rules:true}:theme);await installCaptureConfigurationProtocol(page);
+ const page=await browser.newPage({viewport:{width,height:1000},locale:process.env.CLIORA_CAPTURE_LOCALE??'zh-CN'});page.on('pageerror',e=>failures.push({type:'pageerror',theme,width,message:e.message}));await page.addInitScript(mock,homeCapture?{theme,home:true}:process.argv.includes('--write-recovery')?{theme,remoteHosts:true,writeRecovery:true}:process.argv.includes('--remote-hosts')?{theme,remoteHosts:true}:process.argv.includes('--rules')?{theme,rules:true}:theme);await installCaptureConfigurationProtocol(page);if(process.argv.includes('--projects'))await page.addInitScript(installWorkspaceFixtures);
  const nav=page.getByRole('navigation',{name:'页面'});
  let lastCapture='(before home)';
  async function capture(name){await captureImage(page,name,theme,width);lastCapture=name;}
@@ -735,6 +736,22 @@ for(const width of widths)for(const theme of themes){
  // Navigation is inside the try so a boot timeout under load is recorded instead of crashing the run.
  try{
  await page.goto(process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736');await page.getByText('正在读取本机设置').waitFor({state:'hidden'});await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
+ if(process.argv.includes('--projects')){
+  const project=page.locator('[data-business-workspaces]').first();
+  await project.locator('[data-repository-id="repo-47"]').waitFor({state:'attached'});
+  await capture('projects-many');
+  await project.getByRole('textbox',{name:'搜索仓库名称或路径'}).fill('team-1/api');
+  await project.locator('[data-repository-id]').first().waitFor();await capture('projects-same-name-search');
+  await project.getByRole('textbox',{name:'搜索仓库名称或路径'}).fill('');
+  await project.getByRole('button',{name:'添加仓库',exact:true}).click();
+  await page.getByRole('dialog',{name:'选择要添加的仓库'}).getByText('Permission denied').waitFor();await capture('projects-batch-preview');
+  await page.getByRole('dialog',{name:'选择要添加的仓库'}).getByRole('button',{name:'关闭',exact:true}).click();
+  await project.getByRole('button',{name:'打开项目清单',exact:true}).click();
+  await page.getByRole('dialog',{name:'关联项目清单'}).getByText('shared-api',{exact:true}).waitFor();await capture('projects-manifest-preview');
+  await page.getByRole('dialog',{name:'关联项目清单'}).getByRole('button',{name:'关联项目',exact:true}).click();
+  await project.getByText('已关联项目清单',{exact:false}).waitFor();await capture('projects-linked');
+  await page.close();continue;
+ }
  if(homeCapture){await page.setViewportSize({width,height:1400});await captureHomeScreens(page,capture);await page.close();continue;}
  if(process.argv.includes('--write-recovery')){
   await page.getByText('存在未确认的远程写入，请先核查回执，保留草稿并勿直接重试。',{exact:true}).waitFor();

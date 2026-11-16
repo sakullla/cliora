@@ -1,3 +1,5 @@
+import type { WorkspaceManifestPreview } from '../../types/workspaces';
+import { WorkspaceBrowser } from '../workspaces/WorkspaceBrowser';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
@@ -60,7 +62,7 @@ function projectMatches(project: Project, query: string): boolean {
   return !needle || `${project.name} ${project.path ?? ''}`.toLowerCase().includes(needle);
 }
 
-export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQueryChange: setProjectQuery, remoteSshEnabled = false, remoteTargetId = 'local', onWorkbenchSession, onWorkbenchFailure }: { tools: AdapterDescriptor[]; projectQuery: string; onQueryChange: (query: string) => void; repair?: TrayRepairTarget | null; spotlight?: { id: string; token: number } | null; remoteSshEnabled?: boolean; remoteTargetId?: string; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
+export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQueryChange: setProjectQuery, remoteSshEnabled = false, remoteTargetId = 'local', onWorkbenchSession, onWorkbenchFailure, incomingManifest }: { incomingManifest?: WorkspaceManifestPreview | null; tools: AdapterDescriptor[]; projectQuery: string; onQueryChange: (query: string) => void; repair?: TrayRepairTarget | null; spotlight?: { id: string; token: number } | null; remoteSshEnabled?: boolean; remoteTargetId?: string; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t, i18n } = useTranslation();
   const projectNext = t('home.launcher.projectNext');
   // Recent work is identified with real project data: the backend returns projects by last_opened.
@@ -510,12 +512,13 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
   const remoteHostLabel = scopeTarget?.name || t('home.remote.currentHost');
   const pathLabels = distinctPaths(remoteScope ? scopedRemoteProjects.map((project) => project.path) : scopedProjects.flatMap((project) => project.path ? [project.path] : []));
   return <section className={`${styles.workspace} home-launcher`} aria-label={t('home.launcher.label')}>
-    <Toolbar className={styles.heading} title={t('home.continue.title')} count={totalProjects ? <Badge>{totalProjects}</Badge> : undefined} actions={totalProjects ? <Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.add')}</Button> : undefined} />
+    {remoteTargetId === 'local' && <WorkspaceBrowser tools={tools} onSession={onWorkbenchSession} incomingManifest={incomingManifest} />}
+    <Toolbar className={styles.heading} title={t(remoteScope ? 'home.continue.title' : 'workspaces.directoryTitle')} count={totalProjects ? <Badge>{totalProjects}</Badge> : undefined} actions={totalProjects ? <Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t(remoteScope ? 'home.launcher.add' : 'workspaces.directoryAdd')}</Button> : undefined} />
     {error && <div className={styles.error} role="alert" aria-busy={listLoading || undefined}><span className={styles.errorText}>{error}</span>{listFailed && reloadFailures > 0 && !listLoading && <span className={styles.errorHint}>{t('home.launcher.reloadFailed')}</span>}{listFailed && <Button size="sm" variant="ghost" className={styles.errorAction} loading={listLoading} disabled={listLoading || !!busy} onClick={() => void refresh()}>{t('home.launcher.reload')}</Button>}</div>}
     {feedback && <div className={styles.feedback} role="status">{feedback}</div>}
     {remoteFailed && <div className={styles.error} role="alert" aria-busy={remoteLoading || undefined} data-remote-read={remoteRead.loaded ? 'stale' : 'failed'}><span className={styles.errorText}><strong className={styles.errorTitle}>{remoteRead.loaded ? t('home.remote.refreshFailed', { host: remoteHostLabel }) : t('home.remote.readFailed', { host: remoteHostLabel })}</strong> {remoteRead.error}</span>{remoteRead.failures > 0 && !remoteLoading && <span className={styles.errorHint}>{t('home.launcher.reloadFailed')}</span>}<Button size="sm" variant="ghost" className={styles.errorAction} loading={remoteLoading} disabled={remoteLoading} onClick={() => void loadRemote(true)}>{t('home.remote.retry')}</Button></div>}
     {!managed.length && <p className={styles.note}>{t('home.launcher.enableFirst')}</p>}
-    {totalProjects > 0 && <p className={styles.sectionHint}>{t('home.continue.hint')}</p>}
+    {totalProjects > 0 && <p className={styles.sectionHint}>{t(remoteScope ? 'home.continue.hint' : 'workspaces.directoryHint')}</p>}
     {(totalProjects > 4 || projectQuery) && <SearchField className={styles.projectSearch} pageSearch label={t('home.launcher.searchLabel')} value={projectQuery} placeholder={t('home.launcher.searchPlaceholder')} onChange={setProjectQuery} />}
     {scopeLoading ? <SkeletonRows count={2} /> : (visibleProjects.length || visibleRemoteProjects.length) ? <>
     {visibleProjects.length > 0 && <div className={styles.projectGrid}>
@@ -613,7 +616,7 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
     {/* A failed read keeps its own error band above; only a successful empty read offers the empty state. */}
     </> : projectQuery.trim() ? <div className={styles.noMatch}><p>{t('home.launcher.noMatch', { query: projectQuery.trim() })}</p><Button size="sm" variant="ghost" onClick={() => setProjectQuery('')}>{t('common.search.clear')}</Button></div>
     : scopeReadFailed ? null
-    : <div className={styles.emptyProjects}><span className={styles.emptyIcon} aria-hidden="true"><Icon name="folder" size={18} /></span><span className={styles.emptyCopy}><strong>{t('home.launcher.emptyTitle')}</strong><span>{t('home.launcher.emptyDetail')}</span>{!!managed.length && <span className={styles.emptyNext}>{t('home.continue.emptyNext')}</span>}</span><Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.addProject')}</Button></div>}
+    : <div className={styles.emptyProjects}><span className={styles.emptyIcon} aria-hidden="true"><Icon name="folder" size={18} /></span><span className={styles.emptyCopy}><strong>{t(remoteScope ? 'home.launcher.emptyTitle' : 'workspaces.directoryEmpty')}</strong><span>{t(remoteScope ? 'home.launcher.emptyDetail' : 'workspaces.directoryEmptyDetail')}</span>{!!managed.length && <span className={styles.emptyNext}>{t(remoteScope ? 'home.continue.emptyNext' : 'workspaces.directoryEmptyNext')}</span>}</span><Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t(remoteScope ? 'home.launcher.addProject' : 'workspaces.directoryAdd')}</Button></div>}
     {!!managed.length && <details className={styles.quick}><summary><span>{t('home.launcher.resumeTitle')}</span><small>{t('home.launcher.resumeHint')}</small></summary><div className={styles.quickContent}>
       {resumable.length ? <><div><strong>{t('home.launcher.resumeById')}</strong><span>{directMode === 'yolo' ? t('home.launcher.resumeDescYolo') : t('home.launcher.resumeDescNormal')}</span></div>
       <FilterSelect className={styles.quickTool} label={t('home.launcher.resumeTool')} value={resumeTool} options={toolOptions(resumable)} placeholder={t('home.launcher.pickTool')} searchLabel={t('home.launcher.searchTool')} onChange={setGlobalTool} />

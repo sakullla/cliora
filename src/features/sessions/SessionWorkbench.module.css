@@ -2151,3 +2151,5 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 @media (prefers-reduced-motion: reduce) { .worktreeChanges[data-tone='loading'] { animation: none; } }
 .root[data-compact] .baseRow { grid-template-columns: 44px minmax(0, 1fr) auto; }
 .root[data-compact] .baseCandidates { padding-left: 0 !important; }
+
+.businessScope { flex: none; display: flex; align-items: center; min-width: 0; padding: 6px 12px; border-bottom: 1px solid var(--line); }

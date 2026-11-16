@@ -1,3 +1,4 @@
+import type { BusinessWorkspace, WorkspaceScan, WorkspaceMemberResult, WorkspaceManifestPreview, WorkspaceSessionContext } from '../types/workspaces';
 import { getWriteFaults, getWriteReceipts, rememberWriteFault, rememberWriteReceipt, requestWriteRecovery, unresolvedWrite } from '../features/remote/writeReceipts';
 import { RemoteOperations, type RemoteOperationOptions } from './remoteOperations';
 import type { RemoteApiError } from '../types/native';
@@ -201,6 +202,21 @@ async function usageCommand<T>(name: string, args?: Record<string, unknown>): Pr
 
 /** Feature modules add named wrappers here; components never invoke arbitrary commands. */
 export const native = {
+  previewWorkspaceLink: (url: string) => command<WorkspaceManifestPreview>('preview_workspace_link', { url }),
+  listBusinessWorkspaces: () => command<BusinessWorkspace[]>('list_business_workspaces'),
+  createBusinessWorkspace: (name: string) => command<BusinessWorkspace>('create_business_workspace', { name }),
+  renameBusinessWorkspace: (workspaceId: string, name: string, expectedVersion: number) => command<BusinessWorkspace>('rename_business_workspace', { workspaceId, name, expectedVersion }),
+  scanWorkspaceRepositories: (paths: string[], operationId: string, recursive: boolean) => command<WorkspaceScan>('scan_workspace_repositories', { paths, operationId, recursive }),
+  cancelWorkspaceScan: (operationId: string) => command<void>('cancel_workspace_scan', { operationId }),
+  addWorkspaceRepositories: (workspaceId: string, paths: string[], expectedVersion: number) => command<WorkspaceMemberResult[]>('add_workspace_repositories', { workspaceId, paths, expectedVersion }),
+  removeWorkspaceRepository: (workspaceId: string, repositoryId: string, expectedVersion: number) => command<BusinessWorkspace>('remove_workspace_repository', { workspaceId, repositoryId, expectedVersion }),
+  favoriteWorkspaceRepository: (workspaceId: string, repositoryId: string, favorite: boolean) => command<BusinessWorkspace>('favorite_workspace_repository', { workspaceId, repositoryId, favorite }),
+  relinkWorkspaceRepository: (workspaceId: string, repositoryId: string, path: string, expectedVersion: number) => command<BusinessWorkspace>('relink_workspace_repository', { workspaceId, repositoryId, path, expectedVersion }),
+  previewWorkspaceManifest: (path: string) => command<WorkspaceManifestPreview>('preview_workspace_manifest', { path }),
+  attachWorkspaceManifest: (path: string, expectedDigest: string, replace: boolean) => command<BusinessWorkspace>('attach_workspace_manifest', { path, expectedDigest, replace }),
+  exportWorkspaceManifest: (workspaceId: string, path: string, expectedVersion: number) => command<BusinessWorkspace>('export_workspace_manifest', { workspaceId, path, expectedVersion }),
+  refreshWorkspaceManifest: (workspaceId: string) => command<BusinessWorkspace>('refresh_workspace_manifest', { workspaceId }),
+  listWorkspaceSessionContexts: () => command<WorkspaceSessionContext[]>('list_workspace_session_contexts'),
   openExternalUrl: (url: string) => command<void>('open_external_url', { url }),
   openWorkbenchPath: (sessionId: string, path: string) => command<void>('open_workbench_path', { sessionId, path }),
   scanNativeAgents: (target: PluginTarget) => command<AgentSnapshot>('scan_native_agents', { target }),
@@ -376,7 +392,8 @@ export const native = {
       const projects = await command<RemoteProject[]>('list_remote_projects', { targetId: null });
       const targetId = projects.find(item => `remote:${item.id}` === request.projectId)?.targetId ?? '';
       result = await remoteCommand<LaunchResult>('launch_cli', { request, targetId }, 'write', options);
-    } else result = await command<LaunchResult>('launch_cli', { request });
+    } else if (request.workspaceId && request.repositoryId) result = await command<LaunchResult>('launch_workspace_cli', { workspaceId: request.workspaceId, repositoryId: request.repositoryId, request });
+    else result = await command<LaunchResult>('launch_cli', { request });
     markOnboardingLaunched();
     return result;
   },

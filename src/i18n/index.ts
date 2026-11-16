@@ -1,3 +1,5 @@
+import zhWorkspaces from './locales/zh/workspaces';
+import enWorkspaces from './locales/en/workspaces';
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import zhCommon from './locales/zh/common';
@@ -57,8 +59,8 @@ void i18n.use(initReactI18next).init({
   lng: detectLanguage(),
   fallbackLng: 'zh',
   resources: {
-    zh: { translation: { common: zhCommon, home: zhHome, tools: zhTools, library: zhLibrary, records: zhRecords, settings: zhSettings, sessions: zhSessions } },
-    en: { translation: { common: enCommon, home: enHome, tools: enTools, library: enLibrary, records: enRecords, settings: enSettings, sessions: enSessions } },
+    zh: { translation: { common: zhCommon, home: zhHome, tools: zhTools, library: zhLibrary, records: zhRecords, settings: zhSettings, sessions: zhSessions, workspaces: zhWorkspaces } },
+    en: { translation: { common: enCommon, home: enHome, tools: enTools, library: enLibrary, records: enRecords, settings: enSettings, sessions: enSessions, workspaces: enWorkspaces } },
   },
   interpolation: { escapeValue: false },
   returnEmptyString: false,

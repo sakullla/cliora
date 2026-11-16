@@ -59,6 +59,13 @@ pub(crate) fn main_checkout(directory: &Path) -> Option<PathBuf> {
     Some(common.parent().map(Path::to_path_buf).unwrap_or(root))
 }
 
+/// Verified local identity used by project organization; display names are not identity.
+pub(crate) fn repository_identity(directory: &Path) -> Option<(PathBuf, PathBuf)> {
+    let (root, git_dir, linked) = locate(directory)?;
+    let common = if linked { common_dir(&git_dir)? } else { git_dir };
+    Some((root.canonicalize().ok()?, common.canonicalize().ok()?))
+}
+
 /// Every checkout of the repository that contains `directory`: the main working
 /// tree first, then each linked worktree. Reads `.git` metadata directly, like
 /// [`read`], so it never spawns `git`. Returns `None` outside a repository and

@@ -94,6 +94,7 @@ pub mod native;
 pub mod portable;
 mod process_environment;
 pub mod projects;
+pub mod workspaces;
 pub mod remote;
 pub mod resources;
 pub mod session_host;
@@ -325,6 +326,22 @@ pub fn run() {
             commands::list_cli_adapters,
             commands::open_external_url,
             commands::open_workbench_path,
+            commands::list_business_workspaces,
+            commands::create_business_workspace,
+            commands::rename_business_workspace,
+            commands::scan_workspace_repositories,
+            commands::cancel_workspace_scan,
+            commands::add_workspace_repositories,
+            commands::remove_workspace_repository,
+            commands::favorite_workspace_repository,
+            commands::relink_workspace_repository,
+            commands::preview_workspace_manifest,
+            commands::preview_workspace_link,
+            commands::attach_workspace_manifest,
+            commands::export_workspace_manifest,
+            commands::refresh_workspace_manifest,
+            commands::list_workspace_session_contexts,
+            commands::launch_workspace_cli,
             commands::list_projects,
             commands::add_project,
             commands::relink_project,

@@ -1286,7 +1286,7 @@ test('home lists the tools in daily use first and folds the rest behind one togg
   const rows = tools.locator('[data-tool-row]');
   // R2: continue working is the first band, tool management follows it.
   const launcher = page.getByRole('region', { name: '项目与启动' });
-  await expect(launcher.getByRole('heading', { name: '项目与快速启动', exact: true })).toBeVisible();
+  await expect(launcher.getByRole('heading', { name: '目录配置与快速启动', exact: true })).toBeVisible();
   expect((await launcher.boundingBox())!.y).toBeLessThan((await tools.boundingBox())!.y);
 
   // Only the configured tool is listed; the other seven fold behind one toggle.
@@ -1430,8 +1430,8 @@ test('continue working leads home and every project keeps one launch entry', asy
   await page.goto('/');
   const launcher = page.getByRole('region', { name: '项目与启动' });
   const tools = page.getByLabel('受管理工具');
-  await expect(launcher.getByRole('heading', { name: '项目与快速启动', exact: true })).toBeVisible();
-  await expect(launcher).toContainText('工具和配置沿用项目选择');
+  await expect(launcher.getByRole('heading', { name: '目录配置与快速启动', exact: true })).toBeVisible();
+  await expect(launcher).toContainText('保留已有目录的 CLI、配置与独立启动入口');
   const cards = launcher.locator('[data-project-id]');
   await expect(cards).toHaveCount(2);
   // R2: the project band is authored after the tools list but reads first.
@@ -1448,9 +1448,9 @@ test('an empty project list offers the next step without hiding the tools band',
   await installContinue(page, 'empty');
   await page.goto('/');
   const launcher = page.getByRole('region', { name: '项目与启动' });
-  await expect(launcher).toContainText('还没有项目');
-  await expect(launcher.getByRole('button', { name: '添加项目', exact: true })).toBeVisible();
-  await expect(launcher).toContainText('添加本机目录后，每个项目都会带着自己的工具与配置出现在这里');
+  await expect(launcher).toContainText('尚未添加独立目录');
+  await expect(launcher.getByRole('button', { name: '添加目录', exact: true })).toBeVisible();
+  await expect(launcher).toContainText('添加本机目录后，可单独保存它的工具与配置');
   // The already-managed tools stay reachable below the empty project band.
   await expect(page.getByLabel('受管理工具').getByRole('button', { name: '启动', exact: true })).toHaveCount(1);
 });
@@ -1476,7 +1476,7 @@ test('a failed project read shows the error alone and reports a failed retry', a
   // R2/R8: an unreadable list is not an empty list, so the empty state and its add action stay absent.
   await expect(launcher.getByText('还没有项目', { exact: true })).toHaveCount(0);
   await expect(launcher).not.toContainText('添加本机目录后');
-  await expect(launcher.getByRole('button', { name: '添加项目', exact: true })).toHaveCount(0);
+  await expect(launcher.getByRole('button', { name: '添加目录', exact: true })).toHaveCount(0);
   const reload = launcher.getByRole('button', { name: '重新读取项目', exact: true });
   await reload.click();
   // The retry itself is perceivable, and a repeated failure still says something new.

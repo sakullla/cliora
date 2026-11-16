@@ -1,3 +1,4 @@
+import type { WorkspaceManifestPreview } from './types/workspaces';
 import { RemoteWriteRecovery } from './features/remote/RemoteWriteRecovery';
 import { requestWriteRecovery, useWriteRecoveryNeeded } from './features/remote/writeReceipts';
 import { useRemoteIdentity } from './lib/remoteReads';
@@ -219,6 +220,7 @@ export default function App() {
   const [workbenchFocus, setWorkbenchFocus] = useState<string | null>(null);
   const [workbenchFailure, setWorkbenchFailure] = useState<WorkbenchFailure | null>(null);
   const [workbenchToken, setWorkbenchToken] = useState(0);
+  const [incomingManifest, setIncomingManifest] = useState<WorkspaceManifestPreview | null>(null);
   const [reviewSignal, setReviewSignal] = useState<TwiglaneReviewSignal | null>(null);
   const [remoteTargets, setRemoteTargets] = useState<RemoteTarget[]>([]);
   const [remoteTargetId, setRemoteTargetId] = useState(() => { try { return localStorage.getItem('cliora:remote-target') ?? 'local'; } catch { return 'local'; } });
@@ -411,6 +413,13 @@ export default function App() {
     const handle = (url: unknown) => {
       if (!active || typeof url !== 'string' || seen.has(url)) return;
       seen.add(url);
+      if (url.startsWith('cliora://workspace')) {
+        void native.previewWorkspaceLink(url).then(async preview => {
+          if (!active || !await transitionRef.current('home', 'local')) return;
+          setIncomingManifest(preview);
+        }).catch(value => { if (active) setError({ code: 'workspace_link_failed', message: formatFailure(value, t('workspaces.failed'), t('workspaces.retry')), action: t('workspaces.openManifest') }); });
+        return;
+      }
       void native.twiglaneReviewLink(url).then(async (outcome) => {
         if (!active) return;
         if (outcome.kind === 'ignored') {
@@ -1130,7 +1139,7 @@ export default function App() {
           onClose={closeOnboarding}
         />}
         {page === 'home' && <div className="home-band">
-          {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} projectQuery={projectQueries[remoteIdentity] ?? ''} onQueryChange={query => setProjectQueries(old => ({ ...old, [remoteIdentity]: query }))} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} repair={trayRepair?.page === 'home' ? trayRepair : null} spotlight={page === 'home' && spotlight?.target === 'project' ? spotlight : null} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /> : <section className="home-secondary"><div className="section-heading"><h2>{t('home.projects.title')}</h2></div><div className="subtle-panel"><span className="empty-symbol" aria-hidden="true"><Icon name="folder" size={20} /></span><strong>{t('home.projects.panelTitle')}</strong><p>{t('home.projects.panelDetail')}</p></div></section>}          {nativeAvailable && remoteTargetId === 'local' && <RecentSessions tools={visibleDescriptors} active={page === 'home'} onResume={(session) => resumePaletteSession(session.id, session.toolId)} onOpenSession={(session) => { setRecordsTabIntent({ tab: 'sessions', sessionId: session.id, token: Date.now() }); void go('records'); }} onOpenRecords={() => { void go('records'); }} />}
+          {nativeAvailable ? <ProjectLauncher incomingManifest={incomingManifest} tools={visibleDescriptors} projectQuery={projectQueries[remoteIdentity] ?? ''} onQueryChange={query => setProjectQueries(old => ({ ...old, [remoteIdentity]: query }))} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} repair={trayRepair?.page === 'home' ? trayRepair : null} spotlight={page === 'home' && spotlight?.target === 'project' ? spotlight : null} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /> : <section className="home-secondary"><div className="section-heading"><h2>{t('home.projects.title')}</h2></div><div className="subtle-panel"><span className="empty-symbol" aria-hidden="true"><Icon name="folder" size={20} /></span><strong>{t('home.projects.panelTitle')}</strong><p>{t('home.projects.panelDetail')}</p></div></section>}          {nativeAvailable && remoteTargetId === 'local' && <RecentSessions tools={visibleDescriptors} active={page === 'home'} onResume={(session) => resumePaletteSession(session.id, session.toolId)} onOpenSession={(session) => { setRecordsTabIntent({ tab: 'sessions', sessionId: session.id, token: Date.now() }); void go('records'); }} onOpenRecords={() => { void go('records'); }} />}
           <section className="home-tools" data-home-section="tools">
             <div className="section-heading"><h2 id="home-tools-title">{t('home.managed.title')}<Badge className="heading-count" aria-hidden="true">{visible.length}</Badge></h2><Button variant="ghost" size="sm" onClick={() => openSettings({ tab: 'tools', anchor: 'settings-managed' })}>{t('home.managed.adjust')} <span aria-hidden="true">→</span></Button></div>
             <p className="home-section-hint">{t('home.managed.hint')}</p>

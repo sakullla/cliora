@@ -6932,3 +6932,316 @@ pub async fn restore_configuration_backup(
     let _ = notify.emit("cliora:bindings-changed", tool);
     Ok(result)
 }
+
+// Business workspaces never replace directory-scoped native configuration records.
+#[tauri::command]
+pub async fn list_business_workspaces(
+    app: AppHandle,
+) -> Result<Vec<crate::workspaces::Workspace>, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::list(
+                db,
+                &crate::workspaces::local_host_id().map_err(native_error)?,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn create_business_workspace(
+    app: AppHandle,
+    name: String,
+) -> Result<crate::workspaces::Workspace, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::create(
+                db,
+                &crate::workspaces::local_host_id().map_err(native_error)?,
+                &name,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn rename_business_workspace(
+    app: AppHandle,
+    workspace_id: String,
+    name: String,
+    expected_version: u64,
+) -> Result<crate::workspaces::Workspace, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::rename(
+                db,
+                &crate::workspaces::local_host_id().map_err(native_error)?,
+                &workspace_id,
+                &name,
+                expected_version,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn scan_workspace_repositories(
+    paths: Vec<String>,
+    operation_id: String,
+    recursive: bool,
+) -> Result<crate::workspaces::ScanResult, ApiError> {
+    blocking(move || {
+        crate::workspaces::scan(&paths, &operation_id, recursive).map_err(native_error)
+    })
+    .await
+}
+#[tauri::command]
+pub fn cancel_workspace_scan(operation_id: String) {
+    crate::workspaces::cancel_scan(&operation_id);
+}
+#[tauri::command]
+pub async fn add_workspace_repositories(
+    app: AppHandle,
+    workspace_id: String,
+    paths: Vec<String>,
+    expected_version: u64,
+) -> Result<Vec<crate::workspaces::MemberResult>, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::add_paths(
+                db,
+                &crate::workspaces::local_host_id().map_err(native_error)?,
+                &workspace_id,
+                &paths,
+                expected_version,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn remove_workspace_repository(
+    app: AppHandle,
+    workspace_id: String,
+    repository_id: String,
+    expected_version: u64,
+) -> Result<crate::workspaces::Workspace, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::remove_member(
+                db,
+                &crate::workspaces::local_host_id().map_err(native_error)?,
+                &workspace_id,
+                &repository_id,
+                expected_version,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn favorite_workspace_repository(
+    app: AppHandle,
+    workspace_id: String,
+    repository_id: String,
+    favorite: bool,
+) -> Result<crate::workspaces::Workspace, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::favorite(
+                db,
+                &crate::workspaces::local_host_id().map_err(native_error)?,
+                &workspace_id,
+                &repository_id,
+                favorite,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn relink_workspace_repository(
+    app: AppHandle,
+    workspace_id: String,
+    repository_id: String,
+    path: String,
+    expected_version: u64,
+) -> Result<crate::workspaces::Workspace, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::relink(
+                db,
+                &crate::workspaces::local_host_id().map_err(native_error)?,
+                &workspace_id,
+                &repository_id,
+                &path,
+                expected_version,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn preview_workspace_manifest(
+    app: AppHandle,
+    path: String,
+) -> Result<crate::workspaces::ManifestPreview, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::preview_manifest(db, &path).map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn attach_workspace_manifest(
+    app: AppHandle,
+    path: String,
+    expected_digest: String,
+    replace: bool,
+) -> Result<crate::workspaces::Workspace, ApiError> {
+    let notify = app.clone();
+    let result = blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::attach_manifest(
+                db,
+                &crate::workspaces::local_host_id().map_err(native_error)?,
+                &path,
+                &expected_digest,
+                replace,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await?;
+    let _ = notify.emit("cliora:workspaces-changed", &result.id);
+    Ok(result)
+}
+#[tauri::command]
+pub async fn export_workspace_manifest(
+    app: AppHandle,
+    workspace_id: String,
+    path: String,
+    expected_version: u64,
+) -> Result<crate::workspaces::Workspace, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::export_manifest(
+                db,
+                &crate::workspaces::local_host_id().map_err(native_error)?,
+                &workspace_id,
+                &path,
+                expected_version,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn refresh_workspace_manifest(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<crate::workspaces::Workspace, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::refresh_manifest(
+                db,
+                &crate::workspaces::local_host_id().map_err(native_error)?,
+                &workspace_id,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn list_workspace_session_contexts(
+    app: AppHandle,
+) -> Result<Vec<crate::workspaces::SessionContext>, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::seed_legacy(
+                db,
+                &crate::workspaces::local_host_id().map_err(native_error)?,
+            )
+            .map_err(native_error)?;
+            crate::workspaces::session_contexts(db).map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn launch_workspace_cli(
+    app: AppHandle,
+    workspace_id: String,
+    repository_id: String,
+    mut request: launch::LaunchEnvelope,
+) -> Result<launch::LaunchResult, ApiError> {
+    blocking(move || {
+        if request.request.session_id.is_some() {
+            return Err(native_error(
+                "请从原会话恢复入口继续，不能将历史会话迁到所选仓库".into(),
+            ));
+        }
+
+        let host = crate::workspaces::local_host_id().map_err(native_error)?;
+        let (project, directory) = app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::prepare_launch(
+                db,
+                &host,
+                &workspace_id,
+                &repository_id,
+                request.request.directory.as_deref(),
+            )
+            .map_err(native_error)
+        })?;
+        request.request.project_id = Some(project);
+        request.request.directory = Some(directory.clone());
+        let mut result = launch_now(&app, request)?;
+        if let Some(id) = &result.session_id {
+            let actual = crate::session_host::local_directory(id)
+                .ok()
+                .flatten()
+                .and_then(|p| p.to_str().map(str::to_owned))
+                .unwrap_or(directory);
+            let context = crate::workspaces::SessionContext {
+                session_id: id.clone(),
+                workspace_id,
+                repository_id,
+                host_id: host,
+                directory: actual,
+            };
+            if let Err(error) = app.state::<AppState>().with_database(&app, |db| {
+                crate::workspaces::remember_session(db, &context).map_err(native_error)
+            }) {
+                result
+                    .warnings
+                    .push(format!("会话已启动，项目归属未保存：{}", error.message));
+            }
+        }
+        let _ = app.emit("cliora:workspaces-changed", "session");
+        Ok(result)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn preview_workspace_link(
+    app: AppHandle,
+    url: String,
+) -> Result<crate::workspaces::ManifestPreview, ApiError> {
+    blocking(move || {
+        let path = crate::workspaces::manifest_link(&url).map_err(native_error)?;
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::preview_manifest(db, &path).map_err(native_error)
+        })
+    })
+    .await
+}
