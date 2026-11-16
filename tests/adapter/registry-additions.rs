@@ -998,6 +998,20 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
         let policy = antigravity.rule_kind_policy(kind);
         assert!(!policy.removable && !policy.toggleable, "agy {kind} 只编辑");
     }
+    // Memory (1.5.9 evidence run, evidence/memory.json — verdict absent,
+    // confirming the 1.3.1 finding): no editable native store exists, so no
+    // management entry publishes and the recorded reason reaches the
+    // descriptor, keeping the shared memory tab unavailable-with-reason
+    // instead of hidden (session brain/ trees, transcripts, implicit data
+    // and cloud summaries are never treated as memory).
+    assert!(antigravity.memory().is_some());
+    assert!(antigravity.published_memory().is_none());
+    let agy_descriptor = antigravity.descriptor();
+    assert!(agy_descriptor.management.memory.is_none());
+    assert_eq!(
+        agy_descriptor.management.memory_reason,
+        crate::adapters::antigravity::memory::UNVERIFIED_REASON
+    );
     // kiro (official docs + real local install %LOCALAPPDATA%\kiro-cli,
     // 2.34.2/V3): cli.json editing, --resume-id, dual-scope MCP, Skills
     // (~/.kiro/skills + .kiro/skills), agents (~/.kiro/agents + .kiro/agents
@@ -1533,6 +1547,11 @@ fn builtin_memory_declarations_follow_the_three_state_publication_contract() {
                 .management
                 .memory
                 .unwrap_or_else(|| panic!("{} 完整声明应发布记忆入口", adapter.id()));
+            assert_eq!(
+                descriptor.management.memory_reason, "",
+                "{} 发布记忆入口时不应再记录不可用原因",
+                adapter.id()
+            );
             assert_eq!(published.scope, declaration.scope, "{}", adapter.id());
             assert_eq!(
                 published.targets,
@@ -1560,6 +1579,34 @@ fn builtin_memory_declarations_follow_the_three_state_publication_contract() {
             );
         }
     }
+
+    // Third publication state — unpublished with the recorded reason on the
+    // descriptor: the antigravity absence verdict (1.3.1 finding confirmed by
+    // the 1.5.9 evidence run) keeps the entry off the descriptor while
+    // `memory_reason` carries the text, so the shared tab renders
+    // unavailable-with-reason instead of hiding (the kiro tab already works
+    // this way; antigravity joins it with a confirmed-absence verdict).
+    let antigravity = registry.get("antigravity").unwrap();
+    assert!(antigravity.memory().is_some());
+    assert!(antigravity.published_memory().is_none());
+    let agy_descriptor = antigravity.descriptor();
+    assert!(agy_descriptor.management.memory.is_none());
+    assert_eq!(
+        agy_descriptor.management.memory_reason,
+        crate::adapters::antigravity::memory::UNVERIFIED_REASON
+    );
+    let agy_json = serde_json::to_value(&agy_descriptor).unwrap();
+    assert!(agy_json["management"].get("memory").is_none());
+    assert_eq!(
+        agy_json["management"]["memoryReason"],
+        crate::adapters::antigravity::memory::UNVERIFIED_REASON
+    );
+    // The serialized reason keeps the truthful history: original finding,
+    // confirmation line, and the not-memory boundary.
+    let agy_reason = agy_json["management"]["memoryReason"].as_str().unwrap();
+    assert!(agy_reason.contains("1.3.1") && agy_reason.contains("1.5.9"));
+    assert!(agy_reason.contains("云端协议"));
+    assert!(agy_reason.contains("会话产物"));
 
     static PROJECT: MemoryFixture = MemoryFixture { kind: MemoryFixtureKind::Project };
     static GLOBAL: MemoryFixture = MemoryFixture { kind: MemoryFixtureKind::GlobalReadOnly };

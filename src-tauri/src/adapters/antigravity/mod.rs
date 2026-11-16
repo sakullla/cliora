@@ -755,7 +755,11 @@ impl CliAdapter for Antigravity {
                 project_plugins: self.plugins().is_some_and(|adapter| adapter.capability().project),
                 rules: self.rule_support(),
                 memory: self.published_memory(),
-                memory_reason: "",
+                // No editable native memory store exists on any verified
+                // line (1.3.1 verdict confirmed by the 1.5.9 evidence run);
+                // the recorded reason reaches the shared UI instead of a
+                // hidden memory tab.
+                memory_reason: memory::UNVERIFIED_REASON,
             },
         }
     }
