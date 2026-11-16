@@ -81,7 +81,7 @@ export function TextField({ label, icon, hint, ...input }: { label: string; icon
 export function useKindLabel() {
   const { t } = useTranslation();
   return (kind: string, scope: 'webdav' | 'migration' = 'webdav') => {
-    const known = ['preferences', 'profile', 'common', 'project', 'library', 'mcp', 'skill', 'account', 'binding', 'deployment'];
+    const known = ['preferences', 'profile', 'common', 'project', 'library', 'mcp', 'skill', 'account', 'binding', 'deployment', 'workspace', 'repository'];
     return known.includes(kind) ? t(`settings.${scope}.kind.${kind}`) : kind;
   };
 }

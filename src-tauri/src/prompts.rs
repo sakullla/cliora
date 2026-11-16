@@ -404,6 +404,39 @@ pub fn all_documents(db: &Database) -> Result<Vec<PromptDocument>, String> {
         ids.iter().map(|id| document(conn, id)).collect()
     })
 }
+pub(crate) fn effective_metadata(conn:&Connection, item:&crate::library::LibraryItem) -> Result<PromptMetadata,String> {
+    let saved:Option<(String,Option<String>)> = conn.query_row("SELECT scope_json,tags_json FROM prompt_metadata WHERE library_id=?1",[&item.id],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(|e|e.to_string())?;
+    if let Some((scope,tags)) = saved {
+        return Ok(PromptMetadata { scope:serde_json::from_str(&scope).map_err(|_|"提示词范围记录损坏")?, tags:tags.map(|s|serde_json::from_str(&s).map_err(|_|"提示词标签记录损坏")).transpose()?.unwrap_or_else(||legacy_tags(&item.category)) });
+    }
+    legacy_metadata(conn,item)
+}
+pub(crate) fn legacy_metadata(conn:&Connection,item:&crate::library::LibraryItem)->Result<PromptMetadata,String>{
+    let scope = if let Some(id)=&item.project_id {
+        let workspace:Option<String> = conn.query_row("SELECT m.workspace_id FROM workspace_legacy_map m JOIN workspace_projects w ON w.id=m.workspace_id WHERE m.project_id=?1",[id],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
+        workspace.map(|workspace_id|PromptScope::Workspace{workspace_id}).unwrap_or_else(||PromptScope::Unresolved{legacy_project_id:id.clone()})
+    } else { PromptScope::Global };
+    Ok(PromptMetadata { scope, tags:legacy_tags(&item.category) })
+}
+pub(crate) fn legacy_write_metadata(conn:&Connection, previous:Option<&crate::library::LibraryItem>, incoming:&crate::library::LibraryItem)->Result<PromptMetadata,String>{
+    if let Some(previous)=previous {
+        let exists=conn.query_row("SELECT EXISTS(SELECT 1 FROM prompt_metadata WHERE library_id=?1)",[&previous.id],|r|r.get::<_,bool>(0)).map_err(sql)?;
+        if exists {
+            let saved=effective_metadata(conn,previous)?;
+            // The legacy category field does not edit independent prompt tags. Old
+            // clients often send an empty category when changing only the body.
+            if incoming.project_id==previous.project_id { return Ok(saved); }
+            if saved.scope!=legacy_metadata(conn,previous)?.scope {
+                return Err("提示词使用了新版范围，请通过提示词编辑器修改范围；旧格式不能覆盖这些信息".into());
+            }
+            let mut next=legacy_metadata(conn,incoming)?;
+            next.tags=saved.tags;
+            return Ok(next);
+        }
+    }
+    legacy_metadata(conn,incoming)
+}
+
 pub fn export_metadata(db: &Database) -> Result<BTreeMap<String, PromptMetadata>, String> {
     ensure_metadata(db)?;
     db.with_read_connection(|conn| {
@@ -423,6 +456,7 @@ pub fn export_metadata(db: &Database) -> Result<BTreeMap<String, PromptMetadata>
 /// Used by versioned portable restore; missing scope targets and valid legacy tag
 /// representations are retained for explicit repair. New writes validate before this call.
 pub fn restore_metadata(conn: &Connection, id: &str, meta: &PromptMetadata) -> Result<(), String> {
+    crate::portable::sync::remember_prompt_scope(conn,id,&meta.scope)?;
     let tags = if legacy_tag_shape(&meta.tags, LegacyTagSource::Local) { meta.tags.clone() } else { normalize_tags(&meta.tags)? };
     conn.execute("INSERT INTO prompt_metadata(library_id,scope_json,tags_json) VALUES(?1,?2,?3) ON CONFLICT(library_id) DO UPDATE SET scope_json=excluded.scope_json,tags_json=excluded.tags_json",params![id,json(&meta.scope)?,json(&tags)?]).map_err(sql)?;
     Ok(())

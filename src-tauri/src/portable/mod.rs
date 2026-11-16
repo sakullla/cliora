@@ -1,6 +1,7 @@
 pub mod crypto;
 pub mod sync;
 mod paths;
+mod organization;
 mod resources;
 mod resource_names;
 
@@ -23,20 +24,22 @@ use crate::native::format::{self, FileKind};
 use crate::native::profile::{RegisteredCommon, RegisteredProfile};
 use crate::resources::mcp::McpDefinition;
 
-pub(crate) const SNAPSHOT_VERSION: u32 = 4;
+pub(crate) const SNAPSHOT_VERSION: u32 = 5;
 const MAX_ENTITIES: usize = 10_000;
 
 pub(crate) fn dependency_order(key: &str) -> u8 {
     match key.split_once(':').map(|(kind, _)| kind) {
         Some("preferences") => 0,
         Some("project") => 1,
-        Some("account") => 2,
-        Some("common") => 3,
-        Some("profile") => 4,
-        Some("mcp" | "skill" | "library") => 5,
-        Some("binding") => 6,
-        Some("deployment") => 7,
-        _ => 8,
+        Some("repository") => 2,
+        Some("workspace") => 3,
+        Some("account") => 4,
+        Some("common") => 5,
+        Some("profile") => 6,
+        Some("mcp" | "skill" | "library") => 7,
+        Some("binding") => 8,
+        Some("deployment") => 9,
+        _ => 10,
     }
 }
 
@@ -133,14 +136,40 @@ pub struct PortableMcp {
     pub pending_fields: Vec<String>,
 }
 
+/// A versioned prompt payload keeps its library key while making scope/tags mandatory.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PortablePrompt {
+    #[serde(deserialize_with = "strict_library")]
+    pub item: LibraryItem,
+    pub metadata: crate::prompts::PromptMetadata,
+}
+fn strict_library<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<LibraryItem, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct Fields { id:String, kind:crate::library::LibraryKind, title:String, body:String, category:String, project_id:Option<String>, version:u64, updated_at:u64 }
+    let value = Fields::deserialize(deserializer)?;
+    Ok(LibraryItem { id:value.id, kind:value.kind, title:value.title, body:value.body, category:value.category, project_id:value.project_id, version:value.version, updated_at:value.updated_at })
+}
+/// Effective scope is not inferred from whether a metadata row happens to exist.
+fn prompt_metadata_on(conn:&Connection,item:&LibraryItem)->Result<crate::prompts::PromptMetadata,String>{crate::prompts::effective_metadata(conn,item)}
+fn legacy_prompt_metadata(conn:&Connection,item:&LibraryItem)->Result<crate::prompts::PromptMetadata,String>{crate::prompts::legacy_metadata(conn,item)}
+fn valid_prompt_metadata(meta:&crate::prompts::PromptMetadata) -> bool {
+    let valid_id=|id:&str|!id.is_empty()&&id.len()<=256&&!id.chars().any(char::is_control);
+    let scope=match &meta.scope { crate::prompts::PromptScope::Global=>true,crate::prompts::PromptScope::Workspace{workspace_id}=>valid_id(workspace_id),crate::prompts::PromptScope::Repository{repository_id}=>valid_id(repository_id),crate::prompts::PromptScope::Unresolved{legacy_project_id}=>valid_id(legacy_project_id) };
+    scope && (crate::prompts::normalize_tags(&meta.tags).is_ok_and(|tags|tags==meta.tags) || {let category=meta.tags.join(",");category.chars().count()<=80&&crate::prompts::legacy_tags(&category)==meta.tags})
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PortablePayload {
     Preferences(PortablePreferences),
     Profile(Box<PortableProfile>),
     Common(RegisteredCommon),
     Project(PortableProject),
-    Library(LibraryItem),
+    Library(#[serde(deserialize_with = "strict_library")] LibraryItem),
+    Prompt(PortablePrompt),
+    Repository(organization::PortableRepository),
+    Workspace(organization::PortableWorkspace),
     Mcp(PortableMcp),
     Skill(PortableSkill),
     Account(Box<PortableAccount>),
@@ -162,7 +191,9 @@ impl PortableEntity {
             PortablePayload::Profile(_) => "profile",
             PortablePayload::Common(_) => "common",
             PortablePayload::Project(_) => "project",
-            PortablePayload::Library(_) => "library",
+            PortablePayload::Library(_) | PortablePayload::Prompt(_) => "library",
+            PortablePayload::Repository(_) => "repository",
+            PortablePayload::Workspace(_) => "workspace",
             PortablePayload::Mcp(_) => "mcp",
             PortablePayload::Skill(_) => "skill",
             PortablePayload::Account(_) => "account",
@@ -180,6 +211,9 @@ impl PortableEntity {
                 value.pending_fields.clear();
                 value.profile.revision.clear();
             }
+            // Scope metadata is authoritative. A receiver cannot keep an orphaned
+            // legacy project FK, but retaining it in the incoming bytes must not break idempotence.
+            PortablePayload::Prompt(value) => value.item.project_id = None,
             PortablePayload::Common(value) => value.revision.clear(),
             PortablePayload::Mcp(value) => value.pending_fields.clear(),
             PortablePayload::Skill(value) => value.pending_fields.clear(),
@@ -202,6 +236,9 @@ impl PortableEntity {
             PortablePayload::Common(value) => format!("{} 通用配置", value.tool),
             PortablePayload::Project(value) => value.name.clone(),
             PortablePayload::Library(value) => value.title.clone(),
+            PortablePayload::Prompt(value) => value.item.title.clone(),
+            PortablePayload::Repository(value) => value.name.clone(),
+            PortablePayload::Workspace(value) => value.name.clone(),
             PortablePayload::Mcp(value) => value.definition.name.clone(),
             PortablePayload::Skill(value) => value.name.clone(),
             PortablePayload::Account(value) => value.account.label.clone(),
@@ -215,6 +252,11 @@ impl PortableEntity {
             PortablePayload::Project(value) if !value.path.as_deref().is_some_and(|path| paths::decode(path).is_ok_and(|path| Path::new(&path).is_dir())) => {
                 vec!["项目本机目录".into()]
             }
+            PortablePayload::Prompt(value) => match &value.metadata.scope {
+                crate::prompts::PromptScope::Unresolved { legacy_project_id } => vec![format!("提示词原范围待关联：{legacy_project_id}")],
+                _ => Vec::new(),
+            },
+            PortablePayload::Workspace(_) => vec!["工作位置按来源主机保存为提示；打开前需复核本机 Git，原共享清单需重新关联".into()],
             PortablePayload::Mcp(value) => value.pending_fields.clone(),
             PortablePayload::Skill(value) => value.pending_fields.clone(),
             PortablePayload::Account(value) if value.account.context.is_none() && value.account.state == crate::accounts::AccountState::SignedIn => {
@@ -519,6 +561,8 @@ fn collect_reported(
     registry: &Registry,
 ) -> Result<(PortableSnapshot, Vec<RestoreBlocker>), String> {
     clear_orphaned_binding_blockers(db)?;
+    // Materialize exact legacy scope/tag mappings before taking the portable read snapshot.
+    crate::prompts::export_metadata(db)?;
     let collected = db.with_connection(|conn| collect_snapshot_on(conn, store, registry))?;
     persist_auth_read_blockers(db, &collected)?;
     Ok((collected.snapshot, collected.blocked_entities))
@@ -747,19 +791,11 @@ fn collect_snapshot_on(
             "rule" => crate::library::LibraryKind::Rule,
             _ => return Err("资料库分类无效".into()),
         };
-        entities.push(PortableEntity {
-            id: id.clone(),
-            payload: PortablePayload::Library(LibraryItem {
-                id,
-                kind,
-                title,
-                body,
-                category,
-                project_id,
-                version: version.max(0) as u64,
-                updated_at: updated_at.max(0) as u64,
-            }),
-        });
+        let item=LibraryItem { id:id.clone(),kind,title,body,category,project_id,version:version.max(0) as u64,updated_at:updated_at.max(0) as u64 };
+        let payload=if kind==crate::library::LibraryKind::Prompt {
+            PortablePayload::Prompt(PortablePrompt { metadata:prompt_metadata_on(conn,&item)?, item })
+        } else { PortablePayload::Library(item) };
+        entities.push(PortableEntity { id, payload });
     }
     for text in mcp {
         let mut definition: McpDefinition =
@@ -861,6 +897,7 @@ fn collect_snapshot_on(
             payload: PortablePayload::Binding(PortableBinding { scope_key, tool, profile_id, context_id }),
         });
     }
+    entities.extend(organization::collect(conn)?);
     entities.extend(resources::collect(conn)?);
     if entities.len() > MAX_ENTITIES {
         return Err("可迁移资料超过 10000 项".into());
@@ -881,7 +918,18 @@ pub fn validate_snapshot(snapshot: &PortableSnapshot) -> Result<(), String> {
     }
     let mut keys = HashSet::new();
     let mut names = BTreeMap::new();
+    let mut location_ids=BTreeMap::new();
+    let mut location_paths=BTreeMap::new();
+    let mut legacy_maps=BTreeMap::new();
     for entity in &snapshot.entities {
+        if let PortablePayload::Workspace(workspace)=&entity.payload {
+            for member in &workspace.members {for location in &member.locations {
+                let tuple=(&member.repository_id,&location.host_id,&location.path);
+                if location_ids.insert(&location.id,tuple).is_some_and(|previous|previous!=tuple){return Err("配置包的工作位置标识存在相互矛盾的关联".into());}
+                if let Some(path)=&location.path {let identity=(&member.repository_id,&location.id);if location_paths.insert((&location.host_id,path),identity).is_some_and(|previous|previous!=identity){return Err("配置包含重复但不同身份的工作位置".into());}}
+            }}
+            for map in &workspace.legacy_mappings {let identity=(&workspace.id,&map.repository_id);if legacy_maps.insert(&map.project_id,identity).is_some_and(|previous|previous!=identity){return Err("配置包的旧目录映射相互冲突".into());}}
+        }
         if let Some(name) = resource_names::name(entity) {
             if let Some(previous) = names.insert((entity.kind(), name), entity) {
                 if !resource_names::equivalent(previous, entity) {
@@ -919,6 +967,9 @@ pub fn validate_snapshot(snapshot: &PortableSnapshot) -> Result<(), String> {
             }
             PortablePayload::Library(value)
                 if value.id == entity.id && value.body.len() <= 1_000_000 => {}
+            PortablePayload::Prompt(value) if snapshot.schema_version>=5 && value.item.id==entity.id && value.item.kind==crate::library::LibraryKind::Prompt && value.item.body.len()<=1_000_000 && valid_prompt_metadata(&value.metadata) => {}
+            PortablePayload::Repository(value) if snapshot.schema_version>=5 && value.id==entity.id && organization::validate_repository(value) => {}
+            PortablePayload::Workspace(value) if snapshot.schema_version>=5 && value.id==entity.id && organization::validate_workspace(value) => {}
             PortablePayload::Mcp(value) if value.definition.id == entity.id => {}
             PortablePayload::Skill(value) if value.id == entity.id => {
                 valid_skill_files(&value.files)?;
@@ -951,6 +1002,8 @@ pub fn export_bundle(
 ) -> Result<usize, String> {
     let mut snapshot = collect_snapshot(db, store, registry)?;
     if let Some(keys) = selected {
+        let mut keys=keys.clone();
+        organization::include_dependencies(&snapshot,&mut keys);
         snapshot
             .entities
             .retain(|entity| keys.contains(&entity.key()));
@@ -978,8 +1031,10 @@ pub fn unlock_bundle(path: &Path, password: &str) -> Result<PortableSnapshot, St
     }
     let bytes = fs::read(path).map_err(|_| "配置包不可读取".to_string())?;
     let plaintext = crypto::open(password, "offline", &bytes)?;
+    let header:Value=serde_json::from_slice(&plaintext).map_err(|_|"配置包资料结构损坏")?;
+    if !header.get("schemaVersion").and_then(Value::as_u64).is_some_and(|version|(1..=SNAPSHOT_VERSION as u64).contains(&version)) { return Err("配置包版本不受支持，请升级应用；未写入本机资料".into()); }
     let snapshot: PortableSnapshot =
-        serde_json::from_slice(&plaintext).map_err(|_| "配置包资料结构损坏".to_string())?;
+        serde_json::from_value(header).map_err(|_| "配置包资料结构损坏或含不支持的字段".to_string())?;
     validate_snapshot(&snapshot)?;
     Ok(snapshot)
 }
@@ -991,6 +1046,16 @@ pub fn preview_import(
     snapshot: PortableSnapshot,
 ) -> Result<ImportDraft, String> {
     validate_snapshot(&snapshot)?;
+    let mut snapshot=snapshot;
+    // Old library prompts are upgraded internally without losing their legacy scope.
+    for entity in &mut snapshot.entities {
+        if let PortablePayload::Library(item)=&entity.payload {
+            if item.kind==crate::library::LibraryKind::Prompt {
+                let metadata=db.with_read_connection(|conn|legacy_prompt_metadata(conn,item))?;
+                entity.payload=PortablePayload::Prompt(PortablePrompt{item:item.clone(),metadata});
+            }
+        }
+    }
     let local = collect_snapshot(db, store, registry)?;
     let local: BTreeMap<_, _> = local
         .entities
@@ -1016,7 +1081,8 @@ pub fn preview_import(
         let blocked_local_account = current.is_none()
             && matches!(entity.payload, PortablePayload::Account(_))
             && stored_account_ids.contains(&entity.id);
-        let status = if let Some(named) = matched.as_ref().filter(|named| named.key() != key) {
+        let association=if let PortablePayload::Workspace(workspace)=&entity.payload { db.with_read_connection(|conn|organization::conflict(conn,workspace))? } else { None };
+        let status = if association.is_some() { "conflict" } else if let Some(named) = matched.as_ref().filter(|named| named.key() != key) {
             if resource_names::equivalent(named, entity) { "same" } else { "conflict" }
         } else if blocked_local_account {
             "conflict"
@@ -1037,7 +1103,19 @@ pub fn preview_import(
             },
             label: entity.label(),
             status,
-            pending_fields: entity.pending_fields(),
+            pending_fields: {
+                let mut pending=entity.pending_fields();
+                if let Some(reason)=association {pending.push(reason);}
+                if let PortablePayload::Prompt(prompt)=&entity.payload {
+                    let target=match &prompt.metadata.scope {crate::prompts::PromptScope::Workspace{workspace_id}=>Some(("workspace",workspace_id.as_str(),"workspace_projects")),crate::prompts::PromptScope::Repository{repository_id}=>Some(("repository",repository_id.as_str(),"workspace_repositories")),_=>None};
+                    if let Some((kind,id,table))=target {
+                        let bundled=snapshot.entities.iter().any(|entity|entity.kind()==kind&&entity.id==id);
+                        let present=db.with_read_connection(|conn|conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE id=?1)"),[id],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string()))?;
+                        if !bundled&&!present {pending.push(format!("提示词范围引用 {id} 尚未关联；正文、标签和原范围均保留，不会变成通用提示词"));}
+                    }
+                }
+                pending
+            },
             local_preview: matched.as_ref().map(preview_content).transpose()?,
             incoming_preview: preview_content(entity)?,
         });
@@ -1106,6 +1184,13 @@ fn preview_content(entity: &PortableEntity) -> Result<String, String> {
         preview.push_str("\n… 内容过长，预览已截断");
     }
     Ok(preview)
+}
+
+fn restore_library(conn:&Connection,value:&LibraryItem)->Result<(),String>{
+    let kind=match value.kind {crate::library::LibraryKind::Prompt=>"prompt",crate::library::LibraryKind::Rule=>"rule"};
+    let project_id=value.project_id.as_ref().filter(|id|conn.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",[*id],|r|r.get::<_,bool>(0)).unwrap_or(false));
+    conn.execute("INSERT INTO library_items(id,kind,title,body,category,project_id,version,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,title=excluded.title,body=excluded.body,category=excluded.category,project_id=excluded.project_id,version=excluded.version,updated_at=excluded.updated_at",params![value.id,kind,value.title,value.body,value.category,project_id,value.version as i64,value.updated_at as i64]).map_err(|e|e.to_string())?;
+    Ok(())
 }
 
 pub fn apply_import(
@@ -1196,6 +1281,7 @@ fn apply_import_selecting(
         prepared.push(entity);
     }
     let touched: BTreeSet<String> = prepared.iter().map(PortableEntity::key).collect();
+    let native_changes=prepared.iter().any(|entity|!matches!(entity.payload,PortablePayload::Workspace(_)|PortablePayload::Repository(_)|PortablePayload::Prompt(_)|PortablePayload::Preferences(_)) && !matches!(&entity.payload,PortablePayload::Library(item) if item.kind==crate::library::LibraryKind::Prompt));
     let result = db.with_connection(|conn| {
         let tx = conn.transaction().map_err(|error| error.to_string())?;
         let current: BTreeMap<_, _> = collect_snapshot_on(&tx, store, registry)?
@@ -1272,12 +1358,14 @@ fn apply_import_selecting(
                         .map_err(|error| error.to_string())?;
                 }
                 PortablePayload::Library(value) => {
-                    let kind = match value.kind { crate::library::LibraryKind::Prompt => "prompt", crate::library::LibraryKind::Rule => "rule" };
-                    let project_id = value.project_id.as_ref().filter(|id| tx.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",[*id],|row| row.get::<_,bool>(0)).unwrap_or(false));
-                    tx.execute("INSERT INTO library_items (id,kind,title,body,category,project_id,version,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
-                        ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,title=excluded.title,body=excluded.body,category=excluded.category,project_id=excluded.project_id,version=excluded.version,updated_at=excluded.updated_at",
-                        params![value.id,kind,value.title,value.body,value.category,project_id,value.version as i64,value.updated_at as i64]).map_err(|error| error.to_string())?;
+                    restore_library(&tx,value)?;
                 }
+                PortablePayload::Prompt(value) => {
+                    restore_library(&tx,&value.item)?;
+                    crate::prompts::restore_metadata(&tx,&value.item.id,&value.metadata)?;
+                }
+                PortablePayload::Repository(value) => organization::restore_repository(&tx,value)?,
+                PortablePayload::Workspace(value) => organization::restore_workspace(&tx,value)?,
                 PortablePayload::Mcp(value) => {
                     let definition = &value.definition;
                     let updated_at = std::time::SystemTime::now()
@@ -1360,7 +1448,7 @@ fn apply_import_selecting(
         }
     }
     store_blockers(db, &touched, &issues)?;
-    if apply_native {
+    if apply_native && native_changes {
         if let Some((home, _)) = restore_roots(db) {
             resources::apply_pending(db, store, registry, &home)?;
         }
@@ -1538,6 +1626,13 @@ pub fn with_change_notification<T, E>(db: &Database, notify: impl FnOnce(), acti
                 "SELECT json_array(id,name,path,preferred_tool) FROM projects ORDER BY id",
                 "SELECT json_array(project_id,tool,model) FROM project_tool_models ORDER BY project_id,tool",
                 "SELECT json_array(id,kind,title,body,category,project_id,version,updated_at) FROM library_items ORDER BY id",
+                "SELECT json_array(library_id,scope_json,tags_json) FROM prompt_metadata ORDER BY library_id",
+                "SELECT json_array(id,name,revision) FROM workspace_projects ORDER BY id",
+                "SELECT json_array(id,name) FROM workspace_repositories ORDER BY id",
+                "SELECT json_array(workspace_id,repository_id,favorite) FROM workspace_members ORDER BY workspace_id,repository_id",
+                "SELECT json_array(id,repository_id,host_id,path,native_project_id,target_id) FROM workspace_locations ORDER BY id",
+                "SELECT json_array(workspace_id,repository_id,location_id) FROM workspace_member_locations ORDER BY workspace_id,repository_id,location_id",
+                "SELECT json_array(project_id,workspace_id,repository_id) FROM workspace_legacy_map ORDER BY project_id",
                 "SELECT data_json FROM mcp_definitions ORDER BY id",
                 "SELECT json_array(id,name,description,digest,files_json) FROM skill_packages ORDER BY id",
                 "SELECT data FROM auth_accounts ORDER BY id",

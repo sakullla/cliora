@@ -161,9 +161,14 @@ pub struct SyncProgress {
     pub deleted: bool,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalOnlyItem { pub key:String, pub label:String, pub kind:String, pub reason:String }
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncStatus {
+    pub local_only: Vec<LocalOnlyItem>,
     pub configured: bool,
     pub enabled: bool,
     pub endpoint: Option<String>,
@@ -533,15 +538,75 @@ fn read_config(db: &Database) -> Result<Option<SyncConfig>, String> {
 // Keep legacy remote heads intact, including tombstones, without applying them
 // or publishing local deletions. Configuration bundles retain their own scope.
 fn webdav_key(key: &str) -> bool {
-    !key.starts_with("project:")
+    !key.starts_with("project:") && !key.starts_with("workspace:") && !key.starts_with("repository:")
         && (!key.starts_with("binding:") || key.ends_with("\u{1f}global"))
 }
 
 fn webdav_entity(entity: &PortableEntity) -> bool {
     webdav_key(&entity.key()) && match &entity.payload {
         PortablePayload::Deployment(value) => crate::accounts::selection::split_key(&value.scope_key).1 == "global",
+        PortablePayload::Prompt(value) => matches!(value.metadata.scope,crate::prompts::PromptScope::Global),
+        PortablePayload::Library(value) if value.kind==crate::library::LibraryKind::Prompt => value.project_id.is_none(),
         _ => true,
     }
+}
+
+fn setting_keys(conn:&Connection,name:&str)->Result<BTreeSet<String>,String>{
+    let value:Option<String>=conn.query_row("SELECT value FROM app_settings WHERE key=?1",[name],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
+    value.as_deref().map(serde_json::from_str).transpose().map(|value|value.unwrap_or_default()).map_err(|_|"本机同步范围记录损坏".into())
+}
+fn write_keys(conn:&Connection,name:&str,keys:&BTreeSet<String>)->Result<(),String>{
+    conn.execute("INSERT INTO app_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![name,serde_json::to_string(keys).map_err(|e|e.to_string())?]).map_err(|e|e.to_string())?;Ok(())
+}
+/// Record scope transitions before a later deletion can erase their source metadata.
+pub(crate) fn remember_prompt_scope(conn:&Connection,id:&str,scope:&crate::prompts::PromptScope)->Result<(),String>{
+    let key=format!("library:{id}");
+    let mut keys=setting_keys(conn,"webdav_local_only_keys")?;
+    let text:Option<String>=conn.query_row("SELECT value FROM app_settings WHERE key='webdav_local_only_details'",[],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
+    let mut details:BTreeMap<String,LocalOnlyItem>=text.as_deref().map(serde_json::from_str).transpose().map_err(|_|"本机同步保留记录损坏")?.unwrap_or_default();
+    if !matches!(scope,crate::prompts::PromptScope::Global) {
+        keys.insert(key.clone());
+        let label=conn.query_row("SELECT title FROM library_items WHERE id=?1",[id],|r|r.get::<_,String>(0)).optional().map_err(|e|e.to_string())?.unwrap_or_else(||id.into());
+        details.insert(key.clone(),LocalOnlyItem{key:key.clone(),label,kind:"library".into(),reason:"此范围的提示词保留在本机；即使从本机移除也不会向云端发布替代的通用内容或删除".into()});
+    } else if !setting_keys(conn,"webdav_remote_unsupported_keys")?.contains(&key) { keys.remove(&key);details.remove(&key); }
+    write_keys(conn,"webdav_local_only_keys",&keys)?;
+    conn.execute("INSERT INTO app_settings(key,value) VALUES('webdav_local_only_details',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[serde_json::to_string(&details).map_err(|e|e.to_string())?]).map_err(|e|e.to_string())?;
+    Ok(())
+}
+
+fn prompt_local_items(conn:&Connection)->Result<Vec<LocalOnlyItem>,String>{
+    let rows=super::read_rows(conn,"SELECT id,title,category,project_id FROM library_items WHERE kind='prompt' ORDER BY id",|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?)))?;
+    let mut result=Vec::new();
+    for(id,title,category,project_id)in rows{
+        let item=crate::library::LibraryItem{id:id.clone(),kind:crate::library::LibraryKind::Prompt,title:title.clone(),body:String::new(),category,project_id,version:0,updated_at:0};
+        let meta=super::prompt_metadata_on(conn,&item)?;
+        if !matches!(meta.scope,crate::prompts::PromptScope::Global){ result.push(LocalOnlyItem{key:format!("library:{id}"),label:title,kind:"library".into(),reason:"项目、仓库或待关联范围的提示词保留在本机，当前 WebDAV 不支持此范围；可用加密迁移包保留完整归属".into()}); }
+    }
+    Ok(result)
+}
+fn local_only_items(db:&Database)->Result<Vec<LocalOnlyItem>,String>{
+    db.with_read_connection(|conn|{
+        let mut items=prompt_local_items(conn)?;
+        for(kind,sql)in [("workspace","SELECT id,name FROM workspace_projects ORDER BY id"),("repository","SELECT id,name FROM workspace_repositories ORDER BY id")]{
+            for(id,label)in super::read_rows(conn,sql,|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?{items.push(LocalOnlyItem{key:format!("{kind}:{id}"),label,kind:kind.into(),reason:"项目组织与工作位置仅保留在本机；使用加密迁移包迁移，或在另一产品打开同一份项目清单".into()});}
+        }
+        let remote=setting_keys(conn,"webdav_remote_unsupported_keys")?;
+        let details:Option<String>=conn.query_row("SELECT value FROM app_settings WHERE key='webdav_local_only_details'",[],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
+        let details:BTreeMap<String,LocalOnlyItem>=details.as_deref().map(serde_json::from_str).transpose().map_err(|_|"本机同步保留记录损坏")?.unwrap_or_default();
+        for key in setting_keys(conn,"webdav_local_only_keys")? {
+            if key.starts_with("library:")&&!remote.contains(&key)&&items.iter().all(|item|item.key!=key) {
+                items.push(details.get(&key).cloned().unwrap_or_else(||LocalOnlyItem{label:key.clone(),key,kind:"library".into(),reason:"此前的范围提示词保留屏障仍在，未发布云端删除；请通过兼容迁移包处理".into()}));
+            }
+        }
+        for key in remote{
+            if items.iter().all(|item|item.key!=key){let kind=key.split(':').next().unwrap_or("library").to_owned();items.push(LocalOnlyItem{label:key.clone(),key,kind,reason:"远端包含当前同步范围不支持的资料，已保留原版本，未覆盖本机；请用兼容迁移包接收".into()});}
+        }
+        Ok(items)
+    })
+}
+fn remember_remote_unsupported(db:&Database,keys:&BTreeSet<String>)->Result<(),String>{
+    if keys.is_empty(){return Ok(());}
+    db.with_connection(|conn|{let mut existing=setting_keys(conn,"webdav_remote_unsupported_keys")?;existing.extend(keys.iter().cloned());write_keys(conn,"webdav_remote_unsupported_keys",&existing)})
 }
 
 // Deployment ids are hashes, so retain the local-only scope after deletion too.
@@ -554,6 +619,8 @@ fn local_only_keys(db: &Database, additional: &BTreeSet<String>) -> Result<BTree
         let mut keys: BTreeSet<String> = previous.as_deref().map(serde_json::from_str).transpose()
             .map_err(|_| "本机同步范围记录损坏")?.unwrap_or_default();
         keys.extend(additional.iter().cloned());
+        keys.extend(prompt_local_items(&tx)?.into_iter().map(|item|item.key));
+        keys.extend(setting_keys(&tx,"webdav_remote_unsupported_keys")?);
         keys.extend(super::resources::collect(&tx)?.into_iter().filter(|entity| !webdav_entity(entity)).map(|entity| entity.key()));
         let text = serde_json::to_string(&keys).map_err(|error| error.to_string())?;
         if previous.as_deref() != Some(text.as_str()) {
@@ -749,6 +816,7 @@ pub fn status(db: &Database) -> Result<SyncStatus, String> {
         }
     }
     Ok(SyncStatus {
+        local_only: local_only_items(db)?,
         configured: config.is_some(),
         enabled: config.as_ref().is_some_and(|item| item.enabled),
         endpoint: config.as_ref().map(|item| item.endpoint.clone()),
@@ -1592,8 +1660,10 @@ fn run_once(
     let seen = seen_versions(db)?;
     let mut excluded = local_only_keys(db, &BTreeSet::new())?;
     let mut verified = BTreeMap::new();
+    let mut remote_unsupported=BTreeSet::new();
     for (entity_key, heads) in &manifest.heads {
         if !webdav_key(entity_key) || excluded.contains(entity_key) {
+            if entity_key.starts_with("workspace:")||entity_key.starts_with("repository:"){remote_unsupported.insert(entity_key.clone());}
             continue;
         }
         for head in heads {
@@ -1602,12 +1672,14 @@ fn run_once(
                 let entity = read_version(&dav, &key, &manifest.space_id, entity_key, head)?;
                 if entity.as_ref().is_some_and(|item| !webdav_entity(item)) {
                     excluded.insert(entity_key.clone());
+                    remote_unsupported.insert(entity_key.clone());
                 }
                 verified.insert((entity_key.clone(), head.id.clone()), entity);
             }
         }
     }
-    let excluded = local_only_keys(db, &excluded)?;
+    remember_remote_unsupported(db,&remote_unsupported)?;
+    let excluded = local_only_keys(db, &remote_unsupported)?;
     let local: BTreeMap<String, PortableEntity> = snapshot
         .entities
         .into_iter()
@@ -1634,7 +1706,7 @@ fn run_once(
     all_keys.sort_by_key(|key| {
         let deleted = manifest.heads.get(key).is_some_and(|heads| heads.len() == 1 && heads[0].deleted);
         let rank = super::dependency_order(key);
-        (if deleted { 0 } else { 1 }, if deleted { 8 - rank } else { rank }, key.clone())
+        (if deleted { 0 } else { 1 }, if deleted { u8::MAX - rank } else { rank }, key.clone())
     });
     for entity_key in all_keys {
         if skipped_accounts.contains(&entity_key) {
@@ -1882,7 +1954,9 @@ fn run_once(
     super::apply_synced_bindings(db, store, registry)?;
     super::finish_pending_native(db, store, registry)?;
     acknowledge_received_writes(db, store, registry, &processed_keys)?;
-    status.pending_changes = self::status(db)?.pending_changes;
+    let final_status=self::status(db)?;
+    status.pending_changes = final_status.pending_changes;
+    status.local_only = final_status.local_only;
     status.blockers = super::load_blockers(db)?;
     status.transfers = transfers;
     status.compared = compared;
@@ -1929,7 +2003,7 @@ pub fn run_with_progress(
                 transfers: result.transfers.clone(),
             };
             let receipt_json = serde_json::to_string(&receipt).map_err(|error| error.to_string())?;
-            let complete = result.conflicts.is_empty() && result.blockers.is_empty() && result.pending_changes == 0;
+            let complete = result.conflicts.is_empty() && result.blockers.is_empty() && result.pending_changes == 0 && result.local_only.is_empty();
             let previous_success = config.last_success;
             db.with_connection(|conn| {
                 let tx = conn.transaction().map_err(|error| error.to_string())?;
@@ -1952,6 +2026,7 @@ pub fn run_with_progress(
             let refreshed = status(db)?;
             result.conflicts = refreshed.conflicts;
             result.blockers = refreshed.blockers;
+            result.local_only = refreshed.local_only;
             result.last_error = refreshed.last_error;
             result.retry_after = Some(0);
             result.receipt = refreshed.receipt;
@@ -2220,11 +2295,10 @@ fn summary(entity: Option<&PortableEntity>) -> String {
             value.name,
             value.model_overrides.len()
         ),
-        PortablePayload::Library(value) => format!(
-            "{} · {}",
-            value.title,
-            value.body.chars().take(180).collect::<String>()
-        ),
+        PortablePayload::Library(value) => format!("{} · {}",value.title,value.body.chars().take(180).collect::<String>()),
+        PortablePayload::Prompt(value) => format!("{} · {:?} · {}",value.item.title,value.metadata.scope,value.item.body.chars().take(180).collect::<String>()),
+        PortablePayload::Workspace(value) => format!("{} · {} 个仓库",value.name,value.members.len()),
+        PortablePayload::Repository(value) => format!("{} · 仓库身份",value.name),
         PortablePayload::Mcp(value) => {
             let location = match value.definition.transport {
                 crate::resources::mcp::McpTransport::Stdio => value.definition.command.split_whitespace().next().unwrap_or("").chars().take(120).collect::<String>(),
@@ -2320,6 +2394,17 @@ fn detail(entity: Option<&PortableEntity>) -> String {
                 lines.push(format!("  {tool}: {model}"));
             }
         }
+        PortablePayload::Prompt(value) => {
+            lines.push(format!("标题: {}",value.item.title));
+            lines.push(format!("范围: {}",serde_json::to_string(&value.metadata.scope).unwrap_or_default()));
+            lines.push(format!("标签: {}",value.metadata.tags.join("、")));
+            lines.push(format!("正文:\n{}",value.item.body));
+        }
+        PortablePayload::Workspace(value) => {
+            lines.push(format!("业务项目: {} · {} 个仓库",value.name,value.members.len()));
+            lines.push(serde_json::to_string_pretty(value).unwrap_or_default());
+        }
+        PortablePayload::Repository(value) => {lines.push(format!("仓库: {} · {}",value.name,value.id));}
         PortablePayload::Library(value) => {
             lines.push(format!("标题: {}", value.title));
             if !value.category.is_empty() {

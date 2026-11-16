@@ -99,3 +99,26 @@ A2 复审确认读取屏障、批内重复及本地旧标签问题已闭合，�
 补修仅为私有归一化策略增加明确的 Local/Remote 来源：本地及其恢复仍使用 80 字符旧表示，远端使用 400 字节旧表示；只有与原条目完全相同的标签可保留。回归连续验证修改正文后再归类，确保已保存的 metadata 也能保留旧标签。新建、导入及新增/扩张标签继续走原新写校验，401 ASCII 字节和 402 多字节旧表示不获兼容例外。本轮没有 UI 改动，不重复界面、Node 或截图验证；A2 已有证据与原生平台限制继续保留。
 
 修后完整 prompts 原生组 23/23 通过，退出 0、清理 released，证据 `3c553eb48d1ac9b4a0a3f7933151fd7ae274864a4ea4fece68a86a30d37dcb19`。这包含三项原失败及本地、远端新输入的拒绝边界。Clippy `--all-targets -- -D warnings` 通过，退出 0、清理 released，证据 `3d3526d1e406f8cc83922b460921cfbc5ab1c8e2d94159d7a3818edc3210367f`。
+
+## T4：版本化迁移与 WebDAV 本地保留
+
+开发日期：2026-11-17，Cliora 基线 `3c2415bf`。加密 bundle 使用 snapshot schema 5，继续读取 schema 1–4。新增 repository/workspace 逻辑载体与包含独立 scope/tags 的 Prompt 载体；提示词 key 保持 `library:id`。组织按旧目录、仓库、业务项目、提示词依赖顺序恢复；只导出组织时补齐仓库依赖，不隐式纳入旧目录配置、活动绑定或原生配置应用。位置以来源 host 下的提示保存，打开前仍须本机 Git 校验，原共享清单不会自动重新关联。原 ID、成员、收藏、旧目录映射及孤立范围保留；失效引用不变 global。usage、批次回执、会话与原主机远端提示词文件不进入新组织载体。
+
+WebDAV manifest 随写入升级到 5，使旧客户端在处理新载体前拒绝不支持版本。global 提示词保留 metadata；业务组织和非 global 提示词显式本地保留，不发布替代 global 或伪删除。有效 scope 的识别不依赖 metadata 是否已初始化；新旧提示词写入/删除入口均在原事务记录本地保留屏障，覆盖“已同步 global → 旧 project_id 改范围 → 中间未 sync/ensure 就删除”。旧正文编辑（包括 category 为空）保留已持久 scope/tags，旧接口确实无法表达的范围改写才拒绝。状态和结果有独立本地保留列表，完整成功条件纳入 localOnly，既有冲突与原生待写回队列保持。
+
+修前 3 个真实 DB/本地 WebDAV 反例全部失败：组织/metadata 未被 bundle 收集，旧范围无 metadata 时未排除，以及支持部分上传后错误报告完整成功（`4eee4039ae605c008637bdfd6a32fd1908033d25d6caaf023cefcf3a586e2ede`）。修后首批 5/5 通过，包含旧接口未 sync 就删除的两项边界。扩大直接回归后发现两个真实相邻问题：删除逆序仍写死 `8-rank`，新依赖 rank 触发下溢；旧 category 空值重算并清掉了独立 tags。分别改为严格逆依赖序和物理 metadata 权威后，原断言保持，完整直接组通过。
+
+| T4 开发检查 | 实际结果 | 受控回执键 |
+| --- | --- | --- |
+| portable 全组 | 82/82；真实加密临时 bundle、schema1–4、组织/标签 roundtrip、重复接收、孤立范围、组织-only 不写原生配置/不消费已有队列，以及本地 HTTP WebDAV 冲突、删除、账户凭据和部分失败恢复 | `07209f869de1aef8dffd0504ce22085466480d902507ca6301a30d2c8a91cf77` |
+| prompts 直接回归 | 23/23，保留 T3 本地/远端旧标签与旧正文编辑边界 | `43b36255ff0b9cf1442bfe299fcca360bc928ca902bd7f58a19c5e71aee21211` |
+| library CRUD/CAS | 2/2，保留独立 scope/tags、旧接口范围拒绝和重启版本检查 | `ceeb1eb77ec0bbaa677618b69657ee7cdc9279c8abef8ff2c875fa1e4a9b1a9c` |
+| Node | 193/193 | `4e44fd71fd2be6d2fed1fa8fdfbc2768f6c5a3e9381884f1932f566916295391` |
+| TypeScript/Vite | 通过 | `120afb6c755daf618a5814eeb80adf11a6214de4590593e2baee0c81e1846adf` |
+| 同步 UI 直接回归 | 20/20，含业务项目/仓库信息/目录配置库存区分、本地保留列表和结果不声称全部同步完成 | `9707ed7feb0bd0000fa834b0e78030a44ff3ce5df6359a95cef68d3d8ee0c65c` |
+| Clippy | `--all-targets -- -D warnings` 通过 | `31d56fbd8adee50f5c5e3e290a0eb6ac9b3756e43ee6012404ab8aa8523e5298` |
+| 最终深浅截图 | 1360px、12 图，success=true、failures=[]；可见两个 dialog 及 backdrop opacity 均为 1，真实主题正确 | `ec3b3a5984e3bb8bb2cfa4243b3d7af24172ae8d8638de9147c45bbe87b8108c` |
+
+截图来自现有 `scripts/capture-sync.mjs --theme all --size 1360 --only unconnected,local-only`，预览为本次独立启动的 `http://127.0.0.1:14739`，父进程最终清理 released。图集位于忽略目录 `docs/verification/multi-repository-project-workspaces-sync/`，机器清单为 `capture-sync-manifest.json`。首次结果图截在有限 opacity 动画中，已只修捕获就绪等待并重采；没有修改产品透明度。已实际查看最终 `zh-light-1360-local-only-result.png`、`zh-dark-1360-local-only-result.png`、`zh-light-1360-export-dialog.png`，结果 warning/部分同步语义和三种组织层级标签可读，无背景文字透出。
+
+以上为开发验证。HTTP WebDAV 使用隔离本地协议服务器；截图使用 Playwright 合成 IPC，不证明真实 WebDAV 服务、已安装桌面端、系统 credential 后端或双端 scheme 往返。没有因此重跑或宣称通过无关的完整产品检查；累计正式验证与 T5 联动仍交后续阶段。

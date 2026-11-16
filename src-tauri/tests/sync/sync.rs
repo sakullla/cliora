@@ -998,10 +998,8 @@ fn inbound_snapshot_cannot_replace_an_edit_made_while_remote_was_read() {
         .find(|entity| entity.key() == "library:library-1")
         .unwrap();
     let expected = remote.digest().unwrap();
-    let PortablePayload::Library(item) = &mut remote.payload else {
-        panic!("library expected")
-    };
-    item.body = "remote".into();
+    let PortablePayload::Prompt(prompt) = &mut remote.payload else { panic!("versioned prompt expected") };
+    prompt.item.body = "remote".into();
     put_library(&db, "edited-during-network-read");
     assert!(apply_entity(
         &db,
@@ -1979,4 +1977,76 @@ fn unchanged_digest_delete_does_not_keep_a_finished_write_blocker() {
     assert_eq!(body(&fresh).as_deref(), Some("kept-body"));
     let profile_kept = crate::native::profile::get_registered_profile(&fresh, "profile-write");
     assert!(profile_kept.is_ok(), "{profile_kept:?}");
+}
+
+#[test]
+fn multi_repository_legacy_prompt_without_metadata_is_local_only() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO projects(id,name,path,preferred_tool,last_opened) VALUES ('legacy','Old directory','/missing/project',NULL,0)", []).unwrap();
+        conn.execute("INSERT INTO library_items(id,kind,title,body,category,project_id,version,updated_at) VALUES ('legacy-prompt','prompt','Local scope','body','tag','legacy',1,1)", []).unwrap();
+        Ok(())
+    }).unwrap();
+    let excluded = local_only_keys(&db, &BTreeSet::new()).unwrap();
+    assert!(excluded.contains("library:legacy-prompt"), "effective legacy scope must not depend on physical metadata initialization");
+    let status = serde_json::to_value(status(&db).unwrap()).unwrap();
+    assert!(status["localOnly"].as_array().is_some_and(|items| items.iter().any(|item| item["key"] == "library:legacy-prompt")));
+}
+
+#[test]
+fn multi_repository_sync_does_not_claim_full_success_for_unsupported_organization() {
+    let server = Server::new();
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    db.with_connection(|conn| { conn.execute("INSERT INTO workspace_projects(id,name) VALUES ('business','Business')", []).unwrap(); Ok(()) }).unwrap();
+    configure(&db, &store, setup(&server)).unwrap();
+    let result = run(&db, &store, &registry, false).unwrap();
+    assert!(result.last_success.is_none(), "uploading supported items must not claim the organization was synced");
+    let status = serde_json::to_value(result).unwrap();
+    assert!(status["localOnly"].as_array().is_some_and(|items| items.iter().any(|item| item["key"] == "workspace:business")));
+}
+
+#[test]
+fn multi_repository_legacy_write_and_delete_do_not_publish_scoped_deletion() {
+    let server=Server::new();
+    let temp=tempfile::tempdir().unwrap();
+    let db=database(&temp.path().join("a"));
+    let peer=database(&temp.path().join("b"));
+    let store=MemoryCredentials::default(); let registry=Registry::builtins();
+    put_library(&db,"original global");
+    configure(&db,&store,setup(&server)).unwrap(); run(&db,&store,&registry,false).unwrap();
+    configure(&peer,&store,setup(&server)).unwrap(); run(&peer,&store,&registry,false).unwrap();
+    db.with_connection(|conn|{
+        conn.execute("INSERT INTO projects(id,name,path,preferred_tool,last_opened) VALUES('legacy','Legacy','/missing/legacy',NULL,0)",[]).unwrap();
+        conn.execute("DELETE FROM prompt_metadata WHERE library_id='library-1'",[]).unwrap();
+        Ok(())
+    }).unwrap();
+    let item=crate::library::get(&db,"library-1").unwrap();
+    let scoped=crate::library::save(&db,crate::library::LibraryDraft{id:Some(item.id.clone()),kind:crate::library::LibraryKind::Prompt,title:item.title,body:"private body".into(),category:"legacy-tag".into(),project_id:Some("legacy".into()),expected_version:Some(item.version)}).unwrap();
+    // No ensure_metadata, status read or sync occurs between the old writer and delete.
+    crate::library::delete(&db,&scoped.id,scoped.version).unwrap();
+    let result=run(&db,&store,&registry,false).unwrap();
+    assert!(result.local_only.iter().any(|item|item.key=="library:library-1"));
+    assert!(!result.transfers.iter().any(|item|item.key=="library:library-1"));
+    run(&peer,&store,&registry,false).unwrap();
+    assert_eq!(body(&peer).as_deref(),Some("original global"));
+    assert_eq!(body(&db),None);
+}
+
+#[test]
+fn multi_repository_delete_legacy_row_without_metadata_preserves_history_barrier() {
+    let temp=tempfile::tempdir().unwrap(); let db=database(temp.path());
+    db.with_connection(|conn|{
+        conn.execute("INSERT INTO projects(id,name,path,preferred_tool,last_opened) VALUES('legacy','Legacy','/missing/legacy',NULL,0)",[]).unwrap();
+        conn.execute("INSERT INTO library_items(id,kind,title,body,category,project_id,version,updated_at) VALUES('legacy-only','prompt','Legacy only','private','tag','legacy',1,1)",[]).unwrap();
+        conn.execute("INSERT INTO sync_entity_state(entity_key,local_digest,heads_json,deleted) VALUES('library:legacy-only','old-digest','[]',0)",[]).unwrap();
+        Ok(())
+    }).unwrap();
+    crate::library::delete(&db,"legacy-only",1).unwrap();
+    let keys=local_only_keys(&db,&BTreeSet::new()).unwrap();
+    assert!(keys.contains("library:legacy-only"));
+    assert!(status(&db).unwrap().local_only.iter().any(|item|item.key=="library:legacy-only"&&item.label=="Legacy only"));
 }

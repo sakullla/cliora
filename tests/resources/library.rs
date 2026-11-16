@@ -75,3 +75,19 @@ fn library_crud_search_project_filter_and_optimistic_versions_survive_restart() 
     delete(&db, &id, 2).unwrap();
     assert!(list(&db, LibraryKind::Prompt, None, "").unwrap().is_empty());
 }
+
+#[test]
+fn multi_repository_legacy_body_edit_preserves_new_scope_and_tags_but_cannot_drop_them() {
+    let temp=tempfile::tempdir().unwrap(); let db=Database::open(&temp.path().join("db.sqlite")).unwrap();
+    let item=save(&db,LibraryDraft{id:None,kind:LibraryKind::Prompt,title:"Prompt".into(),body:"before".into(),category:"legacy".into(),project_id:None,expected_version:None}).unwrap();
+    let meta=crate::prompts::PromptMetadata{scope:crate::prompts::PromptScope::Repository{repository_id:"retained-orphan".into()},tags:vec!["new-tag".into(),"other-tag".into()]};
+    db.with_connection(|conn|crate::prompts::restore_metadata(conn,&item.id,&meta)).unwrap();
+    let edited=save(&db,LibraryDraft{id:Some(item.id.clone()),kind:LibraryKind::Prompt,title:"Updated".into(),body:"after".into(),category:"legacy".into(),project_id:None,expected_version:Some(item.version)}).unwrap();
+    let metadata=crate::prompts::export_metadata(&db).unwrap();
+    assert_eq!(metadata[&item.id],meta);
+    assert_eq!(edited.body,"after");
+    db.with_connection(|conn|{conn.execute("INSERT INTO projects(id,name,path,preferred_tool,last_opened) VALUES('different-project','Other',NULL,NULL,0)",[]).unwrap();Ok(())}).unwrap();
+    assert!(save(&db,LibraryDraft{id:Some(item.id.clone()),kind:LibraryKind::Prompt,title:edited.title.clone(),body:"must not write".into(),category:"replacement tags".into(),project_id:Some("different-project".into()),expected_version:Some(edited.version)}).unwrap_err().contains("旧格式不能覆盖"));
+    assert_eq!(get(&db,&item.id).unwrap().body,"after");
+    assert_eq!(crate::prompts::export_metadata(&db).unwrap()[&item.id],meta);
+}

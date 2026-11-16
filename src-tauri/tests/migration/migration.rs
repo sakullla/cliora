@@ -497,10 +497,8 @@ fn import_rechecks_digest_inside_the_write_transaction() {
         .iter_mut()
         .find(|entity| entity.key() == "library:one")
         .unwrap();
-    let PortablePayload::Library(item) = &mut entity.payload else {
-        panic!("library expected")
-    };
-    item.body = "remote".into();
+    let PortablePayload::Prompt(prompt) = &mut entity.payload else { panic!("versioned prompt expected") };
+    prompt.item.body = "remote".into();
     incoming.entities.push(PortableEntity {
         id: "secret-profile".into(),
         payload: PortablePayload::Profile(Box::new(PortableProfile {
@@ -4013,4 +4011,123 @@ fn relogin_recheck_clears_the_blocker_only_after_sign_in_is_accepted() {
         .unwrap()
         .iter()
         .all(|item| item.key != "account:acct-m"));
+}
+
+#[test]
+fn multi_repository_bundle_carries_organization_and_prompt_scope() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO workspace_projects(id,name,revision) VALUES ('workspace-a','Business A',3)", []).unwrap();
+        conn.execute("INSERT INTO workspace_repositories(id,name) VALUES ('repository-a','service')", []).unwrap();
+        conn.execute("INSERT INTO workspace_members(workspace_id,repository_id,favorite) VALUES ('workspace-a','repository-a',1)", []).unwrap();
+        conn.execute("INSERT INTO library_items(id,kind,title,body,category,project_id,version,updated_at) VALUES ('scoped','prompt','Only A','full scoped body','legacy-tag',NULL,1,1)", []).unwrap();
+        crate::prompts::restore_metadata(conn, "scoped", &crate::prompts::PromptMetadata {
+            scope: crate::prompts::PromptScope::Workspace { workspace_id: "workspace-a".into() }, tags: vec!["tag-a".into(), "tag-b".into()],
+        })?;
+        Ok(())
+    }).unwrap();
+    let snapshot = collect_snapshot(&db, &store, &registry).unwrap();
+    assert!(snapshot.entities.iter().any(|entity| entity.kind() == "workspace"));
+    assert!(snapshot.entities.iter().any(|entity| entity.kind() == "repository"));
+    let prompt = snapshot.entities.iter().find(|entity| entity.key() == "library:scoped").unwrap();
+    let value = serde_json::to_value(prompt).unwrap();
+    assert_eq!(value["payload"]["value"]["metadata"]["scope"]["workspaceId"], "workspace-a");
+    assert_eq!(value["payload"]["value"]["metadata"]["tags"], serde_json::json!(["tag-a", "tag-b"]));
+}
+
+fn multi_repository_fixture(db:&Database,path:&Path) {
+    db.with_connection(|conn|{
+        conn.execute("INSERT INTO projects(id,name,path,preferred_tool,last_opened) VALUES('old-directory','Legacy',?1,NULL,0)",[path.to_string_lossy().as_ref()]).unwrap();
+        conn.execute("INSERT INTO workspace_projects(id,name,revision) VALUES('business-a','Same business name',7),('business-b','Same business name',2)",[]).unwrap();
+        conn.execute("INSERT INTO workspace_repositories(id,name) VALUES('repo-a','service'),('orphan-repo','retained repository')",[]).unwrap();
+        conn.execute("INSERT INTO workspace_members(workspace_id,repository_id,favorite) VALUES('business-a','repo-a',1),('business-b','repo-a',0)",[]).unwrap();
+        conn.execute("INSERT INTO workspace_locations(id,repository_id,host_id,path,native_project_id,target_id,kind) VALUES('checkout-a','repo-a','22222222-2222-4222-8222-222222222222',?1,'old-directory',NULL,'repository')",[path.to_string_lossy().as_ref()]).unwrap();
+        conn.execute("INSERT INTO workspace_member_locations(workspace_id,repository_id,location_id) VALUES('business-a','repo-a','checkout-a'),('business-b','repo-a','checkout-a')",[]).unwrap();
+        conn.execute("INSERT INTO workspace_legacy_map(project_id,workspace_id,repository_id) VALUES('old-directory','business-a','repo-a')",[]).unwrap();
+        for(id,scope)in [("scoped-a",crate::prompts::PromptScope::Workspace{workspace_id:"business-a".into()}),("repository-prompt",crate::prompts::PromptScope::Repository{repository_id:"orphan-repo".into()}),("orphan-prompt",crate::prompts::PromptScope::Workspace{workspace_id:"absent-business".into()})]{
+            conn.execute("INSERT INTO library_items(id,kind,title,body,category,project_id,version,updated_at) VALUES(?1,'prompt','Same title','long body kept in full','legacy-tags',NULL,1,1)",[id]).unwrap();
+            crate::prompts::restore_metadata(conn,id,&crate::prompts::PromptMetadata{scope,tags:vec!["tag-one".into(),"tag-two".into()]})?;
+        }
+        Ok(())
+    }).unwrap();
+}
+
+#[test]
+fn multi_repository_bundle_roundtrip_restores_dependencies_and_retains_orphans() {
+    let temp=tempfile::tempdir().unwrap(); let source=database(&temp.path().join("source")); let target=database(&temp.path().join("target"));
+    let store=MemoryCredentials::default(); let registry=Registry::builtins();
+    let location=temp.path().join("missing-checkout"); multi_repository_fixture(&source,&location);
+    let bundle=temp.path().join("organization.cliora");
+    export_bundle(&source,&store,&registry,"synthetic-password",None,&bundle).unwrap();
+    let snapshot=unlock_bundle(&bundle,"synthetic-password").unwrap(); assert_eq!(snapshot.schema_version,5);
+    let raw=serde_json::to_string(&snapshot).unwrap();
+    assert!(!raw.contains("prompt_usage")); assert!(!raw.contains("batch_receipt")); assert!(!raw.contains("manifestPath"));
+    let draft=preview_import(&target,&store,&registry,snapshot.clone()).unwrap();
+    assert!(draft.items.iter().find(|item|item.key=="library:orphan-prompt").unwrap().pending_fields.iter().any(|field|field.contains("不会变成通用")));
+    restore_preview(&target,&store,&registry,&draft).unwrap();
+    let metadata=crate::prompts::export_metadata(&target).unwrap();
+    assert_eq!(metadata["scoped-a"].scope,crate::prompts::PromptScope::Workspace{workspace_id:"business-a".into()});
+    assert_eq!(metadata["orphan-prompt"].scope,crate::prompts::PromptScope::Workspace{workspace_id:"absent-business".into()});
+    assert_eq!(metadata["repository-prompt"].tags,vec!["tag-one","tag-two"]);
+    target.with_connection(|conn|{
+        assert_eq!(conn.query_row("SELECT count(*) FROM workspace_projects",[],|r|r.get::<_,i64>(0)).unwrap(),2);
+        assert_eq!(conn.query_row("SELECT count(*) FROM workspace_repositories",[],|r|r.get::<_,i64>(0)).unwrap(),2);
+        assert_eq!(conn.query_row("SELECT count(*) FROM workspace_member_locations",[],|r|r.get::<_,i64>(0)).unwrap(),2);
+        assert_eq!(conn.query_row("SELECT workspace_id FROM workspace_legacy_map WHERE project_id='old-directory'",[],|r|r.get::<_,String>(0)).unwrap(),"business-a");
+        assert!(conn.query_row("SELECT manifest_path FROM workspace_projects WHERE id='business-a'",[],|r|r.get::<_,Option<String>>(0)).unwrap().is_none());
+        assert_eq!(conn.query_row("SELECT kind FROM workspace_locations WHERE id='checkout-a'",[],|r|r.get::<_,String>(0)).unwrap(),"hint");
+        assert!(!conn.prepare("PRAGMA foreign_key_check").unwrap().exists([]).unwrap()); Ok(())
+    }).unwrap();
+    let again=preview_import(&target,&store,&registry,snapshot).unwrap();
+    assert!(again.items.iter().all(|item|item.status=="same"));
+    assert_eq!(restore_preview(&target,&store,&registry,&again).unwrap(),0);
+}
+
+#[test]
+fn multi_repository_organization_only_import_does_not_apply_native_or_consume_pending_queue() {
+    let _roots=RestoreRootsGuard; let temp=tempfile::tempdir().unwrap(); let home=temp.path().join("home"); fs::create_dir_all(home.join(".codex")).unwrap();
+    fs::write(home.join(".codex/config.toml"),"# receiver native config\n").unwrap(); set_restore_roots_for_test(Some((home.clone(),temp.path().to_path_buf())));
+    let source=database(&temp.path().join("source")); let target=database(&temp.path().join("target")); let store=MemoryCredentials::default(); let registry=Registry::builtins().with_fixture_installation("codex","0.160.0");
+    multi_repository_fixture(&source,&temp.path().join("missing"));
+    target.with_connection(|conn|resources::queue(conn,&resources::PortableDeployment{resource_kind:"skill".into(),resource_id:"still-pending".into(),tool:"codex".into(),scope_key:"global".into(),enabled:true},false)).unwrap();
+    let before=target.with_connection(|conn|conn.query_row("SELECT value FROM app_settings WHERE key='sync_resource_targets_v1'",[],|row|row.get::<_,String>(0)).map_err(|e|e.to_string())).unwrap();
+    let file=temp.path().join("organization-only.cliora");
+    export_bundle(&source,&store,&registry,"synthetic-password",Some(&BTreeSet::from(["workspace:business-a".into()])),&file).unwrap();
+    let snapshot=unlock_bundle(&file,"synthetic-password").unwrap();
+    assert!(snapshot.entities.iter().any(|entity|entity.kind()=="repository"));
+    assert!(snapshot.entities.iter().all(|entity|!matches!(entity.kind(),"project"|"profile"|"binding")));
+    let draft=preview_import(&target,&store,&registry,snapshot).unwrap(); restore_preview(&target,&store,&registry,&draft).unwrap();
+    assert_eq!(fs::read_to_string(home.join(".codex/config.toml")).unwrap(),"# receiver native config\n");
+    assert!(load_blockers(&target).unwrap().is_empty());
+    let after=target.with_connection(|conn|conn.query_row("SELECT value FROM app_settings WHERE key='sync_resource_targets_v1'",[],|row|row.get::<_,String>(0)).map_err(|e|e.to_string())).unwrap(); assert_eq!(before,after);
+}
+
+#[test]
+fn multi_repository_old_schema_one_through_four_keep_missing_prompt_scope() {
+    let temp=tempfile::tempdir().unwrap(); let store=MemoryCredentials::default(); let registry=Registry::builtins();
+    for version in 1..=4 {
+        let target=database(&temp.path().join(version.to_string()));
+        let item=LibraryItem{id:"legacy-prompt".into(),kind:crate::library::LibraryKind::Prompt,title:"Old".into(),body:"old body".into(),category:"tag-a,tag-b".into(),project_id:Some("missing-legacy-id".into()),version:1,updated_at:1};
+        let snapshot=PortableSnapshot{schema_version:version,entities:vec![PortableEntity{id:item.id.clone(),payload:PortablePayload::Library(item)}]};
+        let path=temp.path().join(format!("v{version}.cliora")); fs::write(&path,crypto::seal("synthetic-password","offline",&serde_json::to_vec(&snapshot).unwrap()).unwrap()).unwrap();
+        let parsed=unlock_bundle(&path,"synthetic-password").unwrap(); let draft=preview_import(&target,&store,&registry,parsed).unwrap(); restore_preview(&target,&store,&registry,&draft).unwrap();
+        let metadata=crate::prompts::export_metadata(&target).unwrap();
+        assert_eq!(metadata["legacy-prompt"].scope,crate::prompts::PromptScope::Unresolved{legacy_project_id:"missing-legacy-id".into()});
+        assert_eq!(metadata["legacy-prompt"].tags,vec!["tag-a","tag-b"]);
+        assert_eq!(crate::library::get(&target,"legacy-prompt").unwrap().body,"old body");
+        let again=preview_import(&target,&store,&registry,unlock_bundle(&path,"synthetic-password").unwrap()).unwrap();
+        assert_eq!(again.items[0].status,"same");
+    }
+}
+
+#[test]
+fn multi_repository_snapshot_versions_and_unknown_fields_reject_before_restore() {
+    let old=serde_json::json!({"schemaVersion":4,"entities":[{"id":"x","payload":{"kind":"library","value":{"id":"x","kind":"prompt","title":"X","body":"body","category":"","projectId":null,"version":1,"updatedAt":1,"scope":{"kind":"workspace","workspaceId":"must-not-drop"}}}}]});
+    assert!(serde_json::from_value::<PortableSnapshot>(old).is_err());
+    let future=PortableSnapshot{schema_version:6,entities:vec![]}; assert!(validate_snapshot(&future).is_err());
+    let value=PortableEntity{id:"scope".into(),payload:PortablePayload::Prompt(PortablePrompt{item:LibraryItem{id:"scope".into(),kind:crate::library::LibraryKind::Prompt,title:"X".into(),body:"body".into(),category:"".into(),project_id:None,version:1,updated_at:1},metadata:crate::prompts::PromptMetadata{scope:crate::prompts::PromptScope::Global,tags:vec![]}})};
+    assert!(validate_snapshot(&PortableSnapshot{schema_version:4,entities:vec![value]}).is_err());
 }

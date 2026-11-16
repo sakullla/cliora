@@ -73,7 +73,10 @@ export interface SyncProgress {
   deleted: boolean;
 }
 
+export interface SyncLocalOnlyItem { key: string; label: string; kind: string; reason: string }
+
 export interface SyncStatus {
+  localOnly?: SyncLocalOnlyItem[];
   configured: boolean;
   enabled: boolean;
   endpoint: string | null;
