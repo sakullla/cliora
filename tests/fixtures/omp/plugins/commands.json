@@ -35,6 +35,12 @@
         "expectError": true
       },
       {
+        "action": "install",
+        "source": "@scope/pkg@market",
+        "project": true,
+        "args": ["plugin", "install", "@scope/pkg@market", "--json", "--scope", "project"]
+      },
+      {
         "action": "update",
         "source": "fixture@marketplace",
         "project": true,

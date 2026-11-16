@@ -25,9 +25,14 @@ async function setup(page: Page) {
       policy: '重扫发现原生插件状态问题：用户锁文件仍记录 deleted-plugin，磁盘插件不存在。运行 doctor 会重新核对用户插件目录、包清单、node_modules、锁文件、缺失包与版本漂移；它不保证回滚此前的部分变更，也不处理项目作用域或远程 marketplace。',
       readOnly: false, root: null, resources: [],
     };
+    const missing = {
+      ...project, id: 't5-missing@t5-market', name: 't5-missing@t5-market', source: 't5-missing@t5-market',
+      state: 'not_installed', enabled: null, root: '/fixture/home/.omp/plugins/cache/missing',
+      policy: '项目缓存目录不存在（缓存漂移）；可卸载移除原生注册表/锁记录',
+    };
     const state = {
       calls: [] as any[],
-      entries: [npm, project, user, doctor],
+      entries: [npm, project, user, doctor, missing],
       baseline: 'omp-plugins-baseline',
       doctorCalls: 0,
     };
@@ -43,6 +48,9 @@ async function setup(page: Page) {
       entries: state.entries.map(item => ({ ...item })),
       baseline: state.baseline,
       detail: '列表与本机文件快照；原生会话是否已加载无法从静态列表确认。',
+      // The adapter publishes this id only while the diagnostic row exists;
+      // project scope never publishes a user-root doctor.
+      doctor: target.scope === 'project' ? null : (state.entries.some((entry: any) => entry.id === 'doctor:omp') ? 'doctor:omp' : null),
     });
     Object.assign(window, {
       isTauri: true,
@@ -89,11 +97,6 @@ async function setup(page: Page) {
                 ...state.entries.filter((entry: any) => entry.id !== 'doctor:omp').map((entry: any) => entry.scope === 'user'
                   ? { ...entry, readOnly: true, policy: `${entry.policy} · 项目页只读；请在全局作用域管理` }
                   : { ...entry }),
-                {
-                  ...project, id: 't5-missing@t5-market', name: 't5-missing@t5-market', source: 't5-missing@t5-market',
-                  state: 'not_installed', enabled: null, root: '/fixture/home/.omp/plugins/cache/missing',
-                  policy: '项目缓存目录不存在（缓存漂移）；可卸载移除原生注册表/锁记录',
-                },
               ],
             };
           }
@@ -104,16 +107,27 @@ async function setup(page: Page) {
         }
         if (command === 'operate_native_plugin') {
           const request = args.request;
-          if (request.action !== 'doctor') return { status: 'native_command_completed', detail: '未使用', transactionId: null, snapshot: snapshot(request.target) };
-          state.doctorCalls += 1;
-          if (request.source !== 'doctor:omp') throw { message: 'doctor 来源应为诊断条目' };
-          state.entries = state.entries.filter((entry: any) => entry.id !== 'doctor:omp');
-          return {
-            status: 'native_command_completed',
-            detail: 'doctor 已重新核对；用户根残留已清理',
-            transactionId: null,
-            snapshot: snapshot(request.target),
-          };
+          if (request.action === 'doctor') {
+            state.doctorCalls += 1;
+            if (request.source !== 'doctor:omp') throw { message: 'doctor 来源应为诊断条目' };
+            state.entries = state.entries.filter((entry: any) => entry.id !== 'doctor:omp');
+            return {
+              status: 'native_command_completed',
+              detail: 'doctor 已重新核对；用户根残留已清理',
+              transactionId: null,
+              snapshot: snapshot(request.target),
+            };
+          }
+          if (request.action === 'uninstall') {
+            state.entries = state.entries.filter((entry: any) => entry.id !== request.source);
+            return {
+              status: 'native_command_completed',
+              detail: '原生命令已完成；已重新扫描',
+              transactionId: null,
+              snapshot: snapshot(request.target),
+            };
+          }
+          return { status: 'native_command_completed', detail: '未使用', transactionId: null, snapshot: snapshot(request.target) };
         }
         return null;
       } },
@@ -186,9 +200,17 @@ test('project marketplace copy stays writable while the shadowed user copy is re
   await expect(details.getByRole('button', { name: '卸载', exact: true })).toBeDisabled();
 
   // A missing project cache still has a native registry row; uninstall is the
-  // executable cleanup entry instead of a permanently disabled residual row.
+  // executable cleanup entry and must reach operate_native_plugin, not stop at
+  // the queued-operation entry gate.
   const missing = page.getByRole('listitem').filter({ has: page.getByText('t5-missing@t5-market', { exact: true }) });
   await missing.getByRole('button').click();
-  await expect(details.getByRole('button', { name: '卸载', exact: true })).toBeEnabled();
   await expect(details.getByRole('button', { name: '更新', exact: true })).toHaveCount(0);
+  await details.getByRole('button', { name: '卸载', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '卸载', exact: true }).click();
+  await expect.poll(async () => page.evaluate(() => (window as any).ompPluginsHarness.calls
+    .filter((call: any) => call.command === 'operate_native_plugin')
+    .map((call: any) => ({ action: call.args.request.action, source: call.args.request.source }))))
+    .toContainEqual({ action: 'uninstall', source: 't5-missing@t5-market' });
+  await expect(missing).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).ompPluginsHarness.calls.some((call: any) => call.command === 'operate_native_plugin' && call.args.request.action === 'uninstall'))).toBe(true);
 });

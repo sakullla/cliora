@@ -118,6 +118,10 @@ impl PluginAdapter for OmpPlugins {
         super::lifecycle::version_policy()
     }
 
+    fn doctor_source(&self) -> Option<&'static str> {
+        Some(DOCTOR_SOURCE)
+    }
+
     fn capability(&self) -> PluginCapability {
         PluginCapability {
             version: super::lifecycle::BASELINE,
@@ -1110,7 +1114,32 @@ fn apply_project_overrides(
 /// Unlike [`is_marketplace_source`] this is not an install-source heuristic:
 /// npm rows are bare names or `@scope/name` with no non-leading `@`.
 fn is_marketplace_id(value: &str) -> bool {
-    value.rfind('@').is_some_and(|index| index > 0) && !value.contains(['/', '\\', ':'])
+    let Some(index) = value.rfind('@') else {
+        return false;
+    };
+    if index == 0 || index + 1 >= value.len() {
+        return false;
+    }
+    let (name, marketplace) = (&value[..index], &value[index + 1..]);
+    valid_marketplace_name(name)
+        && !marketplace.is_empty()
+        && !marketplace.contains(['/', '\\', ':', '@'])
+}
+
+/// A marketplace plugin name is a plain name; a scoped package name
+/// (`@scope/name@marketplace`) is also accepted as a Claude-compatible registry
+/// ID. A scoped npm package without a second `@` is not a marketplace ID.
+fn valid_marketplace_name(name: &str) -> bool {
+    if let Some(scoped) = name.strip_prefix('@') {
+        !scoped.is_empty()
+            && !scoped.contains('@')
+            && scoped.contains('/')
+            && !scoped.starts_with('/')
+            && !scoped.ends_with('/')
+            && !scoped.contains(['\\', ':'])
+    } else {
+        !name.is_empty() && !name.contains(['@', '/', '\\', ':'])
+    }
 }
 
 /// A project marketplace copy shadows the same user marketplace ID at runtime.
@@ -1176,9 +1205,8 @@ fn is_marketplace_source(source: &str) -> bool {
         return false;
     }
     let (name, marketplace) = (&base[..index], &base[index + 1..]);
-    !name.is_empty()
+    valid_marketplace_name(name)
         && !marketplace.is_empty()
-        && !name.contains(['/', '\\', ':', '@'])
         && !marketplace.contains(['/', '\\', ':', '@'])
         && marketplace
             .chars()
@@ -1756,6 +1784,22 @@ mod tests {
         assert!(adapter.command_args("install", "fixture@v2", true).is_err());
         assert_eq!(
             adapter
+                .command_args("install", "@scope/pkg@market", true)
+                .unwrap(),
+            [
+                "plugin",
+                "install",
+                "@scope/pkg@market",
+                "--json",
+                "--scope",
+                "project"
+            ]
+        );
+        assert!(adapter
+            .command_args("install", "@scope/pkg@v2", true)
+            .is_err());
+        assert_eq!(
+            adapter
                 .command_args("install", "fixture@market.v2", true)
                 .unwrap(),
             [
@@ -1939,6 +1983,37 @@ mod tests {
             .unwrap();
         assert!(!enabled_row.read_only);
         assert!(enabled_row.policy.contains("同 ID 用户副本被项目副本遮蔽"));
+    }
+
+    #[test]
+    fn scoped_marketplace_ids_collapse_and_keep_the_project_copy_writable() {
+        assert!(is_marketplace_id("@scope/name@market"));
+        assert!(!is_marketplace_id("@scope/name"));
+        let value = json!({
+            "npm": [],
+            "marketplace": [
+                {
+                    "id": "@scope/name@market",
+                    "scope": "project",
+                    "entries": [{ "scope": "project", "installPath": "/missing/cache", "version": "1.0.0" }]
+                },
+                {
+                    "id": "@scope/name@market",
+                    "scope": "user",
+                    "entries": [{ "scope": "user", "installPath": "/missing/cache", "version": "1.0.0" }]
+                }
+            ]
+        });
+        let mut entries = PORT
+            .parse_list(&value, &target(Scope::Project, Some("/fixture/project")))
+            .unwrap();
+        assert_eq!(entries.len(), 2);
+        collapse_project_shadows(&mut entries);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "@scope/name@market");
+        assert_eq!(entries[0].scope, "project");
+        assert!(!entries[0].read_only);
+        assert!(entries[0].policy.contains("同 ID 用户副本被项目副本遮蔽"));
     }
 
     #[test]

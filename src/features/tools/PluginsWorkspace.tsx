@@ -127,10 +127,9 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
   const restoreFocus = useRef<string | null>(null);
   const accountLabel = useAccountLabels(!!remoteTargetId);
   const entries = snapshot?.entries ?? [];
-  // A native adapter publishes a writable not-installed diagnostic row only
-  // while it detects residual or drifted state; the row is the doctor source.
-  const doctorAction = !!snapshot?.capability.actions.includes('doctor');
-  const doctorEntry = doctorAction ? entries.find(entry => entry.state === 'not_installed' && !entry.readOnly && !entry.root) : undefined;
+  // The adapter publishes the diagnostic entry id only while that row exists;
+  // never infer a doctor row from state/root or show it on an unsupported scope.
+  const doctorEntry = snapshot?.doctor ? entries.find(entry => entry.id === snapshot.doctor) : undefined;
   const needle = search.trim().toLocaleLowerCase();
   const filtered = entries.filter(entry => `${entry.name} ${entry.source} ${entry.id}`.toLocaleLowerCase().includes(needle) && (filter === 'all' || (filter === 'readonly' ? entry.readOnly : filter === 'enabled' ? entry.enabled === true : entry.enabled === false)));
   const installedCount = entries.filter(entry => entry.state !== 'not_installed').length;
@@ -176,7 +175,11 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
         setSnapshot(latest); setStale(false);
         if (!latest.baseline || !latest.capability.actions.includes(operation.action)) throw new Error(t('tools.plugins.operationUnavailable'));
         const entry = operation.entryId ? latest.entries.find(item => item.id === operation.entryId) : null;
-        if (operation.action !== 'install' && (!entry || entry.state === 'not_installed')) throw new Error(t('tools.plugins.operationEntryChanged'));
+        // A writable missing-cache marketplace row is still a valid native
+        // uninstall target: its registry row exists even though the package is
+        // gone. Other not-installed rows (catalog/diagnostics) stay blocked.
+        const cleanup = operation.action === 'uninstall' && !!entry && entry.state === 'not_installed' && !entry.readOnly && !!entry.root;
+        if (operation.action !== 'install' && (!entry || (entry.state === 'not_installed' && !cleanup))) throw new Error(t('tools.plugins.operationEntryChanged'));
         if (entry?.readOnly || (operation.action === 'update' && blockProjectUpdate)) throw new Error(t('tools.plugins.operationUnavailable'));
         const result = await native.operateNativePlugin({ target, action: operation.action, source: operation.source, baseline: latest.baseline, trusted: operation.trusted });
         if (id !== generation.current) return;
