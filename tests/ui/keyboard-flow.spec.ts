@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { cliSwitcher } from './cli-switcher';
+import { setupConfigurationWorkspace } from './configuration-workspace-fixture';
 
 // R6: navigation, launching a tool, a dialog and a row menu all work from the keyboard alone,
 // and the focused control always shows a visible ring (02 ADR-6/ADR-7). Arrow keys move inside
@@ -165,4 +166,59 @@ test('the keyboard alone navigates, launches from the split button, closes a dia
   await expect(palette.getByRole('option').first()).toHaveAttribute('aria-selected', 'true');
   await page.mouse.click(8, 8);
   await expect(palette).toHaveCount(0);
+});
+
+test('the configuration quick/advanced shell works from the keyboard and returns focus', async ({ page }) => {
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await setupConfigurationWorkspace(page, 'codex');
+  const create = page.getByRole('button', { name: '新建配置', exact: true });
+  await create.focus();
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Shift+Tab');
+  await expectVisibleFocus(create);
+  await page.keyboard.press('Enter');
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  const quick = dialog.getByRole('button', { name: '快速配置', exact: true });
+  const advanced = dialog.getByRole('button', { name: '高级配置', exact: true });
+  await expect(quick).toHaveAttribute('aria-pressed', 'true');
+  await quick.focus();
+  await expectVisibleFocus(quick);
+  await page.keyboard.press('Tab');
+  await expectVisibleFocus(advanced);
+  await page.keyboard.press('Enter');
+  await expect(advanced).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  const settings = dialog.getByRole('button', { name: '常用设置', exact: true });
+  await expectVisibleFocus(settings);
+  await page.keyboard.press('Enter');
+  await expect(settings).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect(dialog).toHaveCount(0);
+  const saved = await page.evaluate(() => (window as any).configurationProtocol.calls.filter((call: any) => call.command === 'save_configuration_draft'));
+  expect(saved).toHaveLength(1);
+  expect(saved[0].args.draft.profile.name).toMatch(/配置$/);
+  await expectVisibleFocus(create);
+
+  // An empty name blocks save and moves focus to the field that needs attention.
+  await create.focus();
+  await page.keyboard.press('Enter');
+  const reopen = page.getByRole('dialog');
+  const name = reopen.getByLabel('配置名称');
+  await name.fill('');
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect(name).toBeFocused();
+  await expect(reopen.getByRole('alert').filter({ hasText: '请输入配置名称' })).toBeVisible();
+  // Escape asks before discarding; cancel keeps editing, and confirming returns focus to the opener.
+  await page.keyboard.press('Escape');
+  const leave = page.getByRole('dialog').filter({ hasText: '放弃未保存修改' });
+  await expect(leave).toBeVisible();
+  await leave.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(reopen).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.getByRole('dialog').filter({ hasText: '放弃未保存修改' }).getByRole('button', { name: '放弃修改', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(create).toBeFocused();
 });

@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { build } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
+import { setupConfigurationWorkspace } from './configuration-workspace-fixture';
 
 // OMP's dedicated editor mounted in isolation. Native YAML semantics, profile
 // isolation and credential references are covered by Rust tests and the shared
@@ -164,4 +165,36 @@ test('OMP project scope explains plaintext rejection and hides new providers', a
   await page.goto('/__omp_configuration_test?scope=project');
   await expect(page.getByText('项目 .omp 只保存当前项目的值；明文供应商密钥会被拒绝。')).toBeVisible();
   await expect(page.getByText('供应商密钥保存在 Cliora 的凭据边界；配置只写入环境变量引用，不进入草稿、IPC 或未加密导出。')).toBeVisible();
+});
+
+test('the shared shell opens OMP new configurations in quick and keeps one draft across levels', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'omp');
+  await page.getByRole('button', { name: '新建配置' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('button', { name: '快速配置', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(dialog.getByLabel('oh-my-pi (OMP) 配置')).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '常用设置', exact: true })).toHaveCount(0);
+  const model = dialog.getByLabel('模型 one', { exact: true });
+  await model.getByRole('button').first().click();
+  const context = model.getByLabel('上下文上限（Token）');
+  await context.fill('100000');
+  await dialog.getByRole('button', { name: '高级配置', exact: true }).click();
+  await expect(dialog.getByRole('button', { name: '常用设置', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '原生文本', exact: true })).toBeVisible();
+  await expect(dialog.getByLabel('配置名称')).toHaveValue('omp 配置');
+  await dialog.getByRole('button', { name: '快速配置', exact: true }).click();
+  await expect(dialog.getByRole('button', { name: '常用设置', exact: true })).toHaveCount(0);
+  await expect(model.getByLabel('上下文上限（Token）')).toHaveValue('100000');
+});
+
+test('OMP quick save never applies and leaves the current binding alone', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'omp');
+  await page.getByRole('button', { name: '新建配置' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: '保存配置', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  const calls = await page.evaluate(() => (window as any).configurationProtocol.calls);
+  expect(calls.filter((call: any) => call.command === 'save_configuration_draft')).toHaveLength(1);
+  expect(calls.filter((call: any) => call.command.includes('apply_'))).toEqual([]);
+  expect(await page.evaluate(() => (window as any).workspaceFixture.binding.profileVersion)).toBe(3);
 });

@@ -106,6 +106,20 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   const [resourceFocus, setResourceFocus] = useState<{ resource: ResourceView; key: string; token: number } | null>(null);
   const focusToken = useRef(0);
   const configBoard = useRef<HTMLDivElement>(null);
+  // The list keeps its scroll offset when a configuration dialog closes.
+  const listScroll = useRef(0);
+  const frameWasOpen = useRef(false);
+  const rememberListScroll = () => { listScroll.current = document.getElementById('main')?.scrollTop ?? 0; };
+  const restoreListScroll = () => {
+    const top = listScroll.current;
+    requestAnimationFrame(() => { const main = document.getElementById('main'); if (main) main.scrollTop = top; });
+  };
+  useEffect(() => {
+    if (frame) { frameWasOpen.current = true; return; }
+    if (!frameWasOpen.current) return;
+    frameWasOpen.current = false;
+    restoreListScroll();
+  }, [frame]);
   const mcpDirty = useCallback((value: boolean) => setResourceDirty(previous => previous.mcp === value ? previous : { ...previous, mcp: value }), []);
   const skillsDirty = useCallback((value: boolean) => setResourceDirty(previous => previous.skills === value ? previous : { ...previous, skills: value }), []);
   const agentsDirty = useCallback((value: boolean) => setResourceDirty(previous => previous.agents === value ? previous : { ...previous, agents: value }), []);
@@ -324,6 +338,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   async function closeFrame() { if (await mayLeave()) { discard(); } }
   async function openFrame(subject: ConfigurationSubject, profile: RegisteredProfile | null = null, confirmed = false, title?: string) {
     if (!confirmed && !await mayLeave()) return;
+    rememberListScroll();
     discard(); setError(''); setNotice('');
     setFrame({ key: crypto.randomUUID(), subject, profile, title: title ?? (subject === 'current' ? t('tools.workspace.frameCurrent') : subject === 'common' ? t('tools.workspace.frameCommon') : profile?.id ? t('tools.workspace.frameProfile', { name: profile.name }) : t('tools.workspace.frameNew')) });
   }
@@ -364,8 +379,8 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     }
   }
   async function createProfile() {
-    let name = t('tools.workspace.newProfile'); let suffix = 1;
-    while (workspace?.profiles.some(profile => profile.name === name)) name = t('tools.workspace.newProfileN', { suffix: ++suffix });
+    let name = t('tools.workspace.newProfileTool', { tool: descriptor?.name ?? toolId }); let suffix = 1;
+    while (workspace?.profiles.some(profile => profile.name === name)) name = t('tools.workspace.newProfileToolN', { tool: descriptor?.name ?? toolId, suffix: ++suffix });
     await openFrame('profile', { id: '', tool: toolId, name, version: 0, inheritCommon: false, files: {}, suppressed: {}, connection: null, nativeCredentials: {} });
   }
   async function switchScope(next: Scope, path = '') { if (next === scope && (next === 'global' || path === projectPath)) return; if (!await mayLeave()) return; discard(); setScope(next); setProjectPath(path); }
@@ -632,7 +647,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
         <div role="list" aria-label={t('tools.workspace.itemsAria')} className={`${styles.profileCards}${workspace.profiles.length > 6 ? ` ${styles.profileScroll}` : ''}`}>{profileGroups.map(group => <div key={group.id} className={styles.profileGroup} data-group={group.id}>{profileGroups.length > 1 && <div className={styles.groupLabel}><strong>{group.label}</strong><Badge>{query ? `${group.visible.length}/${group.profiles.length}` : group.profiles.length}</Badge></div>}{group.visible.map(row)}</div>)}</div>
         </div>
       </div>}
-      <GuideDialog wide suspended={!active} open={!!frame} title={frame?.title ?? t('tools.workspace.frameFallback')} hint={t(frame?.subject === 'current' ? 'tools.workspace.frameCurrentHint' : 'tools.workspace.frameHint', { tool: descriptor.name, scope: scope === 'global' ? t('tools.apply.global') : projectPath })} onClose={() => void closeFrame()} onBack={() => void closeFrame()}>{frame && !workspace && <p role="status">{t('tools.workspace.frameLoading')}</p>}{frame && workspace && <Suspense fallback={<PageSkeleton />}><ConfigurationWorkspaceEditor key={frame.key} toolId={toolId} subject={frame.subject} profile={frame.profile} scope={scope} projectPath={projectPath} remoteTargetId={isRemote ? remoteTargetId : null} workspace={workspace} accounts={accounts} onClose={() => void closeFrame()} onDirtyChange={value => { if (value) epoch.current++; setDirty(value); }} onDraftChange={changed} onStored={stored} onDone={(result, used) => { setFrame(null); setDirty(false); setNotice(result.application ? t('tools.workspace.doneUpdated') : used ? t('tools.workspace.doneSavedUsed') : t('tools.workspace.doneSaved')); void reload(toolId, scope, projectPath, true); }} /></Suspense>}</GuideDialog>
+      <GuideDialog wide suspended={!active} open={!!frame} title={frame?.title ?? t('tools.workspace.frameFallback')} hint={t(frame?.subject === 'current' ? 'tools.workspace.frameCurrentHint' : 'tools.workspace.frameHint', { tool: descriptor.name, scope: scope === 'global' ? t('tools.apply.global') : projectPath })} onClose={() => void closeFrame()} onBack={() => void closeFrame()}>{frame && !workspace && <p role="status">{t('tools.workspace.frameLoading')}</p>}{frame && workspace && <Suspense fallback={<PageSkeleton />}><ConfigurationWorkspaceEditor key={frame.key} toolId={toolId} subject={frame.subject} profile={frame.profile} scope={scope} projectPath={projectPath} remoteTargetId={isRemote ? remoteTargetId : null} workspace={workspace} accounts={accounts} onClose={() => void closeFrame()} onDirtyChange={value => { if (value) epoch.current++; setDirty(value); }} onDraftChange={changed} onStored={stored} onDone={(result, used) => { setFrame(null); setDirty(false); setNotice(result.application ? t('tools.workspace.doneUpdated') : used ? t('tools.workspace.doneSavedUsed') : t('tools.workspace.doneSaved')); void reload(toolId, scope, projectPath, true).then(() => restoreListScroll()); }} /></Suspense>}</GuideDialog>
       <GuideDialog wide open={!!comparison} title={t('home.conflict.title')} onClose={closeComparison}>{comparison && <div>{comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('tools.workspace.compareBanner') : undefined} actions={false} currentContent={file.current} nextContent={file.proposedText} format={file.format} onUseNext={() => void compareUse()} onKeepCurrent={closeComparison} />)}{compareError && <div className={styles.feedback}><StatusBanner tone="error">{t('tools.workspace.compareFailed', { error: compareError })}</StatusBanner></div>}<div className="dialog-footer"><Button onClick={closeComparison}>{t('common.conflict.keepCurrent')}</Button><span className="dialog-footer-gap" /><Button variant="primary" disabled={busy} onClick={() => void compareUse()}>{busy ? t('tools.workspace.applying') : t('common.conflict.useNext')}</Button></div></div>}</GuideDialog>
     </div>
     <Suspense fallback={<PageSkeleton />}>
