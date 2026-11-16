@@ -8,8 +8,8 @@
       "plugins": {
         "t5-market-plugin": {
           "version": "2.0.0",
-          "enabledFeatures": null,
-          "enabled": true
+          "enabledFeatures": ["extra"],
+          "enabled": false
         }
       },
       "settings": {}
@@ -32,6 +32,6 @@
       }
     ],
     "doctor": false,
-    "policyContains": ["项目覆盖", "项目覆盖功能：extra"]
+    "policyContains": ["项目覆盖", "项目覆盖功能：extra", "原生锁功能：extra"]
   }
 }

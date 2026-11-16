@@ -8,7 +8,9 @@ CLI evidence.
 | --- | --- |
 | `capability.json` | published install/update/enable/disable/uninstall/doctor actions, project scope and source vocabulary |
 | `commands.json` | native `omp plugin` subcommands, `--scope project` for marketplace IDs, refusal of project npm/version-pin installs and project doctor |
+| `manifest-paths.json` | `./` normalization, escaping path isolation and malformed manifest values; one bad path never fails the snapshot |
 | `residual.json` | a user lock entry whose package is missing, reported with a writable doctor recovery row |
+| `shadow-collapse.json` | native user+project rows with the same marketplace ID; the project row stays writable and the shadowed user row is collapsed |
 | `project-overrides.json` | `.omp/plugin-overrides.json` read-only disable/feature state and no misleading project doctor row |
 
 `tests/fixtures/plugins/omp-18.20.2-list.json` and

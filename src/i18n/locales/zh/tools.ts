@@ -241,6 +241,7 @@ export default {
       enable: '启用',
       disable: '禁用',
       uninstall: '卸载',
+      doctor: '修复',
     },
     state: {
       installed_load_unknown: '原生已安装 · 加载未验证',
@@ -264,6 +265,9 @@ export default {
     policyForbidden: '安装策略：禁止安装',
     policyOnInstall: '安装时认证',
     policyNone: '无需额外认证',
+    doctorTitle: '插件状态需要修复',
+    doctorRun: '运行 doctor 修复',
+    doctorConfirm: '运行原生 doctor 可能安装缺失依赖或移除可识别的锁残留；它不会回滚此前的部分变更。继续？',
     confirmUninstall: '卸载 {{name}} 及其包内资源？原生命令的下载和文件副作用不能保证自动回滚。',
     uninstallTitle: '卸载原生插件',
     confirmUpdate: '更新 {{name}}？这会运行原生命令，可能下载并执行插件代码。',

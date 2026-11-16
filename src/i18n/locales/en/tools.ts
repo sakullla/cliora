@@ -241,6 +241,7 @@ export default {
       enable: 'Enable',
       disable: 'Disable',
       uninstall: 'Uninstall',
+      doctor: 'Repair',
     },
     state: {
       installed_load_unknown: 'Installed natively · loading unverified',
@@ -264,6 +265,9 @@ export default {
     policyForbidden: 'Install policy: forbidden',
     policyOnInstall: 'Authenticate on install',
     policyNone: 'No extra authentication',
+    doctorTitle: 'Plugin state needs repair',
+    doctorRun: 'Run doctor repair',
+    doctorConfirm: 'The native doctor may install missing dependencies or remove residual lock state; it does not roll back earlier partial changes. Continue?',
     confirmUninstall: 'Uninstall {{name}} and its bundled resources? Downloads and file side effects of native commands cannot be guaranteed to roll back.',
     uninstallTitle: 'Uninstall native plugin',
     confirmUpdate: 'Update {{name}}? This runs a native command and may download and execute plugin code.',

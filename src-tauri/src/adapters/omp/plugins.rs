@@ -330,7 +330,7 @@ impl PluginAdapter for OmpPlugins {
             if let Some(enabled) = record.enabled {
                 // Marketplace enablement lives in its installed registry; only
                 // npm/link rows resolve enablement from this lock entry.
-                if !is_marketplace_source(&entry.id)
+                if !is_marketplace_id(&entry.id)
                     && entry.enabled != Some(enabled)
                     && entry.state != "not_installed"
                 {
@@ -338,6 +338,17 @@ impl PluginAdapter for OmpPlugins {
                         " · 原生锁启用状态为 {}（可能与其他作用域或缓存状态不同）",
                         if enabled { "启用" } else { "禁用" }
                     ));
+                }
+            }
+            if is_marketplace_id(&entry.id) {
+                if let Some(features) = record
+                    .enabled_features
+                    .as_ref()
+                    .filter(|features| !features.is_empty())
+                {
+                    entry
+                        .policy
+                        .push_str(&format!(" · 原生锁功能：{}", features.join(", ")));
                 }
             }
         }
@@ -353,7 +364,7 @@ impl PluginAdapter for OmpPlugins {
             else {
                 continue;
             };
-            if is_marketplace_source(&entry.id) {
+            if is_marketplace_id(&entry.id) {
                 continue;
             }
             let root = if entry.scope == "project" {
@@ -386,10 +397,13 @@ impl PluginAdapter for OmpPlugins {
                 continue;
             };
             if !Path::new(root).exists() {
-                entry.read_only = true;
-                if entry.state != "not_installed" {
-                    entry.state = "not_installed".into();
+                entry.state = "not_installed".into();
+                if is_marketplace_id(&entry.id) {
+                    // The native registry still makes `uninstall --scope ...`
+                    // available; parse_list already reported the missing cache.
+                    continue;
                 }
+                entry.read_only = true;
                 entry.policy.push_str(if entry.scope == "project" {
                     " · 项目安装目录不存在（缓存漂移）；请在项目作用域用原生 install/upgrade 处理"
                 } else if project_page {
@@ -399,6 +413,51 @@ impl PluginAdapter for OmpPlugins {
                 });
                 issues.push(format!("{} 的安装目录不存在", entry.name));
             }
+        }
+
+        // A marketplace registry entry can survive a deleted runtime link. The
+        // cache may still exist, so a missing link is the visible partial-link
+        // failure; the native uninstall/install commands remain available.
+        for entry in entries
+            .iter_mut()
+            .filter(|entry| is_marketplace_id(&entry.id))
+        {
+            let Some(root) = entry.root.as_deref() else {
+                continue;
+            };
+            if !Path::new(root).exists() {
+                continue;
+            }
+            let Some(name) = package_name_of(entry) else {
+                continue;
+            };
+            let link_root = if entry.scope == "project" {
+                project
+                    .as_ref()
+                    .map(|project| project_plugins_root(project))
+            } else {
+                Some(user_root.clone())
+            };
+            let Some(link_root) = link_root else {
+                continue;
+            };
+            if !link_root.join("node_modules").join(&name).exists() {
+                entry.policy.push_str(if entry.scope == "project" {
+                    " · 项目运行时链接不存在（link/缓存部分失败）；可重新 install --scope project 或卸载移除记录"
+                } else if project_page {
+                    " · 用户运行时链接不存在（link/缓存部分失败）；请在全局作用域重新安装或卸载"
+                } else {
+                    " · 用户运行时链接不存在（link/缓存部分失败）；可重新 install/upgrade 或卸载移除记录"
+                });
+            }
+        }
+
+        // The native runtime gives a project copy precedence over a user copy
+        // with the same marketplace ID. Keep only the project row so the shared
+        // duplicate-ID guard cannot make the writable project copy read-only;
+        // the project row carries the user-copy state and scope guidance.
+        if project.is_some() {
+            collapse_project_shadows(entries);
         }
 
         // `doctor` check 3: installed user plugins without node_modules.
@@ -426,7 +485,10 @@ impl PluginAdapter for OmpPlugins {
             return Ok(());
         }
         let manifest = package_manifest(&root);
-        add_owned_resources(entry, &root, manifest.as_ref(), None)
+        // A malformed or escaping manifest path only marks this entry; it must
+        // never fail the whole snapshot and hide every other plugin.
+        add_owned_resources(entry, &root, manifest.as_ref(), None);
+        Ok(())
     }
 }
 
@@ -508,7 +570,7 @@ fn npm_entry(row: &Value, target: &PluginTarget) -> Result<PluginEntry, String> 
         Path::new(&root),
         manifest,
         enabled_features.as_deref(),
-    )?;
+    );
     Ok(entry)
 }
 
@@ -565,17 +627,22 @@ fn marketplace_entry(row: &Value, target: &PluginTarget) -> Result<Option<Plugin
         }
         .into(),
         policy: "原生 marketplace 安装；启用状态由原生注册表与缓存管理".into(),
-        read_only: missing || project_read_only,
+        // A missing cache directory still has a native registry entry, and
+        // `omp plugin uninstall <id> --scope ...` can remove that record even
+        // when the cache is gone (verified with isolated OMP). Keep it
+        // operable for cleanup; only a user row viewed from a project page is
+        // scope read-only.
+        read_only: project_read_only,
         root: install_path,
         resources: Vec::new(),
     };
     if missing {
         entry.policy.push_str(if scope == "project" {
-            " · 项目缓存目录不存在（缓存漂移）；请在项目作用域用原生 install/upgrade 处理"
+            " · 项目缓存目录不存在（缓存漂移）；可卸载移除原生注册表/锁记录，或重新 install --scope project"
         } else if target.scope == Scope::Project {
-            " · 原生缓存目录不存在（缓存漂移）；请在全局作用域运行 doctor"
+            " · 原生缓存目录不存在（缓存漂移）；请在全局作用域卸载或重新安装"
         } else {
-            " · 原生缓存目录不存在（缓存漂移）；doctor 可检查"
+            " · 原生缓存目录不存在（缓存漂移）；可卸载移除注册表/锁记录或重新安装"
         });
     }
     if project_read_only {
@@ -592,7 +659,7 @@ fn marketplace_entry(row: &Value, target: &PluginTarget) -> Result<Option<Plugin
     if let Some(root) = root.as_deref() {
         let root = Path::new(root);
         let manifest = package_manifest(root);
-        add_owned_resources(&mut entry, root, manifest.as_ref(), None)?;
+        add_owned_resources(&mut entry, root, manifest.as_ref(), None);
     }
     Ok(Some(entry))
 }
@@ -703,9 +770,9 @@ fn add_owned_resources(
     root: &Path,
     manifest: Option<&Value>,
     enabled_features: Option<&[String]>,
-) -> Result<(), String> {
+) {
     if root.as_os_str().is_empty() || !root.is_dir() {
-        return Ok(());
+        return;
     }
     for (kind, relative) in [
         ("agents", "agents"),
@@ -732,7 +799,7 @@ fn add_owned_resources(
         }
     }
     let Some(manifest) = manifest.and_then(Value::as_object) else {
-        return Ok(());
+        return;
     };
     for (key, kind) in [
         ("tools", "tools"),
@@ -741,7 +808,7 @@ fn add_owned_resources(
         ("extensions", "extensions"),
     ] {
         if let Some(value) = manifest.get(key) {
-            add_manifest_paths(entry, root, kind, value)?;
+            add_manifest_paths(entry, root, kind, value);
         }
     }
     if let Some(features) = manifest.get("features").and_then(Value::as_object) {
@@ -771,41 +838,52 @@ fn add_owned_resources(
                 ("extensions", "extensions"),
             ] {
                 if let Some(value) = feature.get(key) {
-                    add_manifest_paths(entry, root, kind, value)?;
+                    add_manifest_paths(entry, root, kind, value);
                 }
             }
         }
     }
-    Ok(())
 }
 
-fn add_manifest_paths(
-    entry: &mut PluginEntry,
-    root: &Path,
-    kind: &str,
-    value: &Value,
-) -> Result<(), String> {
+/// Add declared manifest paths without failing the snapshot. An escaping path
+/// makes this one entry read-only and is reported in its policy; malformed
+/// values or non-strings are warnings only, so one bad plugin package cannot
+/// hide every other installed plugin or the doctor baseline.
+fn add_manifest_paths(entry: &mut PluginEntry, root: &Path, kind: &str, value: &Value) {
     let items: Vec<&str> = match value {
         Value::String(item) => vec![item.as_str()],
-        Value::Array(items) => items
-            .iter()
-            .map(|item| {
-                item.as_str()
-                    .ok_or_else(|| "OMP 插件清单资源路径不是字符串".to_owned())
-            })
-            .collect::<Result<_, _>>()?,
-        _ => return Err("OMP 插件清单资源字段格式未知；未静默忽略".into()),
+        Value::Array(items) => {
+            let mut paths = Vec::new();
+            for item in items {
+                match item.as_str() {
+                    Some(item) => paths.push(item),
+                    None => entry
+                        .policy
+                        .push_str(" · 插件清单资源数组含非字符串项，已忽略该项；请核对原生清单"),
+                }
+            }
+            paths
+        }
+        _ => {
+            entry
+                .policy
+                .push_str(" · 插件清单资源字段不是路径字符串/数组，已忽略；请核对原生清单");
+            return;
+        }
     };
     for item in items {
         let Some(relative) = safe_relative(item) else {
-            return Err(format!("OMP 插件清单包含包外资源路径 {item:?}；已限制管理"));
+            entry.read_only = true;
+            entry.policy.push_str(&format!(
+                " · 插件清单资源路径 {item:?} 在包外，已忽略并限制管理"
+            ));
+            continue;
         };
         let path = root.join(relative);
         if path.exists() && !covered_by_resource_directory(entry, &path) {
             push_resource(entry, kind, path);
         }
     }
-    Ok(())
 }
 
 /// A conventional resource directory already enumerates its files; adding the
@@ -822,12 +900,23 @@ fn safe_relative(value: &str) -> Option<PathBuf> {
     if path.is_absolute() {
         return None;
     }
-    let mut relative = PathBuf::new();
+    let mut parts: Vec<std::ffi::OsString> = Vec::new();
     for component in path.components() {
         match component {
-            Component::Normal(part) => relative.push(part),
-            _ => return None,
+            // Manifest writers commonly use `./commands/x`; it stays inside.
+            Component::CurDir => {}
+            Component::Normal(part) => parts.push(part.to_os_string()),
+            // A parent segment is allowed only while it still stays inside the
+            // package; the first escape rejects the whole path.
+            Component::ParentDir => {
+                parts.pop()?;
+            }
+            Component::RootDir | Component::Prefix(_) => return None,
         }
+    }
+    let mut relative = PathBuf::new();
+    for part in parts {
+        relative.push(part);
     }
     (!relative.as_os_str().is_empty()).then_some(relative)
 }
@@ -852,6 +941,7 @@ struct LockRecord {
     name: String,
     version: Option<String>,
     enabled: Option<bool>,
+    enabled_features: Option<Vec<String>>,
 }
 
 fn read_lock(path: &Path, issues: &mut Vec<String>) -> Vec<LockRecord> {
@@ -885,6 +975,15 @@ fn read_lock(path: &Path, issues: &mut Vec<String>) -> Vec<LockRecord> {
                     .and_then(Value::as_str)
                     .map(str::to_owned),
                 enabled: state.get("enabled").and_then(Value::as_bool),
+                enabled_features: state.get("enabledFeatures").and_then(Value::as_array).map(
+                    |items| {
+                        items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_owned)
+                            .collect()
+                    },
+                ),
             })
         })
         .collect()
@@ -920,7 +1019,7 @@ fn orphan_entry(row: &LockRecord, scope: &str, project: bool) -> PluginEntry {
         enabled: row.enabled,
         state: "not_installed".into(),
         policy: if project {
-            "项目锁文件仍记录此插件，但磁盘包不存在（残留或只删除了安装目录）。项目作用域请在原生 CLI 用 install --scope project 重新安装，或用 uninstall --scope project 移除记录；omp plugin doctor 只检查用户插件根。"
+            "项目锁文件仍记录此插件，但磁盘包不存在（残留或只删除了安装目录）。Cliora 不直接改写锁文件；请在原生 CLI 用 install --scope project 重新安装，或用 uninstall --scope project 移除记录。omp plugin doctor 只检查用户插件根。"
                 .into()
         } else {
             "用户锁文件仍记录此插件，但磁盘包不存在（残留或只删除了安装目录）。运行 doctor 修复会清理可识别的锁残留，也可用原生 install/uninstall 重新安装或移除。"
@@ -1005,6 +1104,63 @@ fn apply_project_overrides(
         }
     }
     Ok(())
+}
+
+/// Structural marketplace identity for an installed row (`name@marketplace`).
+/// Unlike [`is_marketplace_source`] this is not an install-source heuristic:
+/// npm rows are bare names or `@scope/name` with no non-leading `@`.
+fn is_marketplace_id(value: &str) -> bool {
+    value.rfind('@').is_some_and(|index| index > 0) && !value.contains(['/', '\\', ':'])
+}
+
+/// A project marketplace copy shadows the same user marketplace ID at runtime.
+/// The shared snapshot's duplicate-ID guard cannot choose between them, so the
+/// adapter removes the shadowed user row and records its state on the project
+/// row. User-only rows stay visible read-only.
+fn collapse_project_shadows(entries: &mut Vec<PluginEntry>) {
+    let project_ids: BTreeSet<String> = entries
+        .iter()
+        .filter(|entry| entry.scope == "project" && is_marketplace_id(&entry.id))
+        .map(|entry| entry.id.clone())
+        .collect();
+    if project_ids.is_empty() {
+        return;
+    }
+    let mut shadowed = BTreeSet::new();
+    let mut degraded = BTreeSet::new();
+    for entry in entries.iter().filter(|entry| {
+        entry.scope == "user" && is_marketplace_id(&entry.id) && project_ids.contains(&entry.id)
+    }) {
+        shadowed.insert(entry.id.clone());
+        if entry.state == "not_installed"
+            || entry.policy.contains("缓存目录不存在")
+            || entry.policy.contains("运行时链接不存在")
+        {
+            degraded.insert(entry.id.clone());
+        }
+    }
+    if shadowed.is_empty() {
+        return;
+    }
+    for entry in entries
+        .iter_mut()
+        .filter(|entry| entry.scope == "project" && shadowed.contains(&entry.id))
+    {
+        let override_disabled = entry.policy.contains("项目覆盖") && entry.policy.contains("禁用");
+        entry.policy.push_str(if override_disabled {
+            " · 项目覆盖已禁用同 ID 插件；用户副本也不会在本项目加载"
+        } else if entry.enabled == Some(false) {
+            " · 同 ID 用户副本仍在；项目副本禁用时原生运行时回退用户副本，用户副本请在全局作用域管理"
+        } else {
+            " · 同 ID 用户副本被项目副本遮蔽；项目页只管理项目副本，用户副本请在全局作用域查看"
+        });
+        if degraded.contains(&entry.id) {
+            entry.policy.push_str(
+                " · 同 ID 用户副本缓存/链接缺失，运行时回退也可能失败；请在全局作用域修复或卸载",
+            );
+        }
+    }
+    entries.retain(|entry| !(entry.scope == "user" && shadowed.contains(&entry.id)));
 }
 
 /// A conservative `name@marketplace` check for an install source. OMP also
@@ -1217,6 +1373,123 @@ pub(crate) fn verify_case(
                 }
             }
         }
+        "manifest-paths" => {
+            let cases = case
+                .get("cases")
+                .and_then(Value::as_array)
+                .ok_or_else(|| CaseError::Failed("manifest-paths 用例缺少 cases".into()))?;
+            for (index, item) in cases.iter().enumerate() {
+                let sandbox = context
+                    .home
+                    .join(format!("plugins-verify-manifest-{index}"));
+                let _ = std::fs::remove_dir_all(&sandbox);
+                std::fs::create_dir_all(sandbox.join("commands"))
+                    .map_err(|_| CaseError::Failed("无法准备隔离清单目录".into()))?;
+                std::fs::create_dir_all(sandbox.join("custom"))
+                    .map_err(|_| CaseError::Failed("无法准备隔离清单目录".into()))?;
+                std::fs::write(sandbox.join("commands/review.md"), "x")
+                    .map_err(|_| CaseError::Failed("无法写入隔离清单资源".into()))?;
+                std::fs::write(sandbox.join("custom/review.md"), "x")
+                    .map_err(|_| CaseError::Failed("无法写入隔离清单资源".into()))?;
+                let manifest = item
+                    .get("manifest")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({}));
+                std::fs::write(
+                    sandbox.join("package.json"),
+                    serde_json::json!({
+                        "name": "t5-manifest-fixture",
+                        "version": "1.0.0",
+                        "omp": manifest,
+                    })
+                    .to_string(),
+                )
+                .map_err(|_| CaseError::Failed("无法写入隔离包清单".into()))?;
+                let mut entry = PluginEntry {
+                    id: "t5-manifest-fixture".into(),
+                    name: "T5 manifest fixture".into(),
+                    source: "t5-manifest-fixture".into(),
+                    version: Some("1.0.0".into()),
+                    scope: "user".into(),
+                    enabled: Some(true),
+                    state: "installed_load_unknown".into(),
+                    policy: String::new(),
+                    read_only: false,
+                    root: Some(sandbox.display().to_string()),
+                    resources: Vec::new(),
+                };
+                adapter
+                    .fill_missing_resources(&mut entry)
+                    .map_err(CaseError::Failed)?;
+                let expect = item.get("expect").and_then(Value::as_object);
+                if let Some(read_only) = expect
+                    .and_then(|expect| expect.get("readOnly"))
+                    .and_then(Value::as_bool)
+                {
+                    checks.push((
+                        format!("{index} readOnly"),
+                        entry.read_only == read_only,
+                        format!("实际 {}，策略 {}", entry.read_only, entry.policy),
+                    ));
+                }
+                for needle in expect
+                    .and_then(|expect| expect.get("policyContains"))
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                {
+                    checks.push((
+                        format!("{index} policy 包含 {needle}"),
+                        entry.policy.contains(needle),
+                        entry.policy.clone(),
+                    ));
+                }
+                for suffix in expect
+                    .and_then(|expect| expect.get("resourceSuffixes"))
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                {
+                    checks.push((
+                        format!("{index} 资源 {suffix}"),
+                        entry
+                            .resources
+                            .iter()
+                            .any(|resource| resource.path.replace('\\', "/").ends_with(suffix)),
+                        entry
+                            .resources
+                            .iter()
+                            .map(|resource| resource.path.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ));
+                }
+                for suffix in expect
+                    .and_then(|expect| expect.get("absentSuffixes"))
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                {
+                    checks.push((
+                        format!("{index} 未包含 {suffix}"),
+                        entry
+                            .resources
+                            .iter()
+                            .all(|resource| !resource.path.replace('\\', "/").ends_with(suffix)),
+                        entry
+                            .resources
+                            .iter()
+                            .map(|resource| resource.path.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ));
+                }
+                let _ = std::fs::remove_dir_all(&sandbox);
+            }
+        }
         "supplement" => {
             let sandbox = context.home.join("plugins-verify");
             let project = context.project.join("plugins-verify");
@@ -1285,6 +1558,56 @@ pub(crate) fn verify_case(
                         policies.contains(needle),
                         policies.clone(),
                     ));
+                }
+            }
+            if let Some(expected) = case.get("expectEntries").and_then(Value::as_array) {
+                checks.push((
+                    "supplement 后条目数量".into(),
+                    entries.len() == expected.len(),
+                    format!("实际 {}，期望 {}", entries.len(), expected.len()),
+                ));
+                for (index, expected) in expected.iter().enumerate() {
+                    let id = expected.get("id").and_then(Value::as_str);
+                    let scope = expected.get("scope").and_then(Value::as_str);
+                    let entry = entries.iter().find(|entry| {
+                        id.is_none_or(|id| entry.id == id)
+                            && scope.is_none_or(|scope| entry.scope == scope)
+                    });
+                    checks.push((
+                        format!("预期条目 {index} 存在"),
+                        entry.is_some(),
+                        format!("id={id:?} scope={scope:?}"),
+                    ));
+                    let Some(entry) = entry else {
+                        continue;
+                    };
+                    if let Some(read_only) = expected.get("readOnly").and_then(Value::as_bool) {
+                        checks.push((
+                            format!("条目 {index} readOnly"),
+                            entry.read_only == read_only,
+                            format!("实际 {}，策略 {}", entry.read_only, entry.policy),
+                        ));
+                    }
+                    if let Some(state) = expected.get("state").and_then(Value::as_str) {
+                        checks.push((
+                            format!("条目 {index} state"),
+                            entry.state == state,
+                            entry.state.clone(),
+                        ));
+                    }
+                    for needle in expected
+                        .get("policyContains")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                    {
+                        checks.push((
+                            format!("条目 {index} policy 包含 {needle}"),
+                            entry.policy.contains(needle),
+                            entry.policy.clone(),
+                        ));
+                    }
                 }
             }
             let _ = std::fs::remove_dir_all(&sandbox);
@@ -1557,27 +1880,97 @@ mod tests {
         assert!(!market.read_only);
         assert!(market.policy.contains("被同 ID 的项目副本遮蔽"));
 
-        let project = PORT
+        let mut project = PORT
             .parse_list(&value, &target(Scope::Project, Some("/fixture/project")))
             .unwrap();
-        let project_row = project
-            .iter()
-            .find(|entry| entry.id == "t5-market-plugin@t5-market" && entry.scope == "project")
-            .unwrap();
-        assert!(!project_row.read_only);
-        assert_eq!(project_row.enabled, Some(false));
-        assert_eq!(project_row.state, "disabled");
-        let shadowed = project
+        // The native list contains both the project row and the user row marked
+        // `shadowedBy: "project"`; the adapter collapses the user copy before
+        // the shared duplicate-ID guard runs.
+        assert_eq!(
+            project
+                .iter()
+                .filter(|entry| entry.id == "t5-market-plugin@t5-market")
+                .count(),
+            2
+        );
+        let shadowed_user = project
             .iter()
             .find(|entry| entry.id == "t5-market-plugin@t5-market" && entry.scope == "user")
             .unwrap();
-        assert!(shadowed.read_only);
-        assert!(shadowed.policy.contains("项目页只读"));
+        assert!(shadowed_user.read_only);
+        assert!(shadowed_user.policy.contains("项目页只读"));
         let npm_project = project
             .iter()
             .find(|entry| entry.id == "t5-fixture-plugin")
             .unwrap();
         assert!(npm_project.read_only);
+
+        collapse_project_shadows(&mut project);
+        let market_rows: Vec<&PluginEntry> = project
+            .iter()
+            .filter(|entry| entry.id == "t5-market-plugin@t5-market")
+            .collect();
+        assert_eq!(market_rows.len(), 1, "同 ID 用户副本应被项目副本折叠");
+        let project_row = market_rows[0];
+        assert_eq!(project_row.scope, "project");
+        assert!(!project_row.read_only);
+        assert_eq!(project_row.enabled, Some(false));
+        assert_eq!(project_row.state, "disabled");
+        assert!(project_row
+            .policy
+            .contains("项目副本禁用时原生运行时回退用户副本"));
+        assert!(project_row.policy.contains("全局作用域"));
+
+        // An enabled project copy shadows the user copy in the other direction.
+        let mut enabled: Value = serde_json::from_str(LIST_FIXTURE).unwrap();
+        enabled["npm"] = json!([]);
+        enabled["marketplace"][0]["entries"][0]["enabled"] = json!(true);
+        enabled["marketplace"][1]["entries"][0]["installPath"] =
+            json!(market_root.display().to_string());
+        enabled["marketplace"][0]["entries"][0]["installPath"] =
+            json!(market_root.display().to_string());
+        let mut enabled_project = PORT
+            .parse_list(&enabled, &target(Scope::Project, Some("/fixture/project")))
+            .unwrap();
+        collapse_project_shadows(&mut enabled_project);
+        let enabled_row = enabled_project
+            .iter()
+            .find(|entry| entry.id == "t5-market-plugin@t5-market")
+            .unwrap();
+        assert!(!enabled_row.read_only);
+        assert!(enabled_row.policy.contains("同 ID 用户副本被项目副本遮蔽"));
+    }
+
+    #[test]
+    fn missing_marketplace_cache_keeps_native_uninstall_available() {
+        let missing = "/fixture/does-not-exist/t5-market___plugin___1.0.0";
+        for (scope, target) in [
+            ("user", target(Scope::Global, None)),
+            ("project", target(Scope::Project, Some("/fixture/project"))),
+        ] {
+            let entries = PORT
+                .parse_list(
+                    &json!({
+                        "npm": [],
+                        "marketplace": [{
+                            "id": "t5-market-plugin@t5-market",
+                            "scope": scope,
+                            "entries": [{ "scope": scope, "installPath": missing, "version": "1.0.0" }]
+                        }]
+                    }),
+                    &target,
+                )
+                .unwrap();
+            let entry = &entries[0];
+            assert_eq!(entry.state, "not_installed");
+            assert!(
+                !entry.read_only,
+                "{scope} 缺缓存仍可用原生 uninstall 清理注册表"
+            );
+            assert!(entry.root.as_deref() == Some(missing));
+            assert!(entry.policy.contains("卸载"));
+            assert_eq!(entry.id, "t5-market-plugin@t5-market");
+        }
     }
 
     #[test]
@@ -1697,6 +2090,47 @@ mod tests {
     }
 
     #[test]
+    fn missing_marketplace_runtime_link_is_reported_without_disabling_operations() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let user_root = user_plugins_root(&home);
+        std::fs::create_dir_all(&user_root).unwrap();
+        let cache = temp.path().join("cache/t5-market-plugin___1.0.0");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(
+            cache.join("package.json"),
+            r#"{"name":"t5-market-plugin","version":"1.0.0","omp":{"name":"T5"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            lock_path(&user_root),
+            r#"{"plugins":{"t5-market-plugin":{"version":"1.0.0","enabledFeatures":["extra"],"enabled":true}},"settings":{}}"#,
+        )
+        .unwrap();
+        let mut entry = entry(Some(&cache.display().to_string()));
+        entry.id = "t5-market-plugin@t5-market".into();
+        entry.source = entry.id.clone();
+        let mut entries = vec![entry];
+        PORT.supplement(&home, &target(Scope::Global, None), &mut entries)
+            .unwrap();
+        let market = entries
+            .iter()
+            .find(|entry| entry.id == "t5-market-plugin@t5-market")
+            .unwrap();
+        assert!(!market.read_only);
+        assert!(
+            market.policy.contains("运行时链接不存在"),
+            "{}",
+            market.policy
+        );
+        assert!(
+            market.policy.contains("原生锁功能：extra"),
+            "{}",
+            market.policy
+        );
+    }
+
+    #[test]
     fn doctor_fixture_is_parsed_as_native_checks_without_faking_success() {
         let value: Value = serde_json::from_str(DOCTOR_FIXTURE).unwrap();
         let checks = value.as_array().unwrap();
@@ -1741,12 +2175,51 @@ mod tests {
                 == 1
         );
 
+        assert_eq!(
+            safe_relative("./commands/review.md"),
+            Some(PathBuf::from("commands/review.md"))
+        );
+        assert_eq!(
+            safe_relative("a/../commands/review.md"),
+            Some(PathBuf::from("commands/review.md"))
+        );
+        assert!(safe_relative("../outside.md").is_none());
+        assert!(safe_relative("/outside.md").is_none());
+
         std::fs::write(
             root.join("package.json"),
-            r#"{"name":"t5-fixture-plugin","version":"1.0.0","omp":{"commands":["../outside.md"]}}"#,
+            r#"{"name":"t5-fixture-plugin","version":"1.0.0","omp":{"commands":["./commands/review.md"]}}"#,
+        )
+        .unwrap();
+        let mut dotted = entry(Some(&root.display().to_string()));
+        assert!(PORT.fill_missing_resources(&mut dotted).is_ok());
+        assert!(!dotted.read_only, "{}", dotted.policy);
+
+        std::fs::write(root.join("commands/other.md"), "x").unwrap();
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"name":"t5-fixture-plugin","version":"1.0.0","omp":{"commands":["./commands/other.md","../outside.md"]}}"#,
         )
         .unwrap();
         let mut escaped = entry(Some(&root.display().to_string()));
-        assert!(PORT.fill_missing_resources(&mut escaped).is_err());
+        // An escaping manifest item only marks this entry read-only; it must not
+        // fail the snapshot, list or doctor baseline.
+        assert!(PORT.fill_missing_resources(&mut escaped).is_ok());
+        assert!(escaped.read_only);
+        assert!(escaped.policy.contains("包外"), "{}", escaped.policy);
+        assert!(escaped
+            .resources
+            .iter()
+            .all(|resource| !resource.path.contains("outside.md")));
+
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"name":"t5-fixture-plugin","version":"1.0.0","omp":{"commands":{"inline":true}}}"#,
+        )
+        .unwrap();
+        let mut malformed = entry(Some(&root.display().to_string()));
+        assert!(PORT.fill_missing_resources(&mut malformed).is_ok());
+        assert!(!malformed.read_only);
+        assert!(malformed.policy.contains("不是路径字符串/数组"));
     }
 }

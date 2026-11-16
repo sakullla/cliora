@@ -79,14 +79,28 @@ async function setup(page: Page) {
         };
         if (command === 'scan_native_plugins') {
           if (args.target.scope === 'project') {
+            // Real OMP native list shape: project row plus the same-ID user row
+            // with shadowedBy:project. The desktop adapter collapses the user
+            // copy, but this mock keeps both so the project row is still proven
+            // writable and the user copy stays read-only.
             return {
               ...snapshot(args.target),
-              entries: state.entries.filter((entry: any) => entry.scope === 'project' || entry.id === 't5-fixture-plugin').map((entry: any) => entry.id === 't5-fixture-plugin'
-                ? { ...entry, readOnly: true, policy: '用户级安装，项目页只读；请在全局作用域管理' }
-                : { ...entry }),
+              entries: [
+                ...state.entries.filter((entry: any) => entry.id !== 'doctor:omp').map((entry: any) => entry.scope === 'user'
+                  ? { ...entry, readOnly: true, policy: `${entry.policy} · 项目页只读；请在全局作用域管理` }
+                  : { ...entry }),
+                {
+                  ...project, id: 't5-missing@t5-market', name: 't5-missing@t5-market', source: 't5-missing@t5-market',
+                  state: 'not_installed', enabled: null, root: '/fixture/home/.omp/plugins/cache/missing',
+                  policy: '项目缓存目录不存在（缓存漂移）；可卸载移除原生注册表/锁记录',
+                },
+              ],
             };
           }
-          return snapshot(args.target);
+          return {
+            ...snapshot(args.target),
+            entries: state.entries.filter((entry: any) => entry.scope !== 'project').map((entry: any) => ({ ...entry })),
+          };
         }
         if (command === 'operate_native_plugin') {
           const request = args.request;
@@ -114,7 +128,7 @@ async function setup(page: Page) {
 test('OMP plugin rows keep user/project scope, shadowing and the doctor recovery entry', async ({ page }) => {
   await setup(page);
   await expect(page.getByText('t5-fixture-plugin · 全局')).toBeVisible();
-  await expect(page.getByText('t5-market-plugin@t5-market · 项目')).toBeVisible();
+  await expect(page.getByText('t5-market-plugin@t5-market · 项目')).toHaveCount(0);
   await page.getByLabel('插件状态筛选').selectOption('readonly');
   const shadow = page.getByRole('listitem').filter({ has: page.getByText('t5-market-plugin@t5-market', { exact: true }) });
   await expect(shadow).toBeVisible();
@@ -150,4 +164,31 @@ test('project scope keeps user npm plugins read-only', async ({ page }) => {
   await expect(details.getByRole('button', { name: '禁用', exact: true })).toBeDisabled();
   await details.locator('summary').click();
   await expect(details.getByText(/项目页只读/)).toBeVisible();
+});
+
+test('project marketplace copy stays writable while the shadowed user copy is read-only', async ({ page }) => {
+  await setup(page);
+  await page.getByRole('button', { name: '配置范围' }).click();
+  await page.getByRole('option', { name: '测试项目' }).click();
+  const details = page.getByRole('article', { name: '插件详情' });
+
+  const projectRow = page.getByRole('listitem').filter({ has: page.getByText('t5-market-plugin@t5-market · 项目', { exact: true }) });
+  await expect(projectRow).toBeVisible();
+  await projectRow.getByRole('button').click();
+  await expect(details.getByRole('button', { name: '更新', exact: true })).toBeEnabled();
+  await expect(details.getByRole('button', { name: '禁用', exact: true })).toBeEnabled();
+  await expect(details.getByRole('button', { name: '卸载', exact: true })).toBeEnabled();
+
+  const userRow = page.getByRole('listitem').filter({ has: page.getByText('t5-market-plugin@t5-market · 全局', { exact: true }) });
+  await expect(userRow).toBeVisible();
+  await userRow.getByRole('button').click();
+  await expect(details.getByRole('button', { name: '更新', exact: true })).toBeDisabled();
+  await expect(details.getByRole('button', { name: '卸载', exact: true })).toBeDisabled();
+
+  // A missing project cache still has a native registry row; uninstall is the
+  // executable cleanup entry instead of a permanently disabled residual row.
+  const missing = page.getByRole('listitem').filter({ has: page.getByText('t5-missing@t5-market', { exact: true }) });
+  await missing.getByRole('button').click();
+  await expect(details.getByRole('button', { name: '卸载', exact: true })).toBeEnabled();
+  await expect(details.getByRole('button', { name: '更新', exact: true })).toHaveCount(0);
 });
