@@ -3,11 +3,12 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { withMod } from '../lib/shortcut';
 
-export function GuideDialog({ open, title, hint, wide, suspended = false, closeDisabled = false, onClose, onBack, children }: { open: boolean; title: string; hint?: string; wide?: boolean; suspended?: boolean; closeDisabled?: boolean; onClose: () => void; onBack?: () => void; children: ReactNode }) {
+export function GuideDialog({ open, title, hint, wide, suspended = false, closeDisabled = false, restoreFocus = true, onClose, onBack, children }: { open: boolean; title: string; hint?: string; wide?: boolean; suspended?: boolean; closeDisabled?: boolean; restoreFocus?: boolean; onClose: () => void; onBack?: () => void; children: ReactNode }) {
   const { t } = useTranslation();
   const titleId = useId();
   const dialog = useRef<HTMLDialogElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
+  const shouldRestoreFocus = useRef(restoreFocus); shouldRestoreFocus.current = restoreFocus;
 
   useLayoutEffect(() => {
     const element = dialog.current;
@@ -19,7 +20,7 @@ export function GuideDialog({ open, title, hint, wide, suspended = false, closeD
       // on the sheet keeps a ring off that button until the keyboard actually moves.
       if (document.activeElement instanceof HTMLElement && document.activeElement.classList.contains('guide-dialog-close')) element.focus({ preventScroll: true });
     }
-    return () => { if (element.open) element.close(); const target = returnFocus.current; if (target?.isConnected) requestAnimationFrame(() => target.focus()); };
+    return () => { if (element.open) element.close(); const target = returnFocus.current; if (target?.isConnected) requestAnimationFrame(() => { if (shouldRestoreFocus.current && !dialog.current?.open) target.focus(); }); };
   }, [open, suspended]);
 
   useLayoutEffect(() => {

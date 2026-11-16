@@ -4,6 +4,8 @@
 //! embedding an SSH implementation. The adapter layer can build on these
 //! target/project records without creating per-CLI SSH branches.
 
+pub mod prompts;
+
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};

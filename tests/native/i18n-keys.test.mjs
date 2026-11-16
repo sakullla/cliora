@@ -2,18 +2,12 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { statusTable } from '../../src/lib/statusTone.ts';
+import { translationResources } from '../../src/i18n/catalog.ts';
 
 const root = new URL('../../', import.meta.url);
-const modules = ['common', 'home', 'tools', 'library', 'records', 'settings', 'sessions'];
 const languages = ['zh', 'en'];
-
-const bundles = {};
-for (const language of languages) {
-  bundles[language] = {};
-  for (const name of modules) {
-    bundles[language][name] = (await import(new URL(`src/i18n/locales/${language}/${name}.ts`, root))).default;
-  }
-}
+const modules = Object.keys(translationResources.zh.translation);
+const bundles = Object.fromEntries(languages.map(language => [language, translationResources[language].translation]));
 
 function leafPaths(node, prefix = '') {
   const paths = [];
@@ -75,7 +69,8 @@ for (const file of sourceFiles(srcRoot)) {
   }
 }
 
-test('zh and en declare the same key paths in all seven modules', () => {
+test('zh and en declare the same key paths in every registered runtime module', () => {
+  assert.deepEqual(Object.keys(bundles.zh).sort(), Object.keys(bundles.en).sort());
   const gaps = [];
   for (const name of modules) {
     const zh = new Set(leafPaths(bundles.zh[name]));

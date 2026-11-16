@@ -1,19 +1,22 @@
 import { useTranslation } from 'react-i18next';
-import { useLayoutEffect, type ReactNode, type RefObject } from 'react';
+import { useLayoutEffect, useRef, type RefObject } from 'react';
 import { Icon } from '../../components/Icon';
 import { Button, IconButton } from '../../components/ui';
 import { ToolIcon } from '../../components/ToolIcon';
-import type { LibraryItem } from '../../types/library';
+import type { PromptContext } from '../../types/prompts';
+import type { BusinessWorkspace } from '../../types/workspaces';
 import { PromptPicker } from './PromptPicker';
 import styles from './SessionWorkbench.module.css';
 
-export function WorkbenchComposer({ toolId, toolName, place, draft, prompts, promptFeedback, inputRef, onChange, onFilesPaste, onSubmit, onClose }: {
+export function WorkbenchComposer({ toolId, toolName, place, draft, active, promptContext, promptSourceKey, workspaces, inputRef, onChange, onFilesPaste, onSubmit, onClose }: {
   toolId: string;
   toolName: string;
   place: string;
   draft: string;
-  prompts: LibraryItem[];
-  promptFeedback?: ReactNode;
+  active: boolean;
+  promptContext: PromptContext | null;
+  promptSourceKey: string;
+  workspaces: BusinessWorkspace[];
   inputRef: RefObject<HTMLTextAreaElement | null>;
   onChange: (text: string) => void;
   onFilesPaste?: (files: File[]) => void;
@@ -21,6 +24,7 @@ export function WorkbenchComposer({ toolId, toolName, place, draft, prompts, pro
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const latestDraft = useRef(draft); latestDraft.current = draft;
   useLayoutEffect(() => {
     const node = inputRef.current;
     if (!node) return;
@@ -40,14 +44,13 @@ export function WorkbenchComposer({ toolId, toolName, place, draft, prompts, pro
     <div className={styles.composerCard}>
       <div className={styles.composerHead}>
         <span className={styles.composerTarget}><ToolIcon toolId={toolId} size={14} /><span>{t('sessions.composerTarget')}</span><strong>{toolName}</strong><span className={styles.composerPlace}>{place}</span></span>
-        <PromptPicker className={styles.composerPromptList} labelClassName={styles.composerPromptLabel} prompts={prompts} onPick={(prompt) => { const next = draft ? draft + '\n' + prompt.body : prompt.body; onChange(next); requestAnimationFrame(() => { const node = inputRef.current; if (node) { node.focus(); node.setSelectionRange(next.length, next.length); } }); }} />
+        <PromptPicker className={styles.composerPromptList} labelClassName={styles.composerPromptLabel} active={active} context={promptContext} sourceKey={promptSourceKey} workspaces={workspaces} onPick={(prompt) => { const draft = latestDraft.current; const next = draft ? draft + '\n' + prompt.body : prompt.body; onChange(next); requestAnimationFrame(() => { const node = inputRef.current; if (node) { node.focus(); node.setSelectionRange(next.length, next.length); } }); }} />
         {lines > 1 && <span className={styles.composerLines}>{t('sessions.composerLines', { count: lines })}</span>}
         <IconButton size="sm" className={styles.composerClose} aria-label={t('sessions.composerClose')} title={t('sessions.composerClose') + ' (Esc)'} onClick={onClose} icon={<Icon name="close" size={14} />} />
       </div>
-      {promptFeedback}
       <div className={styles.composerInputRow}>
         <span className={styles.promptMark} aria-hidden="true">›</span>
-        <textarea ref={inputRef} rows={1} className={styles.composerTextarea} value={draft} placeholder={t('sessions.composerPlaceholder', { tool: toolName })} aria-label={t('sessions.composerPlaceholder', { tool: toolName })} onChange={(event) => onChange(event.target.value)} onPaste={(event) => {
+        <textarea ref={inputRef} rows={1} className={styles.composerTextarea} value={draft} placeholder={t('sessions.composerPlaceholder', { tool: toolName })} aria-label={t('sessions.composerPlaceholder', { tool: toolName })} onChange={(event) => { latestDraft.current = event.target.value; onChange(event.target.value); }} onPaste={(event) => {
           if (!onFilesPaste) return;
           const data = event.clipboardData;
           if (!data || data.getData('text/plain')) return;

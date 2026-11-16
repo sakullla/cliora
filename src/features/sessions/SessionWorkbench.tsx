@@ -1,6 +1,5 @@
 import { WorkspaceBrowser, WORKSPACES_CHANGED } from '../workspaces/WorkspaceBrowser';
 import type { BusinessWorkspace, WorkspaceSelection, WorkspaceSessionContext } from '../../types/workspaces';
-import { useRemoteIdentity } from '../../lib/remoteReads';
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
@@ -24,7 +23,7 @@ import rowMenuStyles from '../../components/RowMenu.module.css';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, SavedWorkbenchSession, TwiglaneReviewSignal, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchExit, WorkbenchGitContext, WorkbenchWorktree, WorkbenchOutput, WorkbenchRestoreCandidate, WorkbenchRestoreEvent, WorkbenchRestoreStage, WorkbenchSession, WorktreeBase, WorktreeBasePreview, WorktreeLaunchEvent, WorktreeLaunchIntent, WorktreeLaunchStage, WorktreeLedgerEntry, WorktreeMenuStatus } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
-import type { LibraryItem } from '../../types/library';
+import type { PromptContext } from '../../types/prompts';
 import type { AdapterDescriptor } from '../../types/native';
 import type { RemoteProject, RemoteTarget } from '../../types/remote';
 import { SessionTitle, stableTitle } from './SessionTitle';
@@ -40,7 +39,6 @@ import { uploadDisplayName, useSessionUploads, type SessionUploadTask } from './
 import uploadStyles from './sessionUploads.module.css';
 import { WorkbenchComposer } from './WorkbenchComposer';
 import { PromptPicker } from './PromptPicker';
-import { StatusBanner } from '../../components/StatusBanner';
 import { TerminalAppearance } from './TerminalAppearance';
 import { WorkbenchEmpty } from './WorkbenchEmpty';
 import { WorkbenchShortcuts } from './WorkbenchShortcuts';
@@ -458,11 +456,6 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const remoteTargets = loadedRemoteTargets ?? syncedRemoteTargets;
   const [activeTargetId, setActiveTargetId] = useState(remoteTargetId);
   const [hostManagerOpen, setHostManagerOpen] = useState(false);
-  const [promptsByHost, setPromptsByHost] = useState<Record<string, LibraryItem[]>>({});
-  const [promptStatus, setPromptStatus] = useState<Record<string, { identity: string; stale: boolean; at: number; failed: boolean }>>({});
-  const [promptReload, setPromptReload] = useState(0);
-  const promptFreshHosts = useRef(new Set<string>());
-  const promptRequestSeq = useRef(new Map<string, number>());
   const [launchSettings, setLaunchSettings] = useState<LaunchSettings | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(focusSessionId);
   const pendingSelectionId = useRef<string | null>(focusSessionId);
@@ -1347,56 +1340,17 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     announcedReviews.current.add(review.reviewId);
     setNotice(describeReview(review, status, unknownStatus).text);
   }, [gitTarget, reviewStates, codeStatuses, codeStatusUnknown, codeStatusReviews]);
-  const composerHostId = libraryHostId(selected?.projectId, remoteProjects);
-  // The dialog launches on the selected run location, so its prompts come from that host.
-  const dialogHostId = newDialogOpen ? (remoteSshEnabled && activeTargetId !== 'local' ? activeTargetId : 'local') : null;
-  const composerPrompts = composerHostId ? promptsByHost[composerHostId] ?? [] : [];
-  const dialogPrompts = dialogHostId ? promptsByHost[dialogHostId] ?? [] : [];
-  // A remote library read is its own SSH handshake. Reuse a recent result when
-  // the workbench or composer opens again; a failed read is retried next time.
-  const composerIdentity = useRemoteIdentity(composerHostId);
-  const dialogIdentity = useRemoteIdentity(dialogHostId);
-  const promptHostIdentities = useRef(new Map<string, string>());
-  useEffect(() => {
-    if (!active || !nativeAvailable) return;
-    const controller = new AbortController();
-    const hosts = new Set([composerHostId, dialogHostId].filter((host): host is string => !!host));
-    for (const hostId of hosts) {
-      const identity = hostId === composerHostId ? composerIdentity : dialogIdentity;
-      if (promptHostIdentities.current.get(hostId) !== identity) {
-        setPromptsByHost(prev => ({ ...prev, [hostId]: [] }));
-        promptHostIdentities.current.set(hostId, identity);
-      }
-      const seq = (promptRequestSeq.current.get(hostId) ?? 0) + 1;
-      promptRequestSeq.current.set(hostId, seq);
-      const current = () => !controller.signal.aborted && promptRequestSeq.current.get(hostId) === seq;
-      const report = (state: { stale: boolean; at: number }) => {
-        if (current()) setPromptStatus(previous => ({ ...previous, [hostId]: { identity, ...state, at: state.at || (state.stale && previous[hostId]?.identity === identity ? previous[hostId].at : 0), failed: state.stale } }));
-      };
-      const fresh = promptFreshHosts.current.delete(hostId);
-      const request = hostId === 'local'
-        ? native.listLibraryItems('prompt', null, '')
-        : native.listRemoteLibraryItems(hostId, 'prompt', '', { signal: controller.signal, fresh, onFreshness: report });
-      void request.then(items => {
-        if (current()) {
-          setPromptsByHost(prev => ({ ...prev, [hostId]: Array.isArray(items) ? items : [] }));
-          if (hostId === 'local') report({ stale: false, at: Date.now() });
-        }
-      }).catch(() => {
-        if (current()) setPromptStatus(previous => ({ ...previous, [hostId]: {
-          identity, stale: true, at: previous[hostId]?.identity === identity ? previous[hostId].at : 0, failed: true,
-        } }));
-      });
-    }
-    return () => controller.abort();
-  }, [active, composerHostId, dialogHostId, composerOpen, composerIdentity, dialogIdentity, promptReload]);
-  function promptFeedback(hostId: string | null, identity: string) {
-    const state = hostId ? promptStatus[hostId] : undefined;
-    if (!hostId || !state?.failed || state.identity !== identity) return null;
-    return <StatusBanner tone={state.at ? 'warning' : 'error'} action={<Button size="sm" onClick={() => { promptFreshHosts.current.add(hostId); setPromptReload(value => value + 1); }}>{t('sessions.retryPrompts')}</Button>}>
-      {t(state.at ? 'sessions.promptsStale' : 'sessions.promptsFailed')}
-    </StatusBanner>;
+  function sessionPromptContext(session: WorkbenchSession): PromptContext | null {
+    const host = libraryHostId(session.projectId, remoteProjects);
+    if (!host) return null;
+    const scope = businessContexts.find(item => item.sessionId === session.id);
+    return { targetId: host === 'local' ? null : host, workspaceId: scope?.workspaceId ?? null, repositoryId: scope?.repositoryId ?? null };
   }
+  const dialogPromptContext: PromptContext = {
+    targetId: activeTargetId === 'local' ? null : activeTargetId,
+    workspaceId: activeTargetId === 'local' ? businessSelection?.workspaceId ?? null : null,
+    repositoryId: activeTargetId === 'local' ? businessSelection?.repositoryId ?? null : null,
+  };
   // An empty list is the real empty state only once the saved records are known to be empty:
   // otherwise the pending rows (or one line of them) would flash away and come back.
   const restorePreviewKnown = !nativeAvailable || restoreListReady;
@@ -3587,7 +3541,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   <div className={styles.peekBody} />
                 </div>}
               </div>
-              {current?.running && composerOpen && <WorkbenchComposer toolId={current.toolId} toolName={toolName(current)} place={placeOf(current)} draft={composerDrafts[current.id] ?? ''} prompts={composerPrompts} promptFeedback={promptFeedback(composerHostId, composerIdentity)} inputRef={composerInputRef} onChange={updateComposerDraft} onFilesPaste={(files) => handles.current.get(current.id)?.pasteFiles(files)} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
+              {current?.running && composerOpen && <WorkbenchComposer active={active} toolId={current.toolId} toolName={toolName(current)} place={placeOf(current)} draft={composerDrafts[current.id] ?? ''} promptContext={sessionPromptContext(current)} promptSourceKey={current.id} workspaces={businessWorkspaces} inputRef={composerInputRef} onChange={updateComposerDraft} onFilesPaste={(files) => handles.current.get(current.id)?.pasteFiles(files)} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
               {current && <footer className={styles.statusBar}>
                 <span className={styles.statusItem} data-host={remote ? 'remote' : 'local'} title={`${t('common.host.label')}：${hostLabel}${remoteHost ? ` · ${remoteHost.user}@${remoteHost.host}` : ''}`}><Icon name={remote ? 'server' : 'monitor'} size={12} />{hostLabel}</span>
                 {/* Git is one chip: branch name, a worktree glyph when this checkout is a linked worktree,
@@ -3854,7 +3808,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           <button type="button" role="radio" aria-checked={launchMode === 'normal'} className={styles.modeCard} onClick={() => setLaunchMode('normal')}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="shield" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeNormal')}</strong><small>{t('sessions.modeNormalDesc')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
           <button type="button" role="radio" aria-checked={launchMode === 'yolo'} disabled={!selectedLaunchTool?.yoloAvailable} title={!selectedLaunchTool?.yoloAvailable ? t('sessions.yoloUnsupported') : undefined} className={styles.modeCard} onClick={() => setLaunchMode('yolo')}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="sparkle" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeYolo')}</strong><small>{selectedLaunchTool?.yoloAvailable ? t('sessions.modeYoloDesc') : t('sessions.yoloUnsupported')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
         </div>{selectedLaunchTool?.resumeLatestAvailable && !activeRemoteTarget && <label className={styles.checkboxRow}><input type="checkbox" checked={resumeLatest} onChange={(event) => setResumeLatest(event.target.checked)} /><span>{t('sessions.resumeLatest')}</span></label>}</div>
-        <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.initialPromptLabel')}</span><textarea rows={3} className={styles.dialogTextarea} value={initialPrompt} placeholder={t('sessions.initialPromptPlaceholder')} aria-label={t('sessions.initialPromptLabel')} onChange={(event) => setInitialPrompt(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing && !launchingNew && effectiveLaunchToolId) { event.preventDefault(); void launchFromDialog(); } }} /><PromptPicker className={styles.dialogPrompts} labelClassName={styles.dialogPromptLabel} prompts={dialogPrompts} onPick={(prompt) => setInitialPrompt(prompt.body)} />{promptFeedback(dialogHostId, dialogIdentity)}</div>
+        <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.initialPromptLabel')}</span><textarea rows={3} className={styles.dialogTextarea} value={initialPrompt} placeholder={t('sessions.initialPromptPlaceholder')} aria-label={t('sessions.initialPromptLabel')} onChange={(event) => setInitialPrompt(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing && !launchingNew && effectiveLaunchToolId) { event.preventDefault(); void launchFromDialog(); } }} /><PromptPicker active={active && newDialogOpen} className={styles.dialogPrompts} labelClassName={styles.dialogPromptLabel} context={dialogPromptContext} sourceKey={`new:${workspaceValue}:${activeTargetId}`} workspaces={businessWorkspaces} onPick={(prompt) => setInitialPrompt(previous => previous ? `${previous}\n${prompt.body}` : prompt.body)} /></div>
         <div className={styles.dialogSummary}>{effectiveLaunchToolId && <span className={styles.dialogSummaryIcon}><ToolIcon toolId={effectiveLaunchToolId} size={20} /></span>}<span>{(() => {
           const place = workspaceValue.startsWith('project:') ? availableProjects.find((item) => 'project:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('remote:') ? availableRemoteProjects.find((item) => 'remote:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('custom:') ? shortPath(displayPath(workspaceValue.slice('custom:'.length))) : workspaceValue.startsWith('rpath:') ? remoteBaseName(workspaceValue.slice('rpath:'.length)) || workspaceValue.slice('rpath:'.length) : t('sessions.workspaceHome');
           const values = { tool: selectedLaunchTool?.name ?? '', place, mode: modeLabel(launchMode) };

@@ -1,4 +1,7 @@
+import { installPromptFixtureBridge } from '../../scripts/capture-prompt-fixtures.mjs';
 import { expect, test, type Page } from '@playwright/test';
+
+test.beforeEach(async ({ page }) => { await page.addInitScript(installPromptFixtureBridge); });
 
 // R3: one state reads the same everywhere, each Toolbar/card holds at most one primary action,
 // and the first screen at 1360 shows no fewer entries than before the redesign (02 ADR-2/ADR-7).

@@ -94,6 +94,7 @@ pub mod native;
 pub mod portable;
 mod process_environment;
 pub mod projects;
+pub mod prompts;
 pub mod workspaces;
 pub mod remote;
 pub mod resources;
@@ -259,6 +260,13 @@ pub fn run() {
             commands::copy_history_resume_command,
             commands::resume_history_session,
             commands::export_history_session,
+            commands::query_prompts,
+            commands::get_prompt,
+            commands::save_prompt,
+            commands::apply_prompt_batch,
+            commands::preview_prompt_import,
+            commands::delete_prompt,
+            commands::record_prompt_usage,
             commands::list_library_items,
             commands::save_library_item,
             commands::delete_library_item,

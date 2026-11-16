@@ -23,7 +23,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 32 {
+        if version > 33 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -673,6 +673,30 @@ impl Database {
                    repository_id TEXT NOT NULL, host_id TEXT NOT NULL, directory TEXT NOT NULL
                  );
                  PRAGMA user_version = 32;",
+            )?;
+            tx.commit()?;
+        }
+        if version < 33 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE prompt_metadata (
+                   library_id TEXT PRIMARY KEY NOT NULL REFERENCES library_items(id) ON DELETE CASCADE,
+                   scope_json TEXT NOT NULL CHECK(json_valid(scope_json)),
+                   tags_json TEXT CHECK(tags_json IS NULL OR json_valid(tags_json))
+                 );
+                 INSERT INTO prompt_metadata(library_id,scope_json,tags_json)
+                   SELECT id,CASE WHEN project_id IS NULL THEN json_object('kind','global')
+                     ELSE json_object('kind','unresolved','legacyProjectId',project_id) END,NULL
+                   FROM library_items WHERE kind='prompt';
+                 CREATE TABLE prompt_usage (
+                   host_id TEXT NOT NULL, prompt_id TEXT NOT NULL, favorite INTEGER NOT NULL DEFAULT 0,
+                   last_used INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(host_id,prompt_id)
+                 );
+                 CREATE TABLE prompt_batch_items (
+                   operation_id TEXT NOT NULL, item_id TEXT NOT NULL, input_digest TEXT NOT NULL,
+                   result_json TEXT NOT NULL, PRIMARY KEY(operation_id,item_id)
+                 );
+                 PRAGMA user_version=33;",
             )?;
             tx.commit()?;
         }

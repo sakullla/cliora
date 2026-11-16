@@ -1,3 +1,4 @@
+import { installPromptFixtureBridge, installRichPromptFixtures } from './capture-prompt-fixtures.mjs';
 import { installWorkspaceFixtures } from './capture-workspace-fixtures.mjs';
 import { settleCapture, previousCaptureCleanup } from './capture-ready.mjs';
 /** Synthetic, populated native-IPC fixtures for visual inspection; never platform acceptance evidence. */
@@ -36,11 +37,11 @@ if(process.argv.includes('--list')){console.log([...selectedPages,...selectedSce
 const pagesOnly=process.argv.includes('--only')&&selectedPages.length>0&&selectedScenarios.length===0;
 const root=fileURLToPath(new URL('../',import.meta.url)).replace(/\\/g,'/').replace(/\/$/,'');
 const workflowsOnly=process.argv.includes('--features')||process.argv.includes('--workflows');
-const scopedCapture=process.argv.some(arg=>['--full','--only','--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules','--remote-hosts','--write-recovery','--home','--projects'].includes(arg));
+const scopedCapture=process.argv.some(arg=>['--full','--only','--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules','--remote-hosts','--write-recovery','--home','--projects','--prompts'].includes(arg));
 const quickCapture=process.argv.includes('--quick')||!scopedCapture;
-const fullCapture=!quickCapture&&!pagesOnly&&!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules','--remote-hosts','--write-recovery','--home','--projects'].includes(arg));
-const captureMode=process.argv.includes('--projects')?'projects':homeCapture?'home':process.argv.includes('--write-recovery')?'write-recovery':process.argv.includes('--remote-hosts')?'remote-hosts':workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':process.argv.includes('--skills')?'skills':process.argv.includes('--mcp')?'mcp':process.argv.includes('--rules')?'rules':'full';
-const manifestName=`capture-ui${['features','sessions','records','connections','skills','mcp','rules','remote-hosts','write-recovery','home','projects'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
+const fullCapture=!quickCapture&&!pagesOnly&&!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules','--remote-hosts','--write-recovery','--home','--projects','--prompts'].includes(arg));
+const captureMode=process.argv.includes('--prompts')?'prompts':process.argv.includes('--projects')?'projects':homeCapture?'home':process.argv.includes('--write-recovery')?'write-recovery':process.argv.includes('--remote-hosts')?'remote-hosts':workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':process.argv.includes('--skills')?'skills':process.argv.includes('--mcp')?'mcp':process.argv.includes('--rules')?'rules':'full';
+const manifestName=`capture-ui${['features','sessions','records','connections','skills','mcp','rules','remote-hosts','write-recovery','home','projects','prompts'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
 const acceptanceNote='Playwright 与合成 IPC 截图仅用于浏览器界面检查，不是 WebView2、真实桌面主题/焦点/键盘或原生 CLI/文件写入验收；未执行的平台行为均为未验证。';
 const acceptance={kind:'playwright-synthetic-ipc',nativePlatform:'unverified',webview2:'unverified',desktopThemeFocusKeyboard:'unverified',nativeCliAndFileWrites:'unverified',note:acceptanceNote};
 const out=process.env.CLIORA_CAPTURE_OUT ?? root+'/docs/verification/ui'; fs.mkdirSync(out,{recursive:true});
@@ -728,7 +729,7 @@ async function captureHomeScreens(page,capture){
 
 if(!workflowsOnly){
 for(const width of widths)for(const theme of themes){
- const page=await browser.newPage({viewport:{width,height:1000},locale:process.env.CLIORA_CAPTURE_LOCALE??'zh-CN'});page.on('pageerror',e=>failures.push({type:'pageerror',theme,width,message:e.message}));await page.addInitScript(mock,homeCapture?{theme,home:true}:process.argv.includes('--write-recovery')?{theme,remoteHosts:true,writeRecovery:true}:process.argv.includes('--remote-hosts')?{theme,remoteHosts:true}:process.argv.includes('--rules')?{theme,rules:true}:theme);await installCaptureConfigurationProtocol(page);if(process.argv.includes('--projects'))await page.addInitScript(installWorkspaceFixtures);
+ const page=await browser.newPage({viewport:{width,height:1000},locale:process.env.CLIORA_CAPTURE_LOCALE??'zh-CN'});page.on('pageerror',e=>failures.push({type:'pageerror',theme,width,message:e.message}));await page.addInitScript(mock,homeCapture?{theme,home:true}:process.argv.includes('--write-recovery')?{theme,remoteHosts:true,writeRecovery:true}:process.argv.includes('--remote-hosts')?{theme,remoteHosts:true}:process.argv.includes('--rules')?{theme,rules:true}:theme);await installCaptureConfigurationProtocol(page);await page.addInitScript(installPromptFixtureBridge);if(process.argv.includes('--projects')||process.argv.includes('--prompts'))await page.addInitScript(installWorkspaceFixtures);if(process.argv.includes('--prompts'))await page.addInitScript(installRichPromptFixtures);
  const nav=page.getByRole('navigation',{name:'页面'});
  let lastCapture='(before home)';
  async function capture(name){await captureImage(page,name,theme,width);lastCapture=name;}
@@ -736,6 +737,28 @@ for(const width of widths)for(const theme of themes){
  // Navigation is inside the try so a boot timeout under load is recorded instead of crashing the run.
  try{
  await page.goto(process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736');await page.getByText('正在读取本机设置').waitFor({state:'hidden'});await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
+ if(process.argv.includes('--prompts')){
+  await nav.getByRole('button',{name:'资料库',exact:true}).click();
+  const panel=page.locator('[data-prompt-library]');
+  await panel.locator('[data-library-id]').first().waitFor();await capture('prompts-library-many');
+  const search=panel.getByRole('textbox',{name:'搜索资料'});
+  await search.fill('全文后段命中-119');await panel.getByRole('button',{name:'模板 119',exact:true}).waitFor();await capture('prompts-fulltext-search');
+  await search.fill('');await panel.getByRole('button',{name:'项目筛选',exact:true}).click();
+  await page.getByRole('option',{name:/^电商平台 项目专用/}).click();await panel.getByRole('button',{name:'项目 A 发布',exact:true}).waitFor();await capture('prompts-project-scope');
+  await panel.getByRole('button',{name:'项目 A 发布',exact:true}).click();
+  await page.getByRole('dialog',{name:'编辑提示词'}).getByRole('textbox',{name:'资料正文',exact:true}).waitFor();await capture('prompts-edit');
+  await page.getByRole('dialog',{name:'编辑提示词'}).getByRole('button',{name:'关闭',exact:true}).click();
+  await panel.getByRole('button',{name:'批量导入',exact:true}).click();
+  const input=page.getByRole('dialog',{name:'导入提示词'});await input.getByLabel('JSON 内容').fill(JSON.stringify([{title:'通用审查',body:'先检查边界，再检查错误恢复。'},{title:'发布前检查',body:'确认变更范围。\n检查回滚步骤。',tags:['release']}],null,2));
+  await input.getByRole('button',{name:'预览导入'}).click();const imported=page.getByRole('dialog',{name:'确认导入内容'});await imported.getByText('发现同名或相同正文',{exact:false}).waitFor();await capture('prompts-import-preview');
+  await imported.getByRole('button',{name:'关闭',exact:true}).click();
+  await nav.getByRole('button',{name:'工作台',exact:true}).click();await page.getByRole('button',{name:'新建会话',exact:true}).first().click();
+  const session=page.getByRole('dialog',{name:'新建工作台会话'});await session.getByLabel('初始提示词（可选）').fill('已有初始草稿');
+  await session.getByRole('button',{name:'查找提示词',exact:true}).click();const picker=page.getByRole('dialog',{name:'查找提示词'});await picker.getByRole('textbox',{name:'搜索提示词标题或完整正文'}).fill('全文后段命中-119');
+  await picker.getByRole('button',{name:'模板 119',exact:true}).click();await picker.locator('pre').waitFor();await capture('prompts-workbench-picker');
+  await picker.getByRole('button',{name:'插入草稿',exact:true}).click();await session.getByLabel('初始提示词（可选）').waitFor();await capture('prompts-inserted-draft');
+  await page.close();continue;
+ }
  if(process.argv.includes('--projects')){
   const project=page.locator('[data-business-workspaces]').first();
   await project.locator('[data-repository-id="repo-47"]').waitFor({state:'attached'});

@@ -1,4 +1,12 @@
+import { installPromptFixtureBridge } from '../../scripts/capture-prompt-fixtures.mjs';
 import { expect, test, type Locator, type Page } from '@playwright/test';
+
+// These existing Control-key cases model the Windows/Linux shortcut contract explicitly,
+// independent of the machine running Chromium. Production macOS behavior is unchanged.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(navigator, 'platform', { configurable: true, value: 'Win32' }));
+  await page.addInitScript(installPromptFixtureBridge);
+});
 
 // The existing accessible scrollbar exposes the public buffer's row position.
 // xterm 6 virtualizes scrolling instead of assigning a native DOM scrollTop.

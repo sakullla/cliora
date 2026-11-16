@@ -1,4 +1,7 @@
+import { installPromptFixtureBridge } from '../../scripts/capture-prompt-fixtures.mjs';
 import { expect, test, type Locator, type Page } from '@playwright/test';
+
+test.beforeEach(async ({ page }) => { await page.addInitScript(installPromptFixtureBridge); });
 
 const host = {
   id: 'host-1',

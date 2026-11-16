@@ -1,3 +1,4 @@
+import type { PromptContext, PromptQuery, PromptPage, PromptDocument, PromptDraft, PromptBatch, PromptBatchResult, PromptImportInput, PromptImportPreview } from '../types/prompts';
 import type { BusinessWorkspace, WorkspaceScan, WorkspaceMemberResult, WorkspaceManifestPreview, WorkspaceSessionContext } from '../types/workspaces';
 import { getWriteFaults, getWriteReceipts, rememberWriteFault, rememberWriteReceipt, requestWriteRecovery, unresolvedWrite } from '../features/remote/writeReceipts';
 import { RemoteOperations, type RemoteOperationOptions } from './remoteOperations';
@@ -85,8 +86,8 @@ function writeWorkbenchSession(sessionId: string, dataBase64: string): Promise<v
 
 const remoteOperations = new RemoteOperations(command);
 const draftBaselines = new Map<string, Record<string, string>>();
-const transactionalWrites = new Set(['save_remote_library_item', 'delete_remote_library_item', 'sync_remote_rule_clients', 'save_remote_tool_store', 'delete_remote_tool_profile', 'save_remote_resource_store', 'import_remote_skill_directory', 'save_configuration_draft']);
-const versionedReads = new Set(['get_remote_tool_store', 'get_remote_resource_store', 'list_remote_resource_stores', 'list_remote_library_items', 'list_remote_rule_placements', 'begin_configuration_draft']);
+const transactionalWrites = new Set(['save_prompt', 'apply_prompt_batch', 'delete_prompt', 'save_remote_library_item', 'delete_remote_library_item', 'sync_remote_rule_clients', 'save_remote_tool_store', 'delete_remote_tool_profile', 'save_remote_resource_store', 'import_remote_skill_directory', 'save_configuration_draft']);
+const versionedReads = new Set(['query_prompts', 'get_prompt', 'preview_prompt_import', 'get_remote_tool_store', 'get_remote_resource_store', 'list_remote_resource_stores', 'list_remote_library_items', 'list_remote_rule_placements', 'begin_configuration_draft']);
 
 const remoteIdentityListeners = new Set<() => void>();
 export const subscribeRemoteIdentity = (listener: () => void) => { remoteIdentityListeners.add(listener); return () => { remoteIdentityListeners.delete(listener); }; };
@@ -113,7 +114,7 @@ function rememberRemoteTarget(target: RemoteTarget, authenticationMayHaveChanged
   for (const listener of remoteIdentityListeners) listener();
   return target;
 }
-const cachedRemoteReads = new Set(['list_remote_rule_placements', 'list_remote_library_items', 'list_remote_directories', 'probe_remote_cli', 'probe_remote_clis', 'get_remote_tool_store', 'get_remote_resource_store', 'list_remote_resource_stores', 'list_remote_native_history', 'list_remote_native_history_snapshot', 'get_remote_native_history']);
+const cachedRemoteReads = new Set(['query_prompts', 'list_remote_rule_placements', 'list_remote_library_items', 'list_remote_directories', 'probe_remote_cli', 'probe_remote_clis', 'get_remote_tool_store', 'get_remote_resource_store', 'list_remote_resource_stores', 'list_remote_native_history', 'list_remote_native_history_snapshot', 'get_remote_native_history']);
 const remoteRevisions = new Map<string, number>();
 function remoteCommand<T>(name: string, args: Record<string, unknown>, kind: 'read' | 'write', options?: RemoteOperationOptions): Promise<T> {
   const target = args.target as RemoteTarget | undefined;
@@ -201,7 +202,47 @@ async function usageCommand<T>(name: string, args?: Record<string, unknown>): Pr
 }
 
 /** Feature modules add named wrappers here; components never invoke arbitrary commands. */
+const promptBaselines = new Map<string, Record<string, string>>();
+const promptPaths = ['$HOME/.cliora/library.json', '$HOME/.cliora/prompts-v1.json'];
+function promptCommand<T>(name: string, context: PromptContext, args: Record<string, unknown>, kind: 'read' | 'write', options?: RemoteOperationOptions): Promise<T> {
+  const targetId = context.targetId && context.targetId !== 'local' ? context.targetId : null;
+  if (!targetId) return command<T>(name, { ...args, targetId: null });
+  const identity = getRemoteIdentity(targetId);
+  const sourceKey = `${identity}:source`;
+  const draft = args.draft as PromptDraft | undefined;
+  const batch = args.batch as PromptBatch | undefined;
+  const id = draft?.id ?? args.id;
+  const version = draft?.expectedVersion ?? args.expectedVersion;
+  const documentKey = typeof id === 'string' && typeof version === 'number' ? `${identity}:document:${id}:${version}` : '';
+  const writeKey = batch ? `${identity}:batch:${batch.operationId}` : documentKey || sourceKey;
+  const expectedFiles = kind === 'write' ? options?.expectedFiles ?? promptBaselines.get(writeKey) ?? promptBaselines.get(sourceKey) : undefined;
+  if (kind === 'write' && (!expectedFiles || promptPaths.some(path => !(path in expectedFiles)))) {
+    return Promise.reject({ message: i18n.t('prompts.baselineMissing'), action: i18n.t('prompts.retry') });
+  }
+  if (kind === 'write' && batch && expectedFiles && !promptBaselines.has(writeKey)) promptBaselines.set(writeKey, { ...expectedFiles });
+  let observed: Record<string, string> = {};
+  return remoteCommand<T>(name, { ...args, targetId }, kind, { ...options, ...(expectedFiles ? { expectedFiles } : {}), onVersions: versions => { observed = { ...versions }; options?.onVersions?.(versions); } }).then(value => {
+    if (getRemoteIdentity(targetId) !== identity || promptPaths.some(path => !(path in observed))) return value;
+    const result = value as { id?: string; version?: number; operationId?: string; writeApplied?: boolean } | null;
+    // A read/confirmed write may inform future actions. An unsuccessful or receipt-only
+    // batch must not silently rebase an existing preview onto unrelated remote changes.
+    if (kind === 'read' || name !== 'apply_prompt_batch' || result?.writeApplied) {
+      promptBaselines.set(sourceKey, observed);
+      if (result?.id && typeof result.version === 'number') promptBaselines.set(`${identity}:document:${result.id}:${result.version}`, observed);
+      if (result?.operationId) promptBaselines.set(`${identity}:batch:${result.operationId}`, observed);
+    }
+    return value;
+  });
+}
+
 export const native = {
+  queryPrompts: (context: PromptContext, query: PromptQuery, options?: RemoteOperationOptions) => promptCommand<PromptPage>('query_prompts', context, { query: { ...query, workspaceId: context.workspaceId ?? query.workspaceId ?? null, repositoryId: context.repositoryId ?? query.repositoryId ?? null } }, 'read', options),
+  getPrompt: (context: PromptContext, id: string, expectedVersion: number | null = null, options?: RemoteOperationOptions) => promptCommand<PromptDocument>('get_prompt', context, { id, expectedVersion }, 'read', options),
+  savePrompt: (context: PromptContext, draft: PromptDraft, options?: RemoteOperationOptions) => promptCommand<PromptDocument>('save_prompt', context, { draft }, 'write', options),
+  applyPromptBatch: (context: PromptContext, batch: PromptBatch, options?: RemoteOperationOptions) => promptCommand<PromptBatchResult>('apply_prompt_batch', context, { batch }, 'write', options),
+  previewPromptImport: (context: PromptContext, input: PromptImportInput, options?: RemoteOperationOptions) => promptCommand<PromptImportPreview>('preview_prompt_import', context, { input }, 'read', options),
+  deletePrompt: (context: PromptContext, id: string, expectedVersion: number, options?: RemoteOperationOptions) => promptCommand<void>('delete_prompt', context, { id, expectedVersion }, 'write', options),
+  recordPromptUsage: (context: PromptContext, id: string, favorite: boolean | null, used: boolean) => command<void>('record_prompt_usage', { targetId: context.targetId && context.targetId !== 'local' ? context.targetId : null, id, favorite, used }),
   previewWorkspaceLink: (url: string) => command<WorkspaceManifestPreview>('preview_workspace_link', { url }),
   listBusinessWorkspaces: () => command<BusinessWorkspace[]>('list_business_workspaces'),
   createBusinessWorkspace: (name: string) => command<BusinessWorkspace>('create_business_workspace', { name }),

@@ -7245,3 +7245,262 @@ pub async fn preview_workspace_link(
     })
     .await
 }
+
+// Prompt APIs keep business scope distinct from the legacy rule/configuration directory scope.
+fn prepare_prompt_context(db: &Database) -> Result<(), ApiError> {
+    let pending=db.with_read_connection(|conn|conn.query_row("SELECT EXISTS(SELECT 1 FROM projects p WHERE NOT EXISTS(SELECT 1 FROM workspace_legacy_map m WHERE m.project_id=p.id))",[],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())).map_err(native_error)?;
+    if pending {
+        crate::workspaces::seed_legacy(
+            db,
+            &crate::workspaces::local_host_id().map_err(native_error)?,
+        )
+        .map_err(native_error)?;
+    }
+    Ok(())
+}
+#[tauri::command]
+pub async fn query_prompts(
+    window: tauri::WebviewWindow,
+    operation: Option<crate::remote::operations::Request>,
+    app: AppHandle,
+    target_id: Option<String>,
+    query: crate::prompts::PromptQuery,
+) -> Result<crate::prompts::PromptPage, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    let target = target_id
+        .as_deref()
+        .map(|id| enabled_target(&db, id))
+        .transpose()?;
+    if let Some(target) = &target {
+        bind_remote_target(target)?;
+    }
+    remote_blocking(
+        window,
+        operation,
+        crate::remote::operations::Kind::Read,
+        move || {
+            crate::prompts::validate_query_context(&db, &query).map_err(native_error)?;
+            if let Some(target) = target {
+                let usage = crate::prompts::usage(&db, &crate::remote::prompts::namespace(&target))
+                    .map_err(native_error)?;
+                crate::remote::prompts::query(&target, &query, &usage)
+                    .map_err(|e| native_error(e.to_string()))
+            } else {
+                prepare_prompt_context(&db)?;
+                crate::prompts::query(&db, &query).map_err(native_error)
+            }
+        },
+    )
+    .await
+}
+#[tauri::command]
+pub async fn get_prompt(
+    window: tauri::WebviewWindow,
+    operation: Option<crate::remote::operations::Request>,
+    app: AppHandle,
+    target_id: Option<String>,
+    id: String,
+    expected_version: Option<u64>,
+) -> Result<crate::prompts::PromptDocument, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    let target = target_id
+        .as_deref()
+        .map(|id| enabled_target(&db, id))
+        .transpose()?;
+    if let Some(target) = &target {
+        bind_remote_target(target)?;
+    }
+    remote_blocking(
+        window,
+        operation,
+        crate::remote::operations::Kind::Read,
+        move || {
+            if let Some(target) = target {
+                crate::remote::prompts::get(&target, &id, expected_version)
+                    .map_err(|e| native_error(e.to_string()))
+            } else {
+                prepare_prompt_context(&db)?;
+                crate::prompts::get(&db, &id, expected_version).map_err(native_error)
+            }
+        },
+    )
+    .await
+}
+#[tauri::command]
+pub async fn save_prompt(
+    window: tauri::WebviewWindow,
+    operation: Option<crate::remote::operations::Request>,
+    app: AppHandle,
+    target_id: Option<String>,
+    draft: crate::prompts::PromptDraft,
+) -> Result<crate::prompts::PromptDocument, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    let target = target_id
+        .as_deref()
+        .map(|id| enabled_target(&db, id))
+        .transpose()?;
+    if let Some(target) = &target {
+        bind_remote_target(target)?;
+    }
+    remote_blocking(
+        window,
+        operation,
+        crate::remote::operations::Kind::Write,
+        move || {
+            if let Some(target) = target {
+                let item_id = uuid::Uuid::new_v4().to_string();
+                let batch = crate::prompts::PromptBatch {
+                    operation_id: uuid::Uuid::new_v4().to_string(),
+                    items: vec![crate::prompts::BatchItem {
+                        item_id: item_id.clone(),
+                        action: if draft.id.is_some() {
+                            crate::prompts::BatchAction::Replace
+                        } else {
+                            crate::prompts::BatchAction::Create
+                        },
+                        draft,
+                    }],
+                };
+                let result = crate::remote::prompts::apply_batch(&target, &db, &batch)
+                    .map_err(|e| native_error(e.to_string()))?;
+                let item = &result.items[0];
+                if let Some(error) = &item.error {
+                    return Err(native_error(error.clone()));
+                }
+                crate::remote::prompts::get(
+                    &target,
+                    item.id.as_deref().unwrap_or(&item_id),
+                    item.version,
+                )
+                .map_err(|e| native_error(e.to_string()))
+            } else {
+                prepare_prompt_context(&db)?;
+                crate::prompts::save(&db, &draft).map_err(native_error)
+            }
+        },
+    )
+    .await
+}
+#[tauri::command]
+pub async fn apply_prompt_batch(
+    window: tauri::WebviewWindow,
+    operation: Option<crate::remote::operations::Request>,
+    app: AppHandle,
+    target_id: Option<String>,
+    batch: crate::prompts::PromptBatch,
+) -> Result<crate::prompts::BatchResult, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    let target = target_id
+        .as_deref()
+        .map(|id| enabled_target(&db, id))
+        .transpose()?;
+    if let Some(target) = &target {
+        bind_remote_target(target)?;
+    }
+    remote_blocking(
+        window,
+        operation,
+        crate::remote::operations::Kind::Write,
+        move || {
+            if let Some(target) = target {
+                crate::remote::prompts::apply_batch(&target, &db, &batch)
+                    .map_err(|e| native_error(e.to_string()))
+            } else {
+                prepare_prompt_context(&db)?;
+                crate::prompts::apply_batch(&db, &batch).map_err(native_error)
+            }
+        },
+    )
+    .await
+}
+#[tauri::command]
+pub async fn preview_prompt_import(
+    window: tauri::WebviewWindow,
+    operation: Option<crate::remote::operations::Request>,
+    app: AppHandle,
+    target_id: Option<String>,
+    input: crate::prompts::ImportInput,
+) -> Result<crate::prompts::ImportPreview, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    let target = target_id
+        .as_deref()
+        .map(|id| enabled_target(&db, id))
+        .transpose()?;
+    if let Some(target) = &target {
+        bind_remote_target(target)?;
+    }
+    remote_blocking(
+        window,
+        operation,
+        crate::remote::operations::Kind::Read,
+        move || {
+            let existing = if let Some(target) = target {
+                crate::remote::prompts::list(&target).map_err(|e| native_error(e.to_string()))?
+            } else {
+                prepare_prompt_context(&db)?;
+                crate::prompts::all_documents(&db).map_err(native_error)?
+            };
+            let mut preview =
+                crate::prompts::preview_import(input, &existing).map_err(native_error)?;
+            for row in &mut preview.rows {
+                if row.error.is_none() {
+                    row.error = crate::prompts::validate_draft_scope(&db, &row.item.draft).err();
+                }
+            }
+            Ok(preview)
+        },
+    )
+    .await
+}
+#[tauri::command]
+pub async fn delete_prompt(
+    window: tauri::WebviewWindow,
+    operation: Option<crate::remote::operations::Request>,
+    app: AppHandle,
+    target_id: Option<String>,
+    id: String,
+    expected_version: u64,
+) -> Result<(), ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    let target = target_id
+        .as_deref()
+        .map(|id| enabled_target(&db, id))
+        .transpose()?;
+    if let Some(target) = &target {
+        bind_remote_target(target)?;
+    }
+    remote_blocking(
+        window,
+        operation,
+        crate::remote::operations::Kind::Write,
+        move || {
+            if let Some(target) = target {
+                crate::remote::prompts::delete(&target, &id, expected_version)
+                    .map_err(|e| native_error(e.to_string()))
+            } else {
+                crate::prompts::get(&db, &id, Some(expected_version)).map_err(native_error)?;
+                crate::library::delete(&db, &id, expected_version).map_err(native_error)
+            }
+        },
+    )
+    .await
+}
+#[tauri::command]
+pub async fn record_prompt_usage(
+    app: AppHandle,
+    target_id: Option<String>,
+    id: String,
+    favorite: Option<bool>,
+    used: bool,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        let host = if let Some(id) = target_id {
+            crate::remote::prompts::namespace(&enabled_target(&db, &id)?)
+        } else {
+            "local".into()
+        };
+        crate::prompts::record_usage(&db, &host, &id, favorite, used).map_err(native_error)
+    })
+    .await
+}

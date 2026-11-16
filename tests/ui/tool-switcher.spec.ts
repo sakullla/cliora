@@ -1,5 +1,8 @@
+import { installPromptFixtureBridge } from '../../scripts/capture-prompt-fixtures.mjs';
 import { expect, test, type Page } from '@playwright/test';
 import { cliSwitcher, openCli } from './cli-switcher';
+
+test.beforeEach(async ({ page }) => { await page.addInitScript(installPromptFixtureBridge); });
 
 // The CLI is picked from the 工具 header: the h2 is a searchable switcher, and the sidebar\n// keeps only the six pages so it never grows with the managed list.
 const tools = [

@@ -1,0 +1,50 @@
+.pickerBar, .toolbar, .actions, .pageNav, .meta { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; min-width: 0; }
+.pickerBar { font-size: 12px; }
+.pill { max-width: 160px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(240px, 1fr); gap: var(--space-4); min-height: 320px; }
+.searchPane, .detail, .form { display: grid; align-content: start; gap: var(--space-3); min-width: 0; }
+.list { display: grid; gap: var(--space-1); max-height: 460px; overflow: auto; overscroll-behavior: contain; min-width: 0; }
+.row { display: flex; align-items: start; gap: var(--space-2); min-width: 0; padding: var(--space-2_5); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
+.row[data-selected] { border-color: var(--accent); background: var(--accent-soft); }
+.rowButton { display: grid; gap: var(--space-1_25); flex: 1; min-width: 0; text-align: start; border: 0; background: transparent; color: var(--text); padding: 0; box-shadow: none; }
+.rowButton:hover:not(:disabled) { background: transparent; }
+.rowButton strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.summary { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; color: var(--text-3); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.meta { color: var(--text-3); font-size: 11px; }
+.tag { padding: var(--space-0_5) var(--space-1_25); border-radius: var(--radius-xs); background: var(--surface-2); }
+.preview { white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 400px; padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); font: inherit; line-height: 1.6; }
+.hint, .empty { color: var(--text-3); font-size: 12px; margin: 0; }
+.error { padding: var(--space-2) var(--space-2_5); background: var(--surface-2); border-left: 3px solid var(--danger); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.form label { display: grid; gap: var(--space-1_5); font-size: 12px; }
+.form textarea { resize: vertical; min-height: 150px; font-family: var(--font-mono); }
+.form input:not([type="checkbox"]), .form textarea { width: 100%; min-width: 0; }
+.toolbar { margin-bottom: var(--space-3); }
+.toolbar > :first-child { flex: 1; min-width: 180px; }
+.library { min-width: 0; }
+.libraryList { display: grid; gap: var(--space-1_5); }
+.libraryList .rowButton { gap: var(--space-1_5); }
+.pageNav { justify-content: space-between; margin-top: var(--space-3); font-size: 12px; }
+.batch { display: grid; gap: var(--space-3); }
+.batchRows { display: grid; gap: var(--space-2_5); max-height: 55vh; overflow: auto; padding: var(--space-0_5); }
+.batchRow { border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-3); display: grid; gap: var(--space-2_5); }
+.batchHeader { display: flex; align-items: center; gap: var(--space-2_5); }
+.batchHeader > input { flex: none; }
+.batchHeader > strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.batchRow textarea { min-height: 100px; resize: vertical; }
+.scopeRow { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+@media (max-width: 760px) { .browser, .scopeRow { grid-template-columns: 1fr; } .list { max-height: 240px; } .preview { max-height: 220px; } }
+
+.resultBar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); min-width: 0; padding: var(--space-2) 0; font-size: 12px; }
+.resultNote { margin-left: auto; color: var(--text-3); }
+.libraryList { min-width: 0; overflow-x: clip; }
+.libraryList .row { display: grid; gap: var(--space-2); }
+.cardHead { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.cardHead .rowButton { flex: 1; min-width: 0; }
+.libraryList .summary { margin: 0; }
+.toolbar > div { flex: 0 1 180px; min-width: 130px; width: auto; }
+.toolbar > :first-child { flex: 1; }
+@media (max-width: 760px) { .cardHead { flex-wrap: wrap; } .cardHead .actions { width: 100%; justify-content: end; } }
+
+.cardHead .rowButton { display: block; text-align: left; justify-content: flex-start; }
+.cardHead .rowButton strong { display: block; width: 100%; }
+.libraryList .summary, .libraryList .meta { padding-inline-start: calc(var(--space-6) + var(--space-0_5)); }

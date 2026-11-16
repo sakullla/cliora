@@ -1,5 +1,8 @@
+import { installPromptFixtureBridge } from '../../scripts/capture-prompt-fixtures.mjs';
 import { expect, test, type Page } from '@playwright/test';
 import { openCli } from './cli-switcher';
+
+test.beforeEach(async ({ page }) => { await page.addInitScript(installPromptFixtureBridge); });
 
 async function mockResources(page: Page) {
   await page.addInitScript(() => {

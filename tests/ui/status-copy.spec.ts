@@ -1,4 +1,7 @@
+import { installPromptFixtureBridge } from '../../scripts/capture-prompt-fixtures.mjs';
 import { expect, test, type Locator, type Page } from '@playwright/test';
+
+test.beforeEach(async ({ page }) => { await page.addInitScript(installPromptFixtureBridge); });
 
 async function install(page: Page, seed: Record<string, boolean> = {}) {
   await page.addInitScript((initial: Record<string, boolean>) => {
@@ -292,7 +295,7 @@ test('library save closes the dialog and copy results stay in the dialog', async
   await expect(dialog.getByRole('alert')).toContainText('可修改后再次点击保存');
   await expect(dialog.locator('[role="status"]:not([aria-label="资料正文"])')).toHaveCount(0);
   await page.evaluate(() => { (window as unknown as { __statusCopy: { librarySaveFails: boolean } }).__statusCopy.librarySaveFails = false; });
-  await page.keyboard.press('Control+s');
+  await page.keyboard.press('ControlOrMeta+s');
   await expect(dialog).toHaveCount(0);
   await expect(library.getByRole('status')).toContainText('已保存在本机资料库');
   await expect(library.getByRole('alert')).toHaveCount(0);
@@ -429,7 +432,7 @@ test('page search answers Ctrl+F and slash, and Escape clears it', async ({ page
   await nav.getByRole('button', { name: '资料库' }).click();
   const library = page.getByRole('region', { name: '资料库内容' });
   await expect(library.getByRole('button', { name: '发布检查' })).toBeVisible();
-  await page.keyboard.press('Control+f');
+  await page.keyboard.press('ControlOrMeta+f');
   const search = library.getByLabel('搜索资料');
   await expect(search).toBeFocused();
   await page.keyboard.type('没有这项');
