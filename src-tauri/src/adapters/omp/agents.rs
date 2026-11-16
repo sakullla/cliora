@@ -83,24 +83,17 @@ fn disabled_pointer() -> String {
     "/task/disabledAgents".into()
 }
 
-fn disabled_names_in(path: &Path) -> Vec<String> {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    let Ok(value) = serde_yaml::from_str::<Value>(&text) else {
-        return Vec::new();
-    };
-    value
-        .pointer(&disabled_pointer())
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
+fn disabled_names_in(path: &Path) -> Option<Vec<String>> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let value = serde_yaml::from_str::<Value>(&text).ok()?;
+    let items = value.pointer(&disabled_pointer())?.as_array()?;
+    Some(
+        items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+    )
 }
 
 impl AgentAdapter for OmpAgents {
@@ -151,22 +144,14 @@ impl AgentAdapter for OmpAgents {
         scope: Scope,
         home: &Path,
         project: Option<&Path>,
-        name: &str,
+        _name: &str,
     ) -> Option<AgentToggleLocation> {
+        // Each scope writes its own layer. OMP's `task.disabledAgents` array
+        // replaces the lower layer, so a project toggle must not edit the user
+        // file (and project restore only accepts the project config).
         let path = match scope {
             Scope::Global => user_config_path(home),
-            Scope::Project => {
-                // An agent disabled by the user config must be re-enabled there;
-                // writing a project allow entry would leave it disabled.
-                if disabled_names_in(&user_config_path(home))
-                    .iter()
-                    .any(|disabled| disabled == name)
-                {
-                    user_config_path(home)
-                } else {
-                    project_config_path(project?)
-                }
-            }
+            Scope::Project => project_config_path(project?),
         };
         Some(AgentToggleLocation {
             path,
@@ -175,18 +160,38 @@ impl AgentAdapter for OmpAgents {
         })
     }
 
+    fn toggle_seed(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+        _name: &str,
+    ) -> Value {
+        // Arrays replace rather than concatenate across layers. Start a project
+        // override from the effective list so enabling one agent does not
+        // re-enable every agent disabled only at user scope.
+        let names = match scope {
+            Scope::Project => project
+                .and_then(|project| disabled_names_in(&project_config_path(project)))
+                .or_else(|| disabled_names_in(&user_config_path(home))),
+            Scope::Global => disabled_names_in(&user_config_path(home)),
+        };
+        names.map(|names| json!(names)).unwrap_or(Value::Null)
+    }
+
     fn disabled_names(
         &self,
         scope: Scope,
         home: &Path,
         project: Option<&Path>,
     ) -> Result<Vec<String>, String> {
-        let mut names = disabled_names_in(&user_config_path(home));
-        if scope == Scope::Project {
-            if let Some(project) = project {
-                names.extend(disabled_names_in(&project_config_path(project)));
-            }
+        let mut names = match scope {
+            Scope::Project => project
+                .and_then(|project| disabled_names_in(&project_config_path(project)))
+                .or_else(|| disabled_names_in(&user_config_path(home))),
+            Scope::Global => disabled_names_in(&user_config_path(home)),
         }
+        .unwrap_or_default();
         names.sort();
         names.dedup();
         Ok(names)

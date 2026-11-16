@@ -265,6 +265,18 @@ pub trait AgentAdapter: Sync {
     ) -> Option<AgentToggleLocation> {
         None
     }
+    /// Starting value for a native toggle when the target file itself has no
+    /// explicit field. Layered CLIs can use the effective lower-layer list so a
+    /// higher-scope write preserves every currently disabled name.
+    fn toggle_seed(
+        &self,
+        _scope: Scope,
+        _home: &Path,
+        _project: Option<&Path>,
+        _name: &str,
+    ) -> Value {
+        Value::Null
+    }
     /// Names disabled by the native config, including other scopes the CLI
     /// merges. A read failure is reported as an empty list by the caller so one
     /// unreadable config does not hide every definition.

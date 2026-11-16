@@ -1265,6 +1265,9 @@ fn opencode_version_resolved_writes_stay_in_the_entrys_own_container() {
 
 #[test]
 fn omp_agent_disable_uses_native_disabled_agents_without_moving_the_definition() {
+    // The OMP plugin port exists in the registry but this test host has no local
+    // OMP install; Agent scans and toggles must still work (empty plugin
+    // inventory), which is the regression guard for `plugin_owned`.
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let project = temp.path().join("project");
@@ -1296,4 +1299,60 @@ fn omp_agent_disable_uses_native_disabled_agents_without_moving_the_definition()
     assert_eq!(fs::read_to_string(&definition).unwrap(), body);
     let config = fs::read_to_string(project.join(".omp/config.yml")).unwrap();
     assert!(!config.contains("reviewer"));
+}
+
+#[test]
+fn omp_project_agent_enable_overrides_user_disabled_and_restores_the_project_layer() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let project = temp.path().join("project");
+    let definition = project.join(".omp/agents/reviewer.md");
+    let body = "---\nname: reviewer\ndescription: T4 reviewer\n---\n\nReview body.\n";
+    write(&definition, body);
+    let user_config = home.join(".omp/agent/config.yml");
+    let user_original = "task:\n  disabledAgents:\n    - reviewer\n    - keep-me\n";
+    write(&user_config, user_original);
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let credentials = MemoryStore::default();
+    let target = target("omp", &project);
+    let before = snapshot_inner(&home, &target, &[], None).unwrap();
+    let entry = before
+        .entries
+        .iter()
+        .find(|entry| entry.name == "reviewer")
+        .unwrap();
+    assert!(!entry.enabled, "用户层已禁用时项目快照必须反映真实生效状态");
+
+    let mut enable = request(&home, &target, "enable", Some(entry), "", None);
+    enable.name = "reviewer".into();
+    let enabled = operate(&db, &credentials, &home, &enable).unwrap();
+    // The project layer replaces OMP's array; it must keep the other
+    // user-disabled name instead of dropping the lower-layer list.
+    let project_config = project.join(".omp/config.yml");
+    let written = fs::read_to_string(&project_config).unwrap();
+    assert!(written.contains("keep-me"));
+    assert!(!written.contains("reviewer"));
+    assert_eq!(fs::read_to_string(&user_config).unwrap(), user_original);
+    assert!(enabled
+        .snapshot
+        .entries
+        .iter()
+        .find(|entry| entry.name == "reviewer")
+        .unwrap()
+        .enabled);
+
+    let mut restore = request(&home, &target, "restore", None, "", None);
+    restore.id = Some(enabled.restore_path.clone());
+    restore.transaction_id = Some(enabled.transaction_id.clone());
+    let restored = operate(&db, &credentials, &home, &restore).unwrap();
+    assert!(!project_config.exists(), "恢复创建前的项目层应删除该文件");
+    assert_eq!(fs::read_to_string(&user_config).unwrap(), user_original);
+    assert!(!restored
+        .snapshot
+        .entries
+        .iter()
+        .find(|entry| entry.name == "reviewer")
+        .unwrap()
+        .enabled);
+    assert_eq!(fs::read_to_string(&definition).unwrap(), body);
 }

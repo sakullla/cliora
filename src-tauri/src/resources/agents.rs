@@ -473,8 +473,14 @@ fn plugin_owned(
     if !adapter.owns_agent_definitions() {
         return Ok(Vec::new());
     }
-    // Do not lose package ownership when native discovery fails.
-    Ok(plugins::scan_resources(db, home, target)?.entries)
+    // Do not lose package ownership when native discovery fails. A machine with
+    // no local CLI install has no plugin inventory to merge; that must not block
+    // Agent scans or enable/disable, matching the Skills scan.
+    match plugins::scan_resources(db, home, target) {
+        Ok(snapshot) => Ok(snapshot.entries),
+        Err(error) if error == "未找到 CLI 安装" => Ok(Vec::new()),
+        Err(error) => Err(error),
+    }
 }
 /// Installed line for adapters whose agent fields follow the native major
 /// version. Other adapters keep their static shapes without a probe. The
@@ -753,10 +759,17 @@ fn operate_inner(
                             let text = baseline.clone().unwrap_or_default();
                             let parsed = format::parse(location.kind, &text)?;
                             let pointer = pointer_of(&location.field);
-                            let current = parsed
-                                .pointer(&pointer)
-                                .cloned()
-                                .unwrap_or(Value::Null);
+                            let seed = adapter.toggle_seed(
+                                target.scope,
+                                home,
+                                project(target)?.as_deref(),
+                                &entry.name,
+                            );
+                            let current = if seed.is_null() {
+                                parsed.pointer(&pointer).cloned().unwrap_or(Value::Null)
+                            } else {
+                                seed
+                            };
                             let next = adapter.toggle_value(&current, &entry.name, enabled);
                             let contents =
                                 format::set_path(location.kind, &text, &location.field, next.as_ref())?;
