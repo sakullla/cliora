@@ -110,8 +110,8 @@ Twiglane 的内存态来源上下文仍存在时，用户点击“返回 cliora�
 | `outcome` | 含义 | `headOid` |
 | --- | --- | --- |
 | `reviewed` | 本次审查期间**没有**提交或合入。它不再表示“只做了浏览”：工作区可能有未提交修改 | 不得携带 |
-| `committed` | 本次审查期间成功创建的本地提交（`commit_changes`，或 `commit_and_push` 中 `committed=true` 的阶段） | 必填，取该次成功操作的提交对象 ID |
-| `merged` | `start_merge` 的快进或变基完成，或 `complete_merge` 成功 | 必填，取完成后的 HEAD |
+| `committed` | 本次审查期间已核实创建的本地提交：普通提交、commit-and-push 的已提交阶段、拣选、还原、修订，以及拣选/还原的继续完成；部分批次在后续冲突前已创建的提交单独计入 | 必填，取该次成功操作的提交对象 ID |
+| `merged` | `start_merge` 的快进或变基完成，或实际 merge/rebase 的 `complete_merge` 成功；拣选/还原继续完成归 committed | 必填，取完成后的 HEAD |
 
 **工作区状态** `worktreeState` 描述返回时 Twiglane 读取到的工作区，与 outcome 正交：
 
@@ -123,7 +123,7 @@ Twiglane 的内存态来源上下文仍存在时，用户点击“返回 cliora�
 
 因此 `reviewed + dirty`（只编辑未提交）、`committed + dirty`（提交后仍有其他修改）、`merged + dirty` 都是合法且需要如实展示的组合。Twiglane 中普通文件保存只写工作区文件：它不改变 outcome，不产生 `edited`、批准或测试通过之类的结果；审阅标记数量也不进入协议。
 
-失败、取消、过期响应、仅产生冲突草稿的合并都不记录结果，也不得回送 `committed`/`merged`。推送失败不影响已完成的提交声明，但也不得声称推送成功。Twiglane 原生按 reviewId 在返回请求进入时、异步 Git 读取之前分配严格递增 resultRevision，不由前端指定。较慢的旧请求仍携带较小序号，不能因较晚完成变成新结果。允许再次返回更新结果；发送失败可留下序号间隙。Cliora 仅接受比该来源已收到序号更大的 returned，重复或逆序忽略；同一来源只保留最新结果。accepted/rejected 不允许 resultRevision，returned 后迟到的接收回执不能把结果退回 accepted/rejected。v2 不允许此字段。
+全跳过、未核实创建提交的失败/取消、过期响应和纯冲突草稿不制造结果，也不抹去该来源已有的真实结果。已由受控写操作核实的提交阶段即使后续批次遇到冲突仍保留；不从 checkout/reset 等单纯 HEAD 位移推断提交。推送失败不影响已完成的提交声明，但也不得声称推送成功。Twiglane 原生按 reviewId 在返回请求进入时、异步 Git 读取之前分配严格递增 resultRevision，不由前端指定。较慢的旧请求仍携带较小序号，不能因较晚完成变成新结果。允许再次返回更新结果；发送失败可留下序号间隙。Cliora 仅接受比该来源已收到序号更大的 returned，重复或逆序忽略；同一来源只保留最新结果。accepted/rejected 不允许 resultRevision，returned 后迟到的接收回执不能把结果退回 accepted/rejected。v2 不允许此字段。
 
 ```
 cliora://review?v=3&event=returned&reviewId=6f1a2b3c-...&sessionId=0b1c2d3e-...&outcome=reviewed&worktreeState=dirty&resultRevision=1&meta.twiglane.version=0.3.3
@@ -186,4 +186,7 @@ Cliora 在把 URL 交给系统之前登记来源，以接受运行中 peer 的�
 
 Twiglane 的 `cliora_review_sources({resetPending})` 返回有界的 `{sources, expiredPending}`。每项包含 `source`（协议版本、UUID、canonical worktree、baseline 与可选项目来源）、`result`（原生既有 Git 写入成功边界保存的 committed/merged、headOid、recordedAt）和 `lastReturn`（revision 与最近返回声明）。首次 WebView 恢复明确过期旧 pending 并报告数量；入站 prepare 排在恢复 Promise 之后，不能误清当前新请求。普通列表刷新不清 pending；前端 mutation epoch 拒绝迟到快照覆盖新来源、关闭或结果。内存列表不读取另一产品数据库、不包含凭据，不代表进程重启后恢复。
 
-既有 commit_changes、commit_and_push、revert_commits、amend_commit、start_merge、complete_merge 只增加可选的 reviewId 归属，始终走原 GitScheduler/写锁/generation 与失败保护。成功仅记录给操作开始时选择且 canonical 路径相符的来源；没有来源时不产生记录，失败、取消、预览和冲突未完成不产生结果。返回声明必须与原生成功缓存一致，之后仍需 Cliora 复核真实 HEAD/dirty；缓存或快照不是测试、批准或项目完成结论。显式释放来源不要求该路径还能打开，也不关闭当前仓库或删除草稿。
+提交/整合入口 commit_changes、commit_and_push、cherry_pick_commits、revert_commits、amend_commit、start_merge、complete_merge 携带可选的起始 reviewId 归属，始终走原 GitScheduler/写锁/generation 与失败保护。成功仅记录给操作开始时选择且 canonical 路径相符的来源；没有来源时不产生记录；未核实完成提交阶段的失败、取消、预览和纯冲突不产生结果，已有结果仍保留。拣选的 created/headOid 来自该受控写操作内的验证；继续操作的 operation 来自实际 write guard 完成结果，不能由切仓后的前端状态指定。返回声明必须与原生成功缓存一致，之后仍需 Cliora 复核真实 HEAD/dirty；缓存或快照不是测试、批准或项目完成结论。显式释放来源不要求该路径还能打开，也不关闭当前仓库或删除草稿。
+
+
+接收 accepted 的等待只决定来源登记，不授权迟到回调改当前阅读上下文。Twiglane 保留已经接受的来源；repository epoch、路径或显式来源选择已经变化时，仅登记该来源，不激活它、不把其 baseline 写入当前仓库。用户之后可显式选择该来源继续审查。

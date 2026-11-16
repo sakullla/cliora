@@ -142,7 +142,7 @@ WebDAV manifest 随写入升级到 5，使旧客户端在处理新载体前拒�
 
 ## T5-A1：双端来源审查集成（开发记录）
 
-当前结论：T5 实现与开发直接回归已完成；锁定环境双主题 12 图通过，macOS 27.0 arm64 的真实 Native IPC / 系统 scheme 双向闭环已观察并完成恢复清理。原生证据使用隔离测试包、临时 pass-through 驱动与 fixture CLI，按文末边界解释，不替代正式累计验证或完整平台矩阵。
+当前结论：T5-A2 返修与开发直接回归已完成；最终双主题 12 图通过，macOS 27.0 arm64 的真实 Native IPC / 系统 scheme 双向闭环、拣选 committed 返回及下一基线推进已观察并完成恢复清理。原生证据使用隔离测试包、临时 pass-through 驱动与 fixture CLI，按文末边界解释，不替代正式累计验证或完整平台矩阵。
 
 开发基线：Cliora `f46d0007b26af6cf1a61366ecc3349eadb27e4e9`、Twiglane `3e956c7da8fa9636492ba8869dc86ce17d5a0a20`。T1–T4 的已成立证据保留。本轮覆盖 v3 合同、按来源版本兼容 v2、多来源保留与选择、返回结果顺序，以及两项目范围提示词到原会话返回的直接消费者；没有跨仓自动 Git 写入或 Agent 编排。
 
@@ -264,3 +264,35 @@ Worker 只读核对该专属 DB：schema 33、业务项目/仓库/位置各 1，
 实际短暂安装/运行位置为 `~/Applications/Sakullla Review Probe 8c6f1439/`。清理后该安装目录不存在、两私有 identifier 的进程数均为 0，默认标识与实际物理目标分别恢复为 `com.cliora.desktop` → `/Applications/Cliora.app`、`app.twiglane.desktop` → `/Applications/Twiglane.app`。原缓存中的保留 `.app` 路径见 index 的 retainedBundle；其二进制字节 SHA 与实际短暂安装执行一致，不把已删除运行路径当作仍安装。没有为测试新建账号、连接或 Key，也没有对用户 DB 迁移；目录和 Git 输入仅为 owned fixture。
 
 边界：宿主 macOS 27.0 arm64、观测时仍锁屏；候选是正常生产源码的隔离 identifier、ad-hoc bundles，使用临时前端 pass-through 真实 IPC / loopback 观察及最小身份元数据测试 capability。PTY 子进程是输出兼容版本并常驻 cat 的受控 fixture，不能声称真实 Codex 登录、推理或 CLI 全能力验收。键鼠、焦点、IME、签名/公证发布包完整场景矩阵和 Windows/Linux 原生行为未验证。前述真实 Git 单测、56 条协议 fixtures、65 项前端直接回归及双主题 12 图分别支撑各自层级，不拿任何一层替代另一层。正式累计验证与最终交付审查仍由 Delivery 执行。
+
+
+## T5-A2：独立审查返修
+
+基线 Cliora `f1af43b333505e7901e278526820c88ef6a42a09`、Twiglane `4de55c10c6757042b6fddf6e6dd3b5dca0a1eef9`。Cliora 固定范围审查通过的判断保留；前述 Native 8 与 12 图属于 A1 候选，不能自动转作 A2 的新源码证据。A2 只处理两项 P2 与直接安全测试合同。
+
+修前受控结果：前端 4 项中 3 个产品反例失败、1 个负例通过（47 未选），回执 `67b77f0d1793b0ee27ce200d46af5bf7c331de7983102130cf0bb7ff52dea763`。真实 Git/IPC 六项中，拣选成功/部分冲突的源缓存为空及继续拣选误作 merged 为三项真实失败；纯冲突、纯失败两负例通过，回执 `921b460a2e86838b1790626fcb638922148beae4524e4e42092cad1cb6e3a3c2`。all-skip 初始 fixture 误用了无 parent 的 root commit，服务本来就应拒绝；仅改为普通已有 ancestor 提交后，未改生产代码单项通过 `256824b4a19197327dbbf1e9a5ed6d0e89072c0b61cdde151bf9409b29549bed`，不将它记作产品根因。原 security 精确 allowlist 失败回执 `7cf329bd70be811a5d8648a0be7ee4c50e0cc953356399583c09331ed05e5d0f`。
+
+accepted 返修以既有 repository epoch、canonical 路径和来源 mutation epoch 判断上下文是否仍有效；过期完成只保留 A 来源，不激活、不改 B 的任务起点，也不使用长时间全局锁。Git 结果补齐实际 cherry-pick producer：created/headOid 由受控 write guard 内核实，支持已创建提交后冲突；全跳过、纯冲突/失败不制造或清空结果。complete_merge 返回 guard 实际完成的 operation，拣选/还原归 committed，merge/rebase 归 merged，不信任切仓后的前端 operation。Rust/TS DTO、preview fixtures 和双端合同同步；checkout/reset/分支切换不自动推断提交。security 仅同步 forget/sources 两项最小授权期望，保留禁止通用 shell/fs/http 的全部守卫。
+
+修后直接验证结果见下表；正式累计验证仍交 Delivery。Native 与捕获针对冻结的 A2 重新取证，A1 原始材料保留。
+
+
+A2 修后直接组均由 Owner 受控执行，退出 0、cleanup released；生产源、测试和 preview fixture 在这轮后冻结：
+
+| 开发验证 | 实际结果 | 受控回执 |
+| --- | --- | --- |
+| Svelte/TS check | 0 errors、0 warnings | `63de400e942fe0eb04987873ba0ca505a8dce5b92adf8c9a22acfb9c9b071ed7` |
+| integration / api / sources / review-progress | 70/70，含迟到 accepted 和拣选/继续原反例 | `a734a03878e20eebcd8ce1fd4470515378c4f1fca96bb45c84b160ab942e39c8` |
+| ipc_contract | 16/16，含 8 项真实 Git 拣选：成功、全跳过、纯冲突、失败、部分冲突、继续完成及旧结果保留 | `8efcc00076cff8b98b316cb2b1fa7e8c2748a87f69b963c68d28afd304c69bb0` |
+| security | 3/3，精确授权与禁止通用能力守卫均保留 | `d5841d9e60ea284ea1a8a607d3787c98e8d865a5f85b44ca65effe2ef90139a8` |
+| git::resolve 直接服务组 | 48/48，覆盖拣选、还原、合并/变基及继续入口 | `10c95789d45d4816bfd5f3ada496b973ace0b39a23ba56e1713bfd508eed6893` |
+| Clippy all-targets / -D warnings | 通过 | `330be09d1fbb9bff119219a4ba30a4e2fdd990521d15b8fcfabfa5f9b41f1b68` |
+| production build | 通过 | `3f7b0925b8b2523dd178c5e4c7ed6ff41b467cd3e20d788bb3aa74c95c2c2151` |
+
+producer 核对包括普通提交、提交推送、拣选、还原、修订、start_merge 的 ff/rebase 完成，以及 complete_merge 下实际 merge/rebase/cherry-pick/revert；继续拣选的 committed 分类来自原生 guard 回传的 operation。checkout/reset/分支切换和 stash 等不因 HEAD 或 Git 对象变化被推断成源提交。既有 IPC mock AppState 补齐真实 app 已有的 ReviewSources 管理，未弱化请求参数或安全断言。Cliora 产品源码未变，复用其有效固定范围审查；双端合同逐字同步，56 条 URI fixtures 的字段/字节不变。
+
+
+A2 最终同源捕获回执 `5ee8141b5aa98638740c39d3faf934c99879d864ec6550504ce4d41e2cb117d2`：12 图、页面错误 0、水平溢出 0，A 自动返回、草稿保留未发送、B 仍 accepted。
+A2 原生回执 `fdc89a1de898dc928edeaa0cd58adee875af8561eccd471b2c9b69a5b487c322`：真实 owned Git 拣选 created=1、HEAD=`73e08f7c82b537f66d678ac7135c0284e29217d2`，committed/clean、revision=1 返回原会话；Cliora 实际复核后下一审查 baseline 等于该 HEAD。
+统一证据为 Cliora workflow 的 `evidence/native-review-runtime-a2/index.json` / `report.json`；候选路径、SHA、源码输入和外置驱动均在索引，A1 原始证据/二进制另行保留。`postflight-a2.json` 确认原 `/Applications` handlers 已恢复、owned 安装目录不存在、owned 进程为空；两次命令均退出 0、cleanup released。
+边界仍为隔离 ad-hoc bundles、fixture CLI 和外置 pass-through IPC 驱动，不代表真实 Codex 登录/推理、键鼠/焦点/IME、Windows/Linux 或完整原生矩阵验收；正式累计验证交 Delivery。

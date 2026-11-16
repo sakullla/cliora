@@ -101,8 +101,8 @@ Twiglane 的内存态来源上下文仍存在时，用户点击“返回 cliora�
 | `outcome` | 含义 | `headOid` |
 | --- | --- | --- |
 | `reviewed` | 本次审查期间**没有**提交或合入。它不再表示“只做了浏览”：工作区可能有未提交修改 | 不得携带 |
-| `committed` | 本次审查期间成功创建的本地提交（`commit_changes`，或 `commit_and_push` 中 `committed=true` 的阶段） | 必填，取该次成功操作的提交对象 ID |
-| `merged` | `start_merge` 的快进或变基完成，或 `complete_merge` 成功 | 必填，取完成后的 HEAD |
+| `committed` | 本次审查期间已核实创建的本地提交：普通提交、commit-and-push 的已提交阶段、拣选、还原、修订，以及拣选/还原的继续完成；部分批次在后续冲突前已创建的提交单独计入 | 必填，取该次成功操作的提交对象 ID |
+| `merged` | `start_merge` 的快进或变基完成，或实际 merge/rebase 的 `complete_merge` 成功；拣选/还原继续完成归 committed | 必填，取完成后的 HEAD |
 
 **工作区状态** `worktreeState` 描述返回时 Twiglane 读取到的工作区，与 outcome 正交：
 
@@ -114,7 +114,7 @@ Twiglane 的内存态来源上下文仍存在时，用户点击“返回 cliora�
 
 因此 `reviewed + dirty`（只编辑未提交）、`committed + dirty`（提交后仍有其他修改）、`merged + dirty` 都是合法且需要如实展示的组合。Twiglane 中普通文件保存只写工作区文件：它不改变 outcome，不产生 `edited`、批准或测试通过之类的结果；审阅标记数量也不进入协议。
 
-失败、取消、过期响应、仅产生冲突草稿的合并都不记录结果，也不得回送 `committed`/`merged`。推送失败不影响已完成的提交声明，但也不得声称推送成功。新结果替代旧结果；同一来源只保留最新一次结果。
+全跳过、未核实创建提交的失败/取消、过期响应和纯冲突草稿不制造结果，也不抹去该来源已有的真实结果。已由受控写操作核实的提交阶段即使后续批次遇到冲突仍保留；不从 checkout/reset 等单纯 HEAD 位移推断提交。推送失败不影响已完成的提交声明，但也不得声称推送成功。新结果替代旧结果；同一来源只保留最新一次结果。
 
 ```
 cliora://review?v=2&event=returned&reviewId=6f1a2b3c-...&sessionId=0b1c2d3e-...&outcome=reviewed&worktreeState=dirty&meta.twiglane.version=0.3.3
