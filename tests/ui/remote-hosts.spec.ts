@@ -30,7 +30,7 @@ async function install(page: Page) {
           if (command === state.hold) await new Promise<void>(resolve => { state.releases.push(resolve); state.release = () => { for (const release of state.releases.splice(0)) release(); }; });
           if (command === 'create_remote_directory' && state.createOutcome === 'unknown') throw { code: 'remote_unknown', message: 'remote may have created directory', action: '核查远端原路径后再操作。', remote: { outcome: 'unknown', action: '核查远端原路径后再操作。' } };
           if (command === state.failure) throw { message: 'Permission denied fixture', action: '检查远端权限。', remote: { reason: 'permission', outcome: 'failed' } };
-          if (command === 'query_prompts') return { items: [], total: 0, offset: 0, limit: 50, tags: [] };
+          if (command === 'query_prompts') return { items: [], total: 0, tags: [], nextOffset: null };
           // Synthetic shared database survives a full document reload. Product
           // persistence is SQLite; localStorage is only this IPC fixture.
           if (command === 'list_remote_directory_receipts') return JSON.parse(localStorage.getItem('fixture:directory-receipts') ?? '[]').map((item: any) => ({ ...item, outcome: item.outcome === 'pending' ? 'unknown' : item.outcome, inspection: item.inspection?.state === 'checking' ? undefined : item.inspection }));

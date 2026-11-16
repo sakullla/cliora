@@ -312,3 +312,14 @@ A2 原生回执 `fdc89a1de898dc928edeaa0cd58adee875af8561eccd471b2c9b69a5b487c32
 | 原故障用例、完整事务组与 Clippy | exact 1/1、transactions 9/9、`--all-targets -- -D warnings` 均通过 | `77be42c7efd34581a4d3022c1a1c8204ff73409f12ba492dd2e36b3f150d422a` |
 
 以上命令均退出 0、清理 released。修改只在测试/夹具消费者及测试专用适配边界；不是 GNU/util-linux 生产环境、实际 SSH 服务或其它平台的验收。原正式失败保留，T5/Delivery 的其它已知问题和正式累计全量尚未据此宣称完成。
+
+
+## T5-A3：最终集成修复与开发验证
+
+生产最小修复为 Twiglane 三个审查控件复用实际读/写禁用原因，以及 Cliora 仅在 pathName 内让目录 head 可归零、tail 不收缩；列表布局保持原值。测试只补 Skill 字体就绪/有界连续稳定行矩形、Kiro canonical project、mac 显式 MacTerminal 和完整空 PromptPage，原选择、大小写、整文件保存及系统脚本断言保留，未改编辑器、Kiro 路径策略或产品默认终端。
+
+Twiglane 直接 28/28（`8f4528af2b47c727663bc696ea6613168f5809efdbfb1858591c8134c52c919d`）；Cliora 原三 UI specs 39 项与 Skill 8-worker 重复 8 项通过，两个原 native fixture 及 Clippy 通过（`a7bc41146d77020f5bfee371a80d0c9b9f0d51d88ce689ea5042b4a1d137a6be`）。整数宽度曾掩盖 0.046875px 尾段收缩，首次实际残缺图保留为 intermediate-visual-failure；最终 build/标题 5/5（`ebc68d9a8f7f028e3a896b551d44b7f11c2279bdaf15501b452626a51dd0ceef`）加 Text Range 小数检查，1200×800 Desktop Chrome Windows UA 实际图完整显示 mes-fetch，文本/元素宽同为 57.984375、right 同为 648（`b70e715e42fe3180f68a51aacb6642a8e12e25b5a28b818238aadb2a544875f5`；Cliora workflow `evidence/T5-A3-titlebar-final/index.json`），已实际查看最终 crop。
+
+最终双主题 12 图回执 `7cc53799852217d81118fb3a311c839fd45a759c0a826f51b05031388e61e98c`：页面错误/水平溢出均 0，A 返回原会话、草稿保留未发送、B 仍 accepted。新的原生回执 `7ae649ef9f8fa925b7c124445880bc1fb109d8442911cdddd21c7ec554557f4b` 观察真实 owned cherry-pick created=1、HEAD `b4b907578aa5d5601b5c72aaef8797844f962bd5`，原来源 committed/clean/revision1 经 Cliora 真 Git 复核；下一 baseline 等于该 HEAD，第二次 accepted 后才清理。统一入口为 Cliora workflow `evidence/native-review-runtime-a3/index.json`，保留 A3 源码输入与不可变候选包；`postflight-a3.json` 确认原标识/物理路径恢复至两 `/Applications` app、owned 安装不存在、进程为空。以上命令退出 0、cleanup released，旧 A1/A2 仅作历史证据。
+
+原生范围仍是隔离 ad-hoc 包、fixture CLI 与外置 pass-through IPC 驱动，未代表真实 Codex 认证/推理、键鼠焦点/IME、Windows/Linux 或完整平台矩阵。首次全量线程 WouldBlock 来源尚未证明，隔离通过不替代正式全覆盖；最终累计验证与审查交 Delivery。

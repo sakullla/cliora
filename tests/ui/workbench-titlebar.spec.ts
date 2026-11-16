@@ -150,6 +150,12 @@ test('a hyphenated folder suffix leaves the task title, and the folder chip keep
   await expect(chip.getByText('…/qsyn/')).toHaveJSProperty('clientWidth', 0);
   const tail = chip.getByText('mes-fetch', { exact: true });
   await expect.poll(() => tail.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  // Integer client/scroll widths can hide a fractional flex squeeze that still paints an ellipsis.
+  await expect.poll(() => tail.evaluate((element) => {
+    const text = document.createRange();
+    text.selectNodeContents(element);
+    return text.getBoundingClientRect().width <= element.getBoundingClientRect().width + 0.01;
+  })).toBe(true);
   await expect.poll(() => tail.evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThan(20);
 });
 

@@ -400,6 +400,8 @@ mod tests {
         let home = temp.path();
         let project = temp.path().join("work").join("demo");
         std::fs::create_dir_all(&project).unwrap();
+        // Native sessions and shared directory APIs must agree on the canonical workspace identity.
+        let project = project.canonicalize().unwrap();
         let kiro = home.join(".kiro");
         // Two hash directories: one maps to the selected project, the other
         // belongs to a different workspace; the legacy `cli` layout carries

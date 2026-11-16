@@ -834,6 +834,8 @@
    has the whole chip to itself; then its head folds and its end stays (PathLabel). */
 .pathParent { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .pathName { display: flex; flex: none; min-width: 0; max-width: 100%; overflow: hidden; }
+.pathName > .placeHead { min-width: 0; }
+.pathName > .placeTail { flex-shrink: 0; }
 .pathChip > :global(svg) { flex: none; }
 .pathChip:hover:not(:disabled) { background: var(--term-hover); color: var(--term-fg); box-shadow: none; }
 .modeChip { display: inline-flex; flex: none; align-items: center; gap: var(--space-1); color: var(--term-text-3); white-space: nowrap; }
