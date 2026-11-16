@@ -104,14 +104,15 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
                 : backend === 'future-backend'
                   ? '未核实后端；OMP 18.20.2 忽略该值并使用默认 off'
                   : '远程 Hindsight bank（另含 hindsight-outbox 投递队列）；本机 Markdown 文件不参与';
+        const localDetail = `当前后端：local（${storage}）；OMP 直接读取 MEMORY.md、memory_summary.md 与 learned.md，Cliora 对这些文件的编辑会写回原文件；只管理这三个文件，不编辑生成的 skills/，也不提供删除或单条启停；本机有 1 个项目的 local Markdown 记忆文件`;
         const detail = backend === 'future-backend'
           ? `memory.backend 为未核实值 future-backend；OMP 18.20.2 会忽略并使用默认 off，Cliora 保留原值不改写；选择“开”会被拒绝，请先在 OMP 原生配置中修复${bankNote}`
           : backend === 'local'
-            ? `当前后端：local（${storage}）`
+            ? localDetail
             : backend === 'off'
               ? `当前后端：off（${storage}）；Cliora 不把磁盘上的旧 Markdown 文件当作当前记忆${bankNote}`
               : `当前后端：${backend}（${storage}）；该数据由 OMP 原生后端管理，Cliora 不展示为本地 Markdown；记忆界面的开关只写 local/off，选择“开”会替换当前值${bankNote}`;
-        if (zetaFailureReason) return { toolId, failedSources: [{ label: 'OMP 记忆根目录无法枚举', reason: zetaFailureReason }], entries: [], stores: [], switchShared: true, switchGroups: [{ id: 'memory.backend', scope: 'project', enabled: true, detail: `当前后端：local（${storage}）` }] };
+        if (zetaFailureReason) return { toolId, failedSources: [{ label: 'OMP 记忆根目录无法枚举', reason: zetaFailureReason }], entries: [], stores: [], switchShared: true, switchGroups: [{ id: 'memory.backend', scope: 'project', enabled: true, detail: localDetail }] };
         if (backend !== 'local') return { toolId, failedSources: [], entries: [], stores: [], switchShared: true, switchGroups: [{ id: 'memory.backend', scope: 'project', enabled: false, detail }] };
         const target = { toolId: 'zeta', scope: 'project', projectPath: 'C:/A', storeDirectory: 'C:/home/.omp/agent/memories/--c--a--' };
         const entries = ['learned', 'memory_summary'].map(id => entry(id, 'C:/home/.omp/agent/memories/--c--a--', '--c--a--', target));
@@ -859,6 +860,14 @@ test('OMP reports a non-local memory backend without offering Markdown entries',
   await page.getByRole('combobox', { name: '所有项目记忆' }).selectOption('on');
   await expect(entryButton(page, 'memory_summary')).toBeVisible();
   await expect(page.getByText(/当前后端：local/)).toBeVisible();
+  // The local family reports its readable/writable state, not the remote
+  // backends' "not local Markdown / not read / will be replaced" clauses.
+  await expect(page.getByText(/OMP 直接读取 MEMORY\.md/)).toBeVisible();
+  await expect(page.getByText(/编辑会写回原文件/)).toBeVisible();
+  await expect(page.getByText(/本机有 1 个项目的 local Markdown 记忆文件/)).toBeVisible();
+  for (const forbidden of ['不展示为本地 Markdown', '当前后端不读取', '会替换当前值']) {
+    await expect(page.getByText(forbidden, { exact: false })).toHaveCount(0);
+  }
   await expect(page.getByRole('button', { name: '新建记忆' })).toBeEnabled();
   const calls = await memoryCalls(page);
   expect(calls.some(call => call.command === 'set_memory_switch_group' && call.args.groupId === 'memory.backend' && call.args.enabled === true)).toBe(true);

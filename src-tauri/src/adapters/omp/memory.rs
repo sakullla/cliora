@@ -158,10 +158,22 @@ impl Backend {
     }
 
     fn status_detail(&self, home: &Path, legacy: bool) -> String {
+        if matches!(self, Self::Local) {
+            let mut detail = format!("当前后端：local（{}）", self.storage());
+            if legacy {
+                detail.push_str("；来自旧版 memories.enabled 迁移");
+            }
+            detail.push_str(
+                "；OMP 直接读取 MEMORY.md、memory_summary.md 与 learned.md，Cliora 对这些文件的编辑会写回原文件",
+            );
+            detail.push_str("；只管理这三个文件，不编辑生成的 skills/，也不提供删除或单条启停");
+            detail.push_str(&local_bank_note(home, true));
+            return detail;
+        }
         if let Self::Unknown(value) = self {
             return format!(
                 "memory.backend 为未核实值 {value}；OMP 18.20.2 会忽略并使用默认 off，Cliora 保留原值不改写；选择“开”会被拒绝，请先在 OMP 原生配置中修复{}",
-                local_bank_note(home)
+                local_bank_note(home, false)
             );
         }
         let mut detail = format!("当前后端：{}（{}）", self.label(), self.storage());
@@ -174,7 +186,7 @@ impl Backend {
             detail.push_str("；该数据由 OMP 原生后端管理，Cliora 不展示为本地 Markdown");
             detail.push_str("；记忆界面的开关只写 local/off，选择“开”会替换当前值");
         }
-        detail.push_str(&local_bank_note(home));
+        detail.push_str(&local_bank_note(home, false));
         detail
     }
 
@@ -420,7 +432,9 @@ fn project_root(home: &Path, project: &Path) -> Result<PathBuf, String> {
 /// the memories root belongs to another backend (mnemopi/, sharpshooter/) or is
 /// not a project bank at all.
 fn is_bank_name(name: &str) -> bool {
-    name.len() > 4 && name.starts_with("--") && name.ends_with("--")
+    // `/` as the project cwd encodes to exactly `----` (length 4), so the
+    // minimum is four characters rather than five.
+    name.len() >= 4 && name.starts_with("--") && name.ends_with("--")
 }
 
 fn local_banks(root: &Path) -> Result<Vec<PathBuf>, String> {
@@ -458,11 +472,20 @@ fn local_banks(root: &Path) -> Result<Vec<PathBuf>, String> {
 
 /// Disk reality appended to the backend status. An `off`, remote or unknown
 /// backend must never look like "no memory": the local Markdown files may still
-/// be on disk, untouched and simply not loaded.
-fn local_bank_note(home: &Path) -> String {
+/// be on disk, untouched and simply not loaded. The active `local` backend gets
+/// the opposite phrasing so the same note never claims its own files are
+/// unread.
+fn local_bank_note(home: &Path, active: bool) -> String {
     let banks = memories_dir(home).and_then(|root| local_banks(&root));
     match banks {
+        Ok(banks) if banks.is_empty() && active => {
+            "；本机还没有 local Markdown 记忆文件".to_owned()
+        }
         Ok(banks) if banks.is_empty() => "；本机没有已落盘的 local Markdown 记忆".to_owned(),
+        Ok(banks) if active => format!(
+            "；本机有 {} 个项目的 local Markdown 记忆文件",
+            banks.len()
+        ),
         Ok(banks) => format!(
             "；本机仍有 {} 个项目的 local Markdown 记忆文件，当前后端不读取，Cliora 不删除或重建",
             banks.len()
@@ -487,6 +510,49 @@ fn unavailable_store(home: &Path) -> MemoryStoreRef {
         home.join(".cliora-omp-memory-unavailable"),
         "OMP 记忆根目录无法解析",
     )
+}
+
+/// Build local stores from directory entry names. A mid-iteration error keeps
+/// every store already found and appends one status store, so one broken root
+/// entry cannot hide the valid banks.
+fn stores_from_entries(
+    root: &Path,
+    entries: impl Iterator<Item = std::io::Result<std::ffi::OsString>>,
+) -> Vec<MemoryStoreRef> {
+    let mut stores = Vec::new();
+    for entry in entries {
+        let name = match entry {
+            Ok(name) => name,
+            Err(_) => {
+                stores.push(status_store(
+                    root.to_path_buf(),
+                    "OMP 记忆根目录无法完整枚举",
+                ));
+                break;
+            }
+        };
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !is_bank_name(name) {
+            continue;
+        }
+        let directory = root.join(name);
+        if !store_present(&directory) {
+            continue;
+        }
+        stores.push(MemoryStoreRef {
+            scope: Scope::Project,
+            // The encoded directory name is not invertible (a literal `-` and
+            // a separator collapse to the same character), so the store
+            // directory itself pins the native location.
+            project_path: None,
+            label: name.to_owned(),
+            directory,
+        });
+    }
+    stores.sort_by(|left, right| left.directory.cmp(&right.directory));
+    stores
 }
 
 /// Restore the exact prior config text (or remove the fixture file) after a
@@ -590,34 +656,10 @@ impl MemoryAdapter for Memory {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
             Err(_) => return vec![status_store(root, "OMP 记忆根目录无法枚举")],
         };
-        let mut stores = Vec::new();
-        for item in read {
-            let Ok(item) = item else {
-                return vec![status_store(root, "OMP 记忆根目录无法枚举")];
-            };
-            let name = item.file_name();
-            let Some(name) = name.to_str() else {
-                continue;
-            };
-            if !is_bank_name(name) {
-                continue;
-            }
-            let directory = item.path();
-            if !store_present(&directory) {
-                continue;
-            }
-            stores.push(MemoryStoreRef {
-                scope: Scope::Project,
-                // The encoded directory name is not invertible (a literal `-`
-                // and a separator collapse to the same character), so the
-                // store directory itself pins the native location.
-                project_path: None,
-                label: name.to_owned(),
-                directory,
-            });
-        }
-        stores.sort_by(|left, right| left.directory.cmp(&right.directory));
-        stores
+        stores_from_entries(
+            &root,
+            read.map(|item| item.map(|entry| entry.file_name())),
+        )
     }
 }
 
@@ -1304,6 +1346,18 @@ mod tests {
         assert!(detail.contains("由 OMP 原生后端管理"));
         assert!(detail.contains("不展示为本地 Markdown"));
         assert!(detail.contains("选择“开”会替换当前值"));
+        // The managed family reports its real state, never the other backends'
+        // "not local Markdown / not read / will be replaced" clauses.
+        let local = Backend::Local.status_detail(temp.path(), true);
+        assert!(local.contains("当前后端：local"));
+        assert!(local.contains("OMP 直接读取 MEMORY.md、memory_summary.md 与 learned.md"));
+        assert!(local.contains("Cliora 对这些文件的编辑会写回原文件"));
+        assert!(local.contains("只管理这三个文件"));
+        assert!(local.contains("旧版 memories.enabled 迁移"));
+        assert!(local.contains("本机还没有 local Markdown 记忆文件"));
+        for forbidden in ["不展示为本地 Markdown", "当前后端不读取", "会替换当前值"] {
+            assert!(!local.contains(forbidden), "{forbidden}: {local}");
+        }
     }
 
     #[test]
@@ -1316,6 +1370,8 @@ mod tests {
             encode_project(Path::new("/home/me/project"), false),
             "--home-me-project--"
         );
+        // The filesystem root is the shortest bank: `----`.
+        assert_eq!(encode_project(Path::new("/"), false), "----");
         // A leading separator is stripped exactly once, as OMP does; UNC
         // sessions therefore keep one leading dash for the remaining slash.
         assert_eq!(
@@ -1505,6 +1561,37 @@ mod tests {
     }
 
     #[test]
+    fn mid_iteration_entry_error_keeps_the_stores_already_found() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("memories");
+        std::fs::create_dir_all(root.join("--kept--")).unwrap();
+        let entries = vec![
+            Ok(std::ffi::OsString::from("--kept--")),
+            Err(std::io::Error::other("boom")),
+            Ok(std::ffi::OsString::from("--after--")),
+        ];
+        let stores = stores_from_entries(&root, entries.into_iter());
+        assert!(
+            stores
+                .iter()
+                .any(|store| store.directory == root.join("--kept--")),
+            "{stores:?}"
+        );
+        assert!(
+            stores
+                .iter()
+                .any(|store| store.label == "OMP 记忆根目录无法完整枚举"),
+            "{stores:?}"
+        );
+        assert!(
+            !stores
+                .iter()
+                .any(|store| store.directory == root.join("--after--")),
+            "entries after the error are not read"
+        );
+    }
+
+    #[test]
     fn layout_lists_only_the_native_memory_files() {
         let temp = tempfile::tempdir().unwrap();
         let directory = temp.path().join("--fixture-project--");
@@ -1528,6 +1615,21 @@ mod tests {
             .entries(&temp.path().join("--missing--"))
             .unwrap()
             .is_empty());
+        // `/` encodes to the four-character `----`; it is a valid bank.
+        let root_bank = temp.path().join("----");
+        std::fs::create_dir_all(&root_bank).unwrap();
+        std::fs::write(root_bank.join("MEMORY.md"), "# root\n").unwrap();
+        let ids: Vec<String> = MEMORY
+            .entries(&root_bank)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect();
+        assert_eq!(ids, ["MEMORY"]);
+        assert_eq!(
+            MEMORY.entry_path(&root_bank, "MEMORY").unwrap(),
+            root_bank.join("MEMORY.md")
+        );
         // A non-bank directory is a status store, never an empty family.
         assert!(MEMORY.entries(temp.path()).is_err());
         assert!(MEMORY.entry_path(temp.path(), "MEMORY").is_err());
@@ -1596,6 +1698,15 @@ mod tests {
         write_config(home, "memory:\n  backend: local\n");
         let (project, root) = project_fixture(home);
         std::fs::write(root.join("MEMORY.md"), "# kept\n").unwrap();
+        // The managed family reports its own readable/writable state and never
+        // the other backends' "not local Markdown / not read" clauses.
+        let local_group = MEMORY.switch_groups(home).unwrap().remove(0);
+        assert_eq!(local_group.enabled, Some(true));
+        assert!(local_group.detail.contains("本机有 1 个项目的 local Markdown 记忆文件"));
+        assert!(local_group.detail.contains("OMP 直接读取 MEMORY.md"));
+        for forbidden in ["不展示为本地 Markdown", "当前后端不读取", "会替换当前值"] {
+            assert!(!local_group.detail.contains(forbidden), "{forbidden}");
+        }
         write_config(home, "memory:\n  backend: off\n");
         let group = MEMORY.switch_groups(home).unwrap().remove(0);
         assert_eq!(group.enabled, Some(false));
