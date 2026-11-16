@@ -1,0 +1,4 @@
+{
+  "valid": ["/", "/work/project", "C:\\", "C:\\work\\project", "z:/work/project", "\\\\server\\share", "\\\\server\\share\\project", "//server/share/project", "\\\\?\\C:\\work\\project", "\\\\?\\UNC\\server\\share\\project"],
+  "invalid": ["repo", "C:repo", "C:", "1:repo", "1:\\repo", "\\repo", "\\\\", "\\\\server", "\\\\server\\", "//", "//server", "//server/", "\\\\?\\C:repo", "\\\\?\\UNC\\server", "\\\\.\\pipe\\name"]
+}

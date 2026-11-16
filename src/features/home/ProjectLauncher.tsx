@@ -62,7 +62,7 @@ function projectMatches(project: Project, query: string): boolean {
   return !needle || `${project.name} ${project.path ?? ''}`.toLowerCase().includes(needle);
 }
 
-export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQueryChange: setProjectQuery, remoteSshEnabled = false, remoteTargetId = 'local', onWorkbenchSession, onWorkbenchFailure, incomingManifest }: { incomingManifest?: WorkspaceManifestPreview | null; tools: AdapterDescriptor[]; projectQuery: string; onQueryChange: (query: string) => void; repair?: TrayRepairTarget | null; spotlight?: { id: string; token: number } | null; remoteSshEnabled?: boolean; remoteTargetId?: string; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
+export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQueryChange: setProjectQuery, remoteSshEnabled = false, remoteTargetId = 'local', onWorkbenchSession, onWorkbenchFailure, incomingManifest, onManifestConsumed }: { onManifestConsumed?: (preview: WorkspaceManifestPreview) => void; incomingManifest?: WorkspaceManifestPreview | null; tools: AdapterDescriptor[]; projectQuery: string; onQueryChange: (query: string) => void; repair?: TrayRepairTarget | null; spotlight?: { id: string; token: number } | null; remoteSshEnabled?: boolean; remoteTargetId?: string; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t, i18n } = useTranslation();
   const projectNext = t('home.launcher.projectNext');
   // Recent work is identified with real project data: the backend returns projects by last_opened.
@@ -512,7 +512,7 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
   const remoteHostLabel = scopeTarget?.name || t('home.remote.currentHost');
   const pathLabels = distinctPaths(remoteScope ? scopedRemoteProjects.map((project) => project.path) : scopedProjects.flatMap((project) => project.path ? [project.path] : []));
   return <section className={`${styles.workspace} home-launcher`} aria-label={t('home.launcher.label')}>
-    {remoteTargetId === 'local' && <WorkspaceBrowser tools={tools} onSession={onWorkbenchSession} incomingManifest={incomingManifest} />}
+    {remoteTargetId === 'local' && <WorkspaceBrowser tools={tools} onSession={onWorkbenchSession} incomingManifest={incomingManifest} onManifestConsumed={onManifestConsumed} />}
     <Toolbar className={styles.heading} title={t(remoteScope ? 'home.continue.title' : 'workspaces.directoryTitle')} count={totalProjects ? <Badge>{totalProjects}</Badge> : undefined} actions={totalProjects ? <Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t(remoteScope ? 'home.launcher.add' : 'workspaces.directoryAdd')}</Button> : undefined} />
     {error && <div className={styles.error} role="alert" aria-busy={listLoading || undefined}><span className={styles.errorText}>{error}</span>{listFailed && reloadFailures > 0 && !listLoading && <span className={styles.errorHint}>{t('home.launcher.reloadFailed')}</span>}{listFailed && <Button size="sm" variant="ghost" className={styles.errorAction} loading={listLoading} disabled={listLoading || !!busy} onClick={() => void refresh()}>{t('home.launcher.reload')}</Button>}</div>}
     {feedback && <div className={styles.feedback} role="status">{feedback}</div>}

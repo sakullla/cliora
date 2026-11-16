@@ -9,7 +9,7 @@ use std::sync::{
 };
 
 use crate::database::Database;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -213,6 +213,36 @@ fn host_id_at(path: &Path) -> Result<String, String> {
         Err(error) => Err(error.to_string()),
     }
 }
+fn absolute_location_path(path: &str) -> bool {
+    fn drive(path: &str) -> bool {
+        let bytes = path.as_bytes();
+        bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'/' | b'\\')
+    }
+    fn unc(tail: &str) -> bool {
+        let mut parts = tail.split(['/', '\\']);
+        let server = parts.next().unwrap_or_default();
+        let share = parts.next().unwrap_or_default();
+        let valid = |value: &str| {
+            !value.is_empty() && !matches!(value, "." | ".." | "?") && !value.contains(':')
+        };
+        valid(server) && valid(share)
+    }
+    // Rust's Windows canonicalize returns these extended disk path forms.
+    if let Some(tail) = path.strip_prefix(r"\\?\") {
+        return tail
+            .strip_prefix(r"UNC\")
+            .map(unc)
+            .unwrap_or_else(|| drive(tail));
+    }
+    if let Some(tail) = path.strip_prefix(r"\\").or_else(|| path.strip_prefix("//")) {
+        return unc(tail);
+    }
+    path.starts_with('/') || drive(path)
+}
+
 pub fn validate_manifest(value: &Manifest) -> Result<(), String> {
     if value.schema_version != 1 {
         return Err("项目清单版本不受支持，请更新应用；原文件已保留".into());
@@ -238,12 +268,9 @@ pub fn validate_manifest(value: &Manifest) -> Result<(), String> {
             {
                 return Err("工作位置路径无效".into());
             }
-            // A Windows location is a valid hint on macOS; only local binding checks OS paths.
-            if !location.path.starts_with('/')
-                && !(location.path.len() > 2 && location.path.as_bytes()[1] == b':')
-                && !location.path.starts_with("\\\\")
-            {
-                return Err("工作位置必须为绝对路径".into());
+            // Foreign-platform absolute hints are valid data, never implicitly local paths.
+            if !absolute_location_path(&location.path) {
+                return Err("工作位置必须为完整绝对路径".into());
             }
             if !positions.insert((&location.host_id, &location.path)) {
                 return Err("项目清单含重复工作位置".into());
@@ -278,20 +305,24 @@ pub fn seed_legacy(db: &Database, host: &str) -> Result<(), String> {
     let (pending, existing) = db.with_connection(|conn| {
         let mut q = conn.prepare("SELECT p.id,p.name,p.path FROM projects p WHERE NOT EXISTS(SELECT 1 FROM workspace_legacy_map m WHERE m.project_id=p.id) ORDER BY p.id").map_err(sql)?;
         let pending = q.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?, r.get::<_,Option<String>>(2)?))).map_err(sql)?.collect::<Result<Vec<_>,_>>().map_err(sql)?;
-        let mut q = conn.prepare("SELECT repository_id,path FROM workspace_locations WHERE host_id=?1 AND path IS NOT NULL ORDER BY id").map_err(sql)?;
+        let mut q = conn.prepare("SELECT l.repository_id,l.path FROM workspace_locations l WHERE l.host_id=?1 AND l.path IS NOT NULL AND EXISTS(SELECT 1 FROM workspace_member_locations m WHERE m.location_id=l.id) ORDER BY l.id").map_err(sql)?;
         let existing = q.query_map([host], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).map_err(sql)?.collect::<Result<Vec<_>,_>>().map_err(sql)?;
         Ok((pending, existing))
     })?;
     let mut identities: HashMap<PathBuf, String> = existing
         .into_iter()
         .filter_map(|(id, path)| {
-            crate::git_context::repository_identity(Path::new(&path))
+            Path::new(&path)
+                .is_absolute()
+                .then(|| crate::git_context::repository_identity(Path::new(&path)))
+                .flatten()
                 .map(|(_, common)| (common, id))
         })
         .collect();
     for (project_id, title, path) in pending {
         let identity = path
             .as_deref()
+            .filter(|p| Path::new(p).is_absolute())
             .and_then(|p| crate::git_context::repository_identity(Path::new(p)));
         let repository_id = identity
             .as_ref()
@@ -302,7 +333,8 @@ pub fn seed_legacy(db: &Database, host: &str) -> Result<(), String> {
             identities.insert(common.clone(), repository_id.clone());
         }
         db.with_connection(|conn| {
-            let tx = conn.transaction().map_err(sql)?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(sql)?;
+            retire_locations(&tx)?;
             // A concurrent seed may have already installed this exact legacy mapping.
             if tx.query_row("SELECT EXISTS(SELECT 1 FROM workspace_legacy_map WHERE project_id=?1)",[&project_id],|r|r.get::<_,bool>(0)).map_err(sql)? { return Ok(()); }
             tx.execute("INSERT INTO workspace_projects(id,name) VALUES(?1,?2) ON CONFLICT DO NOTHING",params![project_id,title]).map_err(sql)?;
@@ -350,6 +382,10 @@ pub fn get(db: &Database, host: &str, id: &str) -> Result<Workspace, String> {
                 location.reason = Some("旧目录尚未关联，原记录已保留".into());
                 continue;
             };
+            if !path.is_absolute() {
+                location.reason = Some("此位置不是本机绝对路径，请重新关联本机目录".into());
+                continue;
+            }
             if !path.is_dir() {
                 location.reason = Some("目录不存在或不可访问".into());
                 continue;
@@ -423,39 +459,142 @@ fn manifest_from_db(db: &Database, id: &str) -> Result<Manifest, String> {
         Ok(Manifest{schema_version:1,workspace_id:id.into(),name:title,revision,repositories:repos})
     })
 }
+/// Retired locations keep historical native-context metadata but release their live path claim.
+/// Only workspace_member_locations grants current ownership or identity-observation authority.
+fn retire_locations(conn: &Connection) -> Result<(), String> {
+    conn.execute("UPDATE workspace_locations SET path=NULL WHERE path IS NOT NULL AND NOT EXISTS(SELECT 1 FROM workspace_member_locations m WHERE m.location_id=workspace_locations.id)",[]).map_err(sql)?;
+    Ok(())
+}
+
+fn validate_projection(
+    conn: &Connection,
+    value: &Manifest,
+    expected: Option<u64>,
+) -> Result<(), String> {
+    validate_manifest(value)?;
+    if let Some(expected) = expected {
+        let actual = conn
+            .query_row(
+                "SELECT revision FROM workspace_projects WHERE id=?1",
+                [&value.workspace_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(sql)?;
+        if actual < 0 || actual as u64 != expected {
+            return Err("项目已在其他窗口更新，请刷新后重试".into());
+        }
+    }
+    for repo in &value.repositories {
+        for location in &repo.locations {
+            let owner:Option<String> = conn.query_row("SELECT l.repository_id FROM workspace_locations l WHERE l.host_id=?1 AND l.path=?2 AND EXISTS(SELECT 1 FROM workspace_member_locations m WHERE m.location_id=l.id)",params![location.host_id,location.path],|row|row.get(0)).optional().map_err(sql)?;
+            if owner.as_deref().is_some_and(|id| id != repo.id) {
+                return Err("清单工作位置已关联另一个仓库，请先处理关联冲突".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn write_projection(
+    tx: &Transaction<'_>,
+    value: &Manifest,
+    source: Option<(&str, &str)>,
+) -> Result<(), String> {
+    let json = serde_json::to_string(value).map_err(|error| error.to_string())?;
+    // Clean aliases from previously removed/relinked memberships before claiming any reused path.
+    retire_locations(tx)?;
+    let (path, hash) = source
+        .map(|(p, h)| (Some(p), Some(h)))
+        .unwrap_or((None, None));
+    tx.execute("INSERT INTO workspace_projects(id,name,revision,manifest_path,manifest_revision,manifest_digest,manifest_json) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(id) DO UPDATE SET name=excluded.name,revision=excluded.revision,manifest_path=COALESCE(excluded.manifest_path,workspace_projects.manifest_path),manifest_revision=COALESCE(excluded.manifest_revision,workspace_projects.manifest_revision),manifest_digest=COALESCE(excluded.manifest_digest,workspace_projects.manifest_digest),manifest_json=excluded.manifest_json,last_error=NULL",params![value.workspace_id,value.name,value.revision as i64,path,source.map(|_|value.revision as i64),hash,json]).map_err(sql)?;
+    let favorites: HashMap<String, bool> = {
+        let mut query = tx
+            .prepare("SELECT repository_id,favorite FROM workspace_members WHERE workspace_id=?1")
+            .map_err(sql)?;
+        let rows = query
+            .query_map([&value.workspace_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(sql)?;
+        rows.collect::<Result<_, _>>().map_err(sql)?
+    };
+    tx.execute(
+        "DELETE FROM workspace_member_locations WHERE workspace_id=?1",
+        [&value.workspace_id],
+    )
+    .map_err(sql)?;
+    tx.execute(
+        "DELETE FROM workspace_members WHERE workspace_id=?1",
+        [&value.workspace_id],
+    )
+    .map_err(sql)?;
+    for repo in &value.repositories {
+        tx.execute("INSERT INTO workspace_repositories(id,name) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET name=excluded.name",params![repo.id,repo.name]).map_err(sql)?;
+        tx.execute(
+            "INSERT INTO workspace_members(workspace_id,repository_id,favorite) VALUES(?1,?2,?3)",
+            params![
+                value.workspace_id,
+                repo.id,
+                favorites.get(&repo.id).copied().unwrap_or(false)
+            ],
+        )
+        .map_err(sql)?;
+        for location in &repo.locations {
+            let native: Option<String> = tx
+                .query_row(
+                    "SELECT id FROM projects WHERE path=?1",
+                    [&location.path],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(sql)?;
+            tx.execute("INSERT INTO workspace_locations(id,repository_id,host_id,path,native_project_id,kind) VALUES(?1,?2,?3,?4,?5,'repository') ON CONFLICT(host_id,path) DO NOTHING",params![Uuid::new_v4().to_string(),repo.id,location.host_id,location.path,native]).map_err(sql)?;
+            tx.execute("INSERT INTO workspace_member_locations(workspace_id,repository_id,location_id) SELECT ?1,?2,id FROM workspace_locations WHERE host_id=?3 AND path=?4 ON CONFLICT DO NOTHING",params![value.workspace_id,repo.id,location.host_id,location.path]).map_err(sql)?;
+        }
+    }
+    retire_locations(tx)?;
+    Ok(())
+}
+
 fn project_manifest(
     db: &Database,
     value: &Manifest,
     source: Option<(&str, &str)>,
     expected: Option<u64>,
 ) -> Result<(), String> {
-    validate_manifest(value)?;
-    let json = serde_json::to_string(value).map_err(|e| e.to_string())?;
     db.with_connection(|conn| {
-        let tx=conn.transaction().map_err(sql)?;
-        if let Some(expected)=expected {
-            let actual:u64=tx.query_row("SELECT revision FROM workspace_projects WHERE id=?1",[&value.workspace_id],|r|r.get::<_,i64>(0).map(|v|v.max(0) as u64)).map_err(sql)?;
-            if actual!=expected {return Err("项目已在其他窗口更新，请刷新后重试".into());}
-        }
-        let (path,hash)=source.map(|(p,h)|(Some(p),Some(h))).unwrap_or((None,None));
-        tx.execute("INSERT INTO workspace_projects(id,name,revision,manifest_path,manifest_revision,manifest_digest,manifest_json) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(id) DO UPDATE SET name=excluded.name,revision=excluded.revision,manifest_path=COALESCE(excluded.manifest_path,workspace_projects.manifest_path),manifest_revision=COALESCE(excluded.manifest_revision,workspace_projects.manifest_revision),manifest_digest=COALESCE(excluded.manifest_digest,workspace_projects.manifest_digest),manifest_json=excluded.manifest_json,last_error=NULL",params![value.workspace_id,value.name,value.revision as i64,path,source.map(|_|value.revision as i64),hash,json]).map_err(sql)?;
-        let favorites:HashMap<String,bool>={let mut q=tx.prepare("SELECT repository_id,favorite FROM workspace_members WHERE workspace_id=?1").map_err(sql)?; let rows=q.query_map([&value.workspace_id],|r|Ok((r.get(0)?,r.get(1)?))).map_err(sql)?; rows.collect::<Result<_,_>>().map_err(sql)?};
-        tx.execute("DELETE FROM workspace_member_locations WHERE workspace_id=?1",[&value.workspace_id]).map_err(sql)?;
-        tx.execute("DELETE FROM workspace_members WHERE workspace_id=?1",[&value.workspace_id]).map_err(sql)?;
-        for repo in &value.repositories {
-            tx.execute("INSERT INTO workspace_repositories(id,name) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET name=excluded.name",params![repo.id,repo.name]).map_err(sql)?;
-            tx.execute("INSERT INTO workspace_members(workspace_id,repository_id,favorite) VALUES(?1,?2,?3)",params![value.workspace_id,repo.id,favorites.get(&repo.id).copied().unwrap_or(false)]).map_err(sql)?;
-            for location in &repo.locations {
-                let existing:Option<String>=tx.query_row("SELECT repository_id FROM workspace_locations WHERE host_id=?1 AND path=?2",params![location.host_id,location.path],|r|r.get(0)).optional().map_err(sql)?;
-                if existing.as_deref().is_some_and(|id|id!=repo.id) {return Err("清单工作位置已关联另一个仓库，请先处理关联冲突".into());}
-                let native:Option<String>=tx.query_row("SELECT id FROM projects WHERE path=?1",[&location.path],|r|r.get(0)).optional().map_err(sql)?;
-                tx.execute("INSERT INTO workspace_locations(id,repository_id,host_id,path,native_project_id,kind) VALUES(?1,?2,?3,?4,?5,'repository') ON CONFLICT(host_id,path) DO NOTHING",params![Uuid::new_v4().to_string(),repo.id,location.host_id,location.path,native]).map_err(sql)?;
-                tx.execute("INSERT INTO workspace_member_locations(workspace_id,repository_id,location_id) SELECT ?1,?2,id FROM workspace_locations WHERE host_id=?3 AND path=?4 ON CONFLICT DO NOTHING",params![value.workspace_id,repo.id,location.host_id,location.path]).map_err(sql)?;
-            }
-        }
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql)?;
+        validate_projection(&tx, value, expected)?;
+        write_projection(&tx, value, source)?;
         tx.commit().map_err(sql)
     })
 }
+
+/// Hold SQLite's write transaction across preflight and publication so another local writer
+/// cannot introduce a known location conflict between those two steps.
+fn publish_manifest(
+    db: &Database,
+    value: &Manifest,
+    path: &Path,
+    expected: u64,
+) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
+    let path_text = text(path)?;
+    db.with_connection(|conn| {
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql)?;
+        validate_projection(&tx, value, Some(expected))?;
+        atomic_write(path, &bytes)?;
+        // Only failures after actual publication receive this recovery message.
+        (|| {
+            write_projection(&tx, value, Some((&path_text, &digest(&bytes))))?;
+            tx.commit().map_err(sql)
+        })()
+        .map_err(|error| format!("清单已保存，本机投影待刷新：{error}"))
+    })
+}
+
 fn mutate(
     db: &Database,
     id: &str,
@@ -486,10 +625,7 @@ fn mutate(
         .ok_or("项目版本号已耗尽")?;
     validate_manifest(&value)?;
     if let Some((path, _)) = source {
-        let bytes = serde_json::to_vec_pretty(&value).map_err(|e| e.to_string())?;
-        atomic_write(Path::new(&path), &bytes)?;
-        project_manifest(db, &value, Some((&path, &digest(&bytes))), Some(expected))
-            .map_err(|e| format!("清单已保存，本机投影待刷新：{e}"))
+        publish_manifest(db, &value, Path::new(&path), expected)
     } else {
         project_manifest(db, &value, None, Some(expected))
     }
@@ -553,7 +689,7 @@ pub fn add_paths(
             let (root, common) = crate::git_context::repository_identity(&path)
                 .ok_or("所选目录不是可识别的 Git 仓库")?;
             let path = text(&root)?;
-            let existing:Vec<(String,String)>=db.with_connection(|conn|{let mut q=conn.prepare("SELECT repository_id,path FROM workspace_locations WHERE host_id=?1 AND path IS NOT NULL").map_err(sql)?;let rows=q.query_map([host],|r|Ok((r.get(0)?,r.get(1)?))).map_err(sql)?;rows.collect::<Result<_,_>>().map_err(sql)})?;
+            let existing:Vec<(String,String)>=db.with_connection(|conn|{let mut q=conn.prepare("SELECT l.repository_id,l.path FROM workspace_locations l WHERE l.host_id=?1 AND l.path IS NOT NULL AND EXISTS(SELECT 1 FROM workspace_member_locations m WHERE m.location_id=l.id)").map_err(sql)?;let rows=q.query_map([host],|r|Ok((r.get(0)?,r.get(1)?))).map_err(sql)?;rows.collect::<Result<_,_>>().map_err(sql)})?;
             let repository_id = existing
                 .iter()
                 .find(|(_, p)| {
@@ -709,15 +845,7 @@ pub fn export_manifest(
         return Err("项目已更新，请刷新".into());
     }
     validate_manifest(&value)?;
-    let bytes = serde_json::to_vec_pretty(&value).map_err(|e| e.to_string())?;
-    atomic_write(&path, &bytes)?;
-    project_manifest(
-        db,
-        &value,
-        Some((&text(&path)?, &digest(&bytes))),
-        Some(expected),
-    )
-    .map_err(|e| format!("清单已创建，本机关联待恢复：{e}"))?;
+    publish_manifest(db, &value, &path, expected)?;
     get(db, host, id)
 }
 pub fn refresh_manifest(db: &Database, host: &str, id: &str) -> Result<Workspace, String> {
@@ -928,6 +1056,9 @@ pub fn prepare_launch(
                 .map(PathBuf::from)
         })
         .ok_or("请关联可用的本机工作目录")?;
+    if !selected.is_absolute() {
+        return Err("工作目录必须是本机绝对路径".into());
+    }
     let selected = selected
         .canonicalize()
         .map_err(|_| "工作目录不存在，未启动替代目录")?;

@@ -531,3 +531,166 @@ fn explicit_unlock_releases_lock_even_while_an_inherited_descriptor_remains_open
     drop(next);
     drop(inherited);
 }
+
+fn moved_repository_fixture() -> (tempfile::TempDir, Database, String, String, PathBuf) {
+    let temp = tempfile::tempdir().unwrap();
+    let old = temp.path().join("old");
+    let moved = temp.path().join("moved");
+    repository(&old);
+    let db = db();
+    let workspace = create(&db, HOST, "Repository A").unwrap();
+    let added = add_paths(&db, HOST, &workspace.id, &[text(&old).unwrap()], 1).unwrap();
+    let repository_id = added[0].repository_id.clone().unwrap();
+    fs::rename(&old, &moved).unwrap();
+    relink(
+        &db,
+        HOST,
+        &workspace.id,
+        &repository_id,
+        moved.to_str().unwrap(),
+        2,
+    )
+    .unwrap();
+    repository(&old);
+    (temp, db, workspace.id, repository_id, old)
+}
+
+#[test]
+fn retired_location_does_not_adopt_a_new_repository_at_its_old_path() {
+    let (_temp, db, workspace_id, repository_a, old) = moved_repository_fixture();
+    let other = create(&db, HOST, "Repository B").unwrap();
+    let added = add_paths(&db, HOST, &other.id, &[text(&old).unwrap()], 1).unwrap();
+    assert!(added[0].error.is_none(), "{:?}", added[0]);
+    assert_ne!(
+        added[0].repository_id.as_deref(),
+        Some(repository_a.as_str())
+    );
+    assert_eq!(
+        get(&db, HOST, &workspace_id).unwrap().repositories[0].id,
+        repository_a
+    );
+}
+
+#[test]
+fn legacy_seed_does_not_reuse_retired_repository_identity() {
+    let (_temp, db, _workspace_id, repository_a, old) = moved_repository_fixture();
+    let legacy = crate::projects::add(
+        &db,
+        &crate::adapters::Registry::builtins(),
+        old.to_str().unwrap(),
+        Some("New B"),
+        None,
+    )
+    .unwrap();
+    let rows = list(&db, HOST).unwrap();
+    let seeded = rows.iter().find(|item| item.id == legacy.id).unwrap();
+    assert_ne!(seeded.repositories[0].id, repository_a);
+    assert_eq!(
+        seeded.repositories[0].locations[0].project_id.as_deref(),
+        Some(legacy.id.as_str())
+    );
+}
+
+#[test]
+fn known_identity_conflict_is_rejected_before_publishing_shared_manifest() {
+    let temp = tempfile::tempdir().unwrap();
+    let a = temp.path().join("a");
+    let b = temp.path().join("b");
+    repository(&a);
+    repository(&b);
+    let db = db();
+    let first = create(&db, HOST, "A").unwrap();
+    let second = create(&db, HOST, "B").unwrap();
+    let repo_a = add_paths(&db, HOST, &first.id, &[text(&a).unwrap()], 1).unwrap()[0]
+        .repository_id
+        .clone()
+        .unwrap();
+    add_paths(&db, HOST, &second.id, &[text(&b).unwrap()], 1).unwrap();
+    let source = temp.path().join("a.dev-workspace.json");
+    export_manifest(&db, HOST, &first.id, source.to_str().unwrap(), 2).unwrap();
+    let before = fs::read(&source).unwrap();
+    let error = relink(&db, HOST, &first.id, &repo_a, b.to_str().unwrap(), 2).unwrap_err();
+    assert!(
+        !error.contains("清单已保存"),
+        "predictable conflicts are not publication failures: {error}"
+    );
+    assert_eq!(fs::read(&source).unwrap(), before);
+    assert_eq!(get(&db, HOST, &first.id).unwrap().revision, 2);
+    assert_eq!(refresh_manifest(&db, HOST, &first.id).unwrap().error, None);
+}
+
+#[test]
+fn shared_path_contract_rejects_drive_relative_and_incomplete_unc_paths() {
+    let cases: serde_json::Value =
+        serde_json::from_str(include_str!("../fixtures/workspaces/path-cases-v1.json")).unwrap();
+    let mut manifest: Manifest =
+        serde_json::from_str(include_str!("../fixtures/workspaces/valid-v1.json")).unwrap();
+    manifest.repositories.truncate(1);
+    for path in cases["invalid"].as_array().unwrap() {
+        manifest.repositories[0].locations[0].path = path.as_str().unwrap().into();
+        assert!(
+            validate_manifest(&manifest).is_err(),
+            "accepted invalid location: {path}"
+        );
+    }
+    for path in cases["valid"].as_array().unwrap() {
+        manifest.repositories[0].locations[0].path = path.as_str().unwrap().into();
+        validate_manifest(&manifest)
+            .unwrap_or_else(|error| panic!("rejected valid location {path}: {error}"));
+    }
+}
+
+#[test]
+fn actual_storage_failure_after_publication_remains_recoverable_by_refresh() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = db();
+    let workspace = create(&db, HOST, "Before").unwrap();
+    let source = temp.path().join("shared.dev-workspace.json");
+    export_manifest(&db, HOST, &workspace.id, source.to_str().unwrap(), 1).unwrap();
+    db.with_connection(|conn|conn.execute_batch("CREATE TRIGGER reject_workspace_projection BEFORE UPDATE ON workspace_projects BEGIN SELECT RAISE(ABORT, 'simulated storage failure'); END;").map_err(sql)).unwrap();
+    let error = rename(&db, HOST, &workspace.id, "After", 1).unwrap_err();
+    assert!(error.contains("清单已保存，本机投影待刷新"), "{error}");
+    assert_eq!(read_manifest(&source).unwrap().0.name, "After");
+    assert_eq!(get(&db, HOST, &workspace.id).unwrap().name, "Before");
+    db.with_connection(|conn| {
+        conn.execute_batch("DROP TRIGGER reject_workspace_projection;")
+            .map_err(sql)
+    })
+    .unwrap();
+    let refreshed = refresh_manifest(&db, HOST, &workspace.id).unwrap();
+    assert_eq!(refreshed.name, "After");
+    assert_eq!(refreshed.revision, 2);
+    assert_eq!(refreshed.error, None);
+    assert_eq!(
+        refresh_manifest(&db, HOST, &workspace.id).unwrap().revision,
+        2
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn foreign_absolute_hint_with_matching_host_is_still_not_a_local_working_directory() {
+    let db = db();
+    let mut value: Manifest =
+        serde_json::from_str(include_str!("../fixtures/workspaces/valid-v1.json")).unwrap();
+    value.repositories.truncate(1);
+    value.repositories[0].locations[0].host_id = HOST.into();
+    value.repositories[0].locations[0].path = r"C:\work\repo".into();
+    project_manifest(&db, &value, None, None).unwrap();
+    let view = get(&db, HOST, &value.workspace_id).unwrap();
+    assert!(!view.repositories[0].locations[0].available);
+    assert!(view.repositories[0].locations[0]
+        .reason
+        .as_deref()
+        .unwrap()
+        .contains("本机绝对路径"));
+    assert!(prepare_launch(
+        &db,
+        HOST,
+        &value.workspace_id,
+        &value.repositories[0].id,
+        Some(r"C:\work\repo")
+    )
+    .unwrap_err()
+    .contains("本机绝对路径"));
+}

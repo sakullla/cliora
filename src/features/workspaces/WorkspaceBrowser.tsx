@@ -18,7 +18,7 @@ export const WORKSPACE_MANIFEST_OPEN = 'cliora:workspace-manifest-open';
 export function notifyWorkspacesChanged() { window.dispatchEvent(new Event(WORKSPACES_CHANGED)); }
 const failure = (value: unknown) => formatFailure(value, '项目操作失败', '请重试');
 
-export function WorkspaceBrowser({ tools = [], onSession, onPick, incomingManifest, compact = false }: { tools?: AdapterDescriptor[]; incomingManifest?: WorkspaceManifestPreview | null; onSession?: (id: string) => void; onPick?: (selection: WorkspaceSelection) => void; compact?: boolean }) {
+export function WorkspaceBrowser({ tools = [], onSession, onPick, incomingManifest, onManifestConsumed, compact = false }: { tools?: AdapterDescriptor[]; incomingManifest?: WorkspaceManifestPreview | null; onManifestConsumed?: (preview: WorkspaceManifestPreview) => void; onSession?: (id: string) => void; onPick?: (selection: WorkspaceSelection) => void; compact?: boolean }) {
   const { t } = useTranslation();
   const [workspaces, setWorkspaces] = useState<BusinessWorkspace[]>([]);
   const [selectedId, setSelectedId] = useState('');
@@ -39,7 +39,13 @@ export function WorkspaceBrowser({ tools = [], onSession, onPick, incomingManife
   const [scanQuery, setScanQuery] = useState('');
   const [preview, setPreview] = useState<WorkspaceManifestPreview | null>(null);
   const [scanBusy, setScanBusy] = useState(false);
-  useEffect(() => { if (incomingManifest) setPreview(incomingManifest); }, [incomingManifest]);
+  useEffect(() => {
+    if (!incomingManifest) return;
+    setPreview(incomingManifest);
+    // Handoff is one-shot. Local cancellation/acceptance must not leave a parent intent
+    // that reopens the same (possibly stale) preview when this page mounts again.
+    onManifestConsumed?.(incomingManifest);
+  }, [incomingManifest, onManifestConsumed]);
   const scanId = useRef<string | null>(null);
   const mounted = useRef(true);
   const sequence = useRef(0);

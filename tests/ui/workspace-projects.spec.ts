@@ -4,17 +4,25 @@ import { installWorkspaceFixtures } from '../../scripts/capture-workspace-fixtur
 async function install(page: Page) {
   await page.addInitScript(() => {
     const callbacks: Array<(value: unknown) => void> = [];
+    const handlers: Record<string, number> = {};
     Object.assign(window, {
       isTauri: true,
+      __emitWorkspaceLink: (url: string) => {
+        const id = handlers['deep-link://new-url'];
+        if (id === undefined) return false;
+        callbacks[id]?.({ payload: [url] });
+        return true;
+      },
       __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
       __TAURI_INTERNALS__: {
         transformCallback: (callback: (value: unknown) => void) => { callbacks.push(callback); return callbacks.length - 1; },
-        invoke: async (command: string) => {
+        invoke: async (command: string, args: Record<string, any> = {}) => {
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex' }] };
           if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], launchForm: 'terminal', launch: { state: 'supported', reason: '' }, nativeConfig: { state: 'supported', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
           if (command === 'get_launch_settings' || command === 'set_preferred_terminal') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], worktreeLaunch: 'direct' };
           if (command === 'get_tray_status') return { available: false, error: null };
-          if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+          if (command === 'plugin:event|listen') { handlers[args.event] = args.handler; return args.handler; }
+          if (command === 'plugin:event|unlisten') return null;
           if (command === 'workbench_replay') return { dataBase64: '', endOffset: 0, cols: 80, rows: 24 };
           if (command.startsWith('list_')) return [];
           if (command === 'get_registered_tool_workspace') return { profiles: [], snapshots: [], recoveryNeeded: [], common: null, customPath: null, probe: { selectedPath: '/fixture/codex', installations: [{ path: '/fixture/codex', version: '0.160.0', status: 'available' }], nativeFiles: [], interfaceFormats: [], providerPresets: [], dependencies: [], nativeWrites: { state: 'supported', reason: '' }, installUrl: '', upgradeHint: '' } };
@@ -100,3 +108,21 @@ test('new workbench sessions carry the chosen business project without creating 
   expect(launched.request.directory).toBe('/work/commerce/team-0/api');
   expect(launched.request.worktreeIntent).toBe('given');
 });
+
+for (const action of ['cancel', 'accept'] as const) {
+  test(`a ${action === 'accept' ? 'accepted' : 'cancelled'} deep-link project preview stays consumed after leaving and returning home`, async ({ page }) => {
+    await install(page);
+    await expect.poll(() => page.evaluate(() => (window as any).__emitWorkspaceLink('cliora://workspace?v=1&file=%2Fwork%2Fshared.dev-workspace.json'))).toBe(true);
+    const preview = page.getByRole('dialog', { name: '关联项目清单' });
+    await expect(preview).toBeVisible();
+    if (action === 'cancel') await preview.getByRole('button', { name: '关闭', exact: true }).click();
+    else await preview.getByRole('button', { name: '关联项目', exact: true }).click();
+    await expect(preview).not.toBeVisible();
+    const nav = page.getByRole('navigation', { name: '页面' });
+    await nav.getByRole('button', { name: '工作台', exact: true }).click();
+    await nav.getByRole('button', { name: '首页', exact: true }).click();
+    await expect(page.locator('[data-business-workspaces]').first()).toBeVisible();
+    await expect(preview).toHaveCount(0);
+    expect(await page.evaluate(() => (window as any).__workspaceFixture.calls.filter((item: any) => item.command === 'attach_workspace_manifest').length)).toBe(action === 'accept' ? 1 : 0);
+  });
+}
