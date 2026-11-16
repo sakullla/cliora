@@ -1,0 +1,18 @@
+{
+  "description": "Antigravity CLI (agy) 1.5.9 skills.json declaration manifest sample (<workspace>/.agents/skills.json). Same schema as plugins.json/rules.json/agents.json: entries[] paths are scanned one level deep; workspace-relative paths must stay inside the workspace or repository root (absolute/../symlink entries are skipped by the untrusted-repository protection); inherits[] merges other manifests. Verified on the remote 1.5.9 machine: a declared non-standard directory's skills appear in the /skills panel labeled '<dir> · From <project>' and as slash commands.",
+  "entries": [
+    {
+      "path": "shared-skills"
+    },
+    {
+      "path": "tools/agent-skills",
+      "exclude": ["experimental-.*"]
+    }
+  ],
+  "inherits": [
+    {
+      "path": "/home/example/shared/team-skills.json",
+      "include_only": ["linter-skill"]
+    }
+  ]
+}

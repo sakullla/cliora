@@ -1,0 +1,15 @@
+{
+  "name": "fixture-kit",
+  "displayName": "Fixture Kit",
+  "version": "1.0.0",
+  "description": "Sanitized Antigravity plugin manifest sample. Verified on the remote 1.5.9 machine: agy plugin install copies the directory to ~/.gemini/config/plugins/<name>/ and agy plugin list --json reports name/enabled/version/source/path plus the skills[], agents[], rules[], mcpServers[] and hooks[] resource names. plugin.json parses as JSONC; unknown top-level fields are silently dropped by the loader.",
+  "author": {
+    "name": "Cliora fixture",
+    "url": "https://example.invalid/cliora"
+  },
+  "homepage": "https://example.invalid/cliora/fixture-kit",
+  "repository": {
+    "type": "git",
+    "url": "https://example.invalid/cliora/fixture-kit.git"
+  }
+}

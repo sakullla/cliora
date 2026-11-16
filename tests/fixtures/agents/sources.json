@@ -89,11 +89,11 @@
       "limitation": "The mods command exists but its on-disk definition layout is unverified; the agents dimension stays absent with the descriptor reason recorded."
     },
     "antigravity": {
-      "version": "1.3.1",
-      "checkedAt": "2026-10-07",
-      "evidence": "local probes + [RE] codeburn (agy 1.2.x)",
-      "ref": "agy --help (local 1.3.1); codeburn reverse engineering",
-      "limitation": "Subagent definition format not obtained from any evidence class; the agents dimension stays absent with the descriptor reason recorded."
+      "version": "1.5.9",
+      "checkedAt": "2026-11-16",
+      "evidence": "remote isolated evidence run (Debian 13; controlled headless experiments on the authorized machine)",
+      "ref": "scripts/agy-remote-evidence.mjs probe run + the signed-in /agents panel stating the creation paths; report at docs/verification/remote-workflow/agy-1.5.9/",
+      "format": "Standalone agents are Markdown with YAML frontmatter, one directory each: workspace <project>/.agents/agents/{name}/agent.md (project must be a committed git repo; no trust or sign-in needed for roster discovery) and global ~/.gemini/config/agents/{name}/agent.md. Frontmatter: name and description required; mainAgent (true or omitted = main), subagent, hidden, model, tools lists (native tool names), plus skills/plugins/rules/agents/hooks path lists. The --agent launch roster holds main agents only — subagent:true (+mainAgent:false) entries are in-session invocations and never appear in the roster; an unknown headless agent exits 1 while enumerating available agents. Plugin agents live at plugins/<name>/agents/<agent>.md and join the same launch roster when mainAgent. Supersedes the 2026-10-07 absence verdict (1.3.1 had no evidence of the format)."
     },
     "kiro": {
       "version": "kiro-cli (data root verified locally)",
@@ -109,6 +109,7 @@
     "macOS/Linux not exercised.",
     "Static definition state is distinct from an existing session loaded state.",
     "The five default-off additions (zcode/qoder/kimi_code/deepseek/codebuddy) were checked on Windows only; deepseek delivers no agents dimension by evidence gate.",
-    "The 2026-10-07 six were checked on Windows only; only mimo_code delivers an agents dimension (config `agent` key plus .md files), the other five stay absent by evidence gate."
+    "The 2026-10-07 six were checked on Windows only; only mimo_code delivers an agents dimension (config `agent` key plus .md files), the other five stay absent by evidence gate.",
+    "antigravity was re-checked 2026-11-16 on Linux (Debian 13, agy 1.5.9) via an isolated remote evidence run and now delivers the agents dimension (agent.md directories); Windows/macOS layouts for 1.5.9 remain unverified."
   ]
 }

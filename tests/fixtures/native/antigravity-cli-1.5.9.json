@@ -1,0 +1,8 @@
+{
+  "model": "Gemini 4 Carbon (Medium)",
+  "trustedWorkspaces": [
+    "/home/example/projects/alpha",
+    "/home/example/projects/beta",
+    "/home/example/gamma-workspace"
+  ]
+}
