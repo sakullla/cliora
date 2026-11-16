@@ -778,6 +778,25 @@ impl Database {
     }
 }
 
+/// Latest-schema fixtures that reconstruct an older database must remove later
+/// organization tables too. This helper is test-only; production migrations keep
+/// strict CREATE TABLE checks and never repair a contradictory user_version.
+#[cfg(test)]
+pub(crate) fn remove_later_fixture_tables(conn: &Connection, target_version: u32) -> rusqlite::Result<()> {
+    if target_version < 33 {
+        for table in ["prompt_batch_items", "prompt_usage", "prompt_metadata"] {
+            conn.execute_batch(&format!("DROP TABLE IF EXISTS {table};"))?;
+        }
+    }
+    if target_version < 32 {
+        // Children before parents while foreign-key enforcement remains enabled.
+        for table in ["workspace_sessions", "workspace_legacy_map", "workspace_member_locations", "workspace_members", "workspace_locations", "workspace_projects", "workspace_repositories"] {
+            conn.execute_batch(&format!("DROP TABLE IF EXISTS {table};"))?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -965,7 +984,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 31);
+            assert_eq!(version, 33);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;

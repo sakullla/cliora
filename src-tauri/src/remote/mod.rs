@@ -2469,6 +2469,9 @@ pub fn ensure_enabled(db: &Database) -> Result<(), RemoteError> {
 }
 
 #[cfg(test)]
+mod fixture_tools;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use base64::Engine;
@@ -2486,9 +2489,25 @@ mod tests {
         } else { let mut command = Command::new("sh"); command.arg("-s"); command };
         hide_console_window(&mut command);
         let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("local POSIX transport");
-        child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
-        child.wait_with_output().unwrap()
+        let sent=child.stdin.take().unwrap().write_all(script.as_bytes());
+        let mut output=child.wait_with_output().unwrap();
+        if let Err(error)=sent {
+            assert_eq!(error.kind(),std::io::ErrorKind::BrokenPipe,"fixture stdin failed: {error}; exit {:?}; {}",output.status.code(),String::from_utf8_lossy(&output.stderr));
+            output.stderr.extend_from_slice(b"\nfixture stdin closed early; child exit and output preserved\n");
+            assert!(!output.status.success(),"fixture stdin incomplete despite exit 0; stdout: {}; stderr: {}",String::from_utf8_lossy(&output.stdout),String::from_utf8_lossy(&output.stderr));
+        }
+        output
     }
+    #[test]
+    fn local_transport_early_stdin_exit_retains_failure_and_rejects_partial_success() {
+        let padding="# fixture padding\n".repeat(100_000);
+        let failed=posix_output(&format!("exit 70\n{padding}"));
+        assert_eq!(failed.status.code(),Some(70));
+        assert!(String::from_utf8_lossy(&failed.stderr).contains("child exit and output preserved"));
+        let partial=std::panic::catch_unwind(||posix_output(&format!("exit 0\n{padding}")));
+        assert!(partial.is_err(),"incomplete successful-exit scripts must not become successful fixture operations");
+    }
+
     pub(super) fn local_transport(target: &RemoteTarget, command: &str, stdin: Option<&[u8]>) -> Option<std::process::Output> {
         let home = local_homes().lock().unwrap().get(&operations::target_identity(target)).cloned();
         home.map(|home| {
@@ -2496,7 +2515,7 @@ mod tests {
                 assert_eq!(command, "sh -s");
                 String::from_utf8(bytes.to_vec()).unwrap()
             } else { command.to_owned() };
-            posix_output(&format!("export HOME={}\n{script}", shell_quote(&home)))
+            posix_output(&format!("export HOME={}\nexport PATH=\"$HOME/.local/bin:$HOME/bin:$PATH\"\n{script}", shell_quote(&home)))
         })
     }
     pub(super) fn with_local_transport(target: &RemoteTarget, run: impl FnOnce(&str)) {
@@ -2514,6 +2533,8 @@ mod tests {
         let identity = operations::target_identity(target);
         let _cleanup = Cleanup(home.clone(), identity.clone());
         assert!(local_homes().lock().unwrap().insert(identity, home.clone()).is_none());
+        let setup=posix_output(&format!("export HOME={}\n{}",shell_quote(&home),super::fixture_tools::bootstrap()));
+        assert!(setup.status.success(),"fixture tool setup: {:?}: {}",setup.status.code(),String::from_utf8_lossy(&setup.stderr));
         run(&home);
     }
     pub(super) fn write_with_versions(target: &RemoteTarget, versions: transactions::Versions, run: impl FnOnce()) {

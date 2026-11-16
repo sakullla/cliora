@@ -698,6 +698,7 @@ fn version_28_migration_preserves_same_directory_legacy_sessions_and_deduplicate
     let legacy = serde_json::to_string(&vec![make("cliora-a", 10), make("cliora-b", 20), make("cliora-c", 30), make("cliora-a", 40)]).unwrap();
     db.with_connection(|conn| {
         conn.execute("INSERT INTO app_settings (key,value) VALUES ('remote_session_index_v1',?1)", [&legacy]).map_err(|error| error.to_string())?;
+        crate::database::remove_later_fixture_tables(conn, 27).map_err(|error| error.to_string())?;
         conn.execute_batch("DROP TABLE remote_session_index; PRAGMA user_version = 27;").map_err(|error| error.to_string())
     }).unwrap();
     drop(db);

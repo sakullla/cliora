@@ -296,3 +296,19 @@ A2 最终同源捕获回执 `5ee8141b5aa98638740c39d3faf934c99879d864ec6550504ce
 A2 原生回执 `fdc89a1de898dc928edeaa0cd58adee875af8561eccd471b2c9b69a5b487c322`：真实 owned Git 拣选 created=1、HEAD=`73e08f7c82b537f66d678ac7135c0284e29217d2`，committed/clean、revision=1 返回原会话；Cliora 实际复核后下一审查 baseline 等于该 HEAD。
 统一证据为 Cliora workflow 的 `evidence/native-review-runtime-a2/index.json` / `report.json`；候选路径、SHA、源码输入和外置驱动均在索引，A1 原始证据/二进制另行保留。`postflight-a2.json` 确认原 `/Applications` handlers 已恢复、owned 安装目录不存在、owned 进程为空；两次命令均退出 0、cleanup released。
 边界仍为隔离 ad-hoc bundles、fixture CLI 和外置 pass-through IPC 驱动，不代表真实 Codex 登录/推理、键鼠/焦点/IME、Windows/Linux 或完整原生矩阵验收；正式累计验证交 Delivery。
+
+## T3-A4：正式回归暴露的旧消费者合同返修
+
+正式 run `55fe0aa143abd76e72786ae482e65241` 中的本轮派发问题分为三类，未把 Kiro、mac 默认终端、线程资源、Skill 拖选或标题截断混为同一原因。迁移夹具从最新数据库降低 `user_version` 却留下 schema32/33 的 workspace/prompt 表，导致严格 CREATE 正确报 table exists；现仅以 `cfg(test)` helper 按 FK 子先父移除目标版本之后的组织表，保留原降列、旧数据、CAS、恢复断言及真实 v1 迁移，最终版本期望同步为 33。没有将生产迁移改为 IF NOT EXISTS。
+
+远程事务在本机缺少 GNU flock、默认 stat 为 BSD 时于 protect 前置检查退出 70，因此出现未建 journal 的 preparing/unknown；大脚本还使测试 stdin 写入遇到 BrokenPipe。mac 隔离 POSIX 夹具现使用真实 `fcntl.flock` 互斥/超时失败及 `lstat` uid/nlink/mode 适配，两个关键验证覆盖锁继承、竞争拒绝、无效 FD、硬链接、权限与缺失文件。故障 wrapper 委托本机真实 mv/sha256sum 路径，保留原故障条件；早退时保留 child 原 exit/stderr，未完整发送却 exit0 则显式失败。生产 HELPERS、CAS、持久恢复屏障及脚本故障安全条件未降级，`scripts/remote-transaction-fixtures.mjs` 无需改动。
+
+首轮事务 8/9（`d17567a2f0d4224bacfa0e44b6231badc3b54e1ea4fe290c72cd87e1c8062463`）剩余用例经诊断确认 success/committed、两项已提交，但 shell 后置检查 exit92（`5e7a9b20d95941a3a2fa7ddadb5c5353ea3f23736d257933a561c73ef0da36d4`）。BSD `wc -l` 对零行输出 `       0`，旧字符串比较误失败；仅改为数值 `-eq 0`，仍严格要求无临时文件，原版本/备份/权限/回滚断言保留。
+
+| A4 开发检查 | 实际结果 | 受控回执键 |
+| --- | --- | --- |
+| 迁移与直接夹具批次 | 15 组、16 测试通过；含 11 个原迁移失败、两项真实工具语义验证、早退保护、资源缺失/空文件及大技能清单 | `3d9e380d8e66bf2172ea93790c4adbe4a6680f528a8f9f3b3bb9ea5e5cba1e6c` |
+| remote-hosts UI | 31/31；mock 返回正确空 PromptPage，仍先执行原 hold/failure 注入，保留保存失败的原 alert 断言 | `c2e1485936253514d904c182d3d52010ce27fffa7953ed170866d788233405c0` |
+| 原故障用例、完整事务组与 Clippy | exact 1/1、transactions 9/9、`--all-targets -- -D warnings` 均通过 | `77be42c7efd34581a4d3022c1a1c8204ff73409f12ba492dd2e36b3f150d422a` |
+
+以上命令均退出 0、清理 released。修改只在测试/夹具消费者及测试专用适配边界；不是 GNU/util-linux 生产环境、实际 SSH 服务或其它平台的验收。原正式失败保留，T5/Delivery 的其它已知问题和正式累计全量尚未据此宣称完成。

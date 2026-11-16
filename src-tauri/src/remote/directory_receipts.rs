@@ -187,6 +187,7 @@ mod tests {
         let path = directory.path().join("receipts.db");
         let database = Database::open(&path).unwrap();
         database.with_connection(|connection| {
+            crate::database::remove_later_fixture_tables(connection, 28).map_err(|error| error.to_string())?;
             connection.execute_batch("DROP TABLE remote_directory_receipts; PRAGMA user_version = 28;").unwrap();
             connection.execute("INSERT INTO app_settings VALUES ('directory-fixture', 'keep')", []).unwrap();
             Ok(())
@@ -221,7 +222,7 @@ mod tests {
             let value: String = connection.query_row("SELECT value FROM app_settings WHERE key = 'directory-fixture'", [], |row| row.get(0)).unwrap();
             assert_eq!(value, "keep");
             let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0)).unwrap();
-            assert_eq!(version, 31);
+            assert_eq!(version, 33);
             Ok(())
         }).unwrap();
     }

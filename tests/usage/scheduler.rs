@@ -187,6 +187,7 @@ fn v14_queries_without_cache_are_due_but_new_saves_wait_for_interval() {
     let cache = list_cache(&db).unwrap();
     assert!(!due(&cache[0], &q, false, now()));
     db.with_connection(|c| {
+        crate::database::remove_later_fixture_tables(c, 14).map_err(|error| error.to_string())?;
         c.execute_batch("DROP TABLE auth_accounts; ALTER TABLE applied_bindings DROP COLUMN context_id; ALTER TABLE history_usage DROP COLUMN request_count; DROP TABLE usage_cache; DROP TABLE usage_samples; DROP TABLE remote_session_index; PRAGMA user_version =14;")
             .map_err(|e| e.to_string())
     })
@@ -213,7 +214,7 @@ fn v14_queries_without_cache_are_due_but_new_saves_wait_for_interval() {
         let version: u32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|e| e.to_string())?;
-        assert_eq!(version, 31);
+        assert_eq!(version, 33);
         Ok(())
     })
     .unwrap();

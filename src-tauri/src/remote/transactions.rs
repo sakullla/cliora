@@ -367,6 +367,7 @@ mod tests {
         result
     }
     fn install_fixture_script(target: &RemoteTarget, name: &str, text: &str) {
+        let text=super::super::fixture_tools::adapt_fault_tool(name,text);
         let encoded = base64::engine::general_purpose::STANDARD.encode(text);
         run_command(target, &format!("mkdir -p \"$HOME/bin\"; printf '%s' {} | base64 -d > \"$HOME/bin/{name}\"; chmod 700 \"$HOME/bin/{name}\"", shell_quote(&encoded))).unwrap();
     }
@@ -536,6 +537,8 @@ exec /usr/bin/mv "$@"
         });
     }
     fn shell(script: &str) -> Option<String> {
+        let bootstrap=super::super::fixture_tools::bootstrap();
+        let script=script.replace("export HOME=\"$task_root\"\n",&format!("export HOME=\"$task_root\"\n{bootstrap}"));
         let mut command = if cfg!(windows) {
             let mut command = Command::new("wsl.exe"); command.args(["--exec", "sh", "-s"]); command
         } else { let mut command = Command::new("sh"); command.arg("-s"); command };
@@ -544,7 +547,8 @@ exec /usr/bin/mv "$@"
         };
         child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
         let result = child.wait_with_output().unwrap();
-        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+        let scenario=script.lines().find(|line|line.starts_with("scenario=")).unwrap_or("inspection");
+        assert!(result.status.success(), "{scenario}; shell exit {:?}; stdout: {}; stderr: {}",result.status.code(),String::from_utf8_lossy(&result.stdout),String::from_utf8_lossy(&result.stderr));
         Some(String::from_utf8(result.stdout).unwrap())
     }
     #[test]
@@ -598,7 +602,7 @@ set +e
                 script.push_str(&format!("id='{id}'; tx=\"$HOME/.cliora/transactions/$id\"; s0=committed; s1=applying\n"));
                 script.push_str(HELPERS); script.push_str(&journal(&receipt)); script.push_str(&rollback_script(&receipt)); script.push_str("rollback\n");
             }
-            if !["rollback_failure", "external_conflict", "before_second_conflict"].contains(&scenario) { script.push_str("[ \"$(find \"$HOME\" -name '*.tmp' -type f | wc -l)\" = 0 ] || exit 92\n"); }
+            if !["rollback_failure", "external_conflict", "before_second_conflict"].contains(&scenario) { script.push_str("temporary_count=$(find \"$HOME\" -name '*.tmp' -type f | wc -l)\n[ \"$temporary_count\" -eq 0 ] || { printf 'fixture staging files remain: %s\\n' \"$temporary_count\" >&2; find \"$HOME\" -name '*.tmp' -type f >&2; exit 92; }\n"); }
             script.push_str("printf '%s\\n' __CHECK__; cat \"$HOME/a\"; printf '\\n'; cat \"$HOME/b\"; printf '\\n'; stat -c '%a' \"$HOME/.cliora/transactions\"; stat -c '%a' \"$HOME/.cliora/transactions/\"*/receipt\n");
             let Some(output) = shell(&script) else { return; };
             let (journal_text, check) = output.split_once("__CHECK__\n").expect("shell checks");
