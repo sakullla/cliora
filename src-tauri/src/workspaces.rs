@@ -363,6 +363,11 @@ pub fn list(db: &Database, host: &str) -> Result<Vec<Workspace>, String> {
     })?;
     ids.iter().map(|id| get(db, host, id)).collect()
 }
+/// Source display metadata must not probe the project's other repositories.
+pub fn display_name(db: &Database, id: &str) -> Result<Option<String>, String> {
+    db.with_connection(|conn| conn.query_row("SELECT name FROM workspace_projects WHERE id=?1", [id], |row| row.get(0)).optional().map_err(sql))
+}
+
 pub fn get(db: &Database, host: &str, id: &str) -> Result<Workspace, String> {
     let mut value = db.with_connection(|conn| {
         let mut value = conn.query_row("SELECT name,revision,manifest_path,manifest_revision,last_error FROM workspace_projects WHERE id=?1", [id], |row| Ok(Workspace { id:id.into(), name:row.get(0)?, revision:row.get::<_,i64>(1)?.max(0) as u64, manifest_path:row.get(2)?, manifest_revision:row.get::<_,Option<i64>>(3)?.map(|v|v.max(0) as u64), error:row.get(4)?, repositories:Vec::new() })).optional().map_err(sql)?.ok_or("业务项目不存在")?;

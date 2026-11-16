@@ -324,6 +324,7 @@ mod tests {
         previous.status = crate::twiglane::STATUS_RETURNED.into();
         previous.outcome = Some("committed".into());
         previous.head_oid = Some(reviewed.trim().to_owned());
+        previous.verified_head = previous.head_oid.clone();
         std::fs::write(root.join("b.txt"), "more\n").unwrap();
         assert!(git(&root, &["commit", "-q", "-am", "more"]));
         assert_eq!(crate::twiglane::baseline(session, &root, Some(&previous)).as_deref(), Some(reviewed.trim()));

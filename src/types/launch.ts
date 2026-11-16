@@ -152,6 +152,11 @@ export type TwiglaneReviewOutcome = 'reviewed' | 'committed' | 'merged';
 /** Twiglane's claim about the worktree when it returned; always re-checked against real Git. */
 export type TwiglaneWorktreeState = 'clean' | 'dirty' | 'unknown';
 export type TwiglaneReviewState = {
+  resultRevision: number;
+  protocolVersion: 2 | 3;
+  workspaceId: string | null;
+  repositoryId: string | null;
+  workspaceName: string | null;
   reviewId: string;
   sessionId: string;
   worktreePath: string;

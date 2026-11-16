@@ -3847,8 +3847,7 @@ fn review_directory(session_id: &str) -> Result<PathBuf, ApiError> {
 }
 
 /// Start one review: a fresh reviewId, the canonical worktree path and its HEAD.
-/// Nothing is registered when the system refuses to open the link, so a failed
-/// attempt never looks like a pending one.
+/// Register before publishing the URL; a definite failure rolls back only this unconfirmed attempt.
 #[tauri::command]
 pub async fn twiglane_start_review(
     app: AppHandle,
@@ -3860,13 +3859,21 @@ pub async fn twiglane_start_review(
         let path = crate::twiglane::url_path(&root).map_err(crate::twiglane::api_error)?;
         let previous = app.state::<AppState>().reviews.latest_for_session(&session_id);
         let baseline = crate::twiglane::baseline(&session_id, &root, previous.as_ref());
-        let state = crate::twiglane::new_review(&session_id, &path, baseline.clone());
-        let url = crate::twiglane::checked_review_url(&state.review_id, &session_id, &path, baseline.as_deref())
-            .map_err(crate::twiglane::api_error)?;
-        tauri_plugin_opener::open_url(&url, None::<&str>)
-            .map_err(|_| crate::twiglane::api_error("open_failed"))?;
-        app.state::<AppState>().reviews.begin(state.clone());
-        Ok(state)
+        let mut state = crate::twiglane::new_review(&session_id, &path, baseline);
+        app.state::<AppState>().with_database(&app, |db| {
+            let host = crate::workspaces::local_host_id().map_err(native_error)?;
+            if let Some(context) = crate::workspaces::session_contexts(db).map_err(native_error)?.into_iter().find(|context| context.session_id == session_id && context.host_id == host) {
+                // Attribution belongs to this session, never to the currently selected project.
+                state.workspace_id = Some(context.workspace_id.clone());
+                state.repository_id = Some(context.repository_id);
+                state.workspace_name = crate::workspaces::display_name(db, &context.workspace_id).map_err(native_error)?.map(|name| name.chars().take(80).collect());
+            }
+            Ok(())
+        })?;
+        let url = crate::twiglane::source_review_url(&state).map_err(crate::twiglane::api_error)?;
+        app.state::<AppState>().reviews.publish(state, || {
+            tauri_plugin_opener::open_url(&url, None::<&str>).map_err(|_| ())
+        }).map_err(crate::twiglane::api_error)
     })
     .await
 }
@@ -3888,11 +3895,16 @@ pub async fn twiglane_review_link(
     app: AppHandle,
     url: String,
 ) -> Result<crate::twiglane::LinkOutcome, ApiError> {
-    let outcome = match crate::twiglane::parse_event_url(&url) {
-        Ok(event) => app.state::<AppState>().reviews.apply(event),
-        Err(code) => crate::twiglane::LinkOutcome::ignored(code),
-    };
-    Ok(outcome)
+    blocking(move || {
+        let outcome = match crate::twiglane::parse_event_url(&url) {
+            Ok(event) => app.state::<AppState>().reviews.apply(event),
+            Err(code) => crate::twiglane::LinkOutcome::ignored(code),
+        };
+        if outcome.kind == "returned" {
+            if let Some(session_id) = outcome.session_id.as_deref() { app.state::<AppState>().reviews.recheck_return(session_id); }
+        }
+        Ok(outcome)
+    }).await
 }
 
 #[tauri::command]

@@ -1,0 +1,295 @@
+{
+  "schemaVersion": 1,
+  "requests": [
+    {
+      "name": "v2-standalone",
+      "url": "twiglane://review?v=2&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2Fa&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": true,
+      "platform": "unix"
+    },
+    {
+      "name": "v2-slash",
+      "url": "twiglane://review/?v=2&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2Fa&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": true,
+      "platform": "unix"
+    },
+    {
+      "name": "v3-standalone",
+      "url": "twiglane://review?v=3&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2Fa&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": true,
+      "platform": "unix"
+    },
+    {
+      "name": "v3-slash",
+      "url": "twiglane://review/?v=3&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2Fa&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": true,
+      "platform": "unix"
+    },
+    {
+      "name": "v3-project-source",
+      "url": "twiglane://review?v=3&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2Fa&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&workspaceId=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee&repositoryId=bbbbbbbb-cccc-4ddd-8eee-ffffffffffff&workspaceName=%E9%A1%B9%E7%9B%AE%20A",
+      "valid": true,
+      "platform": "unix"
+    },
+    {
+      "name": "v3-posix-literal-backslash",
+      "url": "twiglane://review?v=3&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2FRepo%5Cliteral&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": true,
+      "platform": "unix"
+    },
+    {
+      "name": "v2-cannot-carry-v3-source",
+      "url": "twiglane://review?v=2&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2Fa&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&workspaceId=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee&repositoryId=bbbbbbbb-cccc-4ddd-8eee-ffffffffffff&workspaceName=%E9%A1%B9%E7%9B%AE%20A",
+      "valid": false
+    },
+    {
+      "name": "name-without-id",
+      "url": "twiglane://review?v=3&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2Fa&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&workspaceName=Project",
+      "valid": false
+    },
+    {
+      "name": "bad-id",
+      "url": "twiglane://review?v=3&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2Fa&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&repositoryId=not-uuid",
+      "valid": false
+    },
+    {
+      "name": "empty-name",
+      "url": "twiglane://review?v=3&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2Fa&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&workspaceId=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee&workspaceName=",
+      "valid": false
+    },
+    {
+      "name": "long-name",
+      "url": "twiglane://review?v=3&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2Fa&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&workspaceId=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee&workspaceName=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "valid": false
+    },
+    {
+      "name": "control-name",
+      "url": "twiglane://review?v=3&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2Fa&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&workspaceId=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee&workspaceName=x%0Ay",
+      "valid": false
+    },
+    {
+      "name": "unknown",
+      "url": "twiglane://review?v=3&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2Fa&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&repositories=all",
+      "valid": false
+    },
+    {
+      "name": "duplicate",
+      "url": "twiglane://review?v=3&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2Fa&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0",
+      "valid": false
+    },
+    {
+      "name": "request-meta",
+      "url": "twiglane://review?v=3&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2Fa&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&meta.x.y=fact",
+      "valid": false
+    },
+    {
+      "name": "relative",
+      "url": "twiglane://review?v=3&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=relative&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": false
+    },
+    {
+      "name": "unknown-version",
+      "url": "twiglane://review?v=4&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2Fa&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": false
+    },
+    {
+      "name": "raw-space",
+      "url": "twiglane://review?v=3&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2Fa&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ",
+      "valid": false
+    },
+    {
+      "name": "userinfo",
+      "url": "twiglane://me@review?v=3&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2Fa&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": false
+    },
+    {
+      "name": "double-slash",
+      "url": "twiglane://review//?v=3&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2Fa&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": false
+    },
+    {
+      "name": "malformed-percent",
+      "url": "twiglane://review?v=3&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2Fa&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&workspaceName=%ZZ",
+      "valid": false
+    },
+    {
+      "name": "overlong",
+      "url": "twiglane://review?v=3&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": false
+    },
+    {
+      "name": "v2-windows-path",
+      "url": "twiglane://review?v=2&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=C%3A%2Fwork%2F%E4%BB%A3%E7%A0%81&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": true,
+      "platform": "windows"
+    },
+    {
+      "name": "v3-windows-path",
+      "url": "twiglane://review?v=3&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=C%3A%2Fwork%2F%E4%BB%A3%E7%A0%81&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": true,
+      "platform": "windows"
+    },
+    {
+      "name": "encoded-unicode-control-path",
+      "url": "twiglane://review?v=3&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2Fa%C2%85&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": false
+    },
+    {
+      "name": "raw-query-question",
+      "url": "twiglane://review?v=3&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&worktreePath=%2Fwork%2Fa?x&baseline=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": false
+    }
+  ],
+  "events": [
+    {
+      "name": "v2-accepted",
+      "url": "cliora://review?v=2&event=accepted&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0",
+      "valid": true
+    },
+    {
+      "name": "v2-rejected",
+      "url": "cliora://review?v=2&event=rejected&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&reason=invalid_path",
+      "valid": true
+    },
+    {
+      "name": "v2-reviewed-dirty",
+      "url": "cliora://review?v=2&event=returned&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&outcome=reviewed&worktreeState=dirty",
+      "valid": true
+    },
+    {
+      "name": "v2-committed-dirty",
+      "url": "cliora://review?v=2&event=returned&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&outcome=committed&headOid=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&worktreeState=dirty",
+      "valid": true
+    },
+    {
+      "name": "v2-meta",
+      "url": "cliora://review?v=2&event=returned&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&outcome=reviewed&worktreeState=unknown&meta.twiglane.version=0.3.23",
+      "valid": true
+    },
+    {
+      "name": "v3-accepted",
+      "url": "cliora://review?v=3&event=accepted&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0",
+      "valid": true
+    },
+    {
+      "name": "v3-rejected",
+      "url": "cliora://review?v=3&event=rejected&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&reason=invalid_path",
+      "valid": true
+    },
+    {
+      "name": "v3-reviewed-dirty",
+      "url": "cliora://review?v=3&event=returned&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&outcome=reviewed&worktreeState=dirty&resultRevision=1",
+      "valid": true
+    },
+    {
+      "name": "v3-committed-dirty",
+      "url": "cliora://review?v=3&event=returned&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&outcome=committed&headOid=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&worktreeState=dirty&resultRevision=1",
+      "valid": true
+    },
+    {
+      "name": "v3-meta",
+      "url": "cliora://review?v=3&event=returned&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&outcome=reviewed&worktreeState=unknown&meta.twiglane.version=0.3.23&resultRevision=1",
+      "valid": true
+    },
+    {
+      "name": "v3-missing-revision",
+      "url": "cliora://review?v=3&event=returned&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&outcome=reviewed&worktreeState=clean",
+      "valid": false
+    },
+    {
+      "name": "revision-zero",
+      "url": "cliora://review?v=3&event=returned&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&outcome=reviewed&worktreeState=clean&resultRevision=0",
+      "valid": false
+    },
+    {
+      "name": "revision-leading-zero",
+      "url": "cliora://review?v=3&event=returned&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&outcome=reviewed&worktreeState=clean&resultRevision=01",
+      "valid": false
+    },
+    {
+      "name": "revision-negative",
+      "url": "cliora://review?v=3&event=returned&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&outcome=reviewed&worktreeState=clean&resultRevision=-1",
+      "valid": false
+    },
+    {
+      "name": "revision-large",
+      "url": "cliora://review?v=3&event=returned&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&outcome=reviewed&worktreeState=clean&resultRevision=9007199254740992",
+      "valid": false
+    },
+    {
+      "name": "revision-float",
+      "url": "cliora://review?v=3&event=returned&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&outcome=reviewed&worktreeState=clean&resultRevision=1.2",
+      "valid": false
+    },
+    {
+      "name": "duplicate-revision",
+      "url": "cliora://review?v=3&event=returned&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&outcome=reviewed&worktreeState=clean&resultRevision=1&resultRevision=2",
+      "valid": false
+    },
+    {
+      "name": "returned-source",
+      "url": "cliora://review?v=3&event=returned&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&outcome=reviewed&worktreeState=clean&resultRevision=1&workspaceId=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "valid": false
+    },
+    {
+      "name": "returned-unknown",
+      "url": "cliora://review?v=3&event=returned&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&outcome=reviewed&worktreeState=clean&resultRevision=1&foo=x",
+      "valid": false
+    },
+    {
+      "name": "reviewed-with-head",
+      "url": "cliora://review?v=3&event=returned&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&outcome=reviewed&worktreeState=clean&resultRevision=1&headOid=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": false
+    },
+    {
+      "name": "duplicate-meta",
+      "url": "cliora://review?v=3&event=returned&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&outcome=reviewed&worktreeState=clean&resultRevision=1&meta.x.y=a&meta.x.y=b",
+      "valid": false
+    },
+    {
+      "name": "revision-max",
+      "url": "cliora://review?v=3&event=returned&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&outcome=reviewed&worktreeState=clean&resultRevision=9007199254740991",
+      "valid": true
+    },
+    {
+      "name": "v2-revision-forbidden",
+      "url": "cliora://review?v=2&event=returned&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&outcome=reviewed&worktreeState=clean&resultRevision=1",
+      "valid": false
+    },
+    {
+      "name": "accepted-revision-forbidden",
+      "url": "cliora://review?v=3&event=accepted&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&resultRevision=1",
+      "valid": false
+    },
+    {
+      "name": "accepted-source-forbidden",
+      "url": "cliora://review?v=3&event=accepted&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&workspaceId=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee&repositoryId=bbbbbbbb-cccc-4ddd-8eee-ffffffffffff&workspaceName=%E9%A1%B9%E7%9B%AE%20A",
+      "valid": false
+    },
+    {
+      "name": "unknown-event-version",
+      "url": "cliora://review?v=4&event=accepted&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0",
+      "valid": false
+    },
+    {
+      "name": "unknown-event-param",
+      "url": "cliora://review?v=3&event=accepted&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&foo=x",
+      "valid": false
+    },
+    {
+      "name": "duplicate-id",
+      "url": "cliora://review?v=3&event=accepted&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8",
+      "valid": false
+    },
+    {
+      "name": "returned-without-state",
+      "url": "cliora://review?v=3&event=returned&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&outcome=reviewed&resultRevision=1",
+      "valid": false
+    },
+    {
+      "name": "encoded-unicode-control-meta",
+      "url": "cliora://review?v=3&event=returned&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&outcome=reviewed&worktreeState=dirty&resultRevision=1&meta.x.y=a%C2%85",
+      "valid": false
+    }
+  ]
+}

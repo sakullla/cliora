@@ -335,6 +335,21 @@ function reviewReasonText(t: (key: string) => string, code: string | null | unde
   return t(code && REVIEW_REASON_KEYS[code] ? REVIEW_REASON_KEYS[code] : 'sessions.reviewCodeUnknown');
 }
 
+function reviewResultKey(review: TwiglaneReviewState): string {
+  return `${review.reviewId}:${review.resultRevision ?? 0}`;
+}
+
+function sameReviewCheckout(a: string | null, b: string): boolean {
+  if (!a) return false;
+  const key = (path: string) => {
+    if (/^[a-z]:[\\/]/i.test(path) || /^(?:\\\\|\/\/)[^\\/]+[\\/][^\\/]+/.test(path)) {
+      return path.replace(/^\\\\\?\\/, '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    }
+    return path.replace(/\/+$/, '') || '/';
+  };
+  return key(a) === key(b);
+}
+
 function firstTaskLine(text: string | null | undefined): string | null {
   const line = text?.split(/\r?\n/).map((item) => item.trim()).find(Boolean);
   return line || null;
@@ -1091,7 +1106,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     ? selected.directory || projects.find((item) => item.id === selected.projectId)?.path || null
     : null;
   const selectedReview = gitTarget ? reviewStates.get(gitTarget) : null;
-  const returnedReviewId = selectedReview?.status === 'returned' ? selectedReview.reviewId : null;
+  const returnedReviewId = selectedReview?.status === 'returned' ? reviewResultKey(selectedReview) : null;
   const codeStatusNeeded = worktreeMenuOpen || !!returnedReviewId;
   useEffect(() => {
     const ids = new Set(sessions.map((session) => session.id));
@@ -1106,7 +1121,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setReviewStates(retain);
   }, [sessions]);
   useEffect(() => {
-    const reviews = new Set([...reviewStates.values()].map((review) => review.reviewId));
+    const reviews = new Set([...reviewStates.values()].map(reviewResultKey));
     for (const id of announcedReviews.current) {
       if (!reviews.has(id)) announcedReviews.current.delete(id);
     }
@@ -1332,12 +1347,12 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   useEffect(() => {
     if (!gitTarget) return;
     const review = reviewStates.get(gitTarget);
-    if (!review || review.status !== 'returned' || announcedReviews.current.has(review.reviewId)) return;
-    if (codeStatusReviews.get(gitTarget) !== review.reviewId) return;
+    if (!review || review.status !== 'returned' || announcedReviews.current.has(reviewResultKey(review))) return;
+    if (codeStatusReviews.get(gitTarget) !== reviewResultKey(review)) return;
     const status = codeStatuses.get(gitTarget) ?? null;
     const unknownStatus = !!codeStatusUnknown.get(gitTarget);
     if (!status && !unknownStatus) return;
-    announcedReviews.current.add(review.reviewId);
+    announcedReviews.current.add(reviewResultKey(review));
     setNotice(describeReview(review, status, unknownStatus).text);
   }, [gitTarget, reviewStates, codeStatuses, codeStatusUnknown, codeStatusReviews]);
   function sessionPromptContext(session: WorkbenchSession): PromptContext | null {
@@ -2376,7 +2391,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     const files = !unknownStatus && status?.state === 'ready' && typeof status.uncommittedFiles === 'number'
       ? status.uncommittedFiles
       : null;
-    if (files === null || !status) return { tone: 'unconfirmed', text: t('sessions.reviewReturnedStatusUnknown') };
+    if (files === null || !status || !sameReviewCheckout(status.worktreePath, review.worktreePath)) return { tone: 'unconfirmed', text: t('sessions.reviewReturnedStatusUnknown') };
     const merged = review.outcome === 'merged';
     if (review.outcome === 'committed' || merged) {
       // 提交/合入声明：OID 必须与基线不同且等于当前 HEAD。
@@ -3400,7 +3415,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           const review = current ? reviewStates.get(current.id) ?? null : null;
           const codeStatus = current ? codeStatuses.get(current.id) ?? null : null;
           const codeStatusStale = !!current && (!!codeStatusUnknown.get(current.id) || !codeStatus || codeStatus.state !== 'ready');
-          const reviewUnverified = !!current && review?.status === 'returned' && codeStatusReviews.get(current.id) !== review.reviewId;
+          const reviewUnverified = !!current && review?.status === 'returned' && codeStatusReviews.get(current.id) !== reviewResultKey(review);
           const reviewView = describeReview(review, codeStatus, codeStatusStale || reviewUnverified);
           const reviewWaiting = !!review && review.status === 'opening' && reviewClock - review.createdAt < REVIEW_UNKNOWN_MS;
           // 发起中不重复点击；失败、超时或拒绝都可以重新发起，并一定拿到新的 reviewId。
