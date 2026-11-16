@@ -17,16 +17,19 @@ CREATE TABLE auth_credentials (
   expires_at INTEGER,
   account_id TEXT,
   email TEXT,
-  plan TEXT
+  plan TEXT,
+  disabled_cause TEXT
 );
 
 INSERT INTO auth_credentials
-  (provider, type, access_token, refresh_token, api_key, expires_at, account_id, email, plan)
+  (provider, type, access_token, refresh_token, api_key, expires_at, account_id, email, plan, disabled_cause)
 VALUES
-  ('openai-codex', 'oauth', 'fixture-access-token', 'fixture-refresh-token', NULL, 4102444800, 'acct_codex_1', 'ops@example.test', 'plus'),
-  ('anthropic', 'oauth', 'fixture-access-token', 'fixture-refresh-token', NULL, 1, 'acct_anthropic_1', NULL, NULL),
-  ('qwen', 'api_key', NULL, NULL, 'fixture-api-key', NULL, NULL, NULL, NULL),
-  ('invalid provider!', 'oauth', 'fixture-access-token', 'fixture-refresh-token', NULL, 4102444800, 'acct_invalid', NULL, NULL);
+  ('openai-codex', 'oauth', 'fixture-access-token', 'fixture-refresh-token', NULL, 4102444800, 'acct_codex_1', 'ops@example.test', 'plus', NULL),
+  ('anthropic', 'oauth', 'fixture-access-token', 'fixture-refresh-token', NULL, 1, 'acct_anthropic_1', NULL, NULL, NULL),
+  ('qwen', 'api_key', NULL, NULL, 'fixture-api-key', NULL, NULL, NULL, NULL, NULL),
+  ('openai-codex', 'oauth', 'fixture-access-token', 'fixture-refresh-token', NULL, 4102444800, 'acct_codex_old', 'old@example.test', 'plus', 'logged out by user'),
+  ('devin', 'oauth', 'fixture-access-token', 'fixture-refresh-token', NULL, 4102444800, 'acct_devin_old', NULL, NULL, 'deduplicated duplicate credential'),
+  ('invalid provider!', 'oauth', 'fixture-access-token', 'fixture-refresh-token', NULL, 4102444800, 'acct_invalid', NULL, NULL, NULL);
 
 CREATE TABLE session_state (
   id TEXT PRIMARY KEY,

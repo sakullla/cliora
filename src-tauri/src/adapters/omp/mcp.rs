@@ -44,35 +44,45 @@ pub(crate) fn omp_config_root(home: &Path) -> PathBuf {
         _ => home.join(".omp"),
     }
 }
-fn profile_name() -> Option<String> {
-    ["OMP_PROFILE", "PI_PROFILE"]
-        .iter()
-        .find_map(|name| {
-            env::var_os(name)
-                .filter(|value| !value.is_empty())
-                .and_then(|value| value.into_string().ok())
-        })
-        .filter(|name| {
-            !name.is_empty() && !name.contains(['/', '\\']) && name != "." && name != ".."
-        })
-}
 /// Effective user agent directory: the active profile or the default one.
 /// Delegates the default/named profile rules to the configuration capability so
 /// MCP, Skills and Agents cannot disagree with the config editor.
 pub(crate) fn user_agent_directory(home: &Path) -> PathBuf {
-    let profile = profile_name();
+    let omp_profile = env::var_os("OMP_PROFILE").map(|value| value.to_string_lossy().into_owned());
+    let pi_profile = if omp_profile.is_none() {
+        env::var_os("PI_PROFILE").map(|value| value.to_string_lossy().into_owned())
+    } else {
+        None
+    };
     let config_dir = env::var_os("PI_CONFIG_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
     let coding_agent = env::var_os("PI_CODING_AGENT_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
-    let resolved = super::configuration::resolve_root(&super::configuration::ResolutionInput {
+    user_agent_directory_from(
         home,
-        profile: profile.as_deref(),
-        config_dir: config_dir.as_deref(),
-        coding_agent_dir: coding_agent.as_deref(),
-    })
+        omp_profile.as_deref(),
+        pi_profile.as_deref(),
+        config_dir.as_deref(),
+        coding_agent.as_deref(),
+    )
+}
+
+fn user_agent_directory_from(
+    home: &Path,
+    omp_profile: Option<&str>,
+    pi_profile: Option<&str>,
+    config_dir: Option<&Path>,
+    coding_agent: Option<&Path>,
+) -> PathBuf {
+    let resolved = super::configuration::resolve_agent_root(
+        home,
+        omp_profile,
+        pi_profile,
+        config_dir,
+        coding_agent,
+    )
     .map(|resolved| resolved.root)
     .unwrap_or_else(|_| omp_config_root(home).join("agent"));
     // An active OAuth/account context keeps resources inside its own root, the
@@ -1158,6 +1168,36 @@ mod tests {
         assert_eq!(location.path, home().join(".omp/agent/mcp.json"));
         assert_eq!(location.kind, FileKind::Json);
         assert_eq!(location.root, "mcpServers");
+    }
+    #[test]
+    fn shared_profile_resolution_matches_accounts_and_configuration() {
+        let home = home();
+        assert_eq!(
+            user_agent_directory_from(&home, Some(""), Some("work"), None, None),
+            home.join(".omp/agent")
+        );
+        assert_eq!(
+            user_agent_directory_from(&home, Some("  "), Some("work"), None, None),
+            home.join(".omp/agent")
+        );
+        assert_eq!(
+            user_agent_directory_from(&home, Some("default"), Some("work"), None, None),
+            home.join(".omp/agent")
+        );
+        assert_eq!(
+            user_agent_directory_from(&home, None, Some(" work "), None, None),
+            home.join(".omp/profiles/work/agent")
+        );
+        assert_eq!(
+            user_agent_directory_from(
+                &home,
+                None,
+                Some("work"),
+                Some(Path::new("custom-config")),
+                Some(Path::new("/tmp/ignored-for-profile")),
+            ),
+            home.join("custom-config/profiles/work/agent")
+        );
     }
     #[test]
 

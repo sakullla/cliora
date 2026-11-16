@@ -10,6 +10,7 @@
 //! blocker instead of treating the database as an auth file.
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use rusqlite::types::ValueRef;
@@ -39,6 +40,7 @@ const ENVIRONMENT_KEYS: &[&str] = &[
     "PI_PROFILE",
     "PI_CONFIG_DIR",
     "PI_CODING_AGENT_DIR",
+    "XDG_DATA_HOME",
 ];
 
 pub(crate) fn port() -> Option<&'static dyn AccountAdapter> {
@@ -149,14 +151,6 @@ impl AccountAdapter for super::Omp {
 /// `PI_PROFILE` select a named Profile and `PI_CODING_AGENT_DIR` only relocates
 /// the default Profile.
 fn native_root(home: &Path, environment: &BTreeMap<String, String>) -> Result<PathBuf, String> {
-    let profile = environment
-        .get("OMP_PROFILE")
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            environment
-                .get("PI_PROFILE")
-                .filter(|value| !value.is_empty())
-        });
     let config_dir = environment
         .get("PI_CONFIG_DIR")
         .filter(|value| !value.is_empty())
@@ -165,12 +159,25 @@ fn native_root(home: &Path, environment: &BTreeMap<String, String>) -> Result<Pa
         .get("PI_CODING_AGENT_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
-    super::configuration::resolve_root(&super::configuration::ResolutionInput {
+    // OMP resolves a relative PI_CODING_AGENT_DIR against its process cwd.
+    // Cliora cannot know that cwd when it is launched as a desktop app, so this
+    // boundary is explicit instead of silently reading a different directory.
+    if coding_agent_dir
+        .as_deref()
+        .is_some_and(|path| !path.is_absolute())
+    {
+        return Err(
+            "PI_CODING_AGENT_DIR 为相对路径；OMP 会按进程工作目录解析，Cliora 无法安全定位。请使用绝对路径，或从目标项目目录启动 OMP。"
+                .into(),
+        );
+    }
+    super::configuration::resolve_agent_root(
         home,
-        profile: profile.map(String::as_str),
-        config_dir: config_dir.as_deref(),
-        coding_agent_dir: coding_agent_dir.as_deref(),
-    })
+        environment.get("OMP_PROFILE").map(String::as_str),
+        environment.get("PI_PROFILE").map(String::as_str),
+        config_dir.as_deref(),
+        coding_agent_dir.as_deref(),
+    )
     .map(|resolved| resolved.root)
 }
 
@@ -184,7 +191,7 @@ pub(crate) fn native_context(
         tool_id: super::ID.into(),
         config_root: root.clone(),
         resource_root: root.clone(),
-        auth_files: vec![root.join(DATABASE_FILE)],
+        auth_files: vec![database_path(&root, environment)],
         history_roots: vec![root.join("sessions")],
         environment: environment.clone(),
         remove_environment: ENVIRONMENT_KEYS.iter().map(|key| (*key).into()).collect(),
@@ -193,16 +200,74 @@ pub(crate) fn native_context(
     })
 }
 
-/// Broker-backed credentials replace the local store and are not local
-/// accounts. Only key names/emptiness are inspected; values never leave the
-/// process and no remote broker is contacted.
-fn broker_configured() -> bool {
-    std::env::vars_os().any(|(key, value)| {
-        let key = key.to_string_lossy().to_ascii_uppercase();
-        (key.starts_with("OMP_") || key.starts_with("PI_"))
-            && key.contains("BROKER")
-            && !value.is_empty()
-    })
+/// OMP on macOS/Linux can keep `agent.db` under `$XDG_DATA_HOME/omp` when that
+/// data directory exists (`omp config init-xdg`); otherwise it stays in the
+/// resolved agent directory. Windows has no XDG path.
+fn database_path(root: &Path, environment: &BTreeMap<String, String>) -> PathBuf {
+    #[cfg(not(windows))]
+    if let Some(base) = environment
+        .get("XDG_DATA_HOME")
+        .filter(|value| !value.is_empty())
+    {
+        let data = PathBuf::from(base).join("omp");
+        if data.is_dir() {
+            return data.join(DATABASE_FILE);
+        }
+    }
+    let _ = environment;
+    root.join(DATABASE_FILE)
+}
+
+/// Only the official broker environment variables and `auth.broker.url/token`
+/// in `config.yml` are evidence of a broker. Unrelated `OMP_*BROKER*` variables
+/// are ignored, and broker values are never copied into the returned logins.
+fn broker_configured(context: &NativeContext) -> bool {
+    let url = std::env::var_os("OMP_AUTH_BROKER_URL");
+    let token = std::env::var_os("OMP_AUTH_BROKER_TOKEN");
+    broker_values_configured(
+        url.as_deref().and_then(std::ffi::OsStr::to_str),
+        token.as_deref().and_then(std::ffi::OsStr::to_str),
+    ) || config_broker_configured(&context.root)
+}
+
+fn broker_values_configured(url: Option<&str>, token: Option<&str>) -> bool {
+    url.is_some_and(|value| !value.trim().is_empty())
+        || token.is_some_and(|value| !value.trim().is_empty())
+}
+
+fn config_broker_configured(root: &Path) -> bool {
+    for name in ["config.yml", "config.yaml"] {
+        let path = root.join(name);
+        let Ok(metadata) = fs::metadata(&path) else {
+            continue;
+        };
+        if metadata.len() > 64 * 1024 {
+            continue;
+        }
+        let Ok(bytes) = fs::read(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_yaml::from_slice::<serde_yaml::Value>(&bytes) else {
+            continue;
+        };
+        let Some(broker) = value
+            .get("auth")
+            .and_then(|auth| auth.get("broker"))
+            .and_then(serde_yaml::Value::as_mapping)
+        else {
+            continue;
+        };
+        let nonempty = |key: &str| {
+            broker
+                .get(key)
+                .and_then(serde_yaml::Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+        };
+        if nonempty("url") || nonempty("token") {
+            return true;
+        }
+    }
+    false
 }
 
 fn sidecar_note(sidecars: Sidecars) -> &'static str {
@@ -288,6 +353,7 @@ const EXPIRES_NAMES: &[&str] = &[
 const ACCOUNT_NAMES: &[&str] = &["accountid", "account", "userid", "uid", "subject"];
 const EMAIL_NAMES: &[&str] = &["email", "emailaddress", "useremail", "login", "username"];
 const PLAN_NAMES: &[&str] = &["plan", "tier", "subscription"];
+const DISABLED_NAMES: &[&str] = &["disabledcause", "disabled"];
 
 #[derive(Clone, Debug)]
 struct Candidate {
@@ -302,6 +368,7 @@ struct Candidate {
     account: Option<String>,
     email: Option<String>,
     plan: Option<String>,
+    disabled: Option<String>,
 }
 
 /// Strong auth-store markers. A runtime table that merely has a `provider` and
@@ -375,6 +442,7 @@ fn candidate(table: &str, columns: &[Column]) -> Option<Candidate> {
         account: pick(columns, ACCOUNT_NAMES, &mut used),
         email: pick(columns, EMAIL_NAMES, &mut used),
         plan: pick(columns, PLAN_NAMES, &mut used),
+        disabled: pick(columns, DISABLED_NAMES, &mut used),
     })
 }
 
@@ -450,10 +518,28 @@ fn read_text(value: ValueRef<'_>) -> Option<String> {
     }
 }
 
+fn diagnostic_cause(value: &str) -> Option<String> {
+    let text: String = value
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(120)
+        .collect();
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
+#[derive(Clone)]
+struct Tombstone {
+    provider: String,
+    auth_kind: &'static str,
+    cause: Option<String>,
+}
+
 struct ReadRows {
     logins: Vec<NativeLogin>,
     skipped: usize,
     total: usize,
+    tombstones: Vec<Tombstone>,
 }
 
 fn read_candidate(
@@ -474,6 +560,7 @@ fn read_candidate(
         candidate.account.clone(),
         candidate.email.clone(),
         candidate.plan.clone(),
+        candidate.disabled.clone(),
     ];
     let select = fields
         .iter()
@@ -495,6 +582,7 @@ fn read_candidate(
         .map_err(|error| read_error(&error))?;
     let mut rows = statement.query([]).map_err(|error| read_error(&error))?;
     let mut logins = Vec::new();
+    let mut tombstones = Vec::new();
     let mut skipped = 0usize;
     let mut total = 0usize;
     while let Some(row) = rows.next().map_err(|error| read_error(&error))? {
@@ -502,11 +590,11 @@ fn read_candidate(
         if total > ROW_LIMIT {
             break;
         }
-        let mut values = Vec::with_capacity(10);
+        let mut values = Vec::with_capacity(11);
         let mut unusable = false;
-        for index in 0..10 {
+        for index in 0..11 {
             match row.get_ref(index) {
-                Ok(ValueRef::Blob(_)) if (2..=5).contains(&index) => {
+                Ok(ValueRef::Blob(_)) if (2..=5).contains(&index) || index == 10 => {
                     // Encrypted or binary material cannot be verified safely.
                     unusable = true;
                     break;
@@ -535,6 +623,25 @@ fn read_candidate(
         let mut account = clean(values[7].clone());
         let mut address = clean(values[8].clone());
         let mut plan = clean(values[9].clone());
+        // OMP 18.20.2 tombstones rows left by /logout, deduplication or a
+        // failed refresh with a non-NULL disabled_cause. They must never become
+        // a signed-in login or a duplicate row.
+        if values[10].is_some() {
+            let kind_text = kind.as_deref().map(normalize).unwrap_or_default();
+            let auth_kind = if kind_text.contains("api")
+                || (api_key.is_some() && access.is_none() && refresh.is_none())
+            {
+                "api_key"
+            } else {
+                "oauth"
+            };
+            tombstones.push(Tombstone {
+                provider: provider.to_owned(),
+                auth_kind,
+                cause: diagnostic_cause(values[10].as_deref().unwrap_or("")),
+            });
+            continue;
+        }
         if access.is_none() && refresh.is_none() && api_key.is_none() {
             if let Some(record) = values[5].as_deref().and_then(json_record) {
                 kind = kind.or(record.kind);
@@ -614,7 +721,7 @@ fn read_candidate(
             detail.push_str(sidecar_note(sidecars));
         }
         if broker {
-            detail.push_str("检测到 OMP/PI broker 环境变量；本地记录可能已被 broker 取代，仅作来源提示，不视为本地托管账号。");
+            detail.push_str("检测到 OMP broker 配置（官方环境变量或 config.yml auth.broker）；本地记录可能已被 broker 取代，仅作来源提示，不视为本地托管账号。");
         }
         logins.push(NativeLogin {
             provider: provider.to_owned(),
@@ -629,6 +736,7 @@ fn read_candidate(
         logins,
         skipped,
         total,
+        tombstones,
     })
 }
 
@@ -669,6 +777,7 @@ fn read_logins(path: &Path, now: i64, broker: bool) -> Result<Vec<NativeLogin>, 
         return Err("OMP agent.db 中未找到可识别的认证表；未猜测性读取其他 OMP 状态".into());
     }
     let mut logins = Vec::new();
+    let mut tombstones: BTreeMap<String, (usize, &'static str, Option<String>)> = BTreeMap::new();
     let mut skipped = 0usize;
     let mut total = 0usize;
     for candidate in &candidates {
@@ -676,8 +785,19 @@ fn read_logins(path: &Path, now: i64, broker: bool) -> Result<Vec<NativeLogin>, 
         logins.extend(rows.logins);
         skipped += rows.skipped;
         total += rows.total;
+        for tombstone in rows.tombstones {
+            let entry =
+                tombstones
+                    .entry(tombstone.provider)
+                    .or_insert((0, tombstone.auth_kind, None));
+            entry.0 += 1;
+            entry.1 = tombstone.auth_kind;
+            if entry.2.is_none() {
+                entry.2 = tombstone.cause;
+            }
+        }
     }
-    if logins.is_empty() && total > 0 {
+    if logins.is_empty() && tombstones.is_empty() && total > 0 {
         return Ok(vec![NativeLogin {
             provider: "omp-unparsed".into(),
             auth_kind: "oauth".into(),
@@ -689,6 +809,37 @@ fn read_logins(path: &Path, now: i64, broker: bool) -> Result<Vec<NativeLogin>, 
             )),
             managed_account_id: None,
         }]);
+    }
+    if !tombstones.is_empty() {
+        let active: std::collections::BTreeSet<String> =
+            logins.iter().map(|login| login.provider.clone()).collect();
+        for (provider, (count, auth_kind, cause)) in tombstones {
+            let cause_note = cause
+                .as_deref()
+                .map(|cause| format!("（disabled_cause: {cause}）"))
+                .unwrap_or_default();
+            if active.contains(&provider) {
+                for login in logins.iter_mut().filter(|login| login.provider == provider) {
+                    if let Some(detail) = &mut login.detail {
+                        detail.push_str(&format!(
+                            "另有 {count} 条已停用/墓碑认证记录已忽略{cause_note}，未展示为登录。"
+                        ));
+                    }
+                }
+            } else {
+                logins.push(NativeLogin {
+                    provider,
+                    auth_kind: auth_kind.into(),
+                    state: AccountState::SignedOut,
+                    identity: None,
+                    detail: Some(format!(
+                        "发现 {count} 条已停用/墓碑认证记录{cause_note}；未展示为登录。{}",
+                        sidecar_note(sidecars)
+                    )),
+                    managed_account_id: None,
+                });
+            }
+        }
     }
     if skipped > 0 {
         for login in &mut logins {
@@ -703,7 +854,7 @@ fn read_logins(path: &Path, now: i64, broker: bool) -> Result<Vec<NativeLogin>, 
 }
 
 fn discover(context: &NativeContext) -> Result<Vec<NativeLogin>, String> {
-    discover_with_broker(context, broker_configured())
+    discover_with_broker(context, broker_configured(context))
 }
 
 fn discover_with_broker(context: &NativeContext, broker: bool) -> Result<Vec<NativeLogin>, String> {
@@ -719,7 +870,7 @@ fn discover_with_broker(context: &NativeContext, broker: bool) -> Result<Vec<Nat
                 state: AccountState::Unknown,
                 identity: None,
                 detail: Some(
-                    "检测到 OMP/PI broker 环境变量；本地 agent.db 不存在，凭据可能由 broker 持有。本机未读取远端身份，也未采纳本地账号。"
+                    "检测到 OMP broker 配置（官方环境变量或 config.yml auth.broker）；本地 agent.db 不存在，凭据可能由 broker 持有。本机未读取远端身份，也未采纳本地账号。"
                         .into(),
                 ),
                 managed_account_id: None,
@@ -802,6 +953,8 @@ mod tests {
         include_str!("../../../../tests/fixtures/omp/accounts/sanitized-agent.db.sql");
     const NON_AUTH_FIXTURE: &str =
         include_str!("../../../../tests/fixtures/omp/accounts/non-auth-usage.db.sql");
+    const TOMBSTONE_FIXTURE: &str =
+        include_str!("../../../../tests/fixtures/omp/accounts/real-agent-db-tombstones.db.sql");
 
     fn fixture_database(root: &Path) -> PathBuf {
         fs::create_dir_all(root).unwrap();
@@ -831,11 +984,13 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         fixture_database(temp.path());
         let logins = discover_with_broker(&fixture_context(temp.path()), false).unwrap();
-        assert_eq!(logins.len(), 3);
-        let codex = logins
+        assert_eq!(logins.len(), 4);
+        let codex_rows: Vec<_> = logins
             .iter()
-            .find(|login| login.provider == "openai-codex")
-            .unwrap();
+            .filter(|login| login.provider == "openai-codex")
+            .collect();
+        assert_eq!(codex_rows.len(), 1, "墓碑行不得产生同 provider 幽灵重复");
+        let codex = codex_rows[0];
         assert_eq!(codex.auth_kind, "oauth");
         assert_eq!(codex.state, AccountState::SignedIn);
         let identity = codex.identity.as_ref().unwrap();
@@ -843,6 +998,9 @@ mod tests {
         assert_eq!(identity.plan.as_deref(), Some("plus"));
         assert_eq!(identity.source, "native_agent_db");
         assert!(codex.managed_account_id.is_none());
+        assert!(codex.detail.as_deref().is_some_and(|detail| {
+            detail.contains("已停用") && detail.contains("logged out by user")
+        }));
         let anthropic = logins
             .iter()
             .find(|login| login.provider == "anthropic")
@@ -854,6 +1012,15 @@ mod tests {
             .unwrap();
         assert_eq!(qwen.auth_kind, "api_key");
         assert_eq!(qwen.state, AccountState::SignedIn);
+        let devin = logins
+            .iter()
+            .find(|login| login.provider == "devin")
+            .unwrap();
+        assert_eq!(devin.state, AccountState::SignedOut);
+        assert!(devin
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("deduplicated duplicate credential")));
         let rendered = serde_json::to_string(&logins).unwrap();
         for secret in [
             "fixture-access-token",
@@ -863,10 +1030,51 @@ mod tests {
             assert!(!rendered.contains(secret), "{secret} 不得离开适配器");
         }
         assert!(!rendered.contains("session-body-must-not-be-read"));
-        assert!(logins.iter().all(|login| login
+        assert!(codex
             .detail
             .as_deref()
-            .is_some_and(|detail| detail.contains("已跳过"))));
+            .is_some_and(|detail| detail.contains("已跳过")));
+    }
+
+    #[test]
+    fn omp_tombstones_are_filtered_from_active_logins_and_keep_diagnostics() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("agent.db");
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch(TOMBSTONE_FIXTURE).unwrap();
+        drop(connection);
+        let logins = discover_with_broker(&fixture_context(temp.path()), false).unwrap();
+        assert_eq!(logins.len(), 2);
+        let codex: Vec<_> = logins
+            .iter()
+            .filter(|login| login.provider == "openai-codex")
+            .collect();
+        assert_eq!(codex.len(), 1);
+        assert_eq!(codex[0].state, AccountState::SignedIn);
+        assert_eq!(
+            codex[0]
+                .identity
+                .as_ref()
+                .and_then(|identity| identity.email.as_deref()),
+            Some("ops@example.test")
+        );
+        assert!(codex[0]
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("logged out by user")));
+        let devin = logins
+            .iter()
+            .find(|login| login.provider == "devin")
+            .unwrap();
+        assert_eq!(devin.state, AccountState::SignedOut);
+        assert!(devin
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("refresh failed")));
+        let rendered = serde_json::to_string(&logins).unwrap();
+        for secret in ["fixture-old-access", "fixture-old-refresh"] {
+            assert!(!rendered.contains(secret), "{secret} 不得离开适配器");
+        }
     }
 
     #[test]
@@ -968,6 +1176,41 @@ mod tests {
             temp.path().join(".omp").join("agent")
         );
 
+        // OMP 18.20.2 trims profile values; empty/whitespace/`default` mean the
+        // default profile, and an explicitly present empty OMP_PROFILE must not
+        // fall back to PI_PROFILE.
+        for value in ["", "   ", "default", " default "] {
+            let environment = BTreeMap::from([
+                ("OMP_PROFILE".to_string(), value.to_string()),
+                ("PI_PROFILE".to_string(), "work".to_string()),
+            ]);
+            let context = native_context(temp.path(), &environment).unwrap();
+            assert_eq!(
+                context.root,
+                temp.path().join(".omp").join("agent"),
+                "{value:?}"
+            );
+        }
+        let trimmed = BTreeMap::from([("OMP_PROFILE".to_string(), " work ".to_string())]);
+        assert_eq!(
+            native_context(temp.path(), &trimmed).unwrap().root,
+            temp.path()
+                .join(".omp")
+                .join("profiles")
+                .join("work")
+                .join("agent")
+        );
+        for invalid in ["Work", "work.", "con", "CON.txt", "com1"] {
+            let environment = BTreeMap::from([("OMP_PROFILE".to_string(), invalid.to_string())]);
+            assert!(
+                native_context(temp.path(), &environment).is_err(),
+                "{invalid:?} 必须被拒绝"
+            );
+        }
+        let too_long = "a".repeat(65);
+        let environment = BTreeMap::from([("OMP_PROFILE".to_string(), too_long)]);
+        assert!(native_context(temp.path(), &environment).is_err());
+
         let absolute = BTreeMap::from([(
             "PI_CONFIG_DIR".to_string(),
             temp.path().join("absolute-config").display().to_string(),
@@ -1009,6 +1252,66 @@ mod tests {
         assert_eq!(snapshot.logins.len(), 1);
         assert_eq!(snapshot.logins[0].state, AccountState::SignedOut);
         assert!(snapshot.logins[0].managed_account_id.is_none());
+    }
+
+    #[test]
+    fn relative_coding_agent_dir_is_rejected_with_an_explicit_boundary() {
+        let temp = tempfile::tempdir().unwrap();
+        let environment = BTreeMap::from([(
+            "PI_CODING_AGENT_DIR".to_string(),
+            "relative-agent".to_string(),
+        )]);
+        let error = native_context(temp.path(), &environment).unwrap_err();
+        assert!(error.contains("无法安全定位"), "{error}");
+        assert!(error.contains("绝对路径"), "{error}");
+    }
+
+    #[test]
+    fn broker_detection_uses_official_keys_and_config_yml_only() {
+        assert!(broker_values_configured(Some("https://broker.test"), None));
+        assert!(broker_values_configured(None, Some("token")));
+        assert!(!broker_values_configured(Some("   "), None));
+        assert!(!broker_values_configured(None, None));
+
+        let temp = tempfile::tempdir().unwrap();
+        assert!(!config_broker_configured(temp.path()));
+        fs::write(
+            temp.path().join("config.yml"),
+            "auth:\n  broker:\n    url: https://broker.test\n",
+        )
+        .unwrap();
+        assert!(config_broker_configured(temp.path()));
+        fs::write(
+            temp.path().join("config.yml"),
+            "auth:\n  broker:\n    token: fixture-token\n",
+        )
+        .unwrap();
+        assert!(config_broker_configured(temp.path()));
+        fs::write(
+            temp.path().join("config.yml"),
+            "auth:\n  broker:\n    url: '   '\n    token: ''\n",
+        )
+        .unwrap();
+        assert!(!config_broker_configured(temp.path()));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn xdg_data_home_omp_is_used_only_when_present() {
+        let temp = tempfile::tempdir().unwrap();
+        let xdg = temp.path().join("xdg");
+        fs::create_dir_all(xdg.join("omp")).unwrap();
+        let environment =
+            BTreeMap::from([("XDG_DATA_HOME".to_string(), xdg.display().to_string())]);
+        let context = native_context(temp.path(), &environment).unwrap();
+        assert_eq!(context.auth_files, vec![xdg.join("omp").join("agent.db")]);
+
+        fs::remove_dir_all(xdg.join("omp")).unwrap();
+        let context = native_context(temp.path(), &environment).unwrap();
+        assert_eq!(
+            context.auth_files,
+            vec![temp.path().join(".omp").join("agent").join("agent.db")]
+        );
     }
 
     #[test]

@@ -75,6 +75,19 @@ fn default_named_and_project_roots_stay_isolated() {
     assert_eq!(default.kind, "default");
     assert_eq!(default.root, home.join(".omp/agent"));
 
+    // OMP 18.20.2 treats trimmed empty values and literal `default` as the
+    // default profile.
+    for value in ["", "   ", "default", " default "] {
+        let outcome = resolve_agent_root(home, Some(value), None, None, None).unwrap();
+        assert_eq!(outcome.kind, "default", "{value:?}");
+        assert_eq!(outcome.root, home.join(".omp/agent"), "{value:?}");
+    }
+    // An explicitly present empty OMP_PROFILE must not fall back to PI_PROFILE.
+    assert_eq!(select_profile(Some(""), Some("work")), Some(""));
+    let explicit_empty = resolve_agent_root(home, Some(""), Some("work"), None, None).unwrap();
+    assert_eq!(explicit_empty.kind, "default");
+    assert_eq!(explicit_empty.root, home.join(".omp/agent"));
+
     // PI_CODING_AGENT_DIR relocates only the default profile.
     let relocated = resolve_root(&ResolutionInput {
         home,
@@ -84,6 +97,20 @@ fn default_named_and_project_roots_stay_isolated() {
     })
     .unwrap();
     assert_eq!(relocated.root, Path::new("/tmp/omp-agent"));
+
+    // Accounts and MCP pass the raw OMP/PI profile values through the same
+    // resolver; a fallback profile is trimmed and a named profile ignores the
+    // default-only coding directory.
+    let shared = resolve_agent_root(
+        home,
+        None,
+        Some(" work "),
+        Some(Path::new("custom-config")),
+        Some(Path::new("/tmp/ignored-for-profile")),
+    )
+    .unwrap();
+    assert_eq!(shared.kind, "profile");
+    assert_eq!(shared.root, home.join("custom-config/profiles/work/agent"));
 
     let named = resolve_root(&ResolutionInput {
         home,
@@ -107,7 +134,36 @@ fn default_named_and_project_roots_stay_isolated() {
     .unwrap();
     assert_eq!(configured.root, home.join("custom-config/agent"));
 
-    for invalid in ["", ".", "..", "../work", "work/name", "a\\b"] {
+    let max_name = "a".repeat(64);
+    for valid in ["a", "a.b_c-d", max_name.as_str()] {
+        assert!(
+            resolve_root(&ResolutionInput {
+                home,
+                profile: Some(valid),
+                config_dir: None,
+                coding_agent_dir: None,
+            })
+            .is_ok(),
+            "{valid:?} 必须被接受"
+        );
+    }
+    let too_long = "a".repeat(65);
+    for invalid in [
+        ".",
+        "..",
+        "../work",
+        "work/name",
+        "a\\b",
+        "Work",
+        "work.",
+        "work name",
+        "con",
+        "CON.txt",
+        "com1",
+        "-work",
+        "_work",
+        too_long.as_str(),
+    ] {
         assert!(
             resolve_root(&ResolutionInput {
                 home,

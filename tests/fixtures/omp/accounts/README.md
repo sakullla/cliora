@@ -11,8 +11,12 @@ Current cases:
 | `read-only.json` | `read-only-policy` | the accounts port is published, but no provider has managed login, no login entry exists and the shared `agent.db` cannot be exported as a whole auth file |
 
 `sanitized-agent.db.sql` is a synthetic SQLite fixture used by Rust tests to
-exercise parsing, WAL/SHM notes, corrupt rows, unknown schemas, the broker hint
-and the rule that a mixed `token_usage` table is not a login.
+exercise parsing, disabled_cause tombstones, WAL/SHM notes, corrupt rows,
+unknown schemas, the broker hint and the rule that a mixed `token_usage` table
+is not a login.
+`real-agent-db-tombstones.db.sql` mirrors the OMP 18.20.2
+`auth_credentials(provider, credential_type, data, disabled_cause)` shape with
+an active row and same-provider/only-provider tombstones.
 `non-auth-usage.db.sql` explicitly contains only runtime usage/event tables and
 must be rejected as an unparseable schema, never rendered as OAuth.
 

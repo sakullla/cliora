@@ -195,34 +195,95 @@ pub(crate) fn resolve_root(input: &ResolutionInput<'_>) -> Result<ResolvedRoot, 
     }
     let config = input.home.join(relative);
     match input.profile {
-        Some(name) => {
-            if !valid_profile_name(name) {
-                return Err("OMP Profile 名称无效；不能包含路径分隔符或控制字符".into());
-            }
-            Ok(ResolvedRoot {
+        Some(name) => match normalize_profile_name(name)? {
+            Some(name) => Ok(ResolvedRoot {
                 kind: "profile",
                 root: config.join("profiles").join(name).join("agent"),
-            })
-        }
-        None => Ok(ResolvedRoot {
-            kind: "default",
-            // PI_CODING_AGENT_DIR relocates only the default profile. A named
-            // profile above deliberately ignores it.
-            root: input
-                .coding_agent_dir
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| config.join("agent")),
-        }),
+            }),
+            None => Ok(default_root(config, input.coding_agent_dir)),
+        },
+        None => Ok(default_root(config, input.coding_agent_dir)),
     }
 }
 
+fn default_root(config: PathBuf, coding_agent_dir: Option<&Path>) -> ResolvedRoot {
+    ResolvedRoot {
+        kind: "default",
+        // PI_CODING_AGENT_DIR relocates only the default profile. A named
+        // profile above deliberately ignores it. OMP resolves a relative value
+        // against its process cwd; account discovery records that boundary
+        // explicitly instead of guessing the desktop app's cwd.
+        root: coding_agent_dir
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| config.join("agent")),
+    }
+}
+
+/// OMP 18.20.2 trims profile values and treats empty/whitespace and the literal
+/// `default` as the default profile. Names must match
+/// `^[a-z0-9][a-z0-9._-]{0,63}$`, must not end in `.` and must not be a Windows
+/// reserved device name.
+pub(crate) fn normalize_profile_name(name: &str) -> Result<Option<&str>, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed == "default" {
+        return Ok(None);
+    }
+    let valid = trimmed.len() <= 64
+        && !trimmed.ends_with('.')
+        && trimmed.as_bytes().first().is_some_and(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit()
+        })
+        && trimmed.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'_' | b'-')
+        })
+        && !windows_reserved_name(trimmed);
+    if !valid {
+        return Err(
+            "OMP Profile 名称无效；须匹配 [a-z0-9][a-z0-9._-]{0,63} 且不能是 Windows 保留名".into(),
+        );
+    }
+    Ok(Some(trimmed))
+}
+
+/// OMP_PROFILE presence wins even when it is empty; only an absent OMP_PROFILE
+/// allows the Pi-compatible PI_PROFILE fallback.
+pub(crate) fn select_profile<'a>(omp: Option<&'a str>, pi: Option<&'a str>) -> Option<&'a str> {
+    omp.or(pi)
+}
+
+/// Shared root resolution for configuration, accounts, MCP, Skills and Agents.
+/// Callers pass the raw `OMP_PROFILE`/`PI_PROFILE` values so an explicitly
+/// present but empty `OMP_PROFILE` resolves to the default profile without
+/// falling back to `PI_PROFILE`.
+pub(crate) fn resolve_agent_root(
+    home: &Path,
+    omp_profile: Option<&str>,
+    pi_profile: Option<&str>,
+    config_dir: Option<&Path>,
+    coding_agent_dir: Option<&Path>,
+) -> Result<ResolvedRoot, String> {
+    resolve_root(&ResolutionInput {
+        home,
+        profile: select_profile(omp_profile, pi_profile),
+        config_dir,
+        coding_agent_dir,
+    })
+}
+
+fn windows_reserved_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
+    matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL"
+            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
+            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+    )
+}
+
 fn valid_profile_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 80
-        && name != "."
-        && name != ".."
-        && !name.contains(['/', '\\'])
-        && !name.chars().any(char::is_control)
+    normalize_profile_name(name).is_ok()
 }
 
 fn env_value(name: &str) -> Option<String> {
@@ -232,8 +293,12 @@ fn env_value(name: &str) -> Option<String> {
 }
 
 fn environment_profile() -> Option<String> {
-    // OMP_PROFILE takes precedence over the Pi-compatible fallback.
-    env_value("OMP_PROFILE").or_else(|| env_value("PI_PROFILE"))
+    // OMP_PROFILE presence wins over the Pi-compatible fallback even when the
+    // value is empty/whitespace (which resolves to the default profile).
+    match env::var_os("OMP_PROFILE") {
+        Some(value) => Some(value.to_string_lossy().into_owned()),
+        None => env::var_os("PI_PROFILE").map(|value| value.to_string_lossy().into_owned()),
+    }
 }
 
 fn environment_root(home: &Path) -> Option<ResolvedRoot> {
