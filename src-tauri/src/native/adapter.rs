@@ -1691,8 +1691,13 @@ mod tests {
         let installation = verify_installation(&registry, "omp", temp.path(), Some("bun"), &|| false).unwrap();
         assert_eq!(installation.source, "bun");
         assert_eq!(installation.version.as_deref(), Some("18.20.2"));
-        // A different expected source is never accepted by inference.
-        assert!(verify_installation(&registry, "omp", temp.path(), Some("native"), &|| false).is_err());
-        assert!(verify_installation(&registry, "omp", temp.path(), Some("npm_shim"), &|| false).is_err());
+        // A different expected source is never accepted by inference. A real
+        // host install of that channel on PATH may match; the Bun fixture never.
+        for other in ["native", "npm_shim"] {
+            if let Ok(found) = verify_installation(&registry, "omp", temp.path(), Some(other), &|| false) {
+                assert_eq!(found.source, other);
+                assert_ne!(Path::new(&found.path), executable.as_path(), "{other}");
+            }
+        }
     }
 }

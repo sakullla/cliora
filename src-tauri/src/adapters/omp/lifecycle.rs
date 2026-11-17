@@ -3,11 +3,16 @@
 //!
 //! Evidence read on 2026-11-15: `packages/coding-agent/package.json` declares
 //! `bin.omp`, `@oh-my-pi/pi-coding-agent` 18.20.2 and Bun >=1.4.4; the session
-//! operations document declares `--resume [value]` and `--continue`. The
-//! official precompiled download URL and any update command are NOT verified in
-//! this repository, so Cliora declares none: a missing command is reported by
-//! the shared maintenance service and an installation channel is never
-//! silently switched.
+//! operations document declares `--resume [value]` and `--continue`. Update
+//! commands are declared per identified channel only (Bun, the Windows
+//! precompiled image, and an existing npm global install); a channel without a
+//! verified command reports none, and an installation channel is never silently
+//! switched.
+//!
+//! npm evidence (2026-11-17, Windows): `npm install -g @oh-my-pi/pi-coding-agent`
+//! publishes `%APPDATA%\npm\omp.cmd`, a cmd-shim that runs Bun on
+//! `node_modules\@oh-my-pi\pi-coding-agent\dist\cli.js`. Such an install is
+//! updated through npm; Cliora never offers npm as a fresh install channel.
 
 use std::env;
 use std::io::Read;
@@ -41,6 +46,9 @@ pub(crate) const RESUME_REASON: &str =
 pub(crate) const BUN_INSTALL_COMMAND: &str = "bun add -g @oh-my-pi/pi-coding-agent";
 pub(crate) const BUN_UPDATE_COMMAND: &str = "bun update -g @oh-my-pi/pi-coding-agent";
 pub(crate) const BUN_UNINSTALL_COMMAND: &str = "bun remove -g @oh-my-pi/pi-coding-agent";
+/// Package path fragment inside an npm global `node_modules` tree.
+const NPM_PACKAGE_FRAGMENT: &str = "node_modules/@oh-my-pi/pi-coding-agent/";
+pub(crate) const NPM_HELP_URL: &str = "https://nodejs.org/en/download";
 /// Verified by the official Windows installer: precompiled omp 18.20.2 in an
 /// isolated LOCALAPPDATA, `omp --version` and `omp update` both exit 0.
 pub(crate) const NATIVE_UPDATE_COMMAND: &str = "omp update";
@@ -206,7 +214,44 @@ pub(crate) fn channel(path: &Path) -> Channel {
 /// image is "native"; a Bun or package shim stays in the package channel so a
 /// native upgrade never replaces it.
 pub(crate) fn is_standalone_binary(path: &Path) -> bool {
-    channel(path) == Channel::Standalone
+    // A Unix npm global link is named `omp` too; it belongs to npm, not to the
+    // precompiled channel, so `omp update` is never offered for it.
+    channel(path) == Channel::Standalone && !is_npm_shim(path)
+}
+
+/// Whether `path` is an npm global entry for the OMP package.
+///
+/// Windows npm writes `omp.cmd`/`omp.ps1` shims that name the package payload;
+/// Unix npm links `omp` into `node_modules`. Bun's global tree (`.bun/...`) uses
+/// the same `node_modules` layout and is explicitly excluded so a Bun install is
+/// never updated through npm.
+pub(crate) fn is_npm_shim(path: &Path) -> bool {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if matches!(extension.as_str(), "cmd" | "ps1") {
+        let Ok(file) = std::fs::File::open(path) else {
+            return false;
+        };
+        let mut bytes = Vec::new();
+        if file.take(16_384).read_to_end(&mut bytes).is_err() {
+            return false;
+        }
+        return npm_shim_text(&String::from_utf8_lossy(&bytes));
+    }
+    if cfg!(windows) {
+        return false;
+    }
+    path.canonicalize()
+        .map(|real| npm_shim_text(&real.to_string_lossy()))
+        .unwrap_or(false)
+}
+
+fn npm_shim_text(text: &str) -> bool {
+    let normalized = text.replace('\\', "/").to_ascii_lowercase();
+    normalized.contains(NPM_PACKAGE_FRAGMENT) && !normalized.contains("/.bun/")
 }
 
 fn find_bun(directories: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
@@ -215,6 +260,15 @@ fn find_bun(directories: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
     } else {
         &["bun"]
     };
+    find_named(directories, names)
+}
+
+fn find_npm(directories: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    let names: &[&str] = if cfg!(windows) { &["npm.cmd"] } else { &["npm"] };
+    find_named(directories, names)
+}
+
+fn find_named(directories: impl IntoIterator<Item = PathBuf>, names: &[&str]) -> Option<PathBuf> {
     for directory in directories {
         for name in names {
             let candidate = directory.join(name);
@@ -270,11 +324,14 @@ pub(crate) fn resume_latest_args(mode: LaunchMode) -> Result<Vec<String>, String
     Ok(vec!["--continue".to_owned()])
 }
 
-/// Adapter-owned verified source label. Only Bun's global bin is named here;
-/// standalone images keep the shared `native` channel and an unrecognised path
-/// still falls back to `unknown`.
+/// Adapter-owned verified source label. Bun's global bin is named first, then an
+/// npm global entry; standalone images keep the shared `native` channel and an
+/// unrecognised path still falls back to `unknown`.
 pub(crate) fn source_label(path: &Path) -> Option<&'static str> {
-    (channel(path) == Channel::Bun).then_some("bun")
+    if channel(path) == Channel::Bun {
+        return Some("bun");
+    }
+    is_npm_shim(path).then_some("npm_shim")
 }
 
 fn bun_version_tuple(text: &str) -> Option<(u32, u32, u32)> {
@@ -331,33 +388,37 @@ fn runtime_dependencies_at(
     source: &str,
     installed: bool,
 ) -> Vec<Dependency> {
-    // Only a confirmed Bun installation or a missing installation claims a Bun
-    // runtime. A standalone/custom path does not invent a requirement it has
-    // not verified.
-    if installed && source != "bun" {
+    // Only a confirmed Bun or npm installation, or a missing installation,
+    // claims a Bun runtime (the npm shim runs Bun too). A standalone/custom path
+    // does not invent a requirement it has not verified.
+    if installed && source != "bun" && source != "npm_shim" {
         return Vec::new();
     }
-    let Some(path) = find_bun(directories) else {
-        return vec![Dependency {
-            name: "Bun",
-            status: "missing",
-            detail: "OMP 由 Bun 运行；需要 Bun 1.4.4 或更新版本",
-            help_url: BUN_HELP_URL,
-        }];
+    let directories: Vec<PathBuf> = directories.into_iter().collect();
+    let status = match find_bun(directories.clone()) {
+        None => "missing",
+        Some(path) => match bun_version(&path) {
+            Some(version) if version >= MINIMUM_BUN => "found",
+            // An old Bun, or one that did not answer: report the hard
+            // requirement instead of silently claiming it is usable.
+            _ => "outdated",
+        },
     };
-    let status = match bun_version(&path) {
-        Some(version) if version >= MINIMUM_BUN => "found",
-        Some(_) => "outdated",
-        // The executable exists but did not answer; report the hard requirement
-        // instead of silently claiming it is usable.
-        None => "outdated",
-    };
-    vec![Dependency {
+    let mut dependencies = vec![Dependency {
         name: "Bun",
         status,
         detail: "OMP 由 Bun 运行；需要 Bun 1.4.4 或更新版本",
         help_url: BUN_HELP_URL,
-    }]
+    }];
+    if installed && source == "npm_shim" {
+        dependencies.push(Dependency {
+            name: "npm",
+            status: if find_npm(directories).is_some() { "found" } else { "missing" },
+            detail: "更新 npm 安装的 OMP 需要 npm",
+            help_url: NPM_HELP_URL,
+        });
+    }
+    dependencies
 }
 
 pub(crate) fn install_command() -> Option<String> {
@@ -378,6 +439,9 @@ pub(crate) fn source_upgrade_command(source: &str, _version: Option<&str>) -> Op
     match source {
         "bun" => Some(BUN_UPDATE_COMMAND.to_owned()),
         "native" => Some(NATIVE_UPDATE_COMMAND.to_owned()),
+        // Only an identified npm install is updated through npm; npm is never
+        // offered as a fresh install channel.
+        "npm_shim" => crate::adapters::contract::npm_install_command_for(PACKAGE, &[]),
         _ => None,
     }
 }
@@ -385,6 +449,7 @@ pub(crate) fn source_upgrade_command(source: &str, _version: Option<&str>) -> Op
 pub(crate) fn source_uninstall_command(source: &str, _version: Option<&str>) -> Option<String> {
     match source {
         "bun" => Some(BUN_UNINSTALL_COMMAND.to_owned()),
+        "npm_shim" => crate::adapters::contract::npm_uninstall_command_for(PACKAGE),
         _ => None,
     }
 }
@@ -599,6 +664,76 @@ mod tests {
         assert!(upgrade_command("npm_shim").is_none());
         assert!(install_guidance().1.contains("不会"));
         assert!(!COMMAND_UNVERIFIED_REASON.trim().is_empty());
+    }
+
+    /// Sanitized copy of the cmd-shim npm writes for `npm install -g
+    /// @oh-my-pi/pi-coding-agent` on Windows (observed 2026-11-17).
+    const NPM_CMD_SHIM: &str = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST \"%dp0%\\bun.exe\" (\r\n  SET \"_prog=%dp0%\\bun.exe\"\r\n) ELSE (\r\n  SET \"_prog=bun\"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@oh-my-pi\\pi-coding-agent\\dist\\cli.js\" %*\r\n";
+
+    #[test]
+    fn npm_global_shim_is_identified_and_updated_through_npm() {
+        let temporary = tempfile::tempdir().unwrap();
+        let shim = temporary.path().join("omp.cmd");
+        std::fs::write(&shim, NPM_CMD_SHIM).unwrap();
+        assert!(is_npm_shim(&shim));
+        assert_eq!(source_label(&shim), Some("npm_shim"));
+        assert!(!is_standalone_binary(&shim));
+
+        let ps1 = temporary.path().join("omp.ps1");
+        std::fs::write(&ps1, "& \"bun$exe\"  \"$basedir/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js\" $args").unwrap();
+        assert_eq!(source_label(&ps1), Some("npm_shim"));
+
+        // Another package's shim, or a Bun global tree, is not an npm OMP install.
+        let other = temporary.path().join("pi.cmd");
+        std::fs::write(&other, NPM_CMD_SHIM.replace("@oh-my-pi", "@earendil-works")).unwrap();
+        assert_eq!(source_label(&other), None);
+        assert!(!npm_shim_text(
+            "/home/example/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js"
+        ));
+
+        let upgrade = source_upgrade_command("npm_shim", Some("18.20.3")).unwrap();
+        assert!(upgrade.starts_with("npm install -g @oh-my-pi/pi-coding-agent@latest "), "{upgrade}");
+        assert_eq!(
+            source_uninstall_command("npm_shim", Some("18.20.3")).as_deref(),
+            Some("npm uninstall -g @oh-my-pi/pi-coding-agent")
+        );
+        // npm stays an update-only channel: never a fresh install.
+        assert!(source_install_command(Some("npm_shim")).is_none());
+        assert!(npm_install_command().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_npm_link_is_npm_not_standalone() {
+        let temporary = tempfile::tempdir().unwrap();
+        let package = temporary
+            .path()
+            .join("lib/node_modules/@oh-my-pi/pi-coding-agent/dist");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(package.join("cli.js"), "#!/usr/bin/env bun\n").unwrap();
+        let bin = temporary.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let link = bin.join("omp");
+        std::os::unix::fs::symlink(package.join("cli.js"), &link).unwrap();
+        assert_eq!(source_label(&link), Some("npm_shim"));
+        assert!(!is_standalone_binary(&link));
+    }
+
+    #[test]
+    fn npm_install_reports_bun_and_npm_dependencies() {
+        let temporary = tempfile::tempdir().unwrap();
+        let dependencies =
+            runtime_dependencies_at(vec![temporary.path().to_path_buf()], "npm_shim", true);
+        let names: Vec<_> = dependencies.iter().map(|item| item.name).collect();
+        assert_eq!(names, ["Bun", "npm"]);
+        assert!(dependencies.iter().all(|item| item.status == "missing"));
+        let npm = temporary
+            .path()
+            .join(if cfg!(windows) { "npm.cmd" } else { "npm" });
+        std::fs::write(&npm, "").unwrap();
+        let dependencies =
+            runtime_dependencies_at(vec![temporary.path().to_path_buf()], "npm_shim", true);
+        assert_eq!(dependencies[1].status, "found");
     }
 
     #[test]

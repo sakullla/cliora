@@ -547,12 +547,12 @@ fn npm_registry_url(package: &str) -> Option<String> {
 
 /// Shared npm install policy: optional dependencies, lifecycle scripts and
 /// bounded network retries, with the top-level package always script-allowed.
-fn npm_install_command_for(package: &str, script_dependencies: &[&str]) -> Option<String> {
+pub(crate) fn npm_install_command_for(package: &str, script_dependencies: &[&str]) -> Option<String> {
     let scripts = std::iter::once(package).chain(script_dependencies.iter().copied()).collect::<Vec<_>>().join(",");
     (!package.is_empty()).then(|| format!("npm install -g {package}@latest --include=optional --ignore-scripts=false --foreground-scripts --allow-scripts={scripts} --no-audit --no-fund --fetch-retries=3 --fetch-timeout=60000 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=10000"))
 }
 
-fn npm_uninstall_command_for(package: &str) -> Option<String> {
+pub(crate) fn npm_uninstall_command_for(package: &str) -> Option<String> {
     (!package.is_empty()).then(|| format!("npm uninstall -g {package}"))
 }
 

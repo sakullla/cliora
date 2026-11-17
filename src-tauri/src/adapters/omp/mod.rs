@@ -815,6 +815,10 @@ mod tests {
             Some("omp update")
         );
         assert!(adapter.source_upgrade_command("unknown", Some("18.20.2")).is_none());
+        assert!(adapter
+            .source_upgrade_command("npm_shim", Some("18.20.3"))
+            .is_some_and(|command| command.starts_with("npm install -g @oh-my-pi/pi-coding-agent@latest")));
+        assert!(adapter.source_install_command(Some("npm_shim")).is_none());
         assert!(adapter.npm_packages().is_empty());
         assert!(adapter.install_guidance().0.contains("can1357/oh-my-pi"));
     }
