@@ -323,3 +323,17 @@ Twiglane 直接 28/28（`8f4528af2b47c727663bc696ea6613168f5809efdbfb1858591c813
 最终双主题 12 图回执 `7cc53799852217d81118fb3a311c839fd45a759c0a826f51b05031388e61e98c`：页面错误/水平溢出均 0，A 返回原会话、草稿保留未发送、B 仍 accepted。新的原生回执 `7ae649ef9f8fa925b7c124445880bc1fb109d8442911cdddd21c7ec554557f4b` 观察真实 owned cherry-pick created=1、HEAD `b4b907578aa5d5601b5c72aaef8797844f962bd5`，原来源 committed/clean/revision1 经 Cliora 真 Git 复核；下一 baseline 等于该 HEAD，第二次 accepted 后才清理。统一入口为 Cliora workflow `evidence/native-review-runtime-a3/index.json`，保留 A3 源码输入与不可变候选包；`postflight-a3.json` 确认原标识/物理路径恢复至两 `/Applications` app、owned 安装不存在、进程为空。以上命令退出 0、cleanup released，旧 A1/A2 仅作历史证据。
 
 原生范围仍是隔离 ad-hoc 包、fixture CLI 与外置 pass-through IPC 驱动，未代表真实 Codex 认证/推理、键鼠焦点/IME、Windows/Linux 或完整平台矩阵。首次全量线程 WouldBlock 来源尚未证明，隔离通过不替代正式全覆盖；最终累计验证与审查交 Delivery。
+
+## T3-A5：终端消费者的宿主手势与输出就绪
+
+正式第二轮的四项终端失败保留。滚轮用例只等待 `remaining=0`，也会匹配输出尚未解析的空 buffer，实际取到 `start=0`；现先等最后一行 `line-199` 和正滚动范围，再取基线，保留上下滚轮方向断言并检查不发送 CLI 输入。三个链接失败经只观察事件的诊断（`25522c1d188a25a800967a900b41e5c105fe61debfc4c28ae56a5536dbc570d5`）确认：macOS Chromium 在 Win32 navigator 模拟下仍于真实 Control 左击生成 trusted、button0/buttons1、ctrl=true/meta=false 的 contextmenu，遮住后续悬浮。测试仅在 macOS 宿主、Win32 模拟和终端内过滤此精确手势；真实 down/up、链接激活、普通/中键、完整 URL/path、来源 cwd、缺失错误和提示清理断言保留，产品逻辑未改。
+
+右键用例先完整执行原真实右键→全选→复制/中断的全部断言，再追加 Control+button2 菜单及同形状但 untrusted 的应用 MouseEvent 守卫；后者再以无 force 的全选点击证明可操作。新增守卫曾因 `locator.dispatchEvent('contextmenu')` 使用通用 Event 而两次失败（`d9f18322160c13413edf71fcefef704d08397a20c17451f7f1751bd3bc2c436b`、`2f0a45439e164ecbb3441edc714b56136cf0eff2b508f046fc0a02ab7c28bd20`）；第二次仅补 init 坐标仍无效。本机 Playwright 构造器表和实际附件证实最终显式 MouseEvent 才具有按钮及坐标属性，未改产品定位或强制点击。诊断索引与构造器摘录在 workflow `evidence/T3-A5-diagnostics/`；原诊断源码快照已不可用，索引如实注明，不重建旧字节。
+
+| A5 开发检查 | 实际结果 | 受控回执键 |
+| --- | --- | --- |
+| 原四项与关联链接 | 两次各 12 项通过；仅新增菜单守卫失败，公共手势过滤及这些用例此后未变 | `d9f18322160c13413edf71fcefef704d08397a20c17451f7f1751bd3bc2c436b`、`2f0a45439e164ecbb3441edc714b56136cf0eff2b508f046fc0a02ab7c28bd20` |
+| 显式 MouseEvent 菜单守卫 | 最终顺序单例 1/1；原真实右键/全选/复制/中断先完整完成，再验证 Control 右键及应用事件菜单可操作 | `00b01680a66b607a6b646cc2530857440a75fbcced05acc4ae57d08fbbb63c5c` |
+| remote-hosts 当前消费者 | 31/31；完整 `{items,total,tags,nextOffset:null}` 空页及原 hold/failure 先序保持，无需再改 mock | `82dc0a5d9d2fe9b7a6dba002fea27ef4b70bb23b38cdf3476c740a451f8fbb7d` |
+
+本轮结论为 12+1+31 项开发证据，不记作单次 13/13。最终单例与 remote-hosts 命令退出 0、清理 released；两个中间组退出 1、清理 released。无产品改动，复用既有 T3 生产/原生与图集的适用判断，不重复截图或原生构建。证据仍为本机 Chromium 测试，不代表原生鼠标/IME、Windows/Linux 实机或正式全量终端组验收，最终累计验证交 Delivery。

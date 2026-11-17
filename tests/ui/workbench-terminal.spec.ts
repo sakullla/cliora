@@ -4,7 +4,19 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 // These existing Control-key cases model the Windows/Linux shortcut contract explicitly,
 // independent of the machine running Chromium. Production macOS behavior is unchanged.
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() => Object.defineProperty(navigator, 'platform', { configurable: true, value: 'Win32' }));
+  await page.addInitScript((macHost) => {
+    Object.defineProperty(navigator, 'platform', { configurable: true, value: 'Win32' });
+    if (macHost) document.addEventListener('contextmenu', (event) => {
+      // macOS Chromium still turns real Control+left into a native contextmenu
+      // despite the Win32 navigator fixture. Suppress only that observed host
+      // gesture; retain the real down/up events and all right-button menus.
+      if (navigator.platform === 'Win32' && event.isTrusted && event.button === 0 && event.buttons === 1
+        && event.ctrlKey && !event.metaKey && event.target instanceof Element && event.target.closest('.xterm')) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }, true);
+  }, process.platform === 'darwin');
   await page.addInitScript(installPromptFixtureBridge);
 });
 
@@ -1124,6 +1136,25 @@ test('Ctrl+C copies a selection instead of interrupting, and interrupts without 
   expect(await writes(page)).toEqual([]);
   await page.keyboard.press('Control+c');
   await expect.poll(() => writes(page)).toEqual(['\u0003']);
+
+  // The Win32 fixture's host-gesture filter must also keep Control+right menus.
+  await page.keyboard.down('Control');
+  await canvas.click({ button: 'right' });
+  await page.keyboard.up('Control');
+  await expect(menu).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  // An application-dispatched event with the same modifier/button shape is
+  // not the trusted host gesture and must still reach the product menu.
+  const dispatched = await canvas.evaluate((node) => {
+    const box = node.getBoundingClientRect();
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 0, buttons: 1, ctrlKey: true, clientX: box.x + box.width / 2, clientY: box.y + box.height / 2 });
+    node.dispatchEvent(event);
+    return { constructor: event.constructor.name, trusted: event.isTrusted, button: event.button, buttons: event.buttons, ctrl: event.ctrlKey, clientX: event.clientX, clientY: event.clientY, pageX: event.pageX, pageY: event.pageY };
+  });
+  await expect(menu).toBeVisible();
+  await test.info().attach('synthetic-contextmenu', { body: JSON.stringify({ event: dispatched, menu: await menu.boundingBox() }), contentType: 'application/json' });
+  await menu.getByRole('menuitem', { name: /全选/ }).click();
 });
 
 test('the mouse wheel on the alternate screen never turns into arrow keys', async ({ page }) => {
@@ -1205,16 +1236,22 @@ test('the mouse wheel scrolls the native viewport when the CLI does not track th
     (window as unknown as { __output: (text: string) => void }).__output(lines + '\r\n');
   });
   const viewport = page.locator('.xterm-scrollable-element');
+  // remaining === 0 also matches the initial empty buffer. Wait for the final
+  // output row and a positive range before recording the wheel's baseline.
+  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('line-199');
+  await expect.poll(async () => (await readScroll(viewport)).max).toBeGreaterThan(0);
   await expect.poll(async () => (await readScroll(viewport)).remaining).toBe(0);
   const scrollTop = async () => (await readScroll(viewport)).top;
   const box = await page.getByRole('region', { name: '当前会话' }).locator('.xterm-screen').boundingBox();
   await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  await resetWrites(page);
   const start = await scrollTop();
   await page.mouse.wheel(0, -600);
   await expect.poll(scrollTop).toBeLessThan(start);
   const up = await scrollTop();
   await page.mouse.wheel(0, 600);
   await expect.poll(scrollTop).toBeGreaterThan(up);
+  expect(await writes(page)).toEqual([]);
 });
 
 test('tmux-style SGR wheel reports stay with the hovered alternate-screen session', async ({ page }) => {
