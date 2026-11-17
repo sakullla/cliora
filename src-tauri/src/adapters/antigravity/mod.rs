@@ -54,6 +54,18 @@
 //!   per-conversation protobuf usage rows of both data roots are read-only
 //!   indexed and deduplicated by native session id; any schema drift skips
 //!   the row and degrades the session to partial instead of guessing.
+//! * **Settings** (1.5.9 evidence run, see [`configuration`]): the signed-in
+//!   machine's `antigravity-cli/settings.json` held exactly `model` (the
+//!   display-name string the native `/model` panel persists) and
+//!   `trustedWorkspaces` (the folder-trust prompt's string array). The typed
+//!   port maps only those two keys, and only on the resolved 1.5 native form;
+//!   1.3.x and unverified installations keep the raw JSON editor with no
+//!   typed write. Unknown fields are preserved through the shared apply path.
+//!   Session-only launch flags (`--model`, `--mode accept-edits|auto|plan`,
+//!   `--effort low|medium|high|xhigh|max`) never persist — the native
+//!   `/config` panel holds no model/effort entries — so they are published as
+//!   launch-only reference data and `--model` rides the per-project model
+//!   preference at launch.
 //! * **Credentials**: the OS-keyring browser login is never adopted or logged
 //!   out. Only the documented headless env channel `GEMINI_API_KEY` may be
 //!   managed: the value stays in the system credential store and is injected
@@ -100,6 +112,7 @@
 //!   a local statistic) — that port stays absent by design.
 
 pub(crate) mod agents;
+pub(crate) mod configuration;
 pub(crate) mod history;
 pub(crate) mod hooks;
 pub(crate) mod memory;
@@ -514,23 +527,63 @@ impl CliAdapter for Antigravity {
     }
     fn write_connection_secret(
         &self,
-        _profile: &crate::native::profile::RegisteredProfile,
+        profile: &crate::native::profile::RegisteredProfile,
         _scope: Scope,
         _credentials: &dyn crate::credentials::CredentialStore,
         _secrets: &mut crate::native::apply::NativeSecrets,
     ) -> Result<(), String> {
+        if profile.connection.is_none()
+            && profile.native_credentials.is_empty()
+            && matches!(
+                profile.authentication,
+                crate::native::profile::ProfileAuthentication::Native
+            )
+        {
+            // A settings-only application still traverses the shared secret
+            // plan; there is no credential mutation for an agy settings draft.
+            return Ok(());
+        }
         Err("Antigravity 不向 settings.json 写入密钥；headless GEMINI_API_KEY 只在启动时注入".into())
     }
     fn has_native_secret(&self, _role: &str, _root: &Value) -> bool {
         false
     }
+    fn configuration(&self) -> Option<&dyn super::configuration::ConfigurationAdapter> {
+        // Typed settings port (see [`configuration`]): only the two persisted
+        // keys verified on the 1.5.9 evidence machine are mapped; everything
+        // else stays raw JSON with unknown-field preservation.
+        Some(self)
+    }
+    /// 1.5.9 verified settings keys: `model` is the display-name string the
+    /// native `/model` panel persists; no other inspection field is verified.
     fn inspect_values(
         &self,
-        _settings: &Value,
+        settings: &Value,
         _local_settings: &Value,
         _models: &Value,
     ) -> InspectionFields {
-        InspectionFields::default()
+        InspectionFields {
+            model: crate::native::intake::string_at(settings, &["model"]).map(str::to_owned),
+            ..InspectionFields::default()
+        }
+    }
+    /// The per-project model preference is the verified channel for the
+    /// session-only `--model <id-or-name>` flag (`agy --help`, 1.5.9).
+    fn supports_project_model_override(&self) -> bool {
+        true
+    }
+    fn project_model_args(&self, model: Option<&str>) -> Result<Vec<String>, String> {
+        let Some(model) = model else {
+            return Ok(Vec::new());
+        };
+        let trimmed = model.trim();
+        if trimmed.is_empty() {
+            return Err("请输入 Antigravity 启动模型（--model 的模型 ID 或名称）".into());
+        }
+        if trimmed.chars().count() > 200 || trimmed.chars().any(char::is_control) {
+            return Err("Antigravity 启动模型名称无效；未执行启动".into());
+        }
+        Ok(vec!["--model".into(), trimmed.to_owned()])
     }
     fn launch_args(
         &self,
@@ -717,10 +770,12 @@ impl CliAdapter for Antigravity {
         AdapterDescriptor {
             remote: self.remote_capabilities(),
             id: self.id(),
-            configuration: None,
+            configuration: self
+                .configuration()
+                .map(|port| port.describe(Scope::Global)),
             name: self.name(),
             interface_formats: self.interface_formats(),
-            project_model_override: false,
+            project_model_override: self.supports_project_model_override(),
             yolo_available: true,
             launch_form: self.launch_form(),
             native_config: Facet {
@@ -875,6 +930,11 @@ mod tests {
 
     const NATIVE_FIXTURE: &str =
         include_str!("../../../../tests/fixtures/native/antigravity-cli-1.3.json");
+
+    // Sanitized 1.5.9 settings sample (verified keys: model display name +
+    // trustedWorkspaces) pinned by the remote evidence run.
+    const SETTINGS_159_FIXTURE: &str =
+        include_str!("../../../../tests/fixtures/native/antigravity-cli-1.5.9.json");
 
     const MCP_FIXTURE: &str = r#"{
   "mcpServers": {
@@ -1036,6 +1096,44 @@ mod tests {
             .inspect_values(&parsed, &Value::Null, &Value::Null)
             .provider
             .is_none());
+        // 1.5.9 typed settings: only the verified display-name string maps to
+        // the inspection model; the 1.3.x sample keeps a null model.
+        let parsed_159 =
+            crate::native::format::parse(FileKind::Json, SETTINGS_159_FIXTURE).unwrap();
+        assert_eq!(
+            Antigravity
+                .inspect_values(&parsed_159, &Value::Null, &Value::Null)
+                .model
+                .as_deref(),
+            Some("Gemini 4 Carbon (Medium)")
+        );
+        assert!(Antigravity
+            .inspect_values(&parsed, &Value::Null, &Value::Null)
+            .model
+            .is_none());
+        // The typed settings port is registered and describes exactly the two
+        // verified keys; the project model preference carries --model.
+        let port = Antigravity
+            .configuration()
+            .expect("typed settings port");
+        assert_eq!(
+            port.describe(Scope::Global)
+                .fields
+                .iter()
+                .map(|field| field.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["model", "trustedWorkspaces"]
+        );
+        assert!(Antigravity.supports_project_model_override());
+        assert_eq!(
+            Antigravity
+                .project_model_args(Some("Gemini 4 Carbon (Medium)"))
+                .unwrap(),
+            vec!["--model".to_string(), "Gemini 4 Carbon (Medium)".to_string()]
+        );
+        assert!(Antigravity.project_model_args(None).unwrap().is_empty());
+        assert!(Antigravity.project_model_args(Some("  ")).is_err());
+        assert!(Antigravity.project_model_args(Some("two\nlines")).is_err());
     }
 
     #[test]
@@ -1576,9 +1674,11 @@ mod tests {
         // Agents: standalone agent.md directories verified by the 1.5.9
         // evidence run. Plugins: the 1.5.9 evidence run pinned the
         // ~/.gemini/config/plugins storage and the config.json ledger (see
-        // plugins.rs). Accounts (keyring login never adopted) and official
-        // quota (/usage is a TUI panel) stay absent.
-        assert!(Antigravity.configuration().is_none());
+        // plugins.rs). Typed settings: the two persisted keys of the signed-in
+        // evidence machine (see [`configuration`]). Accounts (keyring login
+        // never adopted) and official quota (/usage is a TUI panel) stay
+        // absent.
+        assert!(Antigravity.configuration().is_some());
         assert!(Antigravity.agents().is_some());
         assert!(Antigravity.plugins().is_some());
         assert!(Antigravity.accounts().is_none());

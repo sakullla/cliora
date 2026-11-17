@@ -650,7 +650,100 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
     // login is never adopted.
     let antigravity = registry.get("antigravity").unwrap();
     assert!(antigravity.supports_skills());
-    assert!(antigravity.configuration().is_none());
+    // Typed settings (1.5.9 evidence): exactly the two persisted keys of the
+    // signed-in machine's settings.json are mapped — no invented model lists,
+    // execution-mode or reasoning-effort settings fields (those are verified
+    // session-only launch flags that never persist).
+    let agy_settings = antigravity.configuration().expect("typed settings port");
+    assert_eq!(
+        agy_settings
+            .describe(crate::native::adapter::Scope::Global)
+            .fields
+            .iter()
+            .map(|field| field.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["model", "trustedWorkspaces"]
+    );
+    let settings_159: serde_json::Value = serde_json::from_str(include_str!(
+        "../fixtures/native/antigravity-cli-1.5.9.json"
+    ))
+    .unwrap();
+    let mut documents = std::collections::BTreeMap::new();
+    documents.insert(
+        "settings".to_string(),
+        settings_159.clone(),
+    );
+    // The typed keys are gated on the resolved 1.5 native form; the shared
+    // draft/apply paths resolve it from the selected installation.
+    let verified = crate::adapters::configuration::EditingState {
+        native_form: Some("1.5".to_string()),
+        ..Default::default()
+    };
+    let view = agy_settings
+        .read(&documents, &verified)
+        .unwrap();
+    assert_eq!(view["typedSettings"], serde_json::json!(true));
+    assert_eq!(view["values"]["model"], settings_159["model"]);
+    assert_eq!(view["values"]["trustedWorkspaces"], settings_159["trustedWorkspaces"]);
+    // The verified session-only launch flags ride along as reference data
+    // with their evidence-fixed choice sets, never as persisted fields.
+    assert_eq!(
+        view["launchParameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["flag"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["--model", "--mode", "--effort", "--agent"]
+    );
+    assert_eq!(
+        view["launchParameters"][2]["values"],
+        serde_json::json!(["low", "medium", "high", "xhigh", "max"])
+    );
+    // Invalid typed values are refused before any document change; unknown
+    // fields and wrong shapes surface typed issues.
+    let bad_action: crate::adapters::configuration::ConfigurationAction =
+        serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "target": "settings",
+            "operation": "set",
+            "field": "trustedWorkspaces",
+            "value": "not-an-array",
+        }))
+        .unwrap();
+    assert!(agy_settings
+        .edit(&mut documents, &mut verified.clone(), &bad_action)
+        .is_err());
+    documents.insert(
+        "settings".to_string(),
+        serde_json::json!({"model": "", "trustedWorkspaces": ["/ok"], "futureNative": true}),
+    );
+    let issues = agy_settings.validate(&documents, &verified, crate::native::adapter::Scope::Global);
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].field.as_deref(), Some("model"));
+    // A 1.3/unresolved form keeps raw JSON only: no typed write is accepted
+    // and the 1.5 value shapes are not judged on that line.
+    let legacy = crate::adapters::configuration::EditingState {
+        native_form: Some("1.3".to_string()),
+        ..Default::default()
+    };
+    assert!(agy_settings
+        .edit(&mut documents, &mut legacy.clone(), &bad_action)
+        .is_err());
+    assert!(agy_settings
+        .validate(&documents, &legacy, crate::native::adapter::Scope::Global)
+        .is_empty());
+    // The per-project model preference is the verified channel for the
+    // session-only --model flag; invalid names refuse the launch.
+    assert!(antigravity.supports_project_model_override());
+    assert_eq!(
+        antigravity
+            .project_model_args(Some("Gemini 4 Carbon (Medium)"))
+            .unwrap(),
+        vec!["--model".to_string(), "Gemini 4 Carbon (Medium)".to_string()]
+    );
+    assert!(antigravity.project_model_args(Some(" ")).is_err());
+    assert!(antigravity.project_model_args(None).unwrap().is_empty());
     let agy_agents = antigravity.agents().expect("agents port");
     assert!(agy_agents.capability().supported);
     assert_eq!(agy_agents.capability().format, "markdown");
