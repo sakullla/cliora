@@ -216,7 +216,9 @@ mod tests {
         for (phase, reason) in ["queue", "dispatch", "process_wait", "retry_wait"].into_iter()
             .flat_map(|phase| ["cancelled", "timeout"].into_iter().map(move |reason| (phase, reason))) {
             let target = target();
-            let (a, a_id) = subscriber(&target, if reason == "timeout" { 300 } else { 3000 });
+            // A must still be alive when B joins its flight; 300ms was exceeded under a
+            // loaded full test run, ending the flight before B attached.
+            let (a, a_id) = subscriber(&target, if reason == "timeout" { 1200 } else { 3000 });
             let (b, b_id) = subscriber(&target, 3000);
             let a_context = a.context.read_child(Duration::from_secs(3)); let b_context = b.context.clone();
             let first_target = target.clone(); let inner_target = target.clone();

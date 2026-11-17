@@ -1265,9 +1265,11 @@ fn opencode_version_resolved_writes_stay_in_the_entrys_own_container() {
 
 #[test]
 fn omp_agent_disable_uses_native_disabled_agents_without_moving_the_definition() {
-    // The OMP plugin port exists in the registry but this test host has no local
-    // OMP install; Agent scans and toggles must still work (empty plugin
-    // inventory), which is the regression guard for `plugin_owned`.
+    // The OMP plugin port exists in the registry; whether or not the host has an
+    // OMP install, `plugin_owned` must not fail an Agent scan or toggle. The
+    // operation itself runs through `operate_inner` with no plugins and no
+    // version, so a real OMP (and its plugins) on the host PATH cannot change
+    // the baseline.
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let project = temp.path().join("project");
@@ -1277,6 +1279,7 @@ fn omp_agent_disable_uses_native_disabled_agents_without_moving_the_definition()
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();
     let credentials = MemoryStore::default();
     let target = target("omp", &project);
+    assert!(plugin_owned(&db, &home, &target).is_ok(), "无 OMP 安装或插件时不得阻塞 Agent 操作");
     let before = snapshot_inner(&home, &target, &[], None).unwrap();
     let entry = before.entries.iter().find(|entry| entry.name == "reviewer").unwrap();
     assert!(entry.enabled);
@@ -1284,7 +1287,7 @@ fn omp_agent_disable_uses_native_disabled_agents_without_moving_the_definition()
 
     let mut disable = request(&home, &target, "disable", Some(entry), "", None);
     disable.name = "reviewer".into();
-    let disabled = operate(&db, &credentials, &home, &disable).unwrap();
+    let disabled = operate_inner(&db, &credentials, &home, &disable, &[], None).unwrap();
     let entry = disabled.snapshot.entries.iter().find(|entry| entry.name == "reviewer").unwrap();
     assert!(!entry.enabled);
     assert_eq!(fs::read_to_string(&definition).unwrap(), body, "定义文件不被移动或改写");
@@ -1294,7 +1297,7 @@ fn omp_agent_disable_uses_native_disabled_agents_without_moving_the_definition()
 
     let mut enable = request(&home, &target, "enable", Some(entry), "", None);
     enable.name = "reviewer".into();
-    let enabled = operate(&db, &credentials, &home, &enable).unwrap();
+    let enabled = operate_inner(&db, &credentials, &home, &enable, &[], None).unwrap();
     assert!(enabled.snapshot.entries.iter().find(|entry| entry.name == "reviewer").unwrap().enabled);
     assert_eq!(fs::read_to_string(&definition).unwrap(), body);
     let config = fs::read_to_string(project.join(".omp/config.yml")).unwrap();
@@ -1325,7 +1328,7 @@ fn omp_project_agent_enable_overrides_user_disabled_and_restores_the_project_lay
 
     let mut enable = request(&home, &target, "enable", Some(entry), "", None);
     enable.name = "reviewer".into();
-    let enabled = operate(&db, &credentials, &home, &enable).unwrap();
+    let enabled = operate_inner(&db, &credentials, &home, &enable, &[], None).unwrap();
     // The project layer replaces OMP's array; it must keep the other
     // user-disabled name instead of dropping the lower-layer list.
     let project_config = project.join(".omp/config.yml");
@@ -1344,7 +1347,7 @@ fn omp_project_agent_enable_overrides_user_disabled_and_restores_the_project_lay
     let mut restore = request(&home, &target, "restore", None, "", None);
     restore.id = Some(enabled.restore_path.clone());
     restore.transaction_id = Some(enabled.transaction_id.clone());
-    let restored = operate(&db, &credentials, &home, &restore).unwrap();
+    let restored = operate_inner(&db, &credentials, &home, &restore, &[], None).unwrap();
     assert!(!project_config.exists(), "恢复创建前的项目层应删除该文件");
     assert_eq!(fs::read_to_string(&user_config).unwrap(), user_original);
     assert!(!restored

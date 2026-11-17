@@ -396,7 +396,15 @@ pub fn maintain(registry: &Registry, tool: &str, action: &str, source: &str, ver
     if action.starts_with("uninstall") { return Ok(MaintenanceResult { output, version: None }); }
     // Verification follows the real source contract instead of guessing from a
     // command prefix: a Bun command must verify a Bun source on every platform.
-    let installation = adapter::verify_installation(registry, tool, home, expected_source.as_deref(), &|| cancelled.load(Ordering::Relaxed))?;
+    let installation = adapter::verify_installation(registry, tool, home, expected_source.as_deref(), &|| cancelled.load(Ordering::Relaxed))
+        .inspect_err(|error| {
+            // The install log is where the user looks first; a clean package-manager
+            // log must not hide that the installed command does not run.
+            let mut log = output.clone();
+            if !log.is_empty() && !log.ends_with('\n') { log.push('\n'); }
+            log.push_str(&format!("[安装验证] {error}\n"));
+            progress(MaintenanceProgress { tool_id: tool.to_owned(), output: log });
+        })?;
     Ok(MaintenanceResult { output, version: installation.version.clone() })
 }
 

@@ -597,7 +597,7 @@ fn run_version_controlled(path: &Path, adapter: &dyn CliAdapter, cancelled: &dyn
         // A warning on stderr must not invalidate a bare semver on stdout.
         output.iter().find_map(|bytes| version_from_output(adapter, path, &String::from_utf8_lossy(bytes)))
     }).flatten();
-    let status = if version.is_some() {
+    let status_text = if version.is_some() {
         "available"
     } else {
         "probe_failed"
@@ -606,13 +606,69 @@ fn run_version_controlled(path: &Path, adapter: &dyn CliAdapter, cancelled: &dyn
         path: path.display().to_string(),
         version,
         source,
-        status,
-        detail: if status == "available" {
+        status: status_text,
+        detail: if status_text == "available" {
             None
         } else {
-            Some("版本命令失败或工具身份无法确认".into())
+            Some(probe_failure_detail(status.success(), status.code(), &output[1], &output[0]))
         },
     }
+}
+
+const PROBE_REASON_CHARS: usize = 300;
+
+/// A failed `--version` must say why. The output is otherwise discarded, and a
+/// shim whose platform binary is missing (an npm optional dependency that was
+/// never published, for example) looks exactly like a locked or corrupt file.
+fn probe_failure_detail(success: bool, code: Option<i32>, stderr: &[u8], stdout: &[u8]) -> String {
+    let head = if success {
+        "版本命令失败或工具身份无法确认".to_owned()
+    } else {
+        match code {
+            Some(code) => format!("版本命令失败（退出码 {code}）"),
+            None => "版本命令失败".to_owned(),
+        }
+    };
+    match probe_failure_reason(stderr, stdout) {
+        Some(reason) => format!("{head}：{reason}"),
+        None => head,
+    }
+}
+
+fn probe_failure_reason(stderr: &[u8], stdout: &[u8]) -> Option<String> {
+    let lines: Vec<String> = [stderr, stdout]
+        .iter()
+        .flat_map(|bytes| strip_ansi(&String::from_utf8_lossy(bytes)).lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect::<Vec<_>>())
+        .collect();
+    let is_error = |line: &str| {
+        let lower = line.to_ascii_lowercase();
+        !lower.starts_with("at ")
+            && (lower.contains("error") || lower.contains("exception") || line.contains("错误") || lower.starts_with("fatal"))
+    };
+    // `Error: message`, `TypeError: ...`, `error: ...`, `fatal: ...` state the cause;
+    // a source excerpt such as `throw new Error(` only mentions it.
+    let is_labelled = |line: &str| line.split_once([':', '：']).is_some_and(|(label, rest)| {
+        let label = label.trim().to_ascii_lowercase();
+        !rest.trim().is_empty() && !label.contains(' ')
+            && (label.ends_with("error") || label.ends_with("exception") || label == "fatal" || label.ends_with("错误"))
+    });
+    let line = lines.iter().find(|line| is_labelled(line)).or_else(|| lines.iter().find(|line| is_error(line))).or_else(|| lines.iter().rev().find(|line| !line.to_ascii_lowercase().starts_with("at ")))?;
+    let mut reason: String = line.chars().take(PROBE_REASON_CHARS).collect();
+    if line.chars().count() > PROBE_REASON_CHARS { reason.push('…'); }
+    Some(reason)
+}
+
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' { out.push(c); continue; }
+        if chars.peek() == Some(&'[') {
+            chars.next();
+            for next in chars.by_ref() { if ('@'..='~').contains(&next) { break; } }
+        }
+    }
+    out
 }
 
 /// Verify the channel that was actually installed, without probing unrelated
@@ -622,6 +678,7 @@ fn run_version_controlled(path: &Path, adapter: &dyn CliAdapter, cancelled: &dyn
 /// Cancellation remains effective.
 pub(crate) fn verify_installation(registry: &Registry, id: &str, home: &Path, expected_source: Option<&str>, cancelled: &dyn Fn() -> bool) -> Result<Installation, String> {
     let adapter = registry.get(id).ok_or("未注册的 CLI 适配器")?;
+    let mut first_failure: Option<Installation> = None;
     for group in group_probe_paths(candidates(adapter, home)) {
         for path in group {
             if cancelled() { return Err("安装验证已取消，请重新检查后重试".into()); }
@@ -633,9 +690,13 @@ pub(crate) fn verify_installation(registry: &Registry, id: &str, home: &Path, ex
             if !matches { continue; }
             let installation = run_version_controlled(&path, adapter, cancelled);
             if installation.status == "available" { return Ok(installation); }
+            first_failure.get_or_insert(installation);
         }
     }
-    Err("安装命令已结束，但尚未验证到可运行的命令。请检查日志、安装来源目录及文件占用后重试".into())
+    Err(match first_failure.and_then(|failed| failed.detail.map(|detail| (failed.path, detail))) {
+        Some((path, detail)) => format!("安装命令已结束，但安装后的命令无法运行。{path}：{detail}。请按上述原因处理，或检查日志、安装来源目录及文件占用后重试"),
+        None => "安装命令已结束，但未在安装来源目录找到可运行的命令。请检查日志、安装来源目录及文件占用后重试".into(),
+    })
 }
 
 pub fn probe_path(tool: CliId, path: &Path) -> Installation {
@@ -1660,6 +1721,41 @@ mod tests {
         // Without a declaration the historical Node/npm panel still applies.
         let legacy = dependencies(&adapters::OPENCODE, "npm_shim", true, Path::new("/home/example"), false);
         assert!(legacy.iter().any(|item| item.name == "npm"));
+    }
+
+    /// A shim whose platform binary is missing (codex 0.169.1 shipped without
+    /// `win32-x64`) exits non-zero with a Node stack trace. The reason must reach
+    /// the user instead of a generic "could not verify".
+    #[test]
+    fn failed_version_probe_reports_the_cli_error_line() {
+        let stderr = "file:///C:/npm/node_modules/@openai/codex/bin/codex.js:108\n  throw new Error(\n        ^\n\n\u{1b}[31mError: Missing optional dependency @openai/codex-win32-x64. Reinstall Codex: npm install -g @openai/codex@latest\u{1b}[0m\n    at findCodexExecutable (file:///C:/npm/codex.js:108:9)\n\nNode.js v26.4.0\n";
+        let detail = probe_failure_detail(false, Some(1), stderr.as_bytes(), b"");
+        assert_eq!(detail, "版本命令失败（退出码 1）：Error: Missing optional dependency @openai/codex-win32-x64. Reinstall Codex: npm install -g @openai/codex@latest");
+        // Without an error-looking line the last meaningful line is kept, bounded.
+        let long = "x".repeat(PROBE_REASON_CHARS + 50);
+        let detail = probe_failure_detail(false, Some(2), b"", long.as_bytes());
+        assert!(detail.ends_with('…') && detail.chars().count() < PROBE_REASON_CHARS + 20, "{detail}");
+        assert_eq!(probe_failure_detail(false, None, b"", b""), "版本命令失败");
+        assert_eq!(probe_failure_detail(true, Some(0), b"", b"\n"), "版本命令失败或工具身份无法确认");
+    }
+
+    #[test]
+    fn verification_failure_names_the_command_and_its_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let bin = temp.path().join(".bun/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        #[cfg(windows)]
+        std::fs::write(bin.join("omp.ps1"), "[Console]::Error.WriteLine('Error: Missing optional dependency fixture-platform'); exit 1\n").unwrap();
+        #[cfg(unix)]
+        {
+            let path = bin.join("omp");
+            std::fs::write(&path, "#!/bin/sh\necho 'Error: Missing optional dependency fixture-platform' >&2\nexit 1\n").unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let error = verify_installation(&Registry::builtins(), "omp", temp.path(), Some("bun"), &|| false).unwrap_err();
+        assert!(error.contains("Missing optional dependency fixture-platform"), "{error}");
+        assert!(error.contains("退出码 1"), "{error}");
     }
 
     /// Post-maintenance verification follows the adapter-declared source. The
