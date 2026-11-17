@@ -352,3 +352,16 @@ Twiglane 直接 28/28（`8f4528af2b47c727663bc696ea6613168f5809efdbfb1858591c813
 | wheel、阅读与临时查看直接边界 | 7/7；tracking、阅读位置、临时查看及普通 wheel、两种 alternate-screen、SGR | `c8ae51f067773724be0dc71db67872f3c926fd59ecde487f7f999b0e672f8b38` |
 
 修后两命令退出0、清理 released；观察命令退出1、清理 released。本轮为9个冷布局样本加7项直接边界，未宣称完整131项通过。无产品/Rust改动，既有生产、原生及图集证据按输入适用性复用，未重复截图或原生构建；真实平台与正式累计验证边界继续保留，交 Delivery 完成。
+
+## T3-A7：状态绘制与保存通知的测试消费者
+
+正式第四轮普通 UI 为838/840，两项失败在未改源的隔离运行仍失败；终端组因前段 `&&` 失败未执行，不能记为终端断言失败。连接范围的 state/tone 已为 project_unbound/neutral，但首次实测圆点仍是旧绿。独立临时副本的四个观察样本（`67cd7279b8c762eab82b5e0b7555daa1ec5bd935c02e273b5cec889f6c4c4275`）保留原首次断言，其中一项失败时两个 transition 仍 running/currentTime0，第一帧即变 neutral，随后20帧不再绿；原源码、完整观测与来源保存在 workflow `evidence/T3-A7-diagnostics/`。测试现仅以 expect.poll 等实际绘制颜色改变，保留原颜色不等比较及全部状态/文案断言，不改 CSS。
+
+资料库保存成功通知与新查询 loading 的两个 role=status 合法并存，原宽泛 locator 触发严格匹配错误，成功消息实际已存在。仅按所验证的保存消息筛选 status，保留保存失败草稿/提示、dialog 关闭、零 alert、再次修改与复制失败/成功全部断言；不取 first、不吞错误。生产、mock 与 Workbench 测试字节均未改动。
+
+| A7 开发检查 | 实际结果 | 受控回执键 |
+| --- | --- | --- |
+| connections-ux 与 status-copy 完整直接组 | 31/31；两项原失败及相邻业务断言全部通过 | `e8ed6245e76bc3b76405fa772fc5ca04969f09a70bdeac4dbcfcff27cdc69112` |
+| 当前输入的既有终端修复独立复证 | 5/5；普通 wheel、三个换行链接、真实右键/Control右键/应用菜单及复制/中断保持有效 | `bb921fe854e26f1e4c2540e285d437e4151ab28d7412c3b85cfd8df4f8eaae37` |
+
+以上修后命令退出0、清理 released。结论仅为31+5项开发验证，未宣称完整131项或最终八类验证通过；无产品改动，不重复截图或原生构建，既有证据按实际输入适用性复用，正式累计验证交 Delivery。

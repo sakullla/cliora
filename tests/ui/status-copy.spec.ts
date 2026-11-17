@@ -297,7 +297,7 @@ test('library save closes the dialog and copy results stay in the dialog', async
   await page.evaluate(() => { (window as unknown as { __statusCopy: { librarySaveFails: boolean } }).__statusCopy.librarySaveFails = false; });
   await page.keyboard.press('ControlOrMeta+s');
   await expect(dialog).toHaveCount(0);
-  await expect(library.getByRole('status')).toContainText('已保存在本机资料库');
+  await expect(library.getByRole('status').filter({ hasText: '已保存在本机资料库' })).toContainText('已保存在本机资料库');
   await expect(library.getByRole('alert')).toHaveCount(0);
   await library.getByRole('button', { name: '修改' }).click();
   const again = page.getByRole('dialog');

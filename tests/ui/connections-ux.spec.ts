@@ -138,7 +138,7 @@ test('a project scope without its own binding says so and never claims a configu
   await expect(live).not.toContainText('当前生效');
   await expect(live).not.toContainText('Plan A');
   // The tone is a real paint, not only an attribute.
-  expect(await live.evaluate((node) => getComputedStyle(node.querySelector('span')!).backgroundColor)).not.toBe(appliedDot);
+  await expect.poll(() => live.evaluate((node) => getComputedStyle(node.querySelector('span')!).backgroundColor)).not.toBe(appliedDot);
   await page.getByRole('button', { name: '配置范围' }).click();
   await page.getByRole('option', { name: '全局配置' }).click();
   await expect(live).toHaveAttribute('data-live-state', 'applied');
