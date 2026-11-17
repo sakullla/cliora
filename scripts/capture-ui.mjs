@@ -63,7 +63,10 @@ async function mock(initialTheme){
  const hostFixture={hold:false,failure:false};
  if(captureHosts)window.__hostCapture=hostFixture;
  const captureRules=typeof initialTheme==='object'&&initialTheme.rules;
- const ids=Object.keys(names); const captureHome=typeof initialTheme==='object'&&initialTheme.home; let theme=captureRules||captureHosts||captureHome?initialTheme.theme:initialTheme; const tool_icons={};
+ const captureHome=typeof initialTheme==='object'&&initialTheme.home;
+ // The launch-options capture needs one 1.5 installation of the version-shaped adapter.
+ if(captureHome){names.antigravity='Antigravity';versions.antigravity='1.5.9';}
+ const ids=Object.keys(names); let theme=captureRules||captureHosts||captureHome?initialTheme.theme:initialTheme; const tool_icons={};
  const bindingFixture={hold:!!captureRules,fail:false,saves:0,syncs:0}; const bindingReleases=[];
  if(captureRules){localStorage.setItem('cliora:remote-target','capture-rule-host');const clockNow=Date.now;let offset=0;Date.now=()=>clockNow()+offset;window.__expireBindings=()=>{offset+=31000;};}
  window.__captureBindings=bindingFixture;window.__releaseBindings=()=>{bindingFixture.hold=false;bindingReleases.splice(0).forEach(release=>release());};
@@ -73,7 +76,7 @@ async function mock(initialTheme){
  // sessionStorage flags survive the reloads used to change scope, so failures can be switched on and off.
  const homeHost={id:'capture-home-host',name:'产品开发主机',host:'192.0.2.10',port:22,user:'fixture',authMethod:'key',enabled:true,createdAt:1,updatedAt:1};
  const homeRemote=[...['website','admin-dashboard','cliora','documentation','backend'].map((name,index)=>({id:'p'+index,targetId:homeHost.id,name,path:'/srv/teams/product/projects/'+name,preferredTool:index===2||index===4?'codex':'claude_code',updatedAt:1})),{id:'p5',targetId:homeHost.id,name:'栖点桌面工具远程开发环境主仓库与发布脚本',path:'/srv/teams/product/projects/cliora-desktop-release-pipeline',preferredTool:'claude_code',updatedAt:1},{id:'p6',targetId:homeHost.id,name:'api',path:'/srv/team-a/services/api',preferredTool:'codex',updatedAt:1},{id:'p7',targetId:homeHost.id,name:'api',path:'/srv/team-b/services/api',preferredTool:'claude_code',updatedAt:1}];
- const homeProjects=[...projects,{id:'long',name:'栖点 · 桌面工具与远程开发环境主仓库（长名称）',path:'C:\\Projects\\clients\\northwind\\cliora-desktop-long-directory-name',preferredTool:'codex',available:true,lastOpened:1790658800,modelOverrides:{},selectedProfiles:{codex:'codex-work'},appliedProfiles:{codex:'codex-work'}},{id:'api-a',name:'api',path:'D:\\work\\team-a\\services\\api',preferredTool:'claude_code',available:true,lastOpened:1790558800,modelOverrides:{},selectedProfiles:{},appliedProfiles:{}},{id:'api-b',name:'api',path:'D:\\work\\team-b\\services\\api',preferredTool:'grok',available:true,lastOpened:1790458800,modelOverrides:{},selectedProfiles:{},appliedProfiles:{}}];
+ const homeProjects=[...projects,{id:'long',name:'栖点 · 桌面工具与远程开发环境主仓库（长名称）',path:'C:\\Projects\\clients\\northwind\\cliora-desktop-long-directory-name',preferredTool:'codex',available:true,lastOpened:1790658800,modelOverrides:{},selectedProfiles:{codex:'codex-work'},appliedProfiles:{codex:'codex-work'}},{id:'api-a',name:'api',path:'D:\\work\\team-a\\services\\api',preferredTool:'claude_code',available:true,lastOpened:1790558800,modelOverrides:{},selectedProfiles:{},appliedProfiles:{}},{id:'api-b',name:'api',path:'D:\\work\\team-b\\services\\api',preferredTool:'grok',available:true,lastOpened:1790458800,modelOverrides:{},selectedProfiles:{},appliedProfiles:{}},{id:'agy',name:'agy 项目',path:'D:\\work\\agy\\workspace',preferredTool:'antigravity',available:true,lastOpened:1790358800,modelOverrides:{},selectedProfiles:{},appliedProfiles:{}}];
  if(captureHome&&!sessionStorage.getItem('capture-home-init')){sessionStorage.setItem('capture-home-init','1');sessionStorage.setItem('capture-home-remote-fail','1');localStorage.setItem('cliora:remote-target',homeHost.id);}
  const homeFlag=name=>sessionStorage.getItem('capture-home-'+name)==='1';
  const library=[{id:'prompt-1',kind:'prompt',title:'代码审查',body:'检查代码变更是否正确、安全、易于维护。先说明影响用户的行为，再给出具体文件和可执行的建议。优先指出会导致故障的问题。',category:'开发',projectId:null,version:1,updatedAt:1790758800},{id:'prompt-2',kind:'prompt',title:'整理发布说明',body:'根据变更清单写一份简洁的发布说明。分成新功能、改进与修复，突出用户能直接感受到的变化。',category:'写作',projectId:null,version:1,updatedAt:1790672400},{id:'prompt-3',kind:'prompt',title:'排查问题',body:'从可以重复出现的现象开始，提出假设并用最小实验验证。列出实际观察，不把推测当成结论。',category:'开发',projectId:'cliora',version:1,updatedAt:1790589600},{id:'prompt-4',kind:'prompt',title:'解释一段代码',body:'用清晰的语言说明这段代码的作用、数据流与边界条件，再给出一个输入输出示例。',category:'学习',projectId:null,version:1,updatedAt:1790416800},{id:'rule-1',kind:'rule',title:'项目协作约定',body:'保持变更小而明确。先阅读现有实现，不覆盖其他人的工作。针对实际行为验证，保留失败原因与恢复步骤。',category:'项目规则',projectId:'cliora',version:1,updatedAt:1790503200}];
@@ -113,7 +116,7 @@ async function mock(initialTheme){
   window.__uiCalls.push({command,args});
   if(command.startsWith('plugin:event|'))return 1;
   if(command==='get_bootstrap'||command==='set_theme'||command==='set_tool_icon'){if(command==='set_theme')theme=args.theme;if(command==='set_tool_icon'){if(args.dataUrl)tool_icons[args.toolId]=args.dataUrl;else delete tool_icons[args.toolId];}return {preferences:{schema_version:1,managed_tools:ids,theme,tool_icons,remote_ssh_enabled:!!(captureRules||captureHosts||captureHome)},tools:ids.map(id=>({id,name:names[id],installation:'not_checked',configuration:'not_checked'}))};}
-  if(command==='list_cli_adapters'||command==='set_registered_managed_tools')return {registered:ids.map(id=>({id,name:names[id],management:{accounts:id!=='grok',mcp:true,skills:true,agents:id!=='pi',plugins:true,projectPlugins:true},interfaceFormats:['openai_chat'],yoloAvailable:true,projectModelOverride:id==='grok',nativeConfig:{state:'available',reason:''},launch:{state:'available',reason:''},resume:{state:'available',reason:''},resources:{state:'available',reason:''},history:{state:'available',reason:''}})),managedIds:args.managedIds??ids,preservedUnknown:[]};
+  if(command==='list_cli_adapters'||command==='set_registered_managed_tools')return {registered:ids.map(id=>({id,name:names[id],management:{accounts:id!=='grok',mcp:true,skills:true,agents:id!=='pi',plugins:true,projectPlugins:true},interfaceFormats:['openai_chat'],yoloAvailable:true,projectModelOverride:id==='grok'||id==='antigravity',projectModelOverrideSince:id==='antigravity'?'1.5':undefined,projectModelOverrideBefore:id==='antigravity'?'2.0':undefined,launchSessionOptions:id==='antigravity'?[{id:'mode',label:'执行模式',labelEn:'Execution mode',choices:['accept-edits','auto','plan']},{id:'effort',label:'推理强度',labelEn:'Reasoning effort',choices:['low','medium','high','xhigh','max']}]:[],launchSessionOptionsSince:id==='antigravity'?'1.5':undefined,launchSessionOptionsBefore:id==='antigravity'?'2.0':undefined,nativeConfig:{state:'available',reason:''},launch:{state:'available',reason:''},resume:{state:'available',reason:''},resources:{state:'available',reason:''},history:{state:'available',reason:''}})),managedIds:args.managedIds??ids,preservedUnknown:[]};
   if(command==='list_accounts')return window.__captureNativeOnly ? accounts.filter(account=>account.toolId!=='open_code') : accounts.map(account=>window.__captureLoginPending && account.toolId==='open_code'?{...account,state:'pending',pendingLogin:{id:'capture-attempt',operation:'login',expiresAt:1999999999}}:account);
   if(command==='account_impact')return {accountId:args.id,accountVersion:1,toolId:accounts.find(account=>account.id===args.id)?.toolId??'codex',currentContextId:null,contexts:[],profiles:[],scopes:[],usageReferences:[]};
   if(command==='discover_native_logins')return {toolId:args.toolId,checkedAt:1790992800,logins:args.toolId==='open_code'?[{provider:'openai',authKind:'oauth',state:'signed_in',identity:null,detail:'已发现本地 OAuth 登录，CLI 未提供账号身份；未在线核验。',managedAccountId:null},{provider:'anthropic',authKind:'api_key',state:'signed_in',identity:null,detail:'已配置原生 API Key；不是 OAuth 订阅账号，未在线核验。',managedAccountId:null}]:[{provider:'chatgpt',authKind:'oauth',state:'signed_in',identity:{subject:'native-user',email:'native@example.test',plan:'plus',source:'synthetic'},detail:'原生本地账号状态；未在线核验。',managedAccountId:null}]};
@@ -723,6 +726,17 @@ async function captureHomeScreens(page,capture){
  await page.getByRole('menuitem',{name:/^打开.*的目录$/}).click();
  await card.getByRole('alert').waitFor();
  await capture('home-local-open-failed');
+ // Session-only launch selectors (antigravity 1.5) sit beside the project
+ // model field and are never persisted as configuration.
+ const agy=projects.locator('[data-project-id="agy"]');
+ await agy.getByRole('button',{name:/的更多操作$/}).click();
+ await page.getByRole('menuitem',{name:'修改',exact:true}).click();
+ const edit=page.getByRole('dialog');
+ await edit.getByLabel('agy 项目 · 执行模式',{exact:true}).waitFor();
+ await edit.getByLabel('agy 项目 · 执行模式',{exact:true}).selectOption('plan');
+ await edit.getByLabel('agy 项目 · 推理强度',{exact:true}).selectOption('high');
+ await edit.getByLabel('agy 项目 项目模型',{exact:true}).waitFor();
+ await capture('home-launch-options');
 }
 
 if(!workflowsOnly){

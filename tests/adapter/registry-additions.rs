@@ -685,21 +685,28 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
     assert_eq!(view["typedSettings"], serde_json::json!(true));
     assert_eq!(view["values"]["model"], settings_159["model"]);
     assert_eq!(view["values"]["trustedWorkspaces"], settings_159["trustedWorkspaces"]);
-    // The verified session-only launch flags ride along as reference data
-    // with their evidence-fixed choice sets, never as persisted fields.
+    // Session-only launch parameters are not persisted settings and are no
+    // longer published through the configuration view.
+    assert!(view.get("launchParameters").is_none());
+    // The adapter publishes the verified 1.5 session parameters through the
+    // launch contract with the evidence-fixed choice sets.
+    let published = crate::adapters::PublishedDescriptor::from_adapter(antigravity);
     assert_eq!(
-        view["launchParameters"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|entry| entry["flag"].as_str().unwrap())
-            .collect::<Vec<_>>(),
-        vec!["--model", "--mode", "--effort", "--agent"]
+        published.launch_session_options.iter().map(|option| option.id).collect::<Vec<_>>(),
+        vec!["mode", "effort"]
     );
     assert_eq!(
-        view["launchParameters"][2]["values"],
-        serde_json::json!(["low", "medium", "high", "xhigh", "max"])
+        published.launch_session_options[1].choices,
+        ["low", "medium", "high", "xhigh", "max"]
     );
+    assert_eq!(published.launch_session_options_since, Some("1.5"));
+    assert_eq!(published.launch_session_options_before, Some("2.0"));
+    assert_eq!(published.project_model_override_since, Some("1.5"));
+    assert_eq!(
+        antigravity.launch_session_options(Some("1.5.9")).len(),
+        2
+    );
+    assert!(antigravity.launch_session_options(Some("1.3.1")).is_empty());
     // Invalid typed values are refused before any document change; unknown
     // fields and wrong shapes surface typed issues.
     let bad_action: crate::adapters::configuration::ConfigurationAction =

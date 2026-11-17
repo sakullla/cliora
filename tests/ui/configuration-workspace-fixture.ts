@@ -5,7 +5,7 @@ export async function installConfigurationProtocol(page: Page) {
   await page.addInitScript(() => {
     const previous = (window as any).__TAURI_INTERNALS__?.invoke;
     if (!previous) throw new Error('Install the base tool fixture before its configuration protocol');
-    const state = { calls: [] as any[], sessions: {} as Record<string, any>, cancelled: [] as string[], leases: {} as Record<string, any>, sequence: 0, currentApiWritable: null as boolean | null, omitSourceCapabilities: false, nativeCredentialTarget: null as any, commonFiles: null as Record<string, string> | null, cancelRequestFailure: '', references: {} as Record<string, string>, delayEdit: false, releaseEdit: null as (() => void) | null, delayDirectory: false, releaseDirectory: null as (() => void) | null, directoryFailure: '', applyFailure: '', disk: {} as Record<string, string>, commonFailures: ['project:/tmp/project'], comparisons: {} as Record<string, any>, backupOriginal: '', backupPreview: null as any, fieldOrigins: {} as Record<string, string> };
+    const state = { calls: [] as any[], sessions: {} as Record<string, any>, cancelled: [] as string[], leases: {} as Record<string, any>, sequence: 0, currentApiWritable: null as boolean | null, omitSourceCapabilities: false, nativeCredentialTarget: null as any, commonFiles: null as Record<string, string> | null, cancelRequestFailure: '', references: {} as Record<string, string>, delayEdit: false, releaseEdit: null as (() => void) | null, delayDirectory: false, releaseDirectory: null as (() => void) | null, directoryFailure: '', applyFailure: '', disk: {} as Record<string, string>, commonFailures: ['project:/tmp/project'], comparisons: {} as Record<string, any>, backupOriginal: '', backupPreview: null as any, fieldOrigins: {} as Record<string, string>, typedSettings: true as boolean };
     (window as any).configurationProtocol = state;
     const clone = (value: any) => structuredClone(value);
     const field = (id: string, label = id, kind = 'string', required = false, advanced = false) => ({ id, label, kind, required, advanced, choices: [], minimum: kind === 'integer' ? 1 : null, defaultSource: '原生默认', unavailableReason: null });
@@ -22,14 +22,8 @@ export async function installConfigurationProtocol(page: Page) {
     function antigravityView(files: Record<string, string>) {
       const root = JSON.parse(files.settings ?? '{}');
       return {
-        typedSettings: true,
+        typedSettings: state.typedSettings !== false,
         values: { model: root.model ?? null, trustedWorkspaces: root.trustedWorkspaces ?? null },
-        launchParameters: [
-          { id: 'model', flag: '--model', values: [], channel: 'project_model' },
-          { id: 'mode', flag: '--mode', values: ['accept-edits', 'auto', 'plan'], channel: 'native_only' },
-          { id: 'effort', flag: '--effort', values: ['low', 'medium', 'high', 'xhigh', 'max'], channel: 'native_only' },
-          { id: 'agent', flag: '--agent', values: [], channel: 'launch_dialog' },
-        ],
       };
     }
     function describe(tool: string, common: boolean) {
@@ -111,7 +105,9 @@ export async function installConfigurationProtocol(page: Page) {
         profile.files = Object.keys(profile.files).length ? profile.files : { settings: JSON.stringify(view) }; if (request.subject === 'current') { if (!Object.keys(state.disk).length) state.disk = clone(profile.files); profile.files = clone(state.disk); } value.baselineFiles = clone(profile.files);
         if (request.toolId === 'antigravity') {
           profile.editing.nativeForm = '1.5';
+          const savedFiles = request.profile?.files;
           if (request.subject === 'current' && Object.keys(state.disk).length) profile.files = clone(state.disk);
+          else if (savedFiles && Object.keys(savedFiles).length) profile.files = clone(savedFiles);
           else profile.files = { settings: '{"model":"Gemini 4 Carbon (Medium)","trustedWorkspaces":["/home/example/projects/alpha"],"futureNative":{"keep":true}}' };
           value.view = antigravityView(profile.files); value.baselineFiles = clone(profile.files);
           if (request.subject === 'current') state.disk = clone(profile.files);

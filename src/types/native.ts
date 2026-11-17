@@ -97,6 +97,13 @@ export type AdapterDescriptor = {
   resumeLatestAvailable?: boolean;
   /** Whether a new-session launch may carry an agent selection. */
   agentLaunchAvailable?: boolean;
+  /** Session-only launch parameters; selectors render only inside the published version range. */
+  launchSessionOptions?: { id: string; label: string; labelEn?: string; choices: string[]; default?: string | null }[];
+  launchSessionOptionsSince?: string;
+  launchSessionOptionsBefore?: string;
+  /** Installation range that publishes the project model override; absent means not version-shaped. */
+  projectModelOverrideSince?: string;
+  projectModelOverrideBefore?: string;
   launchForm: 'terminal' | 'desktop';
   nativeConfig: AdapterFacet;
   launch: AdapterFacet;

@@ -706,6 +706,7 @@ fn on_menu(app: &AppHandle, id: &str) {
                     initial_prompt: None,
                     mode,
                     resume_latest: false, remote_intent: None, agent: None,
+                    session_options: None,
                 };
                 if let Err(failure) = commands::launch_now_with_stage(&app, request) {
                     let repair = RepairTarget::for_launch_failure(&tool, &project, &failure);

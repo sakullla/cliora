@@ -166,6 +166,12 @@ pub struct LaunchRequest {
     /// verified native arguments. Absent keeps the historical launch.
     #[serde(default)]
     pub agent: Option<String>,
+    /// Session-only parameters (`id` -> value) validated against the
+    /// adapter's published options for the resolved installation. Absent or
+    /// empty adds no arguments; an unknown id or unverified value fails the
+    /// launch instead of silently falling back.
+    #[serde(default)]
+    pub session_options: Option<std::collections::BTreeMap<String, String>>,
     #[serde(default)]
     pub remote_intent: Option<RemoteLaunchIntent>,
 }
@@ -1587,6 +1593,36 @@ fn plan_with_stage_at(
             ));
         }
     }
+    // Session-only parameters are validated against the adapter's published
+    // options for this installation before a worktree or process exists. An
+    // unknown id or value is an error, never a silent fallback to no flag.
+    let session_options = request
+        .session_options
+        .as_ref()
+        .filter(|options| !options.is_empty());
+    if let Some(options) = session_options {
+        if launch_form == LaunchForm::Desktop {
+            return Err(LaunchPlanError::new(
+                LaunchStage::Tool,
+                "桌面应用启动不接受会话参数".into(),
+            ));
+        }
+        let published = adapter.launch_session_options(Some(version));
+        for (id, value) in options {
+            let Some(option) = published.iter().find(|option| option.id == id) else {
+                return Err(LaunchPlanError::new(
+                    LaunchStage::Tool,
+                    format!("此 CLI 或安装版本未发布会话参数：{id}"),
+                ));
+            };
+            if value.is_empty() || !option.choices.contains(&value.as_str()) {
+                return Err(LaunchPlanError::new(
+                    LaunchStage::Tool,
+                    format!("会话参数 {id} 的取值无效：{value}"),
+                ));
+            }
+        }
+    }
     // The terminal is fixed before any worktree is created. Only a local new
     // session or another session (no session id, not resume) on the workbench
     // may follow the stored preference. External, desktop, resume, an existing
@@ -1664,7 +1700,14 @@ fn plan_with_stage_at(
             .map(String::as_str);
         cli_args.extend(
             adapter
-                .project_model_args(model)
+                .project_model_args_for_version(Some(version), model)
+                .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?,
+        );
+    }
+    if let Some(options) = session_options {
+        cli_args.extend(
+            adapter
+                .launch_session_args(Some(version), options)
                 .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?,
         );
     }
@@ -2466,6 +2509,7 @@ mod desktop_launch {
             initial_prompt: None,
             mode,
             resume_latest: false, remote_intent: None, agent: None,
+            session_options: None,
         }
     }
 
@@ -2694,6 +2738,7 @@ mod installed_desktop_launch {
             initial_prompt: None,
             mode: LaunchMode::Normal,
             resume_latest: false, remote_intent: None, agent: None,
+            session_options: None,
         }
     }
 
@@ -2762,6 +2807,7 @@ mod installed_desktop_launch {
             initial_prompt: None,
             mode: LaunchMode::Normal,
             resume_latest: false, remote_intent: None, agent: None,
+            session_options: None,
         };
         let zcode = plan(&db, &registry, temp.path(), request("zcode")).unwrap();
         assert_eq!(zcode.directory, canonical);
@@ -2832,6 +2878,7 @@ mod installed_desktop_launch {
                     initial_prompt: None,
                     mode: LaunchMode::Normal,
                     resume_latest: false, remote_intent: None, agent: None,
+                    session_options: None,
                 },
             )
             .unwrap_or_else(|error| panic!("{tool}: {error}"));
@@ -2930,6 +2977,7 @@ mod installed_desktop_launch {
                 resume_latest,
                 remote_intent: None,
                 agent: None,
+                session_options: None,
             },
             worktree_intent: WorktreeIntent::Preference,
             task_text: None,
@@ -3021,6 +3069,7 @@ mod installed_desktop_launch {
                 resume_latest: resume,
                 remote_intent: None,
                 agent: None,
+                session_options: None,
             },
             worktree_intent: intent,
             task_text: Some("feat: hello?".into()),
@@ -3117,6 +3166,7 @@ mod installed_desktop_launch {
                 resume_latest: false,
                 remote_intent: None,
                 agent: None,
+                session_options: None,
             },
             worktree_intent: WorktreeIntent::Preference,
             task_text: None,
@@ -3272,6 +3322,7 @@ mod installed_desktop_launch {
                 resume_latest: false,
                 remote_intent: None,
                 agent: None,
+                session_options: None,
             },
             worktree_intent: WorktreeIntent::Explicit,
             task_text: Some("feat: hello?".into()),

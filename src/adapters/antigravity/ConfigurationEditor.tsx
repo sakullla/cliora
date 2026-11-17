@@ -4,10 +4,9 @@ import { ConfigurationField } from '../../components/configuration/Configuration
 import styles from '../../components/configuration/configuration.module.css';
 
 // Backend-proven view shape: typed values of the verified persisted keys plus
-// the session-only launch flags (1.5.9 evidence), which never persist and are
-// presented as reference data instead of settings fields.
-type LaunchParameter = { id: string; flag: string; values: string[]; channel: string };
-type View = { values?: Record<string, unknown>; launchParameters?: LaunchParameter[]; typedSettings?: boolean };
+// the typed-form flag. Session-only launch parameters are selected in the
+// project launch surface, never as settings fields.
+type View = { values?: Record<string, unknown>; typedSettings?: boolean };
 const english: Record<string, string> = {
   model: 'Model display name',
   trustedWorkspaces: 'Trusted workspaces',
@@ -27,7 +26,6 @@ export function AntigravityConfigurationEditor(props: ConfigurationContentProps)
   const { i18n } = useTranslation();
   const en = i18n.language.startsWith('en');
   const view = (props.draft.view ?? {}) as View;
-  const launchParameters = view.launchParameters ?? [];
   // The typed keys are verified on the 1.5 line only. 1.3.x and unverified
   // installations keep the raw JSON editor and never see a typed write.
   const typed = view.typedSettings === true;
@@ -38,21 +36,6 @@ export function AntigravityConfigurationEditor(props: ConfigurationContentProps)
         : '当前安装未核验为 agy 1.5，类型化设置字段已停用。请在“原生文本”中编辑 settings.json；不会重建未支持或未核验的键。'}</p>
     </section>;
   }
-  const channelCopy = (parameter: LaunchParameter) => {
-    if (parameter.channel === 'project_model') {
-      return en
-        ? 'Set through the project model preference; Cliora passes it as --model on every launch of that project.'
-        : '在项目的模型偏好中设置后，Cliora 每次启动该项目会话都会以 --model 传入所选值。';
-    }
-    if (parameter.channel === 'launch_dialog') {
-      return en
-        ? 'Pick the agent in the launch dialog; only roster (main) agents are selectable.'
-        : '在启动对话框选择；仅主 Agent（roster）名单可选。';
-    }
-    return en
-      ? 'Verified flag with no Cliora launch channel yet; use it natively inside an agy session when needed.'
-      : '已实证的原生参数，暂无 Cliora 启动通道；需要时请在 agy 会话内原生使用。';
-  };
   return <section className={styles.controls} aria-label="Antigravity">
     <p>{en
       ? 'Antigravity signs in through its native browser login. These settings never touch account credentials; unsupported native keys stay in the raw JSON editor.'
@@ -75,15 +58,8 @@ export function AntigravityConfigurationEditor(props: ConfigurationContentProps)
         onValidityChange={valid => props.onValidityChange(field.id, valid)}
       />;
     })}</div>
-    <details className={styles.disclosureCard}>
-      <summary>{en ? 'Session-only launch parameters (never written to settings.json)' : '会话启动参数（仅当前会话，不写入 settings.json）'}</summary>
-      <p>{en
-        ? 'Verified on agy 1.5.9: these flags apply to the current session only and the native /config panel never saves them, so they are kept clearly apart from the persisted fields above.'
-        : '以下参数已在 agy 1.5.9 实证：仅对当次会话生效，原生 /config 面板不会保存它们，因此与上方持久化设置明确区分。'}</p>
-      <ul>{launchParameters.map(parameter => <li key={parameter.flag}>
-        <code>{parameter.flag}</code>{parameter.values.length ? ` ${parameter.values.join(' | ')}` : ' <id-or-name>'}
-        <small>{channelCopy(parameter)}</small>
-      </li>)}</ul>
-    </details>
+    <p>{en
+      ? 'Execution mode and reasoning effort are session launch parameters: choose them in the project launch selectors; they apply to that launch only and are never written to settings.json.'
+      : '执行模式与推理强度是会话启动参数：在项目卡的启动选择器中选择，仅对当次启动生效，不会写入 settings.json。'}</p>
   </section>;
 }

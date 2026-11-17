@@ -1711,6 +1711,7 @@ pub fn resume_plan(
             initial_prompt: None,
             mode,
             resume_latest: false, remote_intent: None, agent: None,
+            session_options: None,
         },
         &cwd,
         context,

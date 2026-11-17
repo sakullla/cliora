@@ -13,10 +13,11 @@
 //! accepts `--model <id-or-name>`, `--mode accept-edits|auto|plan` and
 //! `--effort low|medium|high|xhigh|max` per session, and the evidence run
 //! verified that the native `/config` panel holds no model/effort entries —
-//! those values never persist. The verified choice sets are published
-//! through the draft view (`launchParameters`) so the editor presents them
-//! as launch-only reference data, and `--model` rides the project model
-//! preference at launch (`CliAdapter::project_model_args`).
+//! those values never persist. The verified choice sets are published as
+//! adapter-owned launch session options (`MODE_VALUES`/`EFFORT_VALUES` are
+//! consumed by the `CliAdapter` launch contract), and `--model` rides the
+//! project model preference at launch. The configuration editor only keeps a
+//! short note that these choices happen at launch.
 //!
 //! The typed mapping is gated on the resolved native form: only a probed
 //! 1.5 installation (`configuration_requires_version` +
@@ -91,12 +92,19 @@ fn valid_model(value: &Value) -> bool {
     value.as_str().is_some_and(nonempty_text)
 }
 
+/// A trusted workspace is a path, not a model name: no display-name length
+/// cap applies. Only blank entries and control characters are rejected, so a
+/// long but legitimate native path never blocks the other fields from saving.
+fn valid_path(value: &str) -> bool {
+    !value.trim().is_empty() && !value.chars().any(char::is_control)
+}
+
 /// `trustedWorkspaces` is the folder-trust prompt's string array; each entry
-/// is a path, so blank or control-character items are rejected.
+/// is a path with its own rule (no 200-character display-name limit).
 fn valid_trusted(value: &Value) -> bool {
     value
         .as_array()
-        .is_some_and(|items| items.iter().all(|item| item.as_str().is_some_and(nonempty_text)))
+        .is_some_and(|items| items.iter().all(|item| item.as_str().is_some_and(valid_path)))
 }
 
 fn field(id: &str) -> ConfigurationField {
@@ -172,28 +180,18 @@ impl ConfigurationAdapter for Antigravity {
                 .unwrap_or(Value::Null)
         };
         let typed = verified_form(state);
-        let mut view = json!({
+        Ok(json!({
             "values": {
                 MODEL_FIELD: value(MODEL_FIELD),
                 TRUSTED_FIELD: value(TRUSTED_FIELD),
             },
             // The editor renders the verified 1.5 mapping only when the
             // selected installation resolved to that form; 1.3.x and
-            // unverified installs keep the raw JSON editor.
+            // unverified installs keep the raw JSON editor. Session-only
+            // launch parameters are not settings: their selectors live in the
+            // project launch surface and never appear as persisted fields.
             "typedSettings": typed,
-        });
-        if typed {
-            // Verified per-session launch parameters (never persisted by agy):
-            // surfaced as reference data only, so the editor can keep them
-            // clearly distinct from the persisted fields above.
-            view["launchParameters"] = json!([
-                { "id": "model", "flag": "--model", "values": [], "channel": "project_model" },
-                { "id": "mode", "flag": "--mode", "values": MODE_VALUES, "channel": "native_only" },
-                { "id": "effort", "flag": "--effort", "values": EFFORT_VALUES, "channel": "native_only" },
-                { "id": "agent", "flag": "--agent", "values": [], "channel": "launch_dialog" },
-            ]);
-        }
-        Ok(view)
+        }))
     }
     fn edit(
         &self,
@@ -563,16 +561,10 @@ mod tests {
         );
         // Unknown native fields survive typed edits untouched (R2).
         assert_eq!(root["unknownNative"], json!({"keep": [1, 2]}));
-        // The verified session-only launch parameters ride along as reference
-        // data, never as persisted settings fields.
-        assert_eq!(
-            draft.view["launchParameters"][1]["values"],
-            json!(MODE_VALUES)
-        );
-        assert_eq!(
-            draft.view["launchParameters"][2]["values"],
-            json!(EFFORT_VALUES)
-        );
+        // The typed view carries only persisted fields; session-only launch
+        // parameters are selected at launch, never shown as settings.
+        assert_eq!(draft.view["typedSettings"], true);
+        assert!(draft.view.get("launchParameters").is_none());
         // Reset removes the owned key and releases it for apply.
         draft = drafts::edit(
             &registry,
@@ -840,6 +832,54 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&settings.path).unwrap()).unwrap();
         assert_eq!(actual[MODEL_FIELD], "Named Model");
         assert_eq!(actual["futureNative"], json!({"keep": true}));
+    }
+
+    #[test]
+    fn long_trusted_paths_do_not_block_other_field_saves() {
+        // A trusted workspace is a path, not a display name: the model-name
+        // length cap must not invalidate a long native path and block the
+        // whole document from saving.
+        let long = format!("/home/example/{}", "deep/".repeat(80));
+        let documents = Documents::from([(
+            "settings".into(),
+            json!({"trustedWorkspaces": [long.clone()], "model": "Old Model"}),
+        )]);
+        assert!(ANTIGRAVITY
+            .validate(&documents, &form_state(FORM_15), Scope::Global)
+            .is_empty());
+        let registry = registry();
+        let mut draft = drafts::open(
+            &registry,
+            profile_with(
+                &json!({"trustedWorkspaces": [long.clone()], "model": "Old Model", "futureNative": true})
+                    .to_string(),
+            ),
+            Scope::Global,
+            "agy-long".into(),
+        )
+        .unwrap();
+        assert!(draft.issues.is_empty(), "{:?}", draft.issues);
+        draft = drafts::edit(
+            &registry,
+            draft,
+            action("set", MODEL_FIELD, json!("Gemini 4 Carbon (High)")),
+        )
+        .unwrap();
+        let root: Value = serde_json::from_str(&draft.profile.files["settings"]).unwrap();
+        assert_eq!(root[MODEL_FIELD], "Gemini 4 Carbon (High)");
+        assert_eq!(root[TRUSTED_FIELD][0], long);
+        assert_eq!(root["futureNative"], true);
+        // Blank or control-character path entries stay invalid.
+        let invalid = Documents::from([(
+            "settings".into(),
+            json!({TRUSTED_FIELD: ["/ok", "  ", "/bad\npath"]}),
+        )]);
+        assert_eq!(
+            ANTIGRAVITY
+                .validate(&invalid, &form_state(FORM_15), Scope::Global)
+                .len(),
+            1
+        );
     }
 
     #[test]

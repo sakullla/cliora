@@ -24,7 +24,7 @@ const variants = Object.keys(toolSlugs).flatMap(tool => [
 ]);
 const extra = [
   ['qoder-settings', 'qoder_cn', 'Qoder CN · 常用设置', '模型、权限、语言、两类原生记忆开关', 'qoder-settings'],
-  ['antigravity-settings', 'antigravity', 'Antigravity · 类型化设置', '模型显示名与信任工作区；会话参数仅参考', 'antigravity-settings'],
+  ['antigravity-settings', 'antigravity', 'Antigravity · 类型化设置', '模型显示名与信任工作区；会话参数在启动处选择', 'antigravity-settings'],
   ['qoder-memory-explicit', 'qoder_cn', 'Qoder CN · 显式记忆配置', '用户和项目分开设置，支持恢复原生默认', 'qoder-memory-explicit'],
   ['pi-input-capabilities', 'pi', 'Pi · 文本、图片与推理', '原生 input 与 reasoning 字段', 'capabilities'],
   ['opencode-modalities', 'open_code', 'OpenCode · 输入输出模态', '文本、图片等输入输出能力', 'capabilities'],
@@ -161,15 +161,15 @@ export async function captureConfiguration({ browser, themes, widths, selected, 
         }
         if (action === 'antigravity-settings') {
           // Persisted typed fields (the 1.5.9 settings.json keys) and the
-          // session-only launch parameters stay visibly distinct.
+          // session-only launch parameters stay visibly distinct: the editor
+          // only notes that mode/effort are chosen at launch.
           await expect(dialog.getByLabel('模型显示名', { exact: true })).toHaveValue('Gemini 4 Carbon (Medium)');
           await expect(dialog.getByLabel('信任的工作区', { exact: true })).toHaveValue('["/home/example/projects/alpha"]');
           await expect(dialog.getByRole('button', { name: '连接与模型', exact: true })).toHaveCount(0);
           // Unverified keys keep the raw JSON path.
           await expect(dialog.getByRole('button', { name: '原生文本', exact: true })).toBeVisible();
-          await dialog.getByText('会话启动参数（仅当前会话，不写入 settings.json）', { exact: true }).click();
-          await expect(dialog.getByText('--effort', { exact: true })).toBeVisible();
-          await expect(dialog.getByText(/low \| medium \| high \| xhigh \| max/)).toBeVisible();
+          await expect(dialog.getByText('执行模式与推理强度是会话启动参数：在项目卡的启动选择器中选择，仅对当次启动生效，不会写入 settings.json。', { exact: true })).toBeVisible();
+          await expect(dialog.getByText('会话启动参数（仅当前会话，不写入 settings.json）', { exact: true })).toHaveCount(0);
         }
         if (action === 'source') await dialog.getByRole('radio', { name: '使用 CLI 当前登录或凭据', exact: true }).click();
         if (['picker', 'login', 'login-return'].includes(action)) {

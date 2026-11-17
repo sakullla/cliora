@@ -504,6 +504,46 @@ pub struct InspectionFields {
     pub reasoning_effort: Option<String>,
 }
 
+/// One session-only launch parameter an adapter can receive. Choices are
+/// native values from verified CLI evidence; `default` is the native default
+/// when the flag is omitted (`None` keeps the CLI's own default).
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchSessionOption {
+    pub id: &'static str,
+    pub label: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label_en: Option<&'static str>,
+    pub choices: &'static [&'static str],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<&'static str>,
+}
+
+/// Major/minor installation line (`v1.5.9` -> `(1, 5)`). Unparseable values
+/// stay unverified instead of matching a guessed line.
+fn version_line(value: &str) -> Option<(u32, u32)> {
+    let value = value.trim().trim_start_matches('v');
+    let mut parts = value.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().and_then(|part| part.parse().ok()).unwrap_or(0);
+    Some((major, minor))
+}
+
+/// Whether an installation version falls inside an adapter-declared
+/// `[since, before)` line. `None` means the capability is not version-shaped;
+/// an unverified version never satisfies a declared range.
+fn version_in_range(version: Option<&str>, range: Option<(&'static str, &'static str)>) -> bool {
+    let Some((since, before)) = range else { return true };
+    let (Some(version), Some(since), Some(before)) = (
+        version.and_then(version_line),
+        version_line(since),
+        version_line(before),
+    ) else {
+        return false;
+    };
+    version >= since && version < before
+}
+
 pub type NativeCredentialRefs = BTreeMap<String, BTreeMap<String, String>>;
 pub type PendingSecrets = Vec<(String, String)>;
 
@@ -1227,6 +1267,59 @@ pub trait CliAdapter: Sync {
         }
         Ok(Vec::new())
     }
+    /// Installation range that publishes the project model override. `None`
+    /// keeps the historical fixed-shape behavior for every verified install;
+    /// a declared range hides the field and refuses the flag outside it.
+    fn project_model_override_range(&self) -> Option<(&'static str, &'static str)> {
+        None
+    }
+    /// Version-aware project model arguments. The default keeps
+    /// `project_model_args` for fixed-shape adapters; a version-shaped
+    /// override is composed by the shared launch service with the resolved
+    /// installation version.
+    fn project_model_args_for_version(
+        &self,
+        version: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<Vec<String>, String> {
+        if !version_in_range(version, self.project_model_override_range()) {
+            if model.is_some() {
+                return Err("此 CLI 安装版本未核验项目启动模型参数；请清除项目模型或升级 CLI".into());
+            }
+            return Ok(Vec::new());
+        }
+        self.project_model_args(model)
+    }
+    /// Static declaration of the session-only launch parameters this adapter
+    /// can receive. The catalog publishes the specs plus the version range so
+    /// the UI hides selectors for an unverified install; `launch_session_options`
+    /// applies that range to the resolved installation.
+    fn launch_session_option_specs(&self) -> Vec<LaunchSessionOption> {
+        Vec::new()
+    }
+    fn launch_session_options_range(&self) -> Option<(&'static str, &'static str)> {
+        None
+    }
+    /// Session parameters published for one resolved installation. The shared
+    /// launch service validates the request against this list, so an older or
+    /// unverified install accepts none.
+    fn launch_session_options(&self, version: Option<&str>) -> Vec<LaunchSessionOption> {
+        if version_in_range(version, self.launch_session_options_range()) {
+            self.launch_session_option_specs()
+        } else {
+            Vec::new()
+        }
+    }
+    /// Map the already-validated session parameters to native arguments. The
+    /// default adds nothing; an adapter that publishes options above maps them
+    /// here instead of relying on a shared guess.
+    fn launch_session_args(
+        &self,
+        _version: Option<&str>,
+        _options: &BTreeMap<String, String>,
+    ) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
     /// Optional agent selection for a new session, composed by the shared
     /// launch service after `launch_args`. `None` keeps the historical
     /// argument list; a selection is refused unless the adapter verified a
@@ -1759,6 +1852,20 @@ pub struct PublishedDescriptor {
     /// (`LaunchRequest::agent`). Derived from `launch_agent_args`, never
     /// inferred from the tool id.
     pub agent_launch_available: bool,
+    /// Session-only launch parameters this adapter publishes. The UI renders
+    /// selectors only when the resolved installation satisfies the range.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub launch_session_options: Vec<LaunchSessionOption>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launch_session_options_since: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launch_session_options_before: Option<&'static str>,
+    /// Installation range that publishes the project model override; `None`
+    /// means the adapter's declaration is not version-shaped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_model_override_since: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_model_override_before: Option<&'static str>,
     /// Omitted when this CLI does not provide usage records.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub association: Option<Facet>,
@@ -1775,9 +1882,16 @@ fn remote_native_files_empty(files: &&'static [RemoteNativeDocument]) -> bool {
 
 impl PublishedDescriptor {
     pub fn from_adapter(adapter: &dyn CliAdapter) -> Self {
+        let session_range = adapter.launch_session_options_range();
+        let model_range = adapter.project_model_override_range();
         Self {
             resume_latest_available: adapter.resume_latest_args(LaunchMode::Normal).is_ok(),
             agent_launch_available: adapter.launch_agent_args(Some("probe")).is_ok(),
+            launch_session_options: adapter.launch_session_option_specs(),
+            launch_session_options_since: session_range.map(|(since, _)| since),
+            launch_session_options_before: session_range.map(|(_, before)| before),
+            project_model_override_since: model_range.map(|(since, _)| since),
+            project_model_override_before: model_range.map(|(_, before)| before),
             association: history_association_facet(adapter),
             descriptor: adapter.descriptor(),
             remote_resources: adapter.remote_resource_layout(),

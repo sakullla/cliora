@@ -63,9 +63,11 @@
 //!   typed write. Unknown fields are preserved through the shared apply path.
 //!   Session-only launch flags (`--model`, `--mode accept-edits|auto|plan`,
 //!   `--effort low|medium|high|xhigh|max`) never persist — the native
-//!   `/config` panel holds no model/effort entries — so they are published as
-//!   launch-only reference data and `--model` rides the per-project model
-//!   preference at launch.
+//!   `/config` panel holds no model/effort entries. They are published as
+//!   adapter-owned launch capabilities on the resolved 1.5 install line:
+//!   `--model` rides the project model preference and mode/effort are
+//!   validated session options; older or unverified installs publish neither
+//!   and receive no extra argument.
 //! * **Credentials**: the OS-keyring browser login is never adopted or logged
 //!   out. Only the documented headless env channel `GEMINI_API_KEY` may be
 //!   managed: the value stays in the system credential store and is injected
@@ -572,6 +574,11 @@ impl CliAdapter for Antigravity {
     fn supports_project_model_override(&self) -> bool {
         true
     }
+    /// `--model` was verified on the 1.5 line only; older and unverified
+    /// installs neither publish the field nor receive the flag.
+    fn project_model_override_range(&self) -> Option<(&'static str, &'static str)> {
+        Some(("1.5", "2.0"))
+    }
     fn project_model_args(&self, model: Option<&str>) -> Result<Vec<String>, String> {
         let Some(model) = model else {
             return Ok(Vec::new());
@@ -584,6 +591,64 @@ impl CliAdapter for Antigravity {
             return Err("Antigravity 启动模型名称无效；未执行启动".into());
         }
         Ok(vec!["--model".into(), trimmed.to_owned()])
+    }
+    /// Verified session-only flags of the 1.5.9 `--help`: execution mode and
+    /// reasoning effort. No native default was evidenced for either flag, so
+    /// leaving a selector unset passes no argument.
+    fn launch_session_option_specs(&self) -> Vec<super::LaunchSessionOption> {
+        vec![
+            super::LaunchSessionOption {
+                id: "mode",
+                label: "执行模式",
+                label_en: Some("Execution mode"),
+                choices: configuration::MODE_VALUES,
+                default: None,
+            },
+            super::LaunchSessionOption {
+                id: "effort",
+                label: "推理强度",
+                label_en: Some("Reasoning effort"),
+                choices: configuration::EFFORT_VALUES,
+                default: None,
+            },
+        ]
+    }
+    fn launch_session_options_range(&self) -> Option<(&'static str, &'static str)> {
+        Some(("1.5", "2.0"))
+    }
+    fn launch_session_args(
+        &self,
+        version: Option<&str>,
+        options: &std::collections::BTreeMap<String, String>,
+    ) -> Result<Vec<String>, String> {
+        if options.is_empty() {
+            return Ok(Vec::new());
+        }
+        let published = self.launch_session_options(version);
+        if published.is_empty() {
+            return Err("Antigravity 会话参数仅在已核验的 1.5 安装可用；请升级 CLI".into());
+        }
+        // Adapter-owned mapping in the published order keeps the argument
+        // list deterministic; the shared launch service already validated the
+        // ids and choices, and this repeats it instead of forwarding unknowns.
+        let mut args = Vec::new();
+        for option in &published {
+            let Some(value) = options.get(option.id) else {
+                continue;
+            };
+            if value.is_empty() || !option.choices.contains(&value.as_str()) {
+                return Err(format!("Antigravity 会话参数 {} 的取值无效：{value}", option.id));
+            }
+            match option.id {
+                "mode" => args.extend(["--mode".into(), value.clone()]),
+                "effort" => args.extend(["--effort".into(), value.clone()]),
+                other => return Err(format!("Antigravity 未发布会话参数 {other}")),
+            }
+        }
+        if let Some(unknown) = options.keys().find(|id| !published.iter().any(|option| option.id == id.as_str())) {
+            return Err(format!("Antigravity 未发布会话参数 {unknown}"));
+        }
+        Ok(args)
     }
     fn launch_args(
         &self,
@@ -1125,12 +1190,50 @@ mod tests {
             vec!["model", "trustedWorkspaces"]
         );
         assert!(Antigravity.supports_project_model_override());
+        assert_eq!(Antigravity.project_model_override_range(), Some(("1.5", "2.0")));
         assert_eq!(
             Antigravity
-                .project_model_args(Some("Gemini 4 Carbon (Medium)"))
+                .project_model_args_for_version(Some("1.5.9"), Some("Gemini 4 Carbon (Medium)"))
                 .unwrap(),
             vec!["--model".to_string(), "Gemini 4 Carbon (Medium)".to_string()]
         );
+        assert!(Antigravity
+            .project_model_args_for_version(Some("1.3.1"), Some("Gemini 4 Carbon (Medium)"))
+            .is_err());
+        assert!(Antigravity
+            .project_model_args_for_version(Some("1.3.1"), None)
+            .unwrap()
+            .is_empty());
+        let options = Antigravity.launch_session_options(Some("1.5.9"));
+        assert_eq!(
+            options.iter().map(|option| option.id).collect::<Vec<_>>(),
+            vec!["mode", "effort"]
+        );
+        assert_eq!(options[0].choices, ["accept-edits", "auto", "plan"]);
+        assert_eq!(options[1].choices, ["low", "medium", "high", "xhigh", "max"]);
+        assert!(Antigravity.launch_session_options(Some("1.3.1")).is_empty());
+        assert!(Antigravity.launch_session_options(None).is_empty());
+        let chosen = std::collections::BTreeMap::from([
+            ("mode".to_string(), "plan".to_string()),
+            ("effort".to_string(), "high".to_string()),
+        ]);
+        assert_eq!(
+            Antigravity.launch_session_args(Some("1.5.9"), &chosen).unwrap(),
+            vec!["--mode", "plan", "--effort", "high"]
+        );
+        assert!(Antigravity.launch_session_args(Some("1.3.1"), &chosen).is_err());
+        assert!(Antigravity
+            .launch_session_args(
+                Some("1.5.9"),
+                &std::collections::BTreeMap::from([("mode".to_string(), "bogus".to_string())]),
+            )
+            .is_err());
+        assert!(Antigravity
+            .launch_session_args(
+                Some("1.5.9"),
+                &std::collections::BTreeMap::from([("invented".to_string(), "plan".to_string())]),
+            )
+            .is_err());
         assert!(Antigravity.project_model_args(None).unwrap().is_empty());
         assert!(Antigravity.project_model_args(Some("  ")).is_err());
         assert!(Antigravity.project_model_args(Some("two\nlines")).is_err());

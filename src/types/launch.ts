@@ -83,6 +83,24 @@ export function preferredLaunchMode(settings: LaunchSettings | null, target: 'cl
   return preferred === 'yolo' && yoloAvailable ? 'yolo' : 'normal';
 }
 
+/** Adapter-declared install range `[since, before)`. No range means not version-shaped. */
+export function versionInRange(version: string | null | undefined, since?: string | null, before?: string | null): boolean {
+  if (!since && !before) return true;
+  const line = (value: string) => {
+    const [major, minor = '0'] = value.trim().replace(/^v/, '').split('.');
+    const a = Number(major), b = Number(minor);
+    return Number.isInteger(a) && Number.isInteger(b) ? [a, b] as const : null;
+  };
+  const current = version ? line(version) : null;
+  if (!current) return false;
+  const start = since ? line(since) : null;
+  const end = before ? line(before) : null;
+  if ((since && !start) || (before && !end)) return false;
+  if (start && (current[0] < start[0] || (current[0] === start[0] && current[1] < start[1]))) return false;
+  if (end && (current[0] > end[0] || (current[0] === end[0] && current[1] >= end[1]))) return false;
+  return true;
+}
+
 export type Project = {
   id: string;
   name: string;
@@ -97,7 +115,7 @@ export type Project = {
 };
 
 export type RemoteLaunchIntent = { kind: 'new' } | { kind: 'reattach'; remoteSessionId: string };
-export type LaunchRequest = { toolId: string; projectId: string | null; sessionId: string | null; mode: LaunchMode; directory?: string | null; initialPrompt?: string | null; resumeLatest?: boolean; remoteIntent?: RemoteLaunchIntent; worktreeIntent?: WorktreeLaunchIntent; taskText?: string | null; worktree?: WorktreeLaunchOptions; /** Native agent roster selection for a new session; only CLIs that publish `agentLaunchAvailable` honor it. */ agent?: string | null };
+export type LaunchRequest = { toolId: string; projectId: string | null; sessionId: string | null; mode: LaunchMode; directory?: string | null; initialPrompt?: string | null; resumeLatest?: boolean; remoteIntent?: RemoteLaunchIntent; worktreeIntent?: WorktreeLaunchIntent; taskText?: string | null; worktree?: WorktreeLaunchOptions; /** Native agent roster selection for a new session; only CLIs that publish `agentLaunchAvailable` honor it. */ agent?: string | null; /** Session-only parameter values validated against the adapter's published options for the resolved installation; absent adds no arguments. */ sessionOptions?: Record<string, string> | null };
 export type LaunchResult = { toolId: string; projectId: string | null; mode: LaunchMode; terminal: TerminalId; status: 'terminal_requested' | 'desktop_requested' | 'session_started'; sessionId?: string | null; remoteSessionId?: string | null; warnings?: string[] };
 /** Recent session output: a mode prelude plus the retained bytes, ending at stream offset `endOffset`. */
 export type WorkbenchReplay = { dataBase64: string; endOffset: number; cols: number; rows: number };
