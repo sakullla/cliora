@@ -4,7 +4,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
 import { formatFailure } from '../../lib/feedback';
 import { confirmAction } from '../../lib/confirm';
-import { Badge, Button } from '../../components/ui';
+import { Badge, Button, Toolbar } from '../../components/ui';
 import { RowMenu } from '../../components/RowMenu';
 import { ToolIcon } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
@@ -72,7 +72,9 @@ export function WorkspaceBrowser({ tools = [], onSession, incomingManifest, onMa
     const seq = ++sequence.current;
     setLoading(true);
     try {
-      if (refreshSource && selectedRef.current) await native.refreshWorkspaceManifest(selectedRef.current);
+      // A background source refresh that cannot run now (for example another window holds the
+      // manifest) keeps the last list; the project shows its own source status when it matters.
+      if (refreshSource && selectedRef.current) await native.refreshWorkspaceManifest(selectedRef.current).catch(() => undefined);
       const result = await native.listBusinessWorkspaces();
       if (!mounted.current || seq !== sequence.current) return;
       const rows = Array.isArray(result) ? result : [];
@@ -96,7 +98,7 @@ export function WorkspaceBrowser({ tools = [], onSession, incomingManifest, onMa
     let live = true;
     void native.refreshWorkspaceManifest(selectedId).then(value => {
       if (live && value) setWorkspaces(previous => previous.map(item => item.id === value.id ? value : item));
-    }).catch(value => { if (live) setLoadError(failure(value)); });
+    }).catch(() => undefined);
     return () => { live = false; };
   }, [selectedId]);
   useEffect(() => {
@@ -151,6 +153,11 @@ export function WorkspaceBrowser({ tools = [], onSession, incomingManifest, onMa
       if (typeof path === 'string') await operate(() => native.relinkWorkspaceRepository(current.id, repository.id, path, current.revision));
     } catch (value) { setError(failure(value)); }
   }
+  async function deleteProject() {
+    if (!current || !await confirmAction(t('workspaces.deleteConfirm', { name: current.name }), () => mounted.current, { title: t('workspaces.deleteProject'), confirmLabel: t('workspaces.deleteProject') })) return;
+    const id = current.id;
+    await operate(async () => { await native.deleteBusinessWorkspace(id); setSelectedId(previous => previous === id ? '' : previous); setQuery(''); setFilter('all'); setPaths({}); });
+  }
   async function remove(repository: WorkspaceRepository) {
     if (!current || !await confirmAction(t('workspaces.removeConfirm', { name: repository.name }), () => mounted.current, { title: t('workspaces.remove'), confirmLabel: t('workspaces.remove') })) return;
     await operate(() => native.removeWorkspaceRepository(current.id, repository.id, current.revision));
@@ -201,9 +208,11 @@ export function WorkspaceBrowser({ tools = [], onSession, incomingManifest, onMa
     <button type="button" role="menuitem" disabled={busy} onClick={() => void chooseManifest()}>{t('workspaces.openManifest')}</button>
     {current && !current.manifestPath && <button type="button" role="menuitem" disabled={busy} onClick={() => void publish()}>{t('workspaces.publish')}</button>}
     <button type="button" role="menuitem" disabled={busy || loading} onClick={() => void reload(true)}>{t('workspaces.refresh')}</button>
+    {current && <button type="button" role="menuitem" data-danger="true" disabled={busy} onClick={() => void deleteProject()}>{t('workspaces.deleteProject')}</button>}
   </RowMenu>;
-  return <section className={styles.browser} aria-label={t('workspaces.title')} data-business-workspaces>
-    <h2 className="sr-only">{t('workspaces.title')}</h2>
+  return <section className={styles.block} aria-label={t('workspaces.title')} data-business-workspaces>
+    <Toolbar className={styles.heading} title={t('workspaces.title')} count={workspaces.length ? <Badge>{workspaces.length}</Badge> : undefined} />
+    <div className={styles.browser}>
     {workspaces.length > 0 && current ? <>
       <div className={styles.header}>
         <div className={styles.titleBlock}>
@@ -220,9 +229,9 @@ export function WorkspaceBrowser({ tools = [], onSession, incomingManifest, onMa
           {projectMenu}
         </div>
       </div>
-      {(error || loadError) && <div className={styles.error} role="alert"><Icon name="alert" size={14} /><span>{error || loadError}</span><Button size="sm" variant="ghost" onClick={() => void reload(true)}>{t('workspaces.retry')}</Button></div>}
+      {(error || loadError) && <div className={styles.error} role="alert"><Icon name="alert" size={14} /><span>{error || loadError}</span><Button size="sm" variant="ghost" onClick={() => void reload(true)}>{t('workspaces.retry')}</Button><button type="button" className={styles.dismiss} aria-label={t('workspaces.dismiss')} title={t('workspaces.dismiss')} onClick={() => { setError(''); setLoadError(''); }}><Icon name="close" size={13} /></button></div>}
       {current.error && <div className={styles.warning} role="alert"><Icon name="alert" size={14} /><span>{t('workspaces.sourceStale')} {current.error}</span></div>}
-      {notice && <p className={styles.notice} role="status">{notice}</p>}
+      {notice && <p className={styles.notice} role="status"><span>{notice}</span><button type="button" className={styles.dismiss} aria-label={t('workspaces.dismiss')} title={t('workspaces.dismiss')} onClick={() => setNotice('')}><Icon name="close" size={13} /></button></p>}
       {allRepositories.length > 0 ? <>
         <div className={styles.filters}>
           <div className={styles.search} onKeyDown={event => moveFocus(event, true)}><SearchField label={t('workspaces.search')} value={query} onChange={setQuery} placeholder={t('workspaces.search')} /></div>
@@ -253,16 +262,17 @@ export function WorkspaceBrowser({ tools = [], onSession, incomingManifest, onMa
               </span>
             </article>;
           })}
-        </div> : <p className={styles.empty}>{t('workspaces.noMatches')}</p>}
+        </div> : <div className={styles.empty} role="status"><span>{t('workspaces.noMatches')}</span><Button size="sm" variant="ghost" onClick={() => { setQuery(''); setFilter('all'); }}>{t('workspaces.clearFilters')}</Button></div>}
       </> : <div className={styles.emptyState}><p>{t('workspaces.emptyReposAction')}</p><Button size="sm" variant="ghost" icon={<Icon name="search" size={13} />} disabled={busy || scanBusy} onClick={() => void discover(true)}>{t('workspaces.discover')}</Button></div>}
     </> : <div className={styles.intro}>
       <span className={styles.introIcon} aria-hidden="true"><Icon name="folder" size={18} /></span>
-      <div className={styles.introCopy}><strong>{loading ? t('workspaces.loading') : t('workspaces.title')}</strong><span>{loadError || t('workspaces.hint')}</span></div>
+      <div className={styles.introCopy}><strong>{loading ? t('workspaces.loading') : t('workspaces.empty')}</strong><span>{loadError || t('workspaces.hint')}</span></div>
       {!loading && <div className={styles.headerActions}>
         {loadError ? <Button size="sm" onClick={() => void reload(true)}>{t('workspaces.retry')}</Button> : <Button size="sm" variant="primary" disabled={busy} icon={<Icon name="plus" size={14} />} onClick={startCreate}>{t('workspaces.create')}</Button>}
         <Button size="sm" variant="ghost" disabled={busy} onClick={() => void chooseManifest()}>{t('workspaces.openManifest')}</Button>
       </div>}
     </div>}
+    </div>
     <GuideDialog open={editName !== null} title={t(renaming ? 'workspaces.rename' : 'workspaces.create')} hint={t(renaming ? 'workspaces.renameHint' : 'workspaces.createHint')} closeDisabled={busy} onClose={() => setEditName(null)}>
       <form className={styles.form} onSubmit={event => { event.preventDefault(); if (!editName?.trim()) return; void operate(async () => { const value = renaming && current ? await native.renameBusinessWorkspace(current.id, editName ?? '', current.revision) : await native.createBusinessWorkspace(editName ?? ''); setSelectedId(value.id); setEditName(null); }); }}>
         <label>{t('workspaces.name')}<input autoFocus value={editName ?? ''} onChange={event => setEditName(event.target.value)} maxLength={160} /></label>

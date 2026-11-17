@@ -247,6 +247,7 @@ export const native = {
   listBusinessWorkspaces: () => command<BusinessWorkspace[]>('list_business_workspaces'),
   createBusinessWorkspace: (name: string) => command<BusinessWorkspace>('create_business_workspace', { name }),
   renameBusinessWorkspace: (workspaceId: string, name: string, expectedVersion: number) => command<BusinessWorkspace>('rename_business_workspace', { workspaceId, name, expectedVersion }),
+  deleteBusinessWorkspace: (workspaceId: string) => command<void>('delete_business_workspace', { workspaceId }),
   scanWorkspaceRepositories: (paths: string[], operationId: string, recursive: boolean) => command<WorkspaceScan>('scan_workspace_repositories', { paths, operationId, recursive }),
   cancelWorkspaceScan: (operationId: string) => command<void>('cancel_workspace_scan', { operationId }),
   addWorkspaceRepositories: (workspaceId: string, paths: string[], expectedVersion: number) => command<WorkspaceMemberResult[]>('add_workspace_repositories', { workspaceId, paths, expectedVersion }),

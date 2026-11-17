@@ -338,6 +338,7 @@ pub fn run() {
             commands::list_business_workspaces,
             commands::create_business_workspace,
             commands::rename_business_workspace,
+            commands::delete_business_workspace,
             commands::scan_workspace_repositories,
             commands::cancel_workspace_scan,
             commands::add_workspace_repositories,

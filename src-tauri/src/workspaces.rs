@@ -150,7 +150,12 @@ impl Drop for ManifestLock {
         let _ = self.0.unlock();
     }
 }
+/// Another window or sibling app (such as Twiglane) holding the same manifest lock.
+pub(crate) const MANIFEST_BUSY: &str = "项目清单正在其他窗口更新，请稍后重试";
 fn lock_file(path: &Path) -> Result<ManifestLock, String> {
+    lock_file_with(path, false)
+}
+fn lock_file_with(path: &Path, wait: bool) -> Result<ManifestLock, String> {
     let mut lock_name = path.as_os_str().to_os_string();
     lock_name.push(".lock");
     let lock_path = PathBuf::from(lock_name);
@@ -165,11 +170,12 @@ fn lock_file(path: &Path) -> Result<ManifestLock, String> {
         .open(lock_path)
         .map_err(|e| format!("无法锁定项目清单：{e}"))?;
     private_file(&file)?;
+    if wait {
+        return file.lock().map(|()| ManifestLock(file)).map_err(|error| format!("项目清单锁定失败：{error}"));
+    }
     match file.try_lock() {
         Ok(()) => Ok(ManifestLock(file)),
-        Err(std::fs::TryLockError::WouldBlock) => {
-            Err("项目清单正在其他窗口更新，请稍后重试".into())
-        }
+        Err(std::fs::TryLockError::WouldBlock) => Err(MANIFEST_BUSY.into()),
         Err(std::fs::TryLockError::Error(error)) => Err(format!("项目清单锁定失败：{error}")),
     }
 }
@@ -197,19 +203,29 @@ pub fn local_host_id() -> Result<String, String> {
     }
     host_id_at(&root.join("host-id"))
 }
+/// The identity is written once, atomically, so reading it needs no lock: concurrent windows
+/// and sibling apps sharing this directory can never make an ordinary list fail. Only the
+/// first creation waits for the lock, then re-reads in case another process won the race.
 fn host_id_at(path: &Path) -> Result<String, String> {
-    let _lock = lock_file(path)?;
+    if let Some(id) = read_host_id(path)? {
+        return Ok(id);
+    }
+    let _lock = lock_file_with(path, true)?;
+    if let Some(id) = read_host_id(path)? {
+        return Ok(id);
+    }
+    let id = Uuid::new_v4().to_string();
+    atomic_write(path, id.as_bytes())?;
+    Ok(id)
+}
+fn read_host_id(path: &Path) -> Result<Option<String>, String> {
     match fs::read_to_string(path) {
         Ok(value) => {
             let value = value.trim();
             Uuid::parse_str(value).map_err(|_| "本机项目身份文件损坏，原文件已保留")?;
-            Ok(value.into())
+            Ok(Some(value.into()))
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let id = Uuid::new_v4().to_string();
-            atomic_write(path, id.as_bytes())?;
-            Ok(id)
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.to_string()),
     }
 }
@@ -352,8 +368,11 @@ pub fn seed_legacy(db: &Database, host: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Business projects are a management grouping the user curates. Launch directories no longer
+/// become projects on their own; projects an older version seeded from a directory, and that
+/// were never changed since, leave together with that directory.
 pub fn list(db: &Database, host: &str) -> Result<Vec<Workspace>, String> {
-    seed_legacy(db, host)?;
+    retire_orphan_seeds(db)?;
     let ids: Vec<String> = db.with_connection(|conn| {
         let mut q = conn
             .prepare("SELECT id FROM workspace_projects ORDER BY name COLLATE NOCASE,id")
@@ -362,6 +381,31 @@ pub fn list(db: &Database, host: &str) -> Result<Vec<Workspace>, String> {
         rows.collect::<Result<_, _>>().map_err(sql)
     })?;
     ids.iter().map(|id| get(db, host, id)).collect()
+}
+fn retire_orphan_seeds(db: &Database) -> Result<(), String> {
+    let ids: Vec<String> = db.with_connection(|conn| {
+        let mut q = conn.prepare("SELECT w.id FROM workspace_projects w JOIN workspace_legacy_map m ON m.workspace_id=w.id AND m.project_id=w.id WHERE w.manifest_path IS NULL AND w.revision=1 AND NOT EXISTS(SELECT 1 FROM projects p WHERE p.id=m.project_id) AND (SELECT COUNT(*) FROM workspace_members x WHERE x.workspace_id=w.id)<=1 ORDER BY w.id").map_err(sql)?;
+        let rows = q.query_map([], |row| row.get(0)).map_err(sql)?;
+        rows.collect::<Result<_, _>>().map_err(sql)
+    })?;
+    for id in ids {
+        delete(db, &id)?;
+    }
+    Ok(())
+}
+/// Deletes only the grouping: repositories on disk, branches, sessions and their history stay.
+/// Prompts scoped to the project become general prompts so none of them disappear.
+pub fn delete(db: &Database, id: &str) -> Result<(), String> {
+    db.with_connection(|conn| {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(sql)?;
+        tx.execute("UPDATE prompt_metadata SET scope_json=json_object('kind','global') WHERE json_extract(scope_json,'$.kind')='workspace' AND json_extract(scope_json,'$.workspaceId')=?1", [id]).map_err(sql)?;
+        tx.execute("DELETE FROM workspace_sessions WHERE workspace_id=?1", [id]).map_err(sql)?;
+        // The legacy map row stays: lookups join workspace_projects, and the row keeps an old
+        // directory from being treated as never seen.
+        tx.execute("DELETE FROM workspace_projects WHERE id=?1", [id]).map_err(sql)?;
+        retire_locations(&tx)?;
+        tx.commit().map_err(sql)
+    })
 }
 /// Source display metadata must not probe the project's other repositories.
 pub fn display_name(db: &Database, id: &str) -> Result<Option<String>, String> {
@@ -892,15 +936,19 @@ pub fn refresh_manifest(db: &Database, host: &str, id: &str) -> Result<Workspace
             }
             project_manifest(db, &value, Some((&path, &hash)), Some(version))
         })();
-        if let Err(error) = result {
-            db.with_connection(|conn| {
-                conn.execute(
-                    "UPDATE workspace_projects SET last_error=?2 WHERE id=?1",
-                    params![id, error],
-                )
-                .map(|_| ())
-                .map_err(sql)
-            })?;
+        // A lock held by another window is not a fault of the project source: keep the last
+        // projection and its previous status, and let the next refresh pick the change up.
+        if let Err(error) = result.map(|_| ()) {
+            if error != MANIFEST_BUSY {
+                db.with_connection(|conn| {
+                    conn.execute(
+                        "UPDATE workspace_projects SET last_error=?2 WHERE id=?1",
+                        params![id, error],
+                    )
+                    .map(|_| ())
+                    .map_err(sql)
+                })?;
+            }
         }
     }
     get(db, host, id)

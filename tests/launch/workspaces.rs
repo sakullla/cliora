@@ -48,6 +48,7 @@ fn legacy_contexts_and_invalid_directories_survive_seed_and_reopen() {
         None,
     )
     .unwrap();
+    seed_legacy(&db, HOST).unwrap();
     let initial = list(&db, HOST).unwrap();
     assert_eq!(initial.len(), 1);
     assert_eq!(initial[0].id, project.id);
@@ -335,6 +336,7 @@ fn legacy_main_and_linked_checkouts_share_repository_but_keep_native_contexts() 
         None,
     )
     .unwrap();
+    seed_legacy(&db, HOST).unwrap();
     let rows = list(&db, HOST).unwrap();
     let first = rows.iter().find(|w| w.id == a.id).unwrap();
     let second = rows.iter().find(|w| w.id == b.id).unwrap();
@@ -425,6 +427,7 @@ fn launch_prefers_exact_checkout_configuration_over_main_repository_context() {
         None,
     )
     .unwrap();
+    seed_legacy(&db, HOST).unwrap();
     let rows = list(&db, HOST).unwrap();
     let workspace = rows.iter().find(|w| w.id == a.id).unwrap();
     let repo = &workspace.repositories[0];
@@ -582,6 +585,7 @@ fn legacy_seed_does_not_reuse_retired_repository_identity() {
         None,
     )
     .unwrap();
+    seed_legacy(&db, HOST).unwrap();
     let rows = list(&db, HOST).unwrap();
     let seeded = rows.iter().find(|item| item.id == legacy.id).unwrap();
     assert_ne!(seeded.repositories[0].id, repository_a);
@@ -693,4 +697,64 @@ fn foreign_absolute_hint_with_matching_host_is_still_not_a_local_working_directo
     )
     .unwrap_err()
     .contains("本机绝对路径"));
+}
+#[test]
+fn launch_directories_are_not_projects_and_untouched_seeds_leave_with_their_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = db();
+    let add = |name: &str| {
+        let folder = temp.path().join(name);
+        fs::create_dir(&folder).unwrap();
+        crate::projects::add(&db, &crate::adapters::Registry::builtins(), folder.to_str().unwrap(), Some(name), None).unwrap()
+    };
+    let fresh = add("fresh");
+    assert!(list(&db, HOST).unwrap().is_empty(), "a launch directory is not a business project");
+    crate::projects::remove(&db, &fresh.id).unwrap();
+
+    // An older version seeded these; one stays untouched, the other was renamed by the user.
+    let untouched = add("untouched");
+    let renamed = add("renamed");
+    let kept = add("kept");
+    seed_legacy(&db, HOST).unwrap();
+    rename(&db, HOST, &renamed.id, "Renamed by user", 1).unwrap();
+    let prompt = crate::library::save(&db, crate::library::LibraryDraft { id: None, kind: crate::library::LibraryKind::Prompt, title: "Scoped".into(), body: "body".into(), category: String::new(), project_id: Some(untouched.id.clone()), expected_version: None }).unwrap();
+    crate::prompts::ensure_metadata(&db).unwrap();
+    assert_eq!(crate::prompts::get(&db, &prompt.id, None).unwrap().scope, crate::prompts::PromptScope::Workspace { workspace_id: untouched.id.clone() });
+
+    crate::projects::remove(&db, &untouched.id).unwrap();
+    crate::projects::remove(&db, &renamed.id).unwrap();
+    let ids: Vec<String> = list(&db, HOST).unwrap().into_iter().map(|item| item.id).collect();
+    assert!(!ids.contains(&untouched.id), "an untouched seed leaves with its directory");
+    assert!(ids.contains(&renamed.id), "a project the user changed stays");
+    assert!(ids.contains(&kept.id), "a seed whose directory still exists stays");
+    assert_eq!(crate::prompts::get(&db, &prompt.id, None).unwrap().scope, crate::prompts::PromptScope::Global, "scoped prompts become general instead of disappearing");
+    // The retired seed is not recreated by later lists or prompt queries.
+    assert!(!list(&db, HOST).unwrap().iter().any(|item| item.id == untouched.id));
+}
+#[test]
+fn deleting_a_project_keeps_sessions_and_repositories_and_frees_its_scope() {
+    let temp = tempfile::tempdir().unwrap();
+    repository(temp.path());
+    let db = db();
+    let workspace = create(&db, HOST, "Group").unwrap();
+    add_paths(&db, HOST, &workspace.id, &[temp.path().to_string_lossy().into()], workspace.revision).unwrap();
+    let repository_id = get(&db, HOST, &workspace.id).unwrap().repositories[0].id.clone();
+    remember_session(&db, &SessionContext { session_id: "s1".into(), workspace_id: workspace.id.clone(), repository_id, host_id: HOST.into(), directory: temp.path().to_string_lossy().into() }).unwrap();
+    delete(&db, &workspace.id).unwrap();
+    assert!(list(&db, HOST).unwrap().is_empty());
+    assert!(session_contexts(&db).unwrap().is_empty());
+    assert!(temp.path().join(".git").exists(), "source files are never touched");
+    // Its old path can be added to a new project again.
+    let next = create(&db, HOST, "Again").unwrap();
+    add_paths(&db, HOST, &next.id, &[temp.path().to_string_lossy().into()], next.revision).unwrap();
+    assert_eq!(get(&db, HOST, &next.id).unwrap().repositories.len(), 1);
+}
+#[test]
+fn identity_reads_never_wait_for_or_fail_on_a_held_lock() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("host-id");
+    let id = host_id_at(&path).unwrap();
+    // Another window (or a sibling app) holds the identity lock: reading still succeeds.
+    let _held = lock_file(&path).unwrap();
+    assert_eq!(host_id_at(&path).unwrap(), id);
 }

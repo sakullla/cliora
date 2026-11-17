@@ -512,7 +512,6 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
   const remoteHostLabel = scopeTarget?.name || t('home.remote.currentHost');
   const pathLabels = distinctPaths(remoteScope ? scopedRemoteProjects.map((project) => project.path) : scopedProjects.flatMap((project) => project.path ? [project.path] : []));
   return <section className={`${styles.workspace} home-launcher`} aria-label={t('home.launcher.label')}>
-    {remoteTargetId === 'local' && <WorkspaceBrowser tools={tools} onSession={onWorkbenchSession} incomingManifest={incomingManifest} onManifestConsumed={onManifestConsumed} />}
     <Toolbar className={styles.heading} title={t(remoteScope ? 'home.continue.title' : 'workspaces.directoryTitle')} count={totalProjects ? <Badge>{totalProjects}</Badge> : undefined} actions={totalProjects ? <Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t(remoteScope ? 'home.launcher.add' : 'workspaces.directoryAdd')}</Button> : undefined} />
     {error && <div className={styles.error} role="alert" aria-busy={listLoading || undefined}><span className={styles.errorText}>{error}</span>{listFailed && reloadFailures > 0 && !listLoading && <span className={styles.errorHint}>{t('home.launcher.reloadFailed')}</span>}{listFailed && <Button size="sm" variant="ghost" className={styles.errorAction} loading={listLoading} disabled={listLoading || !!busy} onClick={() => void refresh()}>{t('home.launcher.reload')}</Button>}</div>}
     {feedback && <div className={styles.feedback} role="status">{feedback}</div>}
@@ -536,6 +535,7 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
       const profileHint = profileName ? t('home.launcher.profileIdentity', { name: profileName, id: profileId })
         : t(profileNames[toolId] === undefined ? 'home.launcher.profileNameLoading' : 'home.launcher.profileNameUnavailable', { id: profileId });
       return <Card padding="compact" ref={repair?.projectId === project.id ? repairCard : undefined} tabIndex={marked ? -1 : undefined} data-project-id={project.id} className={`${styles.project}${repair?.projectId === project.id ? ` ${styles.repair}` : ''}${spotlight?.id === project.id ? ` ${styles.spotlight}` : ''}`} key={project.id}>
+        <div className={styles.main}>
         <div className={styles.identity}>
           <div className={styles.projectTitle}><ToolIcon toolId={toolId} size={24} /><strong title={project.name}>{project.name}</strong></div>
           <div className={styles.contextLine}>{projectMode === 'yolo' && descriptor?.yoloAvailable && <span className={styles.badges}><Badge tone="warning">YOLO</Badge></span>}<span className={styles.contextTool}>{descriptor?.name ?? t('home.launcher.pickTool')}</span>{profileId && <span className={styles.contextProfile} title={profileHint} aria-label={profileHint} data-profile-name={profileName ? 'resolved' : 'unavailable'}>{profileName ? t('home.launcher.currentProfile', { id: profileName }) : t('home.launcher.profileNameFallback', { id: profileId })}</span>}</div>
@@ -552,6 +552,7 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
               <button type="button" role="menuitem" aria-label={t('home.launcher.openDirAria', { name: project.name })} title={t('home.launcher.openDirTitle')} disabled={!!busy || !project.available} onClick={() => void openProject(project, 'card')}><Icon name="folder" size={14} /><span>{t('home.launcher.openDir')}</span></button>
             </RowMenu>
           </div>
+        </div>
         </div>
         {cardError?.id === project.id && <div className={styles.cardError} role="alert"><span>{cardError.message}</span><button type="button" className={styles.cardErrorClose} aria-label={t('home.launcher.dismissError')} title={t('home.launcher.dismissError')} onClick={() => setCardError(null)}><Icon name="close" size={13} /></button></div>}
         {descriptor?.resume?.state === 'available' && descriptor.history?.state === 'unsupported' && <div className={styles.extra}><label>{t('home.launcher.projectSessionLabel')}<input aria-label={t('home.launcher.projectSessionAria', { name: project.name })} value={projectSessions[project.id] ?? ''} placeholder={t('home.launcher.resumeIdPlaceholder')} disabled={!!busy || !project.available} onChange={(event) => setProjectSessions((old) => ({ ...old, [project.id]: event.target.value }))} onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing && !busy && project.available && toolId && (projectSessions[project.id] ?? '').trim()) { event.preventDefault(); void launch(toolId, project.id, 'normal', projectSessions[project.id], 'page', false); } }} /></label><Button size="sm" disabled={!!busy || !project.available || !toolId || !(projectSessions[project.id] ?? '').trim()} title={!project.available ? t('home.launcher.dirUnavailable') : descriptor.history.reason} onClick={() => void launch(toolId, project.id, 'normal', projectSessions[project.id], 'page', false)}>{t('home.launcher.resumeById')}</Button><span>{t('home.launcher.projectSessionHint', { reason: descriptor.history.reason })}</span></div>}
@@ -625,6 +626,8 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
       {unindexedResume.map((item) => <p key={item.id}>{item.name}：{item.history.reason} {t('home.launcher.resumeOnProject')}</p>)}
       {!resumable.length && managed.filter((item) => item.resume != null && item.resume.state !== 'available').map((item) => <p key={item.id}>{item.name}：{item.resume.reason}</p>)}
     </div></details>}
+    {/* Business projects group repositories for management; launching from a directory comes first. */}
+    {remoteTargetId === 'local' && <WorkspaceBrowser tools={tools} onSession={onWorkbenchSession} incomingManifest={incomingManifest} onManifestConsumed={onManifestConsumed} />}
     {remotePicker.element}
   </section>;
 }

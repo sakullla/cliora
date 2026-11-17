@@ -445,8 +445,6 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [projects, setProjects] = useState<Project[]>([]);
   const [businessWorkspaces, setBusinessWorkspaces] = useState<BusinessWorkspace[]>([]);
   const [businessContexts, setBusinessContexts] = useState<WorkspaceSessionContext[]>([]);
-  const [businessContextError, setBusinessContextError] = useState('');
-  const [businessFilter, setBusinessFilter] = useState('*');
   const [businessSelection, setBusinessSelection] = useState<WorkspaceSelection | null>(null);
   const businessSessionKey = sessions.map(item => item.id).join('|');
   useEffect(() => {
@@ -458,14 +456,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       void Promise.allSettled([native.listBusinessWorkspaces(), native.listWorkspaceSessionContexts()]).then(([workspaces, contexts]) => {
         if (!live || request !== generation) return;
         if (workspaces.status === 'fulfilled') setBusinessWorkspaces(Array.isArray(workspaces.value) ? workspaces.value : []);
+        // Projects only add choices to the new-session picker and a label to a session; a failed
+        // read keeps the previous values instead of interrupting the workbench with a banner.
         if (contexts.status === 'fulfilled') setBusinessContexts(Array.isArray(contexts.value) ? contexts.value : []);
-        const failure = workspaces.status === 'rejected' ? workspaces.reason : contexts.status === 'rejected' ? contexts.reason : null;
-        setBusinessContextError(failure ? formatFailure(failure, t('workspaces.loadFailed'), t('workspaces.retry')) : '');
       });
     };
     reload(); window.addEventListener(WORKSPACES_CHANGED, reload);
     return () => { live = false; generation++; window.removeEventListener(WORKSPACES_CHANGED, reload); };
-  }, [active, businessSessionKey, t]);
+  }, [active, businessSessionKey]);
   const [remoteProjects, setRemoteProjects] = useState<RemoteProject[]>([]);
   const [loadedRemoteTargets, setLoadedRemoteTargets] = useState<RemoteTarget[] | null>(null);
   const remoteTargets = loadedRemoteTargets ?? syncedRemoteTargets;
@@ -1757,10 +1755,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
 
   function placeOf(session: WorkbenchSession): string {
-    const context = businessContexts.find(item => item.sessionId === session.id);
-    const workspace = context && businessWorkspaces.find(item => item.id === context.workspaceId);
-    const repository = workspace?.repositories.find(item => item.id === context?.repositoryId);
-    if (workspace && repository) return `${workspace.name} / ${repository.name}`;
+    // Sessions are named by where they run; business projects are a management grouping only.
     const project = session.projectId ? projects.find((item) => item.id === session.projectId) : undefined;
     if (project?.name) return project.name;
     if (session.directory) return shortPath(displayPath(session.directory));
@@ -2524,14 +2519,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const filteredSessions = useMemo(() => {
     const query = railSearch.trim().toLowerCase();
     return scopedSessions.filter((session) => {
-      if (businessFilter !== '*' && !businessContexts.some(context => context.sessionId === session.id && context.workspaceId === businessFilter)) return false;
       if (!query) return true;
       return toolName(session).toLowerCase().includes(query)
         || (titles.get(session.id) ?? '').toLowerCase().includes(query)
         || placeOf(session).toLowerCase().includes(query)
         || (session.directory ?? '').toLowerCase().includes(query);
     });
-  }, [scopedSessions, railSearch, projects, tools, titles, businessFilter, businessContexts, businessWorkspaces]);
+  }, [scopedSessions, railSearch, projects, tools, titles]);
 
   const arrangedSessions = useMemo(() => {
     const present = new Set(filteredSessions.map((session) => session.id));
@@ -3316,8 +3310,6 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   return <div ref={rootRef} className={styles.root} data-focus-mode={focusMode || undefined} data-empty={(showEmpty && !listError) || undefined} data-term-theme={terminalMode} data-narrow={narrowFrame || undefined} data-compact={compactFrame || undefined} data-tight={tightFrame || undefined} data-rail-docked={railDocked || undefined}>
     {(focusMode || (showEmpty && !listError)) && <h1 className={styles.srOnly} tabIndex={-1}>{t('common.pages.sessions.title')}</h1>}
-    {businessContextError && <div className={styles.banner} role="alert"><p>{businessContextError}</p><Button size="sm" onClick={() => window.dispatchEvent(new Event(WORKSPACES_CHANGED))}>{t('workspaces.retry')}</Button></div>}
-    {businessWorkspaces.length > 0 && <div className={styles.businessScope}><FilterSelect label={t('workspaces.recentSessions')} value={businessFilter} options={[{ value: '*', label: t('workspaces.allProjects') }, ...businessWorkspaces.map(item => ({ value: item.id, label: item.name }))]} onChange={setBusinessFilter} /></div>}
     {listError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><strong>{t('sessions.listFailed')}</strong><p>{listError}</p></div><Button size="sm" onClick={() => setReload((value) => value + 1)}>{t('sessions.retry')}</Button></div>}
 
     <div className={styles.layout} data-strip={(!railDocked && showRail) || undefined}>

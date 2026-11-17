@@ -7066,6 +7066,14 @@ pub async fn rename_business_workspace(
     .await
 }
 #[tauri::command]
+pub async fn delete_business_workspace(app: AppHandle, workspace_id: String) -> Result<(), ApiError> {
+    blocking(move || {
+        app.state::<AppState>()
+            .with_database(&app, |db| crate::workspaces::delete(db, &workspace_id).map_err(native_error))
+    })
+    .await
+}
+#[tauri::command]
 pub async fn scan_workspace_repositories(
     paths: Vec<String>,
     operation_id: String,
@@ -7246,11 +7254,6 @@ pub async fn list_workspace_session_contexts(
 ) -> Result<Vec<crate::workspaces::SessionContext>, ApiError> {
     blocking(move || {
         app.state::<AppState>().with_database(&app, |db| {
-            crate::workspaces::seed_legacy(
-                db,
-                &crate::workspaces::local_host_id().map_err(native_error)?,
-            )
-            .map_err(native_error)?;
             crate::workspaces::session_contexts(db).map_err(native_error)
         })
     })
@@ -7325,15 +7328,9 @@ pub async fn preview_workspace_link(
 }
 
 // Prompt APIs keep business scope distinct from the legacy rule/configuration directory scope.
-fn prepare_prompt_context(db: &Database) -> Result<(), ApiError> {
-    let pending=db.with_read_connection(|conn|conn.query_row("SELECT EXISTS(SELECT 1 FROM projects p WHERE NOT EXISTS(SELECT 1 FROM workspace_legacy_map m WHERE m.project_id=p.id))",[],|row|row.get::<_,bool>(0)).map_err(|e|e.to_string())).map_err(native_error)?;
-    if pending {
-        crate::workspaces::seed_legacy(
-            db,
-            &crate::workspaces::local_host_id().map_err(native_error)?,
-        )
-        .map_err(native_error)?;
-    }
+fn prepare_prompt_context(_db: &Database) -> Result<(), ApiError> {
+    // Launch directories are no longer seeded as business projects; prompt scopes resolve
+    // through the mappings that already exist, and unmapped legacy scopes stay unresolved.
     Ok(())
 }
 #[tauri::command]

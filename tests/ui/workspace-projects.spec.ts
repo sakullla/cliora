@@ -65,7 +65,9 @@ test('multi-repository projects search same-name paths, favorite, and launch the
   expect(request.repositoryId).toBe('repo-1');
   expect(request.request.directory).toBe('/work/commerce/team-1/api-feature');
   expect(request.request.worktreeIntent).toBe('given');
-  await expect(page.locator('[data-focus-mode]').or(page.getByText('电商平台 / api', { exact: true })).first()).toBeVisible();
+  // The session is named by its directory; the business project is not part of its label.
+  await expect(page.getByText(/api-feature/).first()).toBeVisible();
+  await expect(page.getByText('电商平台 / api', { exact: true })).toHaveCount(0);
 });
 
 test('a partial repository batch keeps the failure and retries only the failed selection', async ({ page }) => {
@@ -173,4 +175,56 @@ test('favorite repositories lead the list and the new-session directory picker',
   await expect(options.nth(1)).toContainText('service-47');
   await page.getByRole('textbox', { name: /搜索/ }).last().fill('team-1/api-feature');
   await expect(page.getByRole('option', { name: /^api · feature\/search/ })).toHaveCount(1);
+});
+
+test('narrow repository rows keep their name, path and worktree from overlapping', async ({ page }) => {
+  await page.setViewportSize({ width: 640, height: 900 });
+  await install(page);
+  const row = page.locator('[data-business-workspaces]').first().locator('[data-repository-id="repo-1"]');
+  const name = await row.locator('strong').first().boundingBox();
+  const path = await row.getByText('/work/commerce/team-1/api', { exact: true }).boundingBox();
+  const rowBox = await row.boundingBox();
+  expect(name && path && rowBox).toBeTruthy();
+  expect(path!.y).toBeGreaterThanOrEqual(name!.y + name!.height - 1);
+  expect(path!.y + path!.height).toBeLessThanOrEqual(rowBox!.y + rowBox!.height + 1);
+});
+
+test('a search with no matching repository clears in one action', async ({ page }) => {
+  await install(page);
+  const project = page.locator('[data-business-workspaces]').first();
+  await project.getByRole('textbox', { name: '搜索仓库名称或路径' }).fill('no-such-repository');
+  await expect(project.getByText('没有匹配的仓库')).toBeVisible();
+  await project.getByRole('button', { name: '清除筛选', exact: true }).click();
+  await expect(project.getByRole('textbox', { name: '搜索仓库名称或路径' })).toHaveValue('');
+  await expect(project.locator('[data-repository-id]')).toHaveCount(48);
+});
+
+test('a project can be deleted from its menu and only the grouping goes away', async ({ page }) => {
+  await install(page);
+  await projectAction(page, '删除项目');
+  const confirm = page.getByRole('alertdialog').or(page.getByRole('dialog', { name: '删除项目' })).first();
+  await expect(confirm).toContainText('仓库目录、分支和会话都不受影响');
+  await confirm.getByRole('button', { name: '删除项目', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__workspaceFixture.calls.filter((call: any) => call.command === 'delete_business_workspace').map((call: any) => call.args.workspaceId))).toEqual(['workspace-commerce']);
+  const project = page.locator('[data-business-workspaces]').first();
+  await expect(project.locator('[data-repository-id]').first()).not.toHaveAttribute('data-repository-id', /^repo-/);
+});
+
+test('project errors can be dismissed and the workbench rail is not filtered by project', async ({ page }) => {
+  await install(page);
+  await page.evaluate(() => { (window as any).__workspaceFixture.failBatch = true; });
+  const project = page.locator('[data-business-workspaces]').first();
+  await project.getByRole('button', { name: '添加仓库', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '选择要添加的仓库' });
+  await dialog.getByRole('button', { name: '添加所选 2 个仓库' }).click();
+  await expect(dialog.getByRole('alert')).toBeVisible();
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+  const alert = project.getByRole('alert').filter({ hasText: '/work/new/web' });
+  await expect(alert).toBeVisible();
+  await alert.getByRole('button', { name: '关闭提示', exact: true }).click();
+  await expect(alert).toHaveCount(0);
+
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.getByText('所有业务项目')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '项目会话' })).toHaveCount(0);
 });

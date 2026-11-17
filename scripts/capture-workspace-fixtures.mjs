@@ -24,6 +24,7 @@ export function installWorkspaceFixtures() {
     if (command === 'list_business_workspaces') return copy(workspaces);
     if (command === 'list_workspace_session_contexts') return copy(fixture.contexts);
     if (command === 'create_business_workspace') { const row = { id: `workspace-${workspaces.length}`, name: args.name, revision: 1, manifestPath: null, manifestRevision: null, error: null, repositories: [] }; workspaces.push(row); return copy(row); }
+    if (command === 'delete_business_workspace') { const at = workspaces.findIndex(item => item.id === args.workspaceId); if (at >= 0) workspaces.splice(at, 1); return null; }
     if (command === 'rename_business_workspace') { const row = find(args.workspaceId); if (row.revision !== args.expectedVersion) throw { message: '项目已在其他窗口更新' }; row.name = args.name; row.revision++; return copy(row); }
     if (command === 'favorite_workspace_repository') { const row = find(args.workspaceId); row.repositories.find(repo => repo.id === args.repositoryId).favorite = args.favorite; return copy(row); }
     if (command === 'refresh_workspace_manifest') return copy(find(args.workspaceId));

@@ -1,5 +1,5 @@
-/* Modern Studio tokens: crisp slate/obsidian neutrals, high-contrast ink typography,
-   deep-teal identity, tactile card elevation and luminous data-viz colors.
+/* Grove tokens: softly green-tinted paper neutrals, calm ink typography and one leaf-green
+   identity color drawn from the brand mark (#366B49), brightened for a friendlier tone.
    Semantic names stay stable so feature modules consume one visual language. */
 
 :root {
@@ -14,15 +14,15 @@
   --font-sans: "Inter", "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
   --font-display: "Inter", "Segoe UI Variable Display", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
 
-  /* Calm cool-neutral frame, paper cards and one deep-teal identity color. */
-  --bg: #f6f7f9;
-  --sidebar: #f0f2f5;
+  /* Calm sage-tinted frame, paper cards and one leaf-green identity color. */
+  --bg: #f5f7f4;
+  --sidebar: #eef2ed;
   --surface: #ffffff;
-  --surface-2: #f3f5f7;
-  --surface-3: #e6e9ee;
-  --overlay: rgb(16 24 32 / 38%);
-  --wash-a: rgb(15 118 110 / 6%);
-  --wash-b: rgb(15 118 110 / 3%);
+  --surface-2: #f2f5f1;
+  --surface-3: #e4e9e3;
+  --overlay: rgb(18 28 22 / 36%);
+  --wash-a: rgb(47 122 82 / 6%);
+  --wash-b: rgb(47 122 82 / 3%);
   --surface-glass: rgb(255 255 255 / 90%);
   --surface-raised: var(--surface);
   --aurora-1: transparent;
@@ -30,36 +30,36 @@
   --aurora-3: transparent;
   --frame: var(--sidebar);
   --canvas-glow: none;
-  --sidebar-edge: color-mix(in srgb, #101820 6%, transparent);
-  --sidebar-divider: color-mix(in srgb, #101820 6%, transparent);
-  --sidebar-well: color-mix(in srgb, #101820 4%, transparent);
+  --sidebar-edge: color-mix(in srgb, #18211c 6%, transparent);
+  --sidebar-divider: color-mix(in srgb, #18211c 7%, transparent);
+  --sidebar-well: color-mix(in srgb, #18211c 4%, transparent);
   --sidebar-well-hover: #ffffff;
-  --sidebar-kbd: color-mix(in srgb, #101820 6%, transparent);
+  --sidebar-kbd: color-mix(in srgb, #18211c 6%, transparent);
   --sidebar-active: #ffffff;
-  --sidebar-active-ring: 0 0 0 1px rgb(16 24 32 / 6%), 0 1px 3px rgb(16 24 32 / 6%);
+  --sidebar-active-ring: 0 0 0 1px rgb(24 33 28 / 6%), 0 1px 3px rgb(24 33 28 / 7%);
 
-  --text: #111827;
-  --text-2: #374151;
-  --text-3: #57606d;
+  --text: #18211c;
+  --text-2: #364139;
+  --text-3: #5a645d;
 
-  --line: #e5e8ec;
-  --line-strong: #d3d8df;
-  --control-line: #d7dce2;
-  --control-line-hover: #a4acb8;
+  --line: #e2e7e0;
+  --line-strong: #cfd7cc;
+  --control-line: #d5dcd3;
+  --control-line-hover: #a3ada4;
 
   --surface-hover: color-mix(in srgb, var(--text) 3%, var(--surface));
   --surface-pressed: color-mix(in srgb, var(--text) 6%, var(--surface));
   --row-hover: color-mix(in srgb, var(--text) 4%, transparent);
 
-  /* Deep teal is reserved for identity, current context, focus and primary work. */
-  --accent: #0f766e;
-  --accent-hover: #115e59;
-  --accent-bright: #14b8a6;
+  /* Leaf green is reserved for identity, current context, focus and primary work. */
+  --accent: #2f7a52;
+  --accent-hover: #276845;
+  --accent-bright: #4caf74;
   --on-accent: #ffffff;
-  --accent-soft: #effcf9;
-  --accent-line: #a7ebe0;
-  --accent-ring: rgb(15 118 110 / 16%);
-  --selection: #ccf5ee;
+  --accent-soft: #edf6ef;
+  --accent-line: #b5dbc1;
+  --accent-ring: rgb(47 122 82 / 18%);
+  --selection: #d2ecd9;
   --accent-border: var(--accent);
   --accent-fill: var(--accent);
   --accent-fill-hover: var(--accent-hover);
@@ -84,7 +84,7 @@
   --caption-close: #c42b1c;
   --on-caption-close: #ffffff;
   --on-brand: #ffffff;
-  --tool-logo-pale: #f8fafc;
+  --tool-logo-pale: #f7f9f6;
 
   /* Whole-pixel steps keep Chinese glyphs crisp on desktop displays. */
   --fs-micro: 11px;
@@ -121,33 +121,33 @@
 
   /* Resting secondary controls stay quiet; cards, primary actions and overlays carry crisp depth. */
   --shadow-xs: none;
-  --shadow-sm: 0 1px 2px rgb(15 23 42 / 5%);
-  --shadow-pill-active: 0 1px 2px rgb(15 23 42 / 5%), 0 0 0 1px rgb(15 23 42 / 5%);
-  --shadow-logo: 0 1px 2px rgb(15 23 42 / 4%);
-  --shadow-md: 0 12px 28px -12px rgb(15 23 42 / 18%), 0 4px 10px -4px rgb(15 23 42 / 8%);
-  --shadow-lg: 0 24px 64px -20px rgb(15 23 42 / 26%), 0 8px 24px -10px rgb(15 23 42 / 12%);
-  --shadow-accent: 0 1px 2px rgb(15 118 110 / 24%);
+  --shadow-sm: 0 1px 2px rgb(22 34 27 / 5%);
+  --shadow-pill-active: 0 1px 2px rgb(22 34 27 / 5%), 0 0 0 1px rgb(22 34 27 / 5%);
+  --shadow-logo: 0 1px 2px rgb(22 34 27 / 4%);
+  --shadow-md: 0 12px 28px -12px rgb(22 34 27 / 18%), 0 4px 10px -4px rgb(22 34 27 / 8%);
+  --shadow-lg: 0 24px 64px -20px rgb(22 34 27 / 24%), 0 8px 24px -10px rgb(22 34 27 / 11%);
+  --shadow-accent: 0 1px 2px rgb(39 104 69 / 26%);
   --inner-highlight: inset 0 1px 0 rgb(255 255 255 / 18%);
-  --shadow-canvas: 0 1px 3px rgb(15 23 42 / 4%);
-  --shadow-card: 0 1px 2px rgb(15 23 42 / 4%), 0 2px 6px -2px rgb(15 23 42 / 3%);
-  --shadow-card-hover: 0 6px 18px -6px rgb(15 23 42 / 10%), 0 2px 6px -2px rgb(15 23 42 / 5%);
-  --shadow-well: inset 0 1px 2px rgb(15 23 42 / 6%);
-  --shadow-well-soft: inset 0 1px 1px rgb(15 23 42 / 4%);
+  --shadow-canvas: 0 1px 3px rgb(22 34 27 / 4%);
+  --shadow-card: 0 1px 2px rgb(22 34 27 / 4%), 0 2px 6px -2px rgb(22 34 27 / 3%);
+  --shadow-card-hover: 0 6px 18px -6px rgb(22 34 27 / 11%), 0 2px 6px -2px rgb(22 34 27 / 5%);
+  --shadow-well: inset 0 1px 2px rgb(22 34 27 / 6%);
+  --shadow-well-soft: inset 0 1px 1px rgb(22 34 27 / 4%);
   --glow-accent: none;
-  --shadow-brandmark: 0 1px 2px rgb(15 23 42 / 10%);
-  --shadow-thumb: 0 1px 3px rgb(15 23 42 / 22%);
+  --shadow-brandmark: 0 1px 2px rgb(22 34 27 / 10%);
+  --shadow-thumb: 0 1px 3px rgb(22 34 27 / 22%);
   --focus-ring: 2px solid var(--accent);
 
-  --theme-preview-light-bg: #f6f7f9;
-  --theme-preview-light-rail: #f0f2f5;
-  --theme-preview-light-line: #dbe2ed;
-  --theme-preview-light-ink: #334155;
-  --theme-preview-light-muted: #cbd5e1;
-  --theme-preview-dark-bg: #101216;
-  --theme-preview-dark-rail: #0b0d10;
-  --theme-preview-dark-line: #293246;
-  --theme-preview-dark-ink: #cbd5e1;
-  --theme-preview-dark-muted: #334155;
+  --theme-preview-light-bg: #f5f7f4;
+  --theme-preview-light-rail: #eef2ed;
+  --theme-preview-light-line: #d5dcd3;
+  --theme-preview-light-ink: #364139;
+  --theme-preview-light-muted: #cfd7cc;
+  --theme-preview-dark-bg: #121614;
+  --theme-preview-dark-rail: #0d100e;
+  --theme-preview-dark-line: #2c352f;
+  --theme-preview-dark-ink: #c5cec7;
+  --theme-preview-dark-muted: #343d37;
 
   --space-0_5: 2px;
   --space-0_75: 3px;
@@ -182,21 +182,21 @@
   --medium: 190ms;
   --slow: 240ms;
 
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23374151' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2357606d' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23364139' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235a645d' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #101216;
-  --sidebar: #0b0d10;
-  --surface: #16191e;
-  --surface-2: #1c2026;
-  --surface-3: #262b33;
-  --overlay: rgb(3 5 8 / 66%);
-  --wash-a: rgb(45 212 191 / 7%);
-  --wash-b: rgb(45 212 191 / 4%);
-  --surface-glass: rgb(22 25 30 / 92%);
+  --bg: #121614;
+  --sidebar: #0d100e;
+  --surface: #171c19;
+  --surface-2: #1d231f;
+  --surface-3: #272e29;
+  --overlay: rgb(3 6 4 / 64%);
+  --wash-a: rgb(127 207 155 / 7%);
+  --wash-b: rgb(127 207 155 / 4%);
+  --surface-glass: rgb(23 28 25 / 92%);
   --surface-raised: var(--surface);
   --frame: var(--sidebar);
   --canvas-glow: none;
@@ -205,30 +205,30 @@
   --sidebar-well: rgb(255 255 255 / 4.5%);
   --sidebar-well-hover: rgb(255 255 255 / 7.5%);
   --sidebar-kbd: rgb(255 255 255 / 7.5%);
-  --sidebar-active: #1b1f25;
+  --sidebar-active: #1c221e;
   --sidebar-active-ring: 0 0 0 1px rgb(255 255 255 / 7%), 0 2px 6px -1px rgb(0 0 0 / 35%);
 
-  --text: #f2f4f6;
-  --text-2: #c8ced6;
-  --text-3: #9aa3af;
+  --text: #eef3ef;
+  --text-2: #c5cec7;
+  --text-3: #98a49b;
 
-  --line: #252a31;
-  --line-strong: #353b45;
-  --control-line: #2f353e;
-  --control-line-hover: #4b5360;
+  --line: #242b26;
+  --line-strong: #343d37;
+  --control-line: #2e3631;
+  --control-line-hover: #4a554d;
 
   --surface-hover: color-mix(in srgb, var(--text) 5%, var(--surface));
   --surface-pressed: color-mix(in srgb, var(--text) 9%, var(--surface));
   --row-hover: color-mix(in srgb, var(--text) 5.5%, transparent);
 
-  --accent: #2dd4bf;
-  --accent-hover: #5eead4;
-  --accent-bright: #99f6e4;
-  --on-accent: #042f2c;
-  --accent-soft: #0e2826;
-  --accent-line: #17504a;
-  --accent-ring: rgb(45 212 191 / 22%);
-  --selection: #0f3632;
+  --accent: #7fcf9b;
+  --accent-hover: #9edcb3;
+  --accent-bright: #b6e9c8;
+  --on-accent: #0b2416;
+  --accent-soft: #152a1d;
+  --accent-line: #2b5139;
+  --accent-ring: rgb(127 207 155 / 22%);
+  --selection: #1e3b29;
   --accent-border: var(--accent);
   --accent-fill: var(--accent);
   --accent-fill-hover: var(--accent-hover);
@@ -267,6 +267,6 @@
   --shadow-well-soft: inset 0 1px 1px rgb(0 0 0 / 22%);
   --shadow-thumb: 0 1px 3px rgb(0 0 0 / 48%);
 
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23c8ced6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%239aa3af' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23c5cec7' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2398a49b' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
 }

@@ -138,3 +138,11 @@
   .quickContent { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .quickContent > div:first-child, .quickContent .actions { grid-column: 1 / -1; }
 }
+/* Local directory cards: identity and the launch row share one grid. A wide card puts launch
+   beside the name so the card is two lines shorter; a narrow card stacks them as before. */
+.main { display: grid; gap: var(--space-3); min-width: 0; }
+@container project-card (min-width: 460px) {
+  .main { grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-3) var(--space-4); }
+  .main > .controls { grid-template-columns: auto; }
+  .main .controlsLead { display: none; }
+}
