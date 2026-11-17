@@ -1731,6 +1731,9 @@ mod tests {
         let stderr = "file:///C:/npm/node_modules/@openai/codex/bin/codex.js:108\n  throw new Error(\n        ^\n\n\u{1b}[31mError: Missing optional dependency @openai/codex-win32-x64. Reinstall Codex: npm install -g @openai/codex@latest\u{1b}[0m\n    at findCodexExecutable (file:///C:/npm/codex.js:108:9)\n\nNode.js v26.4.0\n";
         let detail = probe_failure_detail(false, Some(1), stderr.as_bytes(), b"");
         assert_eq!(detail, "版本命令失败（退出码 1）：Error: Missing optional dependency @openai/codex-win32-x64. Reinstall Codex: npm install -g @openai/codex@latest");
+        // OMP 18.22.1 under npm without its `pi-natives-win32-x64` optional package (Bun output).
+        let omp = "1044 | \tthrow new Error(\n                  ^\nerror: Failed to load pi_natives native addon for win32-x64 (modern).\n\nTried:\n- C:\\Users\\example\\.omp\\natives\\18.22.1\\pi_natives.win32-x64-modern.node: Cannot find module\n\nBun v1.4.4 (Windows x64)\n";
+        assert_eq!(probe_failure_detail(false, Some(1), omp.as_bytes(), b""), "版本命令失败（退出码 1）：error: Failed to load pi_natives native addon for win32-x64 (modern).");
         // Without an error-looking line the last meaningful line is kept, bounded.
         let long = "x".repeat(PROBE_REASON_CHARS + 50);
         let detail = probe_failure_detail(false, Some(2), b"", long.as_bytes());
