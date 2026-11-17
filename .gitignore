@@ -48,6 +48,13 @@ docs/verification/*
 !docs/verification/session-recovery-status-2026-11-13.md
 !docs/verification/tools-resource-performance-2026-11-15.md
 !docs/verification/history-remote-2026-11-16.md
+!docs/verification/omp-performance-2026-11-17.md
+!docs/verification/ui-omp-optimization/
+docs/verification/ui-omp-optimization/*
+!docs/verification/ui-omp-optimization/omp-quick-light-1360.png
+!docs/verification/ui-omp-optimization/omp-quick-dark-1360.png
+!docs/verification/ui-omp-optimization/omp-advanced-light-1360.png
+!docs/verification/ui-omp-optimization/omp-advanced-dark-1360.png
 !docs/verification/performance-installation/
 docs/verification/performance-installation/*
 !docs/verification/performance-installation/README.md

@@ -213,6 +213,7 @@ test('configuration dialog names the profile, marks the preview tab and reports 
   await dialog.getByLabel('配置名称').fill('');
   await expect(dialog.getByLabel('配置名称')).toHaveAttribute('aria-invalid', 'true');
   await dialog.getByLabel('配置名称').fill('改名后的配置');
+  await dialog.getByRole('button', { name: '高级配置', exact: true }).click();
   await dialog.getByRole('button', { name: '合并与来源', exact: true }).click();
   await expect(dialog.getByRole('button', { name: '合并与来源', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(dialog.getByRole('button', { name: '连接与模型', exact: true })).toHaveAttribute('aria-pressed', 'false');

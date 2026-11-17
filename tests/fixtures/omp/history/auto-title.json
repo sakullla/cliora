@@ -1,0 +1,21 @@
+{
+  "capability": "history",
+  "name": "an auto title slot is read as the current title just like a user title",
+  "case": {
+    "action": "session",
+    "fixture": "omp-v3-auto-title.jsonl",
+    "expect": {
+      "title": "Auto fixture title",
+      "nativeId": "0190f4a2-0000-7000-8000-000000000006",
+      "cwd": "/fixture/project",
+      "partial": false,
+      "messages": ["Auto titled prompt", "Auto titled answer"],
+      "usageCount": 1,
+      "input": 10,
+      "output": 5,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "models": ["fixture/fixture-model"]
+    }
+  }
+}

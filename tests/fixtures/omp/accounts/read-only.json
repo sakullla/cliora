@@ -1,0 +1,7 @@
+{
+  "capability": "accounts",
+  "name": "OMP accounts are discovered read-only and no provider has managed login",
+  "case": {
+    "kind": "read-only-policy"
+  }
+}

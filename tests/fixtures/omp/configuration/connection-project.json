@@ -1,0 +1,14 @@
+{
+  "capability": "configuration",
+  "name": "project scope refuses a managed supplier secret",
+  "case": {
+    "kind": "connection",
+    "scope": "project",
+    "provider": "alpha",
+    "format": "openai_completions",
+    "baseUrl": "https://alpha.example.test/v1",
+    "model": "one",
+    "secretRef": "connection-00000000-0000-4000-8000-000000000002",
+    "expectError": true
+  }
+}

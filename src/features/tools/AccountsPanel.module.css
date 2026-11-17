@@ -46,6 +46,7 @@
 .nativeRow > details { grid-column: 1 / -1; font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text-2); }
 .nativeRow summary { cursor: pointer; }
 .readOnlyTag { flex: none; padding: 0 var(--space-2); border: 1px solid var(--line-strong); border-radius: var(--radius-pill); color: var(--text-2); font-size: var(--fs-micro); line-height: 18px; white-space: nowrap; }
+.readOnlyDetail { margin: 0; color: var(--text-2); font-size: var(--fs-body); line-height: 1.6; overflow-wrap: anywhere; }
 /* A managed row leads with identity and state, keeps its current action beside them, and
    opens one continuous management region instead of stacked disclosures. */
 .accountHead { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2) var(--space-4); min-width: 0; }

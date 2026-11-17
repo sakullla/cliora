@@ -1,0 +1,29 @@
+{
+  "capability": "resources",
+  "name": "OMP MCP documents keep stdio/http/sse and the enabled state",
+  "case": {
+    "kind": "mcp",
+    "action": "documents",
+    "cases": [
+      {
+        "name": "filesystem",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp/root"],
+        "enabled": true
+      },
+      {
+        "name": "github",
+        "transport": "http",
+        "url": "https://api.githubcopilot.com/mcp/",
+        "enabled": true
+      },
+      {
+        "name": "legacy-remote",
+        "transport": "sse",
+        "url": "https://example.test/mcp/sse",
+        "enabled": false
+      }
+    ]
+  }
+}

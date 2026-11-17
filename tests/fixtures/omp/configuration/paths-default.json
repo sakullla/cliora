@@ -1,0 +1,14 @@
+{
+  "capability": "configuration",
+  "name": "default profile honours PI_CODING_AGENT_DIR but a named profile does not",
+  "case": {
+    "kind": "paths",
+    "profile": null,
+    "configDir": "custom-config",
+    "codingAgentDir": "{home}/relocated-agent",
+    "expectedProfile": "default",
+    "expectedRoot": "{home}/relocated-agent",
+    "expectedConfig": "{home}/relocated-agent/config.yml",
+    "expectedModels": "{home}/relocated-agent/models.yml"
+  }
+}

@@ -59,6 +59,13 @@ export function ConfigurationWorkspaceEditor(props: Props) {
   const [draft, setDraft] = useState<ConfigurationDraft | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  // Both new and existing named profiles start on the quick screen; advanced
+  // stays one click away and keeps every value. Both levels render the same
+  // draft: toggling only changes what is shown.
+  const quickCapable = subject === 'profile';
+  const [level, setLevel] = useState<'quick' | 'advanced'>(quickCapable ? 'quick' : 'advanced');
+  const quick = quickCapable && level === 'quick';
+  const submitting = useRef(false);
   const [pending, setPending] = useState(false);
   const [valid, setValid] = useState(true);
   const [error, setError] = useState('');
@@ -74,6 +81,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
   const [visibleSecret, setVisibleSecret] = useState<string | null>(null);
   const [secretShown, setSecretShown] = useState(false);
   const nameId = useId();
+  const recommendedHintId = useId();
   const modelPane = useRef<HTMLDivElement>(null);
   const directoryPanel = useRef<HTMLElement>(null);
   const [directory, setDirectory] = useState<ModelDirectory | null>(null);
@@ -117,6 +125,35 @@ export function ConfigurationWorkspaceEditor(props: Props) {
   const focusReturn = useRef<HTMLElement | null>(null);
   const credentialPanel = useRef<HTMLDivElement>(null);
   const credentialSource = useRef<ConfigurationCredential['source'] | null>(null);
+  // A quick step that needs the advanced shell is scheduled once, after the
+  // level state has rendered. The ref never captures a stale `quick` value.
+  const pendingStep = useRef<ConfigurationStepKey | null>(null);
+  const focusStep = (key: ConfigurationStepKey) => {
+    const target = modelPane.current?.querySelector<HTMLElement>(`[data-config-step="${key}"]`);
+    if (!target) return;
+    target.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+    if (key === 'connection') {
+      // The address is the last input of the provider/address card in every
+      // adapter that renders one; focus it rather than the provider id.
+      const inputs = [...target.querySelectorAll<HTMLElement>('input:not([disabled]):not([type="hidden"])')];
+      const address = inputs.at(-1) ?? target.querySelector<HTMLElement>('select:not([disabled]), input:not([disabled]):not([type="hidden"])');
+      address?.focus({ preventScroll: true });
+      return;
+    }
+    const focusable = ['input:not([disabled]):not([type="hidden"]), select:not([disabled])', '[role="radio"][aria-checked="true"]:not([disabled])', 'button:not([disabled])'];
+    for (const selector of focusable) { const control = target.querySelector<HTMLElement>(selector); if (control) { control.focus({ preventScroll: true }); break; } }
+  };
+  const jumpTo = (key: ConfigurationStepKey) => {
+    if (quick && key === 'connection') { pendingStep.current = key; setLevel('advanced'); return; }
+    focusStep(key);
+  };
+  useEffect(() => {
+    if (level !== 'advanced' || !pendingStep.current) return;
+    const step = pendingStep.current;
+    pendingStep.current = null;
+    const frame = requestAnimationFrame(() => { if (alive.current) focusStep(step); });
+    return () => cancelAnimationFrame(frame);
+  }, [level]);
 
   useEffect(() => {
     alive.current = true;
@@ -184,6 +221,13 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     : apiSourceCapability?.available ?? (subject === 'profile' && workspace.probe.connectionPolicy?.apiKey.state === 'writable');
   const apiReason = apiSourceCapability?.reason ?? workspace.probe.connectionPolicy?.apiKey.reason;
   const accountSupported = accountSourceCapability?.available ?? (!!props.accounts.capability && (props.accounts.capability.managedLogin || props.accounts.accounts.some(account => accountReadyForSelection(account, props.accounts.capability))));
+  const signedInNative = !!nativeLogins?.logins.some(login => login.state === 'signed_in');
+  const readyAccount = props.accounts.accounts.some(account => accountReadyForSelection(account, props.accounts.capability));
+  // Recommendation is presentation only: it never changes the draft's source.
+  const recommendedSource: ConfigurationCredential['source'] | null = subject !== 'profile' ? null
+    : signedInNative ? 'native'
+    : accountSupported && readyAccount ? 'account'
+    : apiWritable ? 'api_key' : null;
   const selectedAccountId = draft?.credential?.source === 'account' ? draft.credential.accountId : '';
   const selectedAccount = props.accounts.accounts.find(account => account.id === selectedAccountId);
 
@@ -306,8 +350,9 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     return true;
   }
   async function save(use = false) {
-    const owner = session.current; if (!owner || !owner.canSubmit || busy) return;
+    const owner = session.current; if (!owner || !owner.canSubmit || busy || submitting.current) return;
     if (subject === 'profile' && !owner.draft.profile.name.trim()) { setError(t('tools.config.nameRequired')); document.querySelector<HTMLInputElement>(`[aria-label="${t('tools.config.name')}"]`)?.focus(); return; }
+    submitting.current = true;
     setBusy(true); setError(''); setNotice('');
     try {
       await flushSecret(); if (!alive.current || owner !== session.current || !owner.canSubmit) return;
@@ -329,7 +374,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
       if (subject === 'current') {
         await compareCurrent();
       }
-    } finally { if (alive.current) setBusy(false); }
+    } finally { submitting.current = false; if (alive.current) setBusy(false); }
   }
   async function compareCurrent() {
     const owner = session.current; if (!owner || owner.pending) return;
@@ -388,12 +433,17 @@ export function ConfigurationWorkspaceEditor(props: Props) {
   const fileCount = draft ? new Set([...workspace.probe.nativeFiles.filter(file => !file.sensitive).map(file => file.role), ...Object.keys(draft.profile.files)]).size : 0;
   const views = configViews(subject, Boolean(Editor), fieldCount, fileCount, connectionChainAbsent && !!Editor);
   const activeView = views.includes(view) ? view : views[0] ?? view;
+  // Quick shows the first view the adapter actually declared. Settings-only
+  // tools (no connection/model chain) must not be driven as an empty model page.
+  const quickView = views.includes('models') ? 'models' : views[0] ?? view;
+  const shownView = quick ? quickView : activeView;
+  const quickNoteVisible = quick && views.includes('models') && !connectionChainAbsent;
   useEffect(() => {
     const previous = credentialSource.current;
     credentialSource.current = source;
-    if (!previous || previous === source || source !== 'api_key' || activeView !== 'models') return;
+    if (!previous || previous === source || source !== 'api_key' || shownView !== 'models') return;
     credentialPanel.current?.scrollIntoView({ block: 'nearest' });
-  }, [source, activeView]);
+  }, [source, shownView]);
   // A fetched multi-model directory opens below the model list; bring it into view.
   useEffect(() => { if (directoryOpen) requestAnimationFrame(() => directoryPanel.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' })); }, [directoryOpen, directory]);
   useEffect(() => { if (!secretInput) setSecretShown(false); }, [secretInput]);
@@ -416,6 +466,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     if (key.includes(':new-model:')) return t('tools.config.invalidNewModel');
     if (key.startsWith('common:')) return t('tools.config.invalidCommon', { label: labelFor(key.slice('common:'.length)) });
     const rest = key.startsWith(`${draft.sessionId}:`) ? key.slice(draft.sessionId.length + 1) : key;
+    if (rest === 'roleOverrides') return t('tools.config.invalidRoleOverrides');
     if (rest.startsWith('{')) {
       const sep = rest.indexOf('}:');
       if (sep > 0) try {
@@ -442,7 +493,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
   const accountReady = !!selectedAccount && accountReadyForSelection(selectedAccount, props.accounts.capability);
   const accountTitle = selectedAccount?.identity?.email ?? selectedAccount?.identity?.subject ?? (accountReady ? selectedAccount?.label : undefined) ?? t('tools.config.noAccountSelected');
   const accountStatus = accountReady ? (selectedAccount?.identity ? t('tools.config.verified') : t('tools.config.noIdentity')) : t('tools.config.pendingVerify');
-  const sourceChoice = (value: ConfigurationCredential['source'], aria: string, title: string, detail: string) => <button type="button" role="radio" aria-checked={source === value} disabled={busy || pending || cancelling} onClick={event => { focusReturn.current = event.currentTarget; void chooseSource(value); }}><span className="sr-only">{aria}</span><span className={styles.sourceMark} aria-hidden="true" /><span className={styles.sourceCopy} aria-hidden="true"><strong>{title}</strong><small>{detail}</small></span></button>;
+  const sourceChoice = (value: ConfigurationCredential['source'], aria: string, title: string, detail: string) => <><button type="button" role="radio" aria-checked={source === value} aria-describedby={recommendedSource === value ? recommendedHintId : undefined} data-recommended={recommendedSource === value || undefined} disabled={busy || pending || cancelling} onClick={event => { focusReturn.current = event.currentTarget; void chooseSource(value); }}><span className="sr-only">{aria}</span><span className={styles.sourceMark} aria-hidden="true" /><span className={styles.sourceCopy} aria-hidden="true"><strong>{title}{recommendedSource === value && <span className={styles.recommend}>{t('tools.config.recommended')}</span>}</strong><small>{detail}</small></span></button>{recommendedSource === value && <span id={recommendedHintId} className="sr-only">{t('tools.config.recommended')}</span>}</>;
   const stepLabels: Record<ConfigurationStepKey, string> = { connection: t('tools.config.chainConnection'), login: t('tools.config.chainLogin'), model: t('tools.config.chainModel') };
   const stepDone: Record<ConfigurationStepKey, boolean> = {
     connection: !!(connection?.providerId?.trim() || connection?.baseUrl?.trim()),
@@ -450,14 +501,6 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     model: !!connection?.model?.trim(),
   };
   const steps = configurationStepOrder.filter(key => key !== 'connection' || connectionConfigurable).map(key => ({ key, label: stepLabels[key], done: stepDone[key] }));
-  // Jump to a numbered step and hand keyboard focus to its first control.
-  const jumpTo = (key: ConfigurationStepKey) => {
-    const target = modelPane.current?.querySelector<HTMLElement>(`[data-config-step="${key}"]`);
-    if (!target) return;
-    target.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
-    const focusable = ['input:not([disabled]):not([type="hidden"]), select:not([disabled])', '[role="radio"][aria-checked="true"]:not([disabled])', 'button:not([disabled])'];
-    for (const selector of focusable) { const control = target.querySelector<HTMLElement>(selector); if (control) { control.focus({ preventScroll: true }); break; } }
-  };
   const visibleDirectory = directory ? directory.models.filter(id => id.toLowerCase().includes(search.toLowerCase())) : [];
   const loginSection = (
         <section data-config-step="login" className={`${styles.sources} ${sharedStyles.step}`} aria-label={t('tools.config.sourcesLabel')}>
@@ -481,13 +524,15 @@ export function ConfigurationWorkspaceEditor(props: Props) {
       {picking && <AccountPicker toolId={toolId} selectedAccountId={selectedAccountId} onSelect={account => void selectAccount(account)} onBack={() => { setPicking(false); requestAnimationFrame(() => focusReturn.current?.focus()); }} />}
       {history && <section aria-label={t('tools.config.historyLabel')}><button onClick={() => { setHistory(false); setBackup(null); }}>{t('tools.config.backToEdit')}</button><div className={styles.buttons}>{backups.map(row => <button key={row.transactionId} onClick={() => void selectBackup(row.transactionId)}>{row.createdAt ? backupStamp(row.createdAt) : row.transactionId}</button>)}</div>{!backups.length && <p>{t('tools.config.noBackups')}</p>}{backup && <><CodeEditor label={t('tools.config.historyOriginal')} format={workspace.probe.nativeFiles.find(file => file.role === backup.role)?.format ?? 'json'} readOnly value={backup.original} /><details><summary>{t('tools.config.historyCurrentSummary')}</summary><CodeEditor label={t('tools.config.historyCurrentLabel')} format={workspace.probe.nativeFiles.find(file => file.role === backup.role)?.format ?? 'json'} readOnly value={backup.current} /></details><button disabled={busy || cancelling} onClick={() => void restoreBackup()}>{t('tools.config.restoreThis')}</button></>}</section>}
       <div hidden={picking || history}>
-        {subject === 'profile' && <div className={styles.name} data-empty={!nameInput.trim() || undefined}><label htmlFor={nameId}>{t('tools.config.name')}<span className={styles.required} aria-hidden="true">*</span></label><input id={nameId} aria-label={t('tools.config.name')} aria-required="true" aria-invalid={!nameInput.trim() || undefined} placeholder={t('tools.config.namePlaceholder')} value={nameInput} disabled={busy || cancelling} onChange={event => { setNameInput(event.target.value); metadata({ name: event.target.value }); }} /></div>}
-        {views.length > 1 && <nav className={styles.tabs} aria-label={t('tools.config.tabsLabel')}>{views.includes('models') && <button aria-pressed={activeView === 'models'} disabled={pending} onClick={() => setView('models')}>{t('tools.config.tabModels')}</button>}{views.includes('settings') && <button aria-pressed={activeView === 'settings'} disabled={pending} onClick={() => setView('settings')}>{t('tools.config.tabSettings')}</button>}{views.includes('raw') && <button aria-pressed={activeView === 'raw'} disabled={pending} onClick={() => setView('raw')}>{t('tools.config.tabRaw')}</button>}{views.includes('preview') && <button aria-pressed={activeView === 'preview'} title={!valid ? t('tools.config.previewDisabledTitle') : undefined} disabled={!valid || pending || cancelling} onClick={() => void showPreview()}>{t('tools.config.tabPreview')}</button>}</nav>}
-        <ConnectionCredentialProvider value={activeView === 'models' && subject !== 'common' && !connectionChainAbsent ? loginSection : null}><div ref={modelPane} className={styles.modelPane} data-under-tabs={views.length > 1 || undefined} hidden={activeView === 'raw' || activeView === 'preview'}>
-          {activeView === 'models' && subject !== 'common' && !connectionChainAbsent && (Editor || subject === 'profile' && source !== 'account') && <ol className={styles.chain} aria-label={t('tools.config.chainLabel')}>{steps.map(step => <li key={step.key} data-done={step.done || undefined}><button type="button" aria-label={step.done ? t('tools.config.stepDoneAria', { step: step.label }) : step.label} title={t('tools.config.stepJump', { step: step.label })} onClick={() => jumpTo(step.key)}>{step.label}</button></li>)}</ol>}
-          {Editor ? <Editor draft={draft} descriptor={draft.descriptor!} mode={subject} section={activeView === 'settings' ? 'settings' : 'models'} disabled={busy || cancelling} pending={pending} rawResetEpoch={rawResetEpoch} catalog={catalog} onAction={onAction} onValidityChange={onValidityChange} />
+        {quickCapable && <div className={styles.level} role="group" aria-label={t('tools.config.levelLabel')}><button type="button" aria-pressed={quick} onClick={() => setLevel('quick')}>{t('tools.config.levelQuick')}</button><button type="button" aria-pressed={!quick} onClick={() => setLevel('advanced')}>{t('tools.config.levelAdvanced')}</button></div>}
+        {quickNoteVisible && <p className={styles.quickNote} role="note">{t('tools.config.quickNote')}</p>}
+        {subject === 'profile' && <div className={styles.name} data-empty={!nameInput.trim() || undefined} data-quick={quick || undefined}><label htmlFor={nameId}>{t('tools.config.name')}<span className={styles.required} aria-hidden="true">*</span></label><input id={nameId} aria-label={t('tools.config.name')} aria-required="true" aria-invalid={!nameInput.trim() || undefined} title={quick ? t('tools.config.quickNameHint') : undefined} placeholder={t('tools.config.namePlaceholder')} value={nameInput} disabled={busy || cancelling} onChange={event => { setNameInput(event.target.value); metadata({ name: event.target.value }); }} /></div>}
+        {views.length > 1 && <nav className={styles.tabs} hidden={quick} aria-label={t('tools.config.tabsLabel')}>{views.includes('models') && <button aria-pressed={activeView === 'models'} disabled={pending} onClick={() => setView('models')}>{t('tools.config.tabModels')}</button>}{views.includes('settings') && <button aria-pressed={activeView === 'settings'} disabled={pending} onClick={() => setView('settings')}>{t('tools.config.tabSettings')}</button>}{views.includes('raw') && <button aria-pressed={activeView === 'raw'} disabled={pending} onClick={() => setView('raw')}>{t('tools.config.tabRaw')}</button>}{views.includes('preview') && <button aria-pressed={activeView === 'preview'} title={!valid ? t('tools.config.previewDisabledTitle') : undefined} disabled={!valid || pending || cancelling} onClick={() => void showPreview()}>{t('tools.config.tabPreview')}</button>}</nav>}
+        <ConnectionCredentialProvider value={shownView === 'models' && subject !== 'common' && !connectionChainAbsent ? loginSection : null}><div ref={modelPane} className={styles.modelPane} data-under-tabs={!quick && views.length > 1 || undefined} hidden={!quick && (shownView === 'raw' || shownView === 'preview')}>
+          {shownView === 'models' && subject !== 'common' && !connectionChainAbsent && (Editor || subject === 'profile' && source !== 'account') && <ol className={styles.chain} aria-label={t('tools.config.chainLabel')}>{steps.map(step => <li key={step.key} data-done={step.done || undefined}><button type="button" aria-label={step.done ? t('tools.config.stepDoneAria', { step: step.label }) : step.label} title={t('tools.config.stepJump', { step: step.label })} onClick={() => jumpTo(step.key)}>{step.label}</button></li>)}</ol>}
+          {Editor ? <div className={quick ? styles.quickEditor : undefined}><Editor draft={draft} descriptor={draft.descriptor!} mode={subject} section={shownView === 'settings' ? 'settings' : 'models'} disabled={busy || cancelling} pending={pending} rawResetEpoch={rawResetEpoch} catalog={catalog} onAction={onAction} onValidityChange={onValidityChange} /></div>
           : connectionChainAbsent ? <p className={styles.hint}>{workspace.probe.connectionPolicy?.providerAddress.reason || workspace.probe.connectionPolicy?.apiKey.reason}</p>
-          : subject === 'profile' && source !== 'account' ? <section aria-label={t('tools.config.legacyLabel')} className={styles.legacy}>
+          : subject === 'profile' && source !== 'account' ? <section aria-label={t('tools.config.legacyLabel')} className={`${styles.legacy}${quick ? ` ${styles.quickEditor}` : ''}`}>
             {connectionConfigurable && <div data-config-step="connection" className={sharedStyles.step}>
               <StepHead step="connection" title={t('tools.config.legacyConnection', { provider: legacyInputs?.providerId || t('tools.config.providerMissing') })} meta={t('tools.config.legacyNote')} />
               <div className={sharedStyles.fieldGrid}>
@@ -513,12 +558,12 @@ export function ConfigurationWorkspaceEditor(props: Props) {
           {!directory.models.length && <p className={styles.hint}>{t('tools.config.directoryEmpty')}</p>}
           <div className={styles.directoryFoot}><span>{t('tools.config.directoryChosen', { count: chosen.size })}</span><div className={styles.buttons}><button onClick={() => setDirectoryOpen(false)}>{t('tools.config.backToModels')}</button><button className={sharedStyles.accent} disabled={pending || busy || !chosen.size} onClick={() => void addModels()}>{t('tools.config.addSelected')}</button></div></div>
         </section>}
-        {!connectionChainAbsent && !Editor && source === 'api_key' && connection && activeView === 'models' && <p className={`${styles.hint} ${styles.connectionSummary}`}>{t('tools.config.connectionSummary', { url: connection.baseUrl || t('tools.config.urlMissing'), format: connection.interfaceFormat })}</p>}
-        {activeView === 'raw' && <>{files.length > 1 && <div className={styles.fileTabs} role="group" aria-label={t('tools.config.rawFilesLabel')}>{files.map(role => <button key={role} aria-pressed={rawRole === role} onClick={() => setRawRole(role)}>{role}</button>)}</div>}<p className={styles.hint}>{files.length === 1 && <code>{files[0]}</code>} {t('tools.config.rawHint')}</p><CodeEditor documentId={rawRole} label={t('tools.config.rawEditorLabel', { role: rawRole })} format={format} value={rawInputs[rawRole] ?? ''} onChange={text => textChanged(rawRole, text)} readOnly={busy || cancelling} />{currentConflict && changedConflictFiles.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('home.conflict.banner') : undefined} status={conflictChoices[file.role] ? (conflictChoices[file.role] === 'current' ? t('tools.config.choseCurrent') : t('tools.config.choseNext')) : undefined} currentContent={file.current} nextContent={file.edited} format={workspace.probe.nativeFiles.find(meta => meta.role === file.role)?.format ?? 'json'} busy={busy || pending} onKeepCurrent={() => void chooseCurrent(file.role, 'current')} onUseNext={() => void chooseCurrent(file.role, 'edited')} />)}</>}
-        {activeView === 'preview' && <>{files.length > 1 && <div className={styles.fileTabs} role="group" aria-label={t('tools.config.previewFilesLabel')}>{files.map(role => <button key={role} aria-pressed={rawRole === role} onClick={() => setRawRole(role)}>{role}</button>)}</div>}<p className={styles.hint}>{t('tools.config.previewHint')}{previewLoading ? t('tools.config.previewLoading') : ''}</p>{preview && !previewLoading && preview.rendered?.[rawRole] === undefined && <p className={styles.hint}>{t('tools.config.previewEmpty', { role: rawRole })}</p>}<CodeEditor label={t('tools.config.previewEditorLabel')} format={format} readOnly value={preview?.rendered?.[rawRole] ?? ''} /><details><summary>{t('tools.config.sourcesSummary')}</summary><p>{t('tools.config.sourcesNote')}</p><dl>{Object.entries(preview?.sources?.[rawRole] ?? {}).map(([path, origin]) => <div key={path}><dt><code>{path}</code></dt><dd>{origin === '命名配置' ? t('tools.config.originNamed') : origin === '通用配置' ? t('tools.config.originCommon') : origin}</dd></div>)}</dl>{!Object.keys(preview?.sources?.[rawRole] ?? {}).length && <p>{t('tools.config.noSources')}</p>}</details></>}
-        {activeView === 'models' && subject !== 'common' && !connectionChainAbsent && shownDirectory && draft.catalogSupport?.multiple !== true && (shownDirectory.error ? <p role="alert" className={styles.hint}>{shownDirectory.error}</p> : <p role="status" className={styles.hint}>{t('tools.config.directoryFetched', { count: shownDirectory.models.length, synced: Editor ? t('tools.config.dirSynced') : t('tools.config.dirAvailable') })}</p>)}
-        {activeView === 'models' && subject !== 'common' && !connectionChainAbsent && <details className={styles.diagnostics}><summary>{Editor && draft.catalogSupport?.multiple !== true ? t('tools.config.diagConnection') : t('tools.config.diagCatalog')}</summary><div className={styles.buttons}>{!(Editor && draft.catalogSupport?.multiple !== true) && <button className={sharedStyles.accent} disabled={querying || pending || !draft.catalogSupport?.available} onClick={() => void query('directory')}>{t('common.field.fetchCatalog')}</button>}<button disabled={querying || pending || !connection} onClick={() => void query('check')}>{t('tools.config.checkConnection')}</button><button disabled={!querying || pending || cancelling} onClick={() => void cancelRequests()}>{cancelling ? t('tools.config.cancellingRequests') : t('tools.config.cancelRequests')}</button></div>{draft.catalogSupport?.reason && <p className={styles.hint}>{draft.catalogSupport.reason}{t('tools.config.catalogReasonSuffix')}</p>}<details><summary>{t('tools.config.moreDiagnostics')}</summary><button disabled={querying || pending || !connection} onClick={() => void query('check', true)}>{t('tools.config.sendMinimal')}</button></details>{check && <div role="status"><p className={styles.hint}>{check.format.message}</p><p className={styles.hint}>{check.connectivity.message}</p><p className={styles.hint}>{check.modelRequest.message}</p></div>}</details>}
-        {subject === 'profile' && <details className={sharedStyles.disclosureCard}><summary>{t('tools.config.inheritSummary')}</summary><label><input type="checkbox" disabled={busy || pending || cancelling} checked={draft.profile.inheritCommon} onChange={event => metadata({ inheritCommon: event.target.checked })} />{t('tools.config.inheritCommon')}</label></details>}
+        {!connectionChainAbsent && !Editor && source === 'api_key' && connection && shownView === 'models' && <p className={`${styles.hint} ${styles.connectionSummary}`}>{t('tools.config.connectionSummary', { url: connection.baseUrl || t('tools.config.urlMissing'), format: connection.interfaceFormat })}</p>}
+        {shownView === 'raw' && <>{files.length > 1 && <div className={styles.fileTabs} role="group" aria-label={t('tools.config.rawFilesLabel')}>{files.map(role => <button key={role} aria-pressed={rawRole === role} onClick={() => setRawRole(role)}>{role}</button>)}</div>}<p className={styles.hint}>{files.length === 1 && <code>{files[0]}</code>} {t('tools.config.rawHint')}</p><CodeEditor documentId={rawRole} label={t('tools.config.rawEditorLabel', { role: rawRole })} format={format} value={rawInputs[rawRole] ?? ''} onChange={text => textChanged(rawRole, text)} readOnly={busy || cancelling} />{currentConflict && changedConflictFiles.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('home.conflict.banner') : undefined} status={conflictChoices[file.role] ? (conflictChoices[file.role] === 'current' ? t('tools.config.choseCurrent') : t('tools.config.choseNext')) : undefined} currentContent={file.current} nextContent={file.edited} format={workspace.probe.nativeFiles.find(meta => meta.role === file.role)?.format ?? 'json'} busy={busy || pending} onKeepCurrent={() => void chooseCurrent(file.role, 'current')} onUseNext={() => void chooseCurrent(file.role, 'edited')} />)}</>}
+        {shownView === 'preview' && <>{files.length > 1 && <div className={styles.fileTabs} role="group" aria-label={t('tools.config.previewFilesLabel')}>{files.map(role => <button key={role} aria-pressed={rawRole === role} onClick={() => setRawRole(role)}>{role}</button>)}</div>}<p className={styles.hint}>{t('tools.config.previewHint')}{previewLoading ? t('tools.config.previewLoading') : ''}</p>{preview && !previewLoading && preview.rendered?.[rawRole] === undefined && <p className={styles.hint}>{t('tools.config.previewEmpty', { role: rawRole })}</p>}<CodeEditor label={t('tools.config.previewEditorLabel')} format={format} readOnly value={preview?.rendered?.[rawRole] ?? ''} /><details><summary>{t('tools.config.sourcesSummary')}</summary><p>{t('tools.config.sourcesNote')}</p><dl>{Object.entries(preview?.sources?.[rawRole] ?? {}).map(([path, origin]) => <div key={path}><dt><code>{path}</code></dt><dd>{origin === '命名配置' ? t('tools.config.originNamed') : origin === '通用配置' ? t('tools.config.originCommon') : origin}</dd></div>)}</dl>{!Object.keys(preview?.sources?.[rawRole] ?? {}).length && <p>{t('tools.config.noSources')}</p>}</details></>}
+        {shownView === 'models' && subject !== 'common' && !connectionChainAbsent && shownDirectory && draft.catalogSupport?.multiple !== true && (shownDirectory.error ? <p role="alert" className={styles.hint}>{shownDirectory.error}</p> : <p role="status" className={styles.hint}>{t('tools.config.directoryFetched', { count: shownDirectory.models.length, synced: Editor ? t('tools.config.dirSynced') : t('tools.config.dirAvailable') })}</p>)}
+        {shownView === 'models' && subject !== 'common' && !connectionChainAbsent && <details className={styles.diagnostics} hidden={quick}><summary>{Editor && draft.catalogSupport?.multiple !== true ? t('tools.config.diagConnection') : t('tools.config.diagCatalog')}</summary><div className={styles.buttons}>{!(Editor && draft.catalogSupport?.multiple !== true) && <button className={sharedStyles.accent} disabled={querying || pending || !draft.catalogSupport?.available} onClick={() => void query('directory')}>{t('common.field.fetchCatalog')}</button>}<button disabled={querying || pending || !connection} onClick={() => void query('check')}>{t('tools.config.checkConnection')}</button><button disabled={!querying || pending || cancelling} onClick={() => void cancelRequests()}>{cancelling ? t('tools.config.cancellingRequests') : t('tools.config.cancelRequests')}</button></div>{draft.catalogSupport?.reason && <p className={styles.hint}>{draft.catalogSupport.reason}{t('tools.config.catalogReasonSuffix')}</p>}<details><summary>{t('tools.config.moreDiagnostics')}</summary><button disabled={querying || pending || !connection} onClick={() => void query('check', true)}>{t('tools.config.sendMinimal')}</button></details>{check && <div role="status"><p className={styles.hint}>{check.format.message}</p><p className={styles.hint}>{check.connectivity.message}</p><p className={styles.hint}>{check.modelRequest.message}</p></div>}</details>}
+        {subject === 'profile' && <details className={sharedStyles.disclosureCard} hidden={quick}><summary>{t('tools.config.inheritSummary')}</summary><label><input type="checkbox" disabled={busy || pending || cancelling} checked={draft.profile.inheritCommon} onChange={event => metadata({ inheritCommon: event.target.checked })} />{t('tools.config.inheritCommon')}</label></details>}
         {subject === 'common' && <section aria-label={t('tools.config.influenceLabel')} className={styles.influence}><div className={styles.influenceHead}><strong>{t('tools.config.influenceTitle')}{influence && <Badge>{influence.targets.length}</Badge>}</strong><button disabled={busy || cancelling} onClick={() => { void commonInfluence(toolId).then(value => { if (alive.current) setInfluence(value); }).catch(failure => setError(messageOf(failure))); }}>{t('tools.config.influenceRefresh')}</button></div>{influence?.targets.length ? <ul>{influence.targets.map(target => <li key={target.scopeKey}>{t('tools.config.influenceEntry', { profile: target.profileName, scope: target.scope === 'global' ? t('tools.apply.global') : target.projectPath, version: target.appliedVersion })}</li>)}</ul> : <p>{t('tools.config.influenceEmpty')}</p>}{applications.map(item => <p key={item.scopeKey} role={item.status === 'failed' ? 'alert' : 'status'}>{applyScopeCopy(item.scopeKey, influence?.targets ?? [])} · {applyStatusCopy(item.status, item.detail)}{item.status === 'failed' && saved?.common && <button onClick={() => { const target = influence?.targets.find(target => target.scopeKey === item.scopeKey); if (target) void applyCommonConfiguration(saved.common!, [target]).then(next => setApplications(previous => previous.map(old => old.scopeKey === item.scopeKey ? next[0] : old))).catch(failure => setError(messageOf(failure))); }}>{t('tools.config.retryScope')}</button>}</p>)}</section>}
         {subject === 'current' && <details className={sharedStyles.disclosureCard}><summary>{t('tools.config.restoreSummary')}</summary><button disabled={pending || busy} onClick={() => void compareCurrent()}>{t('tools.config.recompare')}</button><button disabled={pending || busy} onClick={() => void showHistory()}>{t('tools.config.historyButton')}</button></details>}
         {comparison && <section aria-label={t('tools.config.conflictLabel')}>{comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('tools.config.conflictBanner') : undefined} actions={false} currentContent={file.current} nextContent={file.proposedText} format={file.format} busy={busy || cancelling} onUseNext={() => void applyComparison()} onKeepCurrent={() => setComparison(null)} />)}<div className={styles.buttons}><button disabled={busy || cancelling} onClick={() => void applyComparison()}>{t('common.conflict.useNext')}</button><button onClick={() => setComparison(null)}>{t('common.conflict.keepCurrent')}</button></div></section>}

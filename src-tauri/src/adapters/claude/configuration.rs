@@ -69,6 +69,24 @@ fn paths(field: &str) -> Result<Vec<Vec<String>>, String> {
         _ => Err("不支持的 Claude 角色参数".into()),
     }
 }
+/// Non-default roles still defined by the global settings file. A local
+/// editor cannot remove these, so unify must not claim success.
+fn role_models_inherited(settings: &Value) -> Vec<&'static str> {
+    ROLES
+        .iter()
+        .filter(|(role, key)| *role != "default" && raw_model(settings, role, key).is_some())
+        .map(|(role, _)| *role)
+        .collect()
+}
+/// Unifying removes every explicit non-default role model so all roles follow
+/// the default model natively. Display names are labels, not model overrides.
+fn unify_paths() -> Vec<Vec<String>> {
+    ROLES
+        .iter()
+        .filter(|(role, _)| *role != "default")
+        .flat_map(|(role, _)| paths(&format!("{role}.model")).unwrap_or_default())
+        .collect()
+}
 fn action_paths(action: &ConfigurationAction) -> Result<Vec<Vec<String>>, String> {
     if action.field.as_deref() == Some("modelEffortLevel") {
         let model = action
@@ -431,8 +449,29 @@ impl ConfigurationAdapter for Claude {
                 (model, choices)
             })
             .collect();
+        // A role without a native model key follows the default model in
+        // Claude Code. State that explicitly instead of letting the editor
+        // guess which role values can be overridden without a write.
+        let role_following: BTreeMap<_, _> = ROLES
+            .iter()
+            .filter(|(role, _)| *role != "default")
+            .map(|(role, key)| {
+                (
+                    (*role).to_string(),
+                    json!(raw_model(&settings, role, key).is_none()),
+                )
+            })
+            .collect();
+        // The local settings editor cannot remove global role overrides. List
+        // them so unify is blocked instead of reporting a no-op success.
+        let inherited_role_models: Vec<&str> = if documents.contains_key("local_settings") {
+            let settings_only = documents.get("settings").cloned().unwrap_or_else(|| json!({}));
+            role_models_inherited(&settings_only)
+        } else {
+            Vec::new()
+        };
         Ok(
-            json!({"values":values,"editTarget":if documents.contains_key("local_settings"){"local_configuration"}else{"configuration"},"effortChoices":choices,"effortWarnings":effort_warnings,"effortOverride":settings["env"].get("CLAUDE_CODE_EFFORT_LEVEL"),"modelEffortOverride":settings["modelSettings"][canonical].get("effortLevel"),"modelEfforts":model_efforts,"modelEffortChoices":model_effort_choices,"currentEffortModel":current_model,"capabilitySource":if choices.is_empty(){"未核验模型能力；展示 CLI 可持久化的原生档位"}else{"Claude 原生模型文档（2026-10-05）"}}),
+            json!({"values":values,"editTarget":if documents.contains_key("local_settings"){"local_configuration"}else{"configuration"},"effortChoices":choices,"effortWarnings":effort_warnings,"effortOverride":settings["env"].get("CLAUDE_CODE_EFFORT_LEVEL"),"modelEffortOverride":settings["modelSettings"][canonical].get("effortLevel"),"modelEfforts":model_efforts,"modelEffortChoices":model_effort_choices,"currentEffortModel":current_model,"roleFollowing":role_following,"inheritedRoleModels":inherited_role_models,"baseUrlSource":settings["env"].get("ANTHROPIC_BASE_URL").map(|_|"env.ANTHROPIC_BASE_URL"),"capabilitySource":if choices.is_empty(){"未核验模型能力；展示 CLI 可持久化的原生档位"}else{"Claude 原生模型文档（2026-10-05）"}}),
         )
     }
     fn edit(
@@ -458,6 +497,19 @@ impl ConfigurationAdapter for Claude {
             return Err("未知 Claude 配置目标".into());
         }
         let baseline = root(effective)?;
+        // Local settings can only remove local role overrides. If global
+        // settings still define a role model, report a locatable error
+        // instead of deleting nothing and claiming success.
+        if action.operation == "unify" && action.target == json!("local_configuration") {
+            let settings_only = documents.get("settings").cloned().unwrap_or_else(|| json!({}));
+            let inherited = role_models_inherited(&settings_only);
+            if !inherited.is_empty() {
+                return Err(format!(
+                    "{} 的模型覆盖来自全局 settings，需在全局配置统一",
+                    inherited.join("、")
+                ));
+            }
+        }
         let settings = documents
             .entry(action_role(action).into())
             .or_insert_with(|| json!({}));
@@ -471,15 +523,22 @@ impl ConfigurationAdapter for Claude {
                 .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty())
                 .ok_or("请选择要统一的模型")?;
+            // Falling back to the default model means removing role overrides,
+            // not pinning copies of the default. Claude Code then keeps every
+            // role following later default-model changes.
             for (role, _) in ROLES {
-                // Unification changes only these six explicit mappings, never display names,
-                // credentials, effort, modelPicker, permissions, or arbitrary env values.
-                for path in paths(&format!("{role}.model"))? {
-                    crate::native::apply::set_json(
-                        settings,
-                        &path.iter().map(String::as_str).collect::<Vec<_>>(),
-                        json!(model),
-                    );
+                if *role == "default" {
+                    for path in paths("default.model")? {
+                        crate::native::apply::set_json(
+                            settings,
+                            &path.iter().map(String::as_str).collect::<Vec<_>>(),
+                            json!(model),
+                        );
+                    }
+                } else {
+                    for path in paths(&format!("{role}.model"))? {
+                        remove(settings, &path);
+                    }
                 }
             }
             return Ok(());
@@ -712,10 +771,18 @@ impl ConfigurationAdapter for Claude {
         if matches!(role, "settings" | "local_settings") {
             if let Some(state) = &profile.editing {
                 for action in &state.intents {
-                    if action.operation == "reset" && action_role(action) == role {
-                        for path in action_paths(action)? {
-                            managed.released.push(pointer(&path));
-                        }
+                    if action_role(action) != role {
+                        continue;
+                    }
+                    let released = match action.operation.as_str() {
+                        "reset" => action_paths(action)?,
+                        // Unify removes role overrides; applying that version
+                        // must release the previously managed role paths.
+                        "unify" => unify_paths(),
+                        _ => continue,
+                    };
+                    for path in released {
+                        managed.released.push(pointer(&path));
                     }
                 }
             }
@@ -785,6 +852,65 @@ mod tests {
         assert_eq!(origin("modelEffortLevel"), None);
     }
     #[test]
+    fn claude_read_reports_role_following_without_unifying_existing_differences() {
+        let registry = Registry::with_adapters(vec![&Claude]).unwrap();
+        let draft = configuration::open(&registry, profile(), Scope::Global, "claude-follow".into())
+            .unwrap();
+        let following = &draft.view["roleFollowing"];
+        // The fixture writes sonnet, haiku and subagent models; the remaining
+        // roles have no native key and therefore follow the default model.
+        assert_eq!(following["sonnet"], false);
+        assert_eq!(following["haiku"], false);
+        assert_eq!(following["subagent"], false);
+        assert_eq!(following["opus"], true);
+        assert_eq!(following["fable"], true);
+        // Changing the default model never rewrites an explicit role.
+        let changed = configuration::edit(
+            &registry,
+            draft,
+            action("set", Some("default.model"), json!("claude-sonnet-4-6")),
+        )
+        .unwrap();
+        let parsed: Value = serde_json::from_str(&changed.profile.files["settings"]).unwrap();
+        assert_eq!(
+            parsed["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"],
+            "gateway-sonnet[1m]"
+        );
+        assert_eq!(parsed["env"]["CLAUDE_CODE_SUBAGENT_MODEL"], "gateway-subagent");
+        assert_eq!(changed.view["roleFollowing"]["sonnet"], false);
+        assert_eq!(changed.view["roleFollowing"]["opus"], true);
+        // A new draft with only a default model leaves every role following;
+        // following is represented by absent native keys, not duplicated values.
+        let fresh = BTreeMap::from([(
+            "settings".into(),
+            serde_json::from_str(include_str!(
+                "../../../../tests/fixtures/native/claude-following-default.json"
+            ))
+            .unwrap(),
+        )]);
+        let view = Claude.read(&fresh, &EditingState::default()).unwrap();
+        for role in ["sonnet", "opus", "fable", "haiku", "subagent"] {
+            assert_eq!(view["roleFollowing"][role], true);
+            assert!(view["values"].get(format!("{role}.model")).is_none());
+        }
+        assert_eq!(view["values"]["default.model"], "claude-sonnet-4-6");
+    }
+    #[test]
+    fn claude_read_marks_the_native_address_source() {
+        let documents = BTreeMap::from([(
+            "settings".into(),
+            json!({"env":{"ANTHROPIC_BASE_URL":"https://gateway.example.test/anthropic"},"model":"claude-sonnet-4-6"}),
+        )]);
+        let view = Claude.read(&documents, &EditingState::default()).unwrap();
+        assert_eq!(view["baseUrlSource"], "env.ANTHROPIC_BASE_URL");
+        let official = BTreeMap::from([(
+            "settings".into(),
+            json!({"model":"claude-sonnet-4-6"}),
+        )]);
+        let view = Claude.read(&official, &EditingState::default()).unwrap();
+        assert!(view["baseUrlSource"].is_null());
+    }
+    #[test]
     fn claude_roles_edit_independently_and_unify_is_explicit() {
         let registry = Registry::with_adapters(vec![&Claude]).unwrap();
         let mut draft =
@@ -825,10 +951,20 @@ mod tests {
         )
         .unwrap();
         let parsed: Value = serde_json::from_str(&draft.profile.files["settings"]).unwrap();
-        for (_, key) in ROLES {
-            assert_eq!(parsed["env"][*key], "gateway-all");
+        // Unify makes every role follow the default model by removing role
+        // overrides instead of pinning copies of the default.
+        for (role, key) in ROLES {
+            if *role == "default" {
+                assert_eq!(parsed["env"][*key], "gateway-all");
+                assert_eq!(parsed["model"], "gateway-all");
+            } else {
+                assert!(
+                    parsed["env"].get(*key).is_none(),
+                    "{role} should follow the default model"
+                );
+                assert_eq!(draft.view["roleFollowing"][*role], true);
+            }
         }
-        assert_eq!(parsed["model"], "gateway-all");
         // Unification keeps display names as they stood; it never rewrites them.
         assert_eq!(
             parsed["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"],
@@ -837,6 +973,33 @@ mod tests {
         assert_eq!(parsed["env"]["USER_CUSTOM_OPTION"], "preserve");
         assert_eq!(parsed["permissions"]["allow"][0], "Read");
         assert_eq!(parsed["modelPicker"]["options"][0]["custom"], true);
+        // Applying this version releases the previously owned role overrides.
+        let managed = Claude
+            .managed_fields("settings", &json!({}), &parsed, &draft.profile)
+            .unwrap();
+        for (role, _) in ROLES.iter().filter(|(role, _)| *role != "default") {
+            assert!(
+                managed
+                    .released
+                    .contains(&format!("/env/ANTHROPIC_DEFAULT_{}_MODEL", role.to_uppercase()))
+                    || managed
+                        .released
+                        .contains(&format!("/env/CLAUDE_CODE_{}_MODEL", role.to_uppercase())),
+                "missing release for {role}: {:?}",
+                managed.released
+            );
+        }
+        // Later default-model changes keep the roles following.
+        let following = configuration::edit(
+            &registry,
+            draft,
+            action("set", Some("default.model"), json!("claude-sonnet-4-6")),
+        )
+        .unwrap();
+        let parsed: Value = serde_json::from_str(&following.profile.files["settings"]).unwrap();
+        for (role, key) in ROLES.iter().filter(|(role, _)| *role != "default") {
+            assert!(parsed["env"].get(*key).is_none(), "{role} lost following");
+        }
     }
     #[test]
     fn claude_reset_and_raw_round_trip_keep_native_semantics() {
@@ -994,6 +1157,33 @@ mod tests {
             Claude.suppression_changes(&edit, &crate::adapters::configuration::EditingState::default()).unwrap()[0].role,
             "local_settings"
         );
+    }
+    #[test]
+    fn claude_local_unify_blocks_inherited_global_role_overrides() {
+        let documents = BTreeMap::from([
+            (
+                "settings".into(),
+                json!({"model":"claude-sonnet-4-6","env":{"ANTHROPIC_DEFAULT_SONNET_MODEL":"global-sonnet"}}),
+            ),
+            (
+                "local_settings".into(),
+                json!({"env":{"ANTHROPIC_DEFAULT_SONNET_MODEL":"local-sonnet","ANTHROPIC_DEFAULT_OPUS_MODEL":"local-opus"}}),
+            ),
+        ]);
+        let view = Claude.read(&documents, &EditingState::default()).unwrap();
+        assert_eq!(view["editTarget"], "local_configuration");
+        // Even when a local value shadows it, the global key remains after a
+        // local unify and would keep the role from following.
+        assert_eq!(view["inheritedRoleModels"], json!(["sonnet"]));
+        let mut own = documents.clone();
+        let mut edit = action("unify", None, json!("claude-sonnet-4-6"));
+        edit.target = json!("local_configuration");
+        let error = Claude
+            .edit_inherited(&mut own, &documents, &mut EditingState::default(), &edit)
+            .unwrap_err();
+        assert!(error.contains("全局"), "{error}");
+        assert_eq!(own["settings"], documents["settings"]);
+        assert_eq!(own["local_settings"], documents["local_settings"]);
     }
     #[test]
     fn claude_scalar_reset_does_not_claim_empty_native_containers() {

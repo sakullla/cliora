@@ -1,0 +1,32 @@
+{
+  "name": "OMP manifest resource paths normalize ./ and isolate escaping entries",
+  "capability": "plugins",
+  "case": {
+    "action": "manifest-paths",
+    "cases": [
+      {
+        "manifest": { "commands": ["./custom/review.md"] },
+        "expect": {
+          "readOnly": false,
+          "resourceSuffixes": ["custom/review.md"]
+        }
+      },
+      {
+        "manifest": { "commands": ["./custom/review.md", "../outside.md"] },
+        "expect": {
+          "readOnly": true,
+          "policyContains": ["包外", "已忽略"],
+          "resourceSuffixes": ["custom/review.md"],
+          "absentSuffixes": ["outside.md"]
+        }
+      },
+      {
+        "manifest": { "commands": { "inline": true } },
+        "expect": {
+          "readOnly": false,
+          "policyContains": ["不是路径字符串/数组"]
+        }
+      }
+    ]
+  }
+}

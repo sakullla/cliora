@@ -1,0 +1,29 @@
+{
+  "capability": "memory",
+  "name": "OMP local memory root follows profile, PI_CONFIG_DIR and PI_CODING_AGENT_DIR",
+  "case": {
+    "action": "layout",
+    "expect": {
+      "project": "{home}/.omp/agent/memories/{encoded}"
+    },
+    "entries": ["MEMORY", "learned", "memory_summary"],
+    "inputs": [
+      {
+        "profile": "work",
+        "expect": "{home}/.omp/profiles/work/agent/memories/{encoded}"
+      },
+      {
+        "configDir": "custom",
+        "expect": "{home}/custom/agent/memories/{encoded}"
+      },
+      {
+        "codingAgentDir": "{home}/pinned/agent",
+        "expect": "{home}/pinned/agent/memories/{encoded}"
+      },
+      {
+        "profile": "..",
+        "expectError": true
+      }
+    ]
+  }
+}

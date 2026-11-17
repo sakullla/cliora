@@ -1778,6 +1778,20 @@ fn safe_auth_relative(relative: &str) -> Option<PathBuf> {
 
 fn portable_account(mut account: crate::accounts::AuthAccount) -> AccountRead {
     account.pending_login = None;
+    // A credential database that also stores unrelated native state cannot be
+    // copied as one auth file. Without an evidence-backed per-login selector the
+    // account is held with a blocker instead of exporting the whole database.
+    if let Ok(adapter) = crate::adapters::accounts::get(&account.tool_id) {
+        if adapter.auth_export_policy() == crate::adapters::accounts::AuthExportPolicy::SharedDatabase
+        {
+            let detail = format!(
+                "账号 {} 的认证材料存放在混存数据库中，无法按账号安全筛选，不能当作已导出；未复制整库。{}",
+                account.label,
+                adapter.capability().reason
+            );
+            return AccountRead::Blocked(auth_read_blocker(&account, detail));
+        }
+    }
     let mut auth_files = Vec::new();
     let mut listed = false;
     let label = account.label.clone();
@@ -1889,6 +1903,29 @@ fn place_account(
     account.version = 1;
     let mut written = Vec::new();
     let mut issues = Vec::new();
+    // Importing a shared credential database as whole-file auth material would
+    // write unrelated native state into a new account. Keep the account row
+    // unverified and report a blocker without creating any file.
+    if let Ok(adapter) = crate::adapters::accounts::get(&account.tool_id) {
+        if adapter.auth_export_policy() == crate::adapters::accounts::AuthExportPolicy::SharedDatabase
+        {
+            let detail = format!(
+                "账号 {} 的认证存储在混存数据库中，未安全筛选出该账号的认证记录，不能按整库恢复。{}",
+                account.label,
+                adapter.capability().reason
+            );
+            let mut stored = account_without_context(&account);
+            stored.state = crate::accounts::AccountState::Error;
+            stored.detail = Some(detail.clone());
+            issues.push(RestoreBlocker {
+                key: format!("account:{}", account.id),
+                label: account.label.clone(),
+                action: "relogin".into(),
+                detail,
+            });
+            return (stored, Vec::new(), issues);
+        }
+    }
     let sources: Vec<_> = account.context.iter().cloned().chain(account.retired_contexts.iter().cloned()).collect();
     let retired_ids: BTreeSet<_> = account.retired_contexts.iter().map(|context| context.id.clone()).collect();
     let primary_id = account.context.as_ref().map(|context| context.id.clone());

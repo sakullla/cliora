@@ -1362,10 +1362,34 @@ pub async fn remove_native_mcp(
 }
 
 #[tauri::command]
+pub async fn set_external_mcp_enabled(
+    app: AppHandle,
+    target: resources::mcp::McpTargetRequest,
+    name: String,
+    enabled: bool,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        resources::mcp::set_external_mcp_enabled(
+            &db,
+            &AppCredentialStore,
+            &adapters::Registry::builtins(),
+            &home,
+            &target,
+            &name,
+            enabled,
+        )
+        .map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn list_native_mcp(
     app: AppHandle,
     target: resources::mcp::McpTargetRequest,
-) -> Result<Vec<resources::mcp::NativeMcpEntry>, ApiError> {
+) -> Result<resources::mcp::NativeMcpStore, ApiError> {
     blocking(move || {
         let home = home()?;
         let db = app.state::<AppState>().database(&app)?;
@@ -2675,6 +2699,48 @@ pub async fn set_skill_enabled(
                 &tool_id,
                 scope,
                 project_path.as_deref(),
+                enabled,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn set_observed_skill_enabled(
+    app: AppHandle,
+    expected_context_id: Option<String>,
+    tool_id: String,
+    scope: Scope,
+    project_path: Option<String>,
+    name: String,
+    path: String,
+    enabled: bool,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            let home = home()?;
+            let _context = crate::accounts::selection::enter_bound(
+                db,
+                &home,
+                &tool_id,
+                scope,
+                project_path.as_deref().map(Path::new),
+            )
+            .map_err(native_error)?;
+            crate::accounts::selection::validate_expected(&tool_id, expected_context_id.as_deref())
+                .map_err(native_error)?;
+            resources::skills::set_observed_enabled(
+                db,
+                &AppCredentialStore,
+                &adapters::Registry::builtins(),
+                &home,
+                &tool_id,
+                scope,
+                project_path.as_deref(),
+                &name,
+                &path,
                 enabled,
             )
             .map_err(native_error)

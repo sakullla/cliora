@@ -65,6 +65,11 @@ pub struct PluginSnapshot {
     pub entries: Vec<PluginEntry>,
     pub baseline: String,
     pub detail: String,
+    /// Adapter-published native diagnostic entry id, present only while that
+    /// entry exists in this snapshot. The UI anchors recovery to this id instead
+    /// of guessing from a not-installed/root shape.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doctor: Option<String>,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -655,7 +660,11 @@ fn snapshot_with_packages(
         }
     }
     basis.push_str(&serde_json::to_string(&disabled(db, target)?).map_err(|_| "禁用记录错误")?);
-    Ok(PluginSnapshot { target: target.clone(), capability, entries, baseline: transaction::fingerprint(basis.as_bytes()), detail: "列表与本机文件快照；原生会话是否已加载无法从静态列表确认。配置事务可从配置页的原生备份恢复。".into() })
+    let doctor = adapter
+        .doctor_source()
+        .filter(|id| entries.iter().any(|entry| entry.id == *id))
+        .map(str::to_owned);
+    Ok(PluginSnapshot { target: target.clone(), capability, entries, baseline: transaction::fingerprint(basis.as_bytes()), detail: "列表与本机文件快照；原生会话是否已加载无法从静态列表确认。配置事务可从配置页的原生备份恢复。".into(), doctor })
 }
 pub fn scan(db: &Database, home: &Path, target: &PluginTarget) -> Result<PluginSnapshot, String> {
     scan_registered(&Registry::builtins(), db, home, target, true)
@@ -684,7 +693,7 @@ fn preview_registered(registry: &Registry, db: &Database, home: &Path, target: &
     };
     for entry in &mut entries { entry.read_only = true; entry.enabled = None; entry.state = "inventory_pending".into(); }
     capability.actions.clear();
-    Ok(Some(PluginSnapshot { target: target.clone(), capability, entries, baseline: String::new(), detail: "本机插件目录预览；完整列表、启停状态与管理操作正在核对。".into() }))
+    Ok(Some(PluginSnapshot { target: target.clone(), capability, entries, baseline: String::new(), detail: "本机插件目录预览；完整列表、启停状态与管理操作正在核对。".into(), doctor: None }))
 }
 /// Agent definitions have their own content baseline; they never mutate plugin
 /// packages, so enumerating their resources needs no whole-package digest.

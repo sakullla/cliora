@@ -1,0 +1,95 @@
+{
+  "capability": "memory",
+  "name": "OMP memory.backend values, legacy migration and data-preserving switches",
+  "case": {
+    "action": "backend",
+    "verifiedValues": ["off", "local", "hindsight", "mnemopi", "sharpshooter"],
+    "cases": [
+      {
+        "name": "absent config defaults to off",
+        "config": "",
+        "expect": {
+          "enabled": false,
+          "detailContains": "当前后端：off"
+        }
+      },
+      {
+        "name": "local is the managed Markdown backend",
+        "config": "memory:\n  backend: local\n",
+        "expect": {
+          "enabled": true
+        }
+      },
+      {
+        "name": "legacy memories.enabled=true migrates to local",
+        "config": "memories:\n  enabled: true\n",
+        "expect": {
+          "enabled": true,
+          "detailContains": "旧版 memories.enabled 迁移"
+        }
+      },
+      {
+        "name": "hindsight stays a native remote backend",
+        "config": "retry:\n  attempts: 2\nmemory:\n  backend: hindsight\n",
+        "expect": {
+          "enabled": false,
+          "detailContains": "hindsight"
+        },
+        "patchOff": true,
+        "configContains": "backend: hindsight"
+      },
+      {
+        "name": "mnemopi stays a native SQLite backend",
+        "config": "memory:\n  backend: mnemopi\n",
+        "expect": {
+          "enabled": false,
+          "detailContains": "mnemopi"
+        },
+        "patchOff": true,
+        "configContains": "backend: mnemopi"
+      },
+      {
+        "name": "unknown value is preserved and reported as unverified",
+        "config": "memory:\n  backend: future-backend\n",
+        "expect": {
+          "enabled": false,
+          "detailContains": "未核实值 future-backend"
+        },
+        "patchOff": true,
+        "configContains": "backend: future-backend"
+      },
+      {
+        "name": "unknown value rejects an enable write",
+        "config": "memory:\n  backend: future-backend\n",
+        "expect": {
+          "enabled": false
+        },
+        "enableError": true,
+        "configContains": "backend: future-backend"
+      },
+      {
+        "name": "off reports the local files that stay on disk",
+        "config": "memory:\n  backend: off\n",
+        "diskFiles": true,
+        "expect": {
+          "enabled": false,
+          "detailContains": "本机仍有 1 个项目的 local Markdown 记忆文件"
+        }
+      },
+      {
+        "name": "enabling local writes only memory.backend and keeps memory files",
+        "config": "memory:\n  backend: off\nretry:\n  attempts: 2\n",
+        "expectFile": "backend: local",
+        "enable": true,
+        "expectBackend": "local"
+      },
+      {
+        "name": "disabling writes off and keeps memory files",
+        "config": "memory:\n  backend: local\n",
+        "expectFile": "backend: off",
+        "enable": false,
+        "expectBackend": "off"
+      }
+    ]
+  }
+}

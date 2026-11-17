@@ -1,0 +1,58 @@
+{
+  "npm": [
+    {
+      "name": "t5-fixture-plugin",
+      "version": "1.2.3",
+      "path": "/fixture/home/.omp/plugins/node_modules/t5-fixture-plugin",
+      "manifest": {
+        "name": "T5 Fixture Plugin",
+        "description": "Sanitized OMP 18.20.2 link fixture; never executed",
+        "commands": ["commands/review.md", "commands/explain.md"],
+        "extensions": ["extensions/entry.ts"],
+        "features": {
+          "extra": {
+            "description": "Extra commands",
+            "default": false,
+            "commands": ["commands/extra.md"]
+          }
+        },
+        "settings": {
+          "greeting": { "type": "string", "description": "Greeting", "default": "hi" }
+        },
+        "version": "1.2.3"
+      },
+      "enabledFeatures": ["extra"],
+      "enabled": true
+    }
+  ],
+  "marketplace": [
+    {
+      "id": "t5-market-plugin@t5-market",
+      "scope": "project",
+      "entries": [
+        {
+          "scope": "project",
+          "installPath": "/fixture/home/.omp/plugins/cache/plugins/t5-market___t5-market-plugin___2.0.0",
+          "version": "2.0.0",
+          "installedAt": "2026-11-15T20:36:00.818Z",
+          "lastUpdated": "2026-11-15T20:36:00.818Z",
+          "enabled": false
+        }
+      ]
+    },
+    {
+      "id": "t5-market-plugin@t5-market",
+      "scope": "user",
+      "entries": [
+        {
+          "scope": "user",
+          "installPath": "/fixture/home/.omp/plugins/cache/plugins/t5-market___t5-market-plugin___2.0.0",
+          "version": "2.0.0",
+          "installedAt": "2026-11-15T20:36:27.589Z",
+          "lastUpdated": "2026-11-15T20:36:27.589Z"
+        }
+      ],
+      "shadowedBy": "project"
+    }
+  ]
+}

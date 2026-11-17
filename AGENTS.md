@@ -48,7 +48,7 @@ node scripts/capture-ui.mjs --skills --theme light --size 1360
 
 - `--theme all|light|dark` chooses the theme. The default is `all`.
 - With no area selector, capture page overviews only. Use `--full` for the exhaustive capture set.
-- `--size all|1360,900,640` chooses widths. The default is desktop width `1360`; smaller widths are opt-in compatibility checks. The native window minimum is 720px, so 640px is not a normal desktop scenario.
+- `--size all|1360,900,720` chooses widths. The default is desktop width `1360`; smaller widths are opt-in compatibility checks. The native window minimum is 720px. `640` is not a normal desktop scenario and only runs when explicitly passed or when `CLIORA_CAPTURE_640=1` / `--compat-640` is set.
 - `--skills` captures the Skill list, the SKILL.md reading view, and the SKILL.md editor.
 - `--connections`, `--records`, `--sessions`, and `--features` capture those areas. `--workflows` is an alias of `--features`.
 - `--mcp` captures the tool MCP list with its details, edit and add dialogs, plus the library MCP list, editor, and CLI target panel.

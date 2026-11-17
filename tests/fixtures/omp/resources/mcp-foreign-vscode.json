@@ -1,0 +1,20 @@
+{
+  "capability": "resources",
+  "name": "VS Code project MCP uses the documented mcp.servers shape",
+  "case": {
+    "kind": "mcp",
+    "action": "foreign",
+    "base": "vscode-nested",
+    "files": [
+      {
+        "scope": "project",
+        "path": ".vscode/mcp.json",
+        "content": "{\"mcp\":{\"servers\":{\"vscode-one\":{\"type\":\"http\",\"url\":\"https://example.test/mcp\"},\"vscode-two\":{\"command\":\"npx\"}}}}"
+      }
+    ],
+    "expect": [
+      { "name": "vscode-one", "source": "VS Code", "enabled": true },
+      { "name": "vscode-two", "source": "VS Code", "enabled": true }
+    ]
+  }
+}

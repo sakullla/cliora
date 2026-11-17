@@ -2,7 +2,9 @@
  * One command for the UI capture acceptance run (02 ADR-7): build the frontend, serve it with
  * vite preview on 127.0.0.1:14736, run the four capture scripts over all themes and widths, then
  * stop the preview. The scripts run as one job per theme × width, two at a time by default
- * (CLIORA_CAPTURE_JOBS overrides), and the total wall-clock is printed at the end. Output goes to docs/verification/ui-redesign/<script>/<theme>-<width>,
+ * (CLIORA_CAPTURE_JOBS overrides), and the total wall-clock is printed at the end. The
+ * default matrix is 1360/900/720 for every gallery, with 640 only when
+ * CLIORA_CAPTURE_640=1. Output goes to docs/verification/ui-redesign/<script>/<theme>-<width>,
  * each with the script's own gallery, manifest and job.log. Any failing job makes the run exit
  * non-zero and its failing scenarios are printed. Captures use synthetic IPC and are
  * not native platform acceptance.
@@ -18,7 +20,11 @@ const port = 14736;
 const previewUrl = `http://127.0.0.1:${port}`;
 const outRoot = path.join(root, 'docs', 'verification', 'ui-redesign');
 const themes = ['light', 'dark'];
-const widths = [1360, 900, 640];
+// The native minimum width 720 is the default compatibility edge. 640 stays
+// an explicit opt-in sweep (CLIORA_CAPTURE_640=1). All four galleries share it.
+const desktopWidths = [1360, 900, 720];
+const compat640 = process.env.CLIORA_CAPTURE_640 === '1' || process.argv.includes('--compat-640');
+const widths = compat640 ? [...desktopWidths, 640] : desktopWidths;
 // Independent capture jobs share the one preview server. Two at a time by default: at four, CPU
 // contention on a loaded host pushed Playwright waits past 30 s. CLIORA_CAPTURE_JOBS (integer ≥ 1)
 // overrides it. Each job covers one theme × width of one script and writes to

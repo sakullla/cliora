@@ -1,0 +1,8 @@
+model = "gpt-6.1-sol"
+model_provider = "openai"
+
+[model_providers.openai]
+base_url = "https://legacy.example.test/v1"
+
+[features]
+user_defined_feature = true

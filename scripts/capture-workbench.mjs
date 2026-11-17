@@ -375,8 +375,10 @@ const option = (flag, fallback) => {
 const themeOption = option('--theme', 'all');
 if (!['all', 'light', 'dark'].includes(themeOption)) throw new Error('Invalid --theme; use all, light or dark');
 const sizeOption = option('--size', '1360');
-const widths = sizeOption === 'all' ? [1360, 900, 640] : [...new Set(sizeOption.split(',').map(Number))];
-if (!widths.length || widths.some((width) => ![1360, 900, 640].includes(width))) throw new Error('Invalid --size; use 1360,900,640');
+const compat640 = process.env.CLIORA_CAPTURE_640 === '1' || process.argv.includes('--compat-640');
+const defaultWidths = compat640 ? [1360, 900, 720, 640] : [1360, 900, 720];
+const widths = sizeOption === 'all' ? defaultWidths : [...new Set(sizeOption.split(',').map(Number))];
+if (!widths.length || widths.some((width) => ![1360, 900, 720, 640].includes(width))) throw new Error('Invalid --size; use all|1360,900,720; 640 requires an explicit width or CLIORA_CAPTURE_640=1');
 
 const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
 // Routine desktop review: one example of each distinct primary surface. The
@@ -1026,7 +1028,7 @@ fs.writeFileSync(out + '/README.md', [
   'CLIORA_PREVIEW_URL=http://127.0.0.1:14736 node scripts/capture-workbench.mjs',
   '```',
   '',
-  '`--theme all|light|dark`、`--size all|1360,900,640` 和 `--only "workbench-remote-*"` 可缩小范围；`CLIORA_CAPTURE_OUT` 指定输出目录，`CLIORA_CAPTURE_LOCALE=en-US` 捕获英文界面并写入独立目录。预览服务器需运行当前 frontend build。远程连接状态覆盖连接中、已连接、断开、未知和远端结束；`--only "workbench-remote-prompts-*"` 捕获快捷输入与新建会话提示词读取失败、旧成功陈旧标记及重试入口，保留输入草稿；`--performance` 仅在首个主题/尺寸执行一次 stream 压力场景，在三会话持续输出和切换后记录 GC 后 heap、DOM/listener、CPU task duration 等浏览器观察，不构成原生或长时间泄漏验收。',
+  '`--theme all|light|dark`、`--size all|1360,900,720`（640 需显式指定或 CLIORA_CAPTURE_640=1）和 `--only "workbench-remote-*"` 可缩小范围；`CLIORA_CAPTURE_OUT` 指定输出目录，`CLIORA_CAPTURE_LOCALE=en-US` 捕获英文界面并写入独立目录。预览服务器需运行当前 frontend build。远程连接状态覆盖连接中、已连接、断开、未知和远端结束；`--only "workbench-remote-prompts-*"` 捕获快捷输入与新建会话提示词读取失败、旧成功陈旧标记及重试入口，保留输入草稿；`--performance` 仅在首个主题/尺寸执行一次 stream 压力场景，在三会话持续输出和切换后记录 GC 后 heap、DOM/listener、CPU task duration 等浏览器观察，不构成原生或长时间泄漏验收。',
   '',
   '终端文本、项目与提示词均为合成数据。' + acceptanceNote + '真实登录与计费也未验证。',
   '',

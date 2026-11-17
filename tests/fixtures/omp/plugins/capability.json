@@ -1,0 +1,10 @@
+{
+  "name": "OMP plugin capability exposes the verified native lifecycle",
+  "capability": "plugins",
+  "case": {
+    "action": "capability",
+    "actions": ["install", "update", "enable", "disable", "uninstall", "doctor"],
+    "project": true,
+    "sourcesContain": ["npm", "Git", "link", "marketplace"]
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "capability": "resources",
+  "name": "Cross-provider priority keeps the first documented provider for a duplicate name",
+  "case": {
+    "kind": "mcp",
+    "action": "foreign",
+    "base": "priority",
+    "files": [
+      {
+        "scope": "project",
+        "path": ".vscode/mcp.json",
+        "content": "{\"servers\":{\"opencode-wins\":{\"command\":\"vscode\"},\"claude-wins\":{\"command\":\"vscode\"}}}"
+      },
+      {
+        "scope": "project",
+        "path": ".cursor/mcp.json",
+        "content": "{\"mcpServers\":{\"opencode-wins\":{\"command\":\"cursor\"},\"claude-wins\":{\"command\":\"cursor\"}}}"
+      },
+      {
+        "scope": "project",
+        "path": ".opencode/opencode.json",
+        "content": "{\"mcp\":{\"opencode-wins\":{\"type\":\"local\",\"command\":[\"npx\",\"opencode\"]},\"claude-wins\":{\"type\":\"local\",\"command\":[\"npx\",\"opencode\"]}}}"
+      },
+      {
+        "scope": "project",
+        "path": ".claude/mcp.json",
+        "content": "{\"mcpServers\":{\"claude-wins\":{\"command\":\"claude\"}}}"
+      }
+    ],
+    "expect": [
+      { "name": "claude-wins", "source": "Claude Code", "enabled": true },
+      { "name": "opencode-wins", "source": "OpenCode", "enabled": true }
+    ]
+  }
+}

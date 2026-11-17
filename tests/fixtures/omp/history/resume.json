@@ -1,0 +1,10 @@
+{
+  "capability": "history",
+  "name": "a specified OMP session resumes with --resume; --continue is only the latest-session selector",
+  "case": {
+    "action": "resume",
+    "id": "0190f4a2-0000-7000-8000-000000000001",
+    "args": ["--resume", "0190f4a2-0000-7000-8000-000000000001"],
+    "latest": true
+  }
+}

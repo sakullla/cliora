@@ -13,7 +13,7 @@ import type { Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, MemoryAggregate, MemoryReadRequest, MemoryReadResult, MemoryDelete, MemoryDocument, MemoryEnable, MemoryList, MemorySave, MemoryTarget, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, SavedWorkbenchSession, TerminalId, TrayStatus, TwiglaneLinkOutcome, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchGitContext, WorkbenchWorktree, WorkbenchReplay, WorkbenchSession, WorkbenchTerminalSize, RemoteSessionIndexEntry, WorktreeBase, WorktreeBasePreview, WorktreeCleanupReport, WorktreeLedgerEntry, WorktreeMenuStatus, WorktreePrepareCommand } from '../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
-import type { McpDefinition, McpDraft, McpDraftPreview, McpDraftTargetRequest, McpCommitResult, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry, NativeRuleFile, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue, SkillManifest, SkillFileListing, SkillFilePreview } from '../types/resources';
+import type { McpDefinition, McpDraft, McpDraftPreview, McpDraftTargetRequest, McpCommitResult, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpStore, NativeRuleFile, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue, SkillManifest, SkillFileListing, SkillFilePreview } from '../types/resources';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, RemoteHistorySnapshot, ScanStatus, UsageReport } from '../types/history';
 import { markOnboardingLaunched } from './onboarding';
 import type { ConflictPreview, PortableImportReport, PortableItem, PortablePreview, SyncStatus, WebdavSetup } from '../types/portable';
@@ -336,7 +336,8 @@ export const native = {
   saveMcpDefinition: (draft: McpDraft) => command<McpDefinition>('save_mcp_definition', { draft }),
   deleteMcpDefinition: (id: string, expectedVersion: number) => command<void>('delete_mcp_definition', { id, expectedVersion }),
   removeNativeMcp: (target: McpTargetRequest, name: string) => command<void>('remove_native_mcp', { target, name }),
-  listNativeMcp: (target: McpTargetRequest) => command<NativeMcpEntry[]>('list_native_mcp', { target }),
+  setExternalMcpEnabled: (target: McpTargetRequest, name: string, enabled: boolean) => command<void>('set_external_mcp_enabled', { target, name, enabled }),
+  listNativeMcp: (target: McpTargetRequest) => command<NativeMcpStore>('list_native_mcp', { target }),
   getManagedMcpEnabled: (definitionId: string, target: McpTargetRequest) => command<boolean | null>('get_managed_mcp_enabled', {definitionId,target}),
   previewMcpTargets: (definitionId: string, targets: McpTargetRequest[]) => command<McpTargetResult[]>('preview_mcp_targets', { definitionId, targets }),
   previewMcpDraft: (draft: McpDraft, targets: McpDraftTargetRequest[]) => command<McpDraftPreview>('preview_mcp_draft', { draft, targets }),
@@ -538,6 +539,7 @@ export const native = {
   recoverNativeTransactions: () => command<string[]>('recover_native_transactions'),
   getSkillEnabled: (packageId: string, toolId: string, scope: Scope, projectPath: string | null) => command<boolean>('get_skill_enabled', { packageId, toolId, scope, projectPath }),
   setSkillEnabled: (packageId: string, toolId: string, scope: Scope, projectPath: string | null, enabled: boolean, expectedContextId: string | null = null) => command<void>('set_skill_enabled', { expectedContextId, packageId, toolId, scope, projectPath, enabled }),
+  setObservedSkillEnabled: (name: string, path: string, toolId: string, scope: Scope, projectPath: string | null, enabled: boolean, expectedContextId: string | null = null) => command<void>('set_observed_skill_enabled', { expectedContextId, name, path, toolId, scope, projectPath, enabled }),
   getNativeRuleEnabled: (target: RuleTarget) => command<boolean>('get_native_rule_enabled', { target }),
   setNativeRuleEnabled: (target: RuleTarget, enabled: boolean) => command<void>('set_native_rule_enabled', { target, enabled }),
   readNativeRule: (target: RuleTarget) => command<{ contextId: string | null; path: string; text: string; fingerprint: string }>('read_native_rule', { target }),

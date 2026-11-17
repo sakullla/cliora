@@ -80,7 +80,11 @@ mod tests {
                     "{}",
                     adapter.id()
                 );
-                assert!(adapter.install_command().is_none(), "{}", adapter.id());
+                assert!(
+                    adapter.source_install_command(Some("npm_shim")).is_none(),
+                    "{}",
+                    adapter.id()
+                );
                 assert!(adapter.upgrade_command("npm_shim").is_none(), "{}", adapter.id());
                 assert!(adapter.npm_uninstall_command().is_none(), "{}", adapter.id());
             }

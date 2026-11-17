@@ -2,6 +2,9 @@
 
 These assets render offline. Product symbols remain in their original colors; custom raster overrides are separate portable preference content.
 
+- `omp.svg`: Cliora placeholder monogram for oh-my-pi (OMP), not an official brand asset. No official OMP vector could be fetched offline on 2026-11-15; it is a neutral dark tile with the letters OMP and is replaced once an official source is verified. Image source link: https://github.com/can1357/oh-my-pi .
+  SHA-256: `b30fa401a5a0dd0c332aa1fce556c29c4441c7821886d4a567c9d65daab5da18`.
+
 - `codex.svg`: Official Codex product symbol extracted unchanged from the installed OpenAI.Codex 26.924.2738.0 package, app/resources/app.asar/webview/assets/codex-new-f14177b03534.svg. This is the Codex terminal mark, not the OpenAI/ChatGPT blossom. A quiet light tile preserves its original black paths in dark mode.
   SHA-256: `0b490f33f9c5b62c7db578f5101497efb87b774720f91b9e878243e761952c52`.
 - `claude.svg`: Official Claude symbol: first symbol path extracted unchanged (orange #D97757) from https://code.claude.com/docs/logo/light.svg linked by https://code.claude.com/docs/en/overview. Original CDN source https://mintcdn.com/claude-code/c5r9_6tjPMzFdDDT/logo/light.svg . Only the symbol is separated from the wordmark; paths and color are retained.

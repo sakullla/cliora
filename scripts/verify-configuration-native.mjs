@@ -79,7 +79,14 @@ function isolatedEnvironment(home, temporary) {
 
 export function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: options.cwd ?? repository, env: options.env ?? process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    // npm publishes a .cmd launcher on Windows; the extensionless sibling is a
+    // POSIX shell script and cannot be spawned directly. Route .cmd/.bat through
+    // cmd.exe with minimally quoted arguments.
+    const batch = process.platform === 'win32' && /\.(cmd|bat)$/i.test(command);
+    const quote = value => /[\s"&|<>^]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
+    const child = batch
+      ? spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${command}" ${args.map(quote).join(' ')}`], { cwd: options.cwd ?? repository, env: options.env ?? process.env, stdio: ['ignore', 'pipe', 'pipe'], windowsVerbatimArguments: true })
+      : spawn(command, args, { cwd: options.cwd ?? repository, env: options.env ?? process.env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     child.stdout.on('data', bytes => { stdout += bytes; });
     child.stderr.on('data', bytes => { stderr += bytes; });
@@ -105,7 +112,7 @@ async function fingerprint() {
 
 async function executable(command) {
   for (const directory of (process.env.PATH ?? '').split(path.delimiter)) {
-    for (const suffix of process.platform === 'win32' ? ['', '.exe', '.cmd'] : ['']) {
+    for (const suffix of process.platform === 'win32' ? ['.exe', '.cmd', ''] : ['']) {
       const target = path.join(directory, `${command}${suffix}`);
       try { await fs.access(target, process.platform === 'win32' ? fs.constants.F_OK : fs.constants.X_OK); return await fs.realpath(target); } catch {}
     }
@@ -142,15 +149,24 @@ export async function verifyConfigurationNative({ output, strict = false } = {})
   await requireSuccess('rustc', ['--edition=2021', '--crate-name', 'cliora_native_verification', source, '-L', `dependency=${path.dirname(jsonLibrary)}`, '--extern', `cliora_lib=${library}`, '--extern', `serde_json=${jsonLibrary}`, '-o', binary], { timeout: 120_000 });
   const env = isolatedEnvironment(bootstrapHome, temporary);
   const catalog = JSON.parse((await requireSuccess(binary, ['catalog'], { env })).stdout);
-  // The redesign Recipe requires five CLI observations; never silently pass a partial registry export.
-  if (catalog.length < 5) throw new Error('The configuration redesign requires at least five registry-declared native verification modules');
+  // Adapters may publish a native verifier in another language (OMP owns a Rust
+  // dispatcher consumed by verify-omp-native). This offline harness can only
+  // import JavaScript verifiers; skip those refs instead of failing the whole
+  // registry, then enforce the original five-module floor on the JS subset.
   const modules = [];
+  const skipped = [];
   for (const entry of catalog) {
     const ref = entry.moduleRef;
-    if (!/^src-tauri\/src\/adapters\/[^/]+\/native_verification\.mjs$/.test(ref)) throw new Error(`Invalid adapter verifier ref: ${ref}`);
+    if (!/^src-tauri\/src\/adapters\/[^/]+\/native_verification\.mjs$/.test(ref)) {
+      skipped.push({ tool: entry.tool, ref });
+      continue;
+    }
     const module = await import(pathToFileURL(path.join(repository, ref)).href);
     modules.push({ entry, module });
   }
+  // The redesign Recipe requires five CLI observations; never silently pass a partial registry export.
+  if (modules.length < 5) throw new Error('The configuration redesign requires at least five registry-declared native verification modules');
+  for (const item of skipped) console.log(`skipped non-JavaScript native verifier: ${item.tool} ${item.ref}`);
   const specs = modules.map(({ entry, module }) => ({ tool: entry.tool, ...module.fixture }));
   const specsPath = path.join(temporary, 'synthetic-inputs.json'); await fs.writeFile(specsPath, JSON.stringify(specs));
   const applied = JSON.parse((await requireSuccess(binary, [temporary, specsPath], { env })).stdout);

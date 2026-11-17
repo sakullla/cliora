@@ -485,10 +485,35 @@ fn mcp_seed_path(tool_id: &str) -> Option<String> {
 /// Native config decides which MCP servers are effective. Library metadata in
 /// the Cliora store is kept only for names the CLI file still contains.
 fn reconcile_mcp_store(tool_id: &str, stored: &serde_json::Value, config_text: &str) -> serde_json::Value {
-    if mcp_seed_path(tool_id).is_none() {
+    let Some(seed) = mcp_seed_path(tool_id) else {
         return empty_resource_store("mcp");
-    }
-    let native = mcp_store_from_config_text(tool_id, config_text).unwrap_or_else(|| empty_resource_store("mcp"));
+    };
+    let native = match mcp_store_from_config_text(tool_id, config_text) {
+        Ok(native) => native,
+        Err(error) => {
+            // A parse failure is an observable recovery issue, not an empty
+            // store: cached entries/definitions stay visible while the native
+            // file is corrected, and other tools in the same bundle are kept.
+            let entries = stored
+                .get("entries")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([]));
+            let definitions = stored
+                .get("definitions")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([]));
+            return serde_json::json!({
+                "entries": entries,
+                "definitions": definitions,
+                "stale": true,
+                "issues": [{
+                    "kind": "mcp_parse",
+                    "path": seed,
+                    "message": error,
+                }],
+            });
+        }
+    };
     let native_entries = native.get("entries").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
     let names: HashSet<String> = native_entries.iter().filter_map(|entry| entry.get("name").and_then(serde_json::Value::as_str).map(str::to_owned)).collect();
     let definitions: Vec<serde_json::Value> = stored
@@ -508,11 +533,14 @@ fn reconcile_mcp_store(tool_id: &str, stored: &serde_json::Value, config_text: &
         if let Some(object) = entry.as_object_mut() { object.insert("inLibrary".into(), serde_json::json!(in_library)); }
         entry
     }).collect();
-    serde_json::json!({ "entries": entries, "definitions": definitions })
+    serde_json::json!({ "entries": entries, "definitions": definitions, "issues": [] })
 }
 
-fn mcp_store_from_config_text(tool_id: &str, config_text: &str) -> Option<serde_json::Value> {
-    crate::adapters::Registry::builtins().get(tool_id)?.parse_remote_mcp(config_text).ok()
+fn mcp_store_from_config_text(tool_id: &str, config_text: &str) -> Result<serde_json::Value, String> {
+    let adapter = crate::adapters::Registry::builtins()
+        .get(tool_id)
+        .ok_or_else(|| "适配器未注册".to_owned())?;
+    adapter.parse_remote_mcp(config_text)
 }
 
 fn bundle_groups(tool_ids: &[String], kind: &str) -> Vec<Vec<String>> {
@@ -2920,6 +2948,27 @@ mod tests {
         assert_eq!(stores["grok"]["entries"][0]["command"], "node");
         assert_eq!(stores["grok"]["entries"][0]["args"][0], "server.js");
         assert!(stores["cursor"]["entries"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn malformed_native_mcp_is_an_issue_and_keeps_cached_entries() {
+        let saved = r#"{"entries":[{"name":"saved-server","transport":"stdio","command":"npx","inLibrary":true}],"definitions":[{"name":"saved-server","inLibrary":true}]}"#;
+        let stdout = format!(
+            "__CLIORA_TOOL__\ncodex\n__CLIORA_STORE__\n{}\n__CLIORA_CONFIG__\n{}\n__CLIORA_TOOL__\ngrok\n__CLIORA_STORE__\n\n__CLIORA_CONFIG__\n{}\n",
+            b64(saved),
+            b64("{ this is not json"),
+            b64("[mcp_servers.valid]\ncommand = \"node\"\n"),
+        );
+        let parsed = parse_resource_bundle("mcp", &["codex".into(), "grok".into()], &stdout);
+        let store = &parsed["stores"]["codex"];
+        assert_eq!(store["entries"][0]["name"], "saved-server");
+        assert_eq!(store["definitions"][0]["name"], "saved-server");
+        assert_eq!(store["stale"], true);
+        assert_eq!(store["issues"][0]["kind"], "mcp_parse");
+        assert!(!store["issues"][0]["message"].as_str().unwrap().is_empty());
+        // The other tool's valid store is unaffected.
+        assert_eq!(parsed["stores"]["grok"]["entries"][0]["name"], "valid");
+        assert_eq!(parsed["stores"]["grok"]["issues"], serde_json::json!([]));
     }
 
     #[test]

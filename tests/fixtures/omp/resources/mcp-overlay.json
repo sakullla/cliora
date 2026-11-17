@@ -1,0 +1,34 @@
+{
+  "capability": "resources",
+  "name": "External MCP switches use OMP overlays instead of the source file",
+  "case": {
+    "kind": "mcp",
+    "action": "overlay",
+    "cases": [
+      {
+        "name": "github",
+        "enabled": false,
+        "sourceEnabled": true,
+        "config": { "disabledServers": ["keep"], "enabledServers": ["force"] },
+        "expectDisabled": ["keep", "github"],
+        "expectEnabled": ["force"]
+      },
+      {
+        "name": "tool-owned-server",
+        "enabled": true,
+        "sourceEnabled": false,
+        "config": { "disabledServers": ["keep"], "enabledServers": ["force", "tool-owned-server"] },
+        "expectDisabled": ["keep"],
+        "expectEnabled": ["force", "tool-owned-server"]
+      },
+      {
+        "name": "force",
+        "enabled": true,
+        "sourceEnabled": true,
+        "config": { "disabledServers": [], "enabledServers": ["force"] },
+        "expectDisabled": [],
+        "expectEnabled": []
+      }
+    ]
+  }
+}

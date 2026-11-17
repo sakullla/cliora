@@ -1615,6 +1615,75 @@ fn unreadable_auth_file_does_not_block_webdav_sync() {
 }
 
 #[test]
+fn omp_shared_agent_database_is_held_with_a_blocker_and_never_uploaded() {
+    let server = Server::new();
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    put_library(&db, "kept-body");
+    let root = temp.path().join("omp-agent");
+    std::fs::create_dir_all(&root).unwrap();
+    let agent_db = root.join("agent.db");
+    let marker = "unrelated-omp-session-state";
+    std::fs::write(&agent_db, format!("SQLite format 3\0{marker}")).unwrap();
+    let account = crate::accounts::AuthAccount {
+        id: "omp-acct".into(),
+        tool_id: "omp".into(),
+        provider: "openai-codex".into(),
+        label: "OMP account".into(),
+        version: 1,
+        state: crate::accounts::AccountState::SignedIn,
+        identity: None,
+        context: Some(crate::accounts::NativeContext {
+            id: "omp-ctx".into(),
+            tool_id: "omp".into(),
+            root: root.clone(),
+            config_root: root.clone(),
+            auth_files: vec![agent_db],
+            history_roots: vec![root.join("sessions")],
+            resource_root: root,
+            environment: BTreeMap::new(),
+            remove_environment: Vec::new(),
+            cli_args: Vec::new(),
+        }),
+        retired_contexts: Vec::new(),
+        pending_login: None,
+        checked_at: None,
+        detail: None,
+    };
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO auth_accounts (id,tool,version,data) VALUES ('omp-acct','omp',1,?1)",
+            [serde_json::to_string(&account).unwrap()],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    configure(&db, &credentials, setup(&server)).unwrap();
+    let synced = run(&db, &credentials, &registry, false).unwrap();
+    assert!(synced.last_error.is_none(), "{synced:?}");
+    assert_eq!(body(&db).as_deref(), Some("kept-body"));
+    let still_there: bool = db
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM auth_accounts WHERE id='omp-acct')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert!(still_there);
+    assert!(synced.blockers.iter().any(|item| {
+        item.key == "account:omp-acct"
+            && item.detail.contains("混存数据库")
+            && !item.detail.contains(marker)
+    }), "{:?}", synced.blockers);
+}
+
+#[test]
 fn unchanged_digest_still_finishes_a_pending_native_write() {
     struct Guard;
     impl Drop for Guard {

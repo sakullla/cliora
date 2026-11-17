@@ -230,6 +230,9 @@ function AccountRow({ account, run, isCurrent, busy, capability, method, remote,
   const identityText = identity ?? t('tools.accounts.noIdentity');
   const plan = account.identity?.plan ? ` · ${account.identity.plan}` : '';
   const signIn = !remote && !!capability?.managedLogin && !!capability.methods.length;
+  const readOnlyCapability = !!capability && !capability.managedLogin;
+  const managed = !remote && !readOnlyCapability;
+  const canManage = managed || remote;
   const methods = capability?.methods ?? [];
   const loginMethod = methods.includes(method) ? method : methods[0];
   const manageId = `account-management-${account.id}`;
@@ -250,7 +253,7 @@ function AccountRow({ account, run, isCurrent, busy, capability, method, remote,
         <Badge tone={accountTone(account.state)} dot={account.state === 'signed_in'} data-state={account.state}>{accountStateLabel(account.state)}</Badge>
       </div>
     </div>
-    {!remote && renaming && <div className={accountStyles.renameForm}>
+    {canManage && renaming && <div className={accountStyles.renameForm}>
       <label>{t('tools.accounts.newName')}<input ref={renameInput} value={renameValue} onChange={event => setRenameValue(event.target.value)} onKeyDown={event => {
         if (event.key === 'Enter' && !event.nativeEvent.isComposing && !busy && renameValue.trim()) { event.preventDefault(); void run(async () => { await native.renameAccount(account.id, account.version, renameValue.trim()); if (isCurrent()) setRenaming(false); }, t('tools.accounts.renamed')); }
         else if (event.key === 'Escape' && !busy) { event.preventDefault(); event.stopPropagation(); setRenaming(false); }
@@ -267,12 +270,13 @@ function AccountRow({ account, run, isCurrent, busy, capability, method, remote,
     </div>}
     <div className={accountStyles.rowActions}>
       {!pending && signIn && <Button size="sm" disabled={busy} onClick={() => void run(() => native.startAccountLogin(account.id, account.version, loginMethod!), account.state === 'signed_in' ? t('tools.accounts.reauthRequested') : t('tools.accounts.loginRequested'))}>{account.state === 'signed_in' ? t('tools.accounts.reauthenticate') : t('tools.accounts.login')}</Button>}
-      {!pending && !remote && <Button variant={signIn ? 'ghost' : 'secondary'} size="sm" disabled={busy} onClick={() => void run(() => native.checkAccount(account.id), t('tools.accounts.checkedNotice'))}>{t('tools.accounts.checkStatus')}</Button>}
-      {!pending && !remote && <Button ref={renameButton} variant="ghost" size="sm" disabled={busy} onClick={() => { setRenameValue(account.label); setRenaming(true); }}>{t('tools.accounts.rename')}</Button>}
-      {account.retiredContexts.length > 0 && !managing && <Button variant="ghost" size="sm" onClick={() => setManaging(true)}>{t('tools.accounts.viewRetired')}</Button>}
-      <Button ref={manageButton} variant="ghost" size="sm" aria-expanded={managing} aria-controls={manageId} onClick={() => setManaging(value => !value)}>{t('tools.accounts.manageSummary')}</Button>
+      {!pending && managed && <Button variant={signIn ? 'ghost' : 'secondary'} size="sm" disabled={busy} onClick={() => void run(() => native.checkAccount(account.id), t('tools.accounts.checkedNotice'))}>{t('tools.accounts.checkStatus')}</Button>}
+      {!pending && managed && <Button ref={renameButton} variant="ghost" size="sm" disabled={busy} onClick={() => { setRenameValue(account.label); setRenaming(true); }}>{t('tools.accounts.rename')}</Button>}
+      {account.retiredContexts.length > 0 && canManage && !managing && <Button variant="ghost" size="sm" onClick={() => setManaging(true)}>{t('tools.accounts.viewRetired')}</Button>}
+      {canManage && <Button ref={manageButton} variant="ghost" size="sm" aria-expanded={managing} aria-controls={manageId} onClick={() => setManaging(value => !value)}>{t('tools.accounts.manageSummary')}</Button>}
     </div>
-    {managing && <div className={accountStyles.management} id={manageId} role="region" aria-label={t('tools.accounts.managementAria', { label: account.label })}>
+    {!managed && !remote && readOnlyCapability && account.detail && <p className={accountStyles.readOnlyDetail}>{account.detail}</p>}
+    {canManage && managing && <div className={accountStyles.management} id={manageId} role="region" aria-label={t('tools.accounts.managementAria', { label: account.label })}>
       {account.detail && <p>{account.detail}</p>}
       <AccountImpactView account={account} controller={impact} remote={remote} onOpenProfile={onOpenProfile} onOpenUsage={onOpenUsage} />
       <section className={accountStyles.danger} aria-label={t('tools.accounts.dangerTitle')}>
@@ -280,7 +284,7 @@ function AccountRow({ account, run, isCurrent, busy, capability, method, remote,
         <p>{t('tools.accounts.dangerNote')}</p>
         {impact.impact && <p>{t('tools.accounts.dangerImpact', { profiles: impact.impact.profiles.length, scopes: impact.impact.scopes.length, usage: impact.impact.usageReferences.length })}</p>}
         {impact.error && <p>{t('tools.accounts.dangerImpactFailed')}</p>}
-        {!remote && <div className={accountStyles.dangerActions}>
+        {managed && <div className={accountStyles.dangerActions}>
           <Button size="sm" disabled={busy || !!pending || account.state === 'signed_out'} onClick={event => { const opener = event.currentTarget; void run(async () => {
             const fresh = guard(await native.accountImpact(account.id));
             if (!isCurrent()) return false;
@@ -343,7 +347,7 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
       {nativeLogins && !nativeLogins.logins.length && (!state.loading && !state.accounts.length
         ? <EmptyState icon="monitor" title={t('tools.accounts.nativeEmptyTitle')} detail={t('tools.accounts.nativeEmpty')} action={<Button variant="primary" disabled={remote || nativeLoading || !nativeAvailable} onClick={() => void discover()}>{t('tools.accounts.rediscover')}</Button>} />
         : <p>{t('tools.accounts.nativeEmpty')}</p>)}
-      {nativeLogins?.logins.map(login => <div className={accountStyles.nativeRow} data-native-login={login.provider} key={`${login.provider}:${login.authKind}`}><div className={accountStyles.nativeIdentity}><strong>{login.identity?.email ?? login.identity?.subject ?? login.provider}</strong><span>{login.identity ? `${login.provider} · ` : ''}{login.authKind === 'oauth' ? 'OAuth' : 'API Key'}{login.identity?.plan && ` · ${login.identity.plan}`}{!login.identity && login.authKind === 'oauth' && login.state === 'signed_in' ? t('tools.accounts.identityMissing') : ''}</span><p>{login.managedAccountId ? t('tools.accounts.managed', { label: state.accounts.find(account => account.id === login.managedAccountId)?.label ?? t('tools.accounts.existingAccount') }) : login.state === 'signed_in' ? t('tools.accounts.unmanagedNote') : login.detail}</p></div><Badge tone={accountTone(login.state)} dot={login.state === 'signed_in'} data-state={login.state}>{login.state === 'signed_in' ? login.authKind === 'api_key' ? t('tools.accounts.badgeConfigured') : t('tools.accounts.badgeSignedIn') : login.state === 'signed_out' ? t('tools.accounts.badgeSignedOut') : accountStateLabel(login.state)}</Badge>{login.state !== 'signed_out' && <details><summary>{t('tools.accounts.detail')}</summary><p>{login.detail}</p></details>}</div>)}
+      {nativeLogins?.logins.map((login, index) => <div className={accountStyles.nativeRow} data-native-login={login.provider} key={`${login.provider}:${login.authKind}:${login.identity?.subject ?? login.identity?.email ?? ''}:${index}`}><div className={accountStyles.nativeIdentity}><strong>{login.identity?.email ?? login.identity?.subject ?? login.provider}</strong><span>{login.identity ? `${login.provider} · ` : ''}{login.authKind === 'oauth' ? 'OAuth' : 'API Key'}{login.identity?.plan && ` · ${login.identity.plan}`}{!login.identity && login.authKind === 'oauth' && login.state === 'signed_in' ? t('tools.accounts.identityMissing') : ''}</span><p>{login.managedAccountId ? t('tools.accounts.managed', { label: state.accounts.find(account => account.id === login.managedAccountId)?.label ?? t('tools.accounts.existingAccount') }) : login.state === 'signed_in' ? t('tools.accounts.unmanagedNote') : login.detail}</p></div><Badge tone={accountTone(login.state)} dot={login.state === 'signed_in'} data-state={login.state}>{login.state === 'signed_in' ? login.authKind === 'api_key' ? t('tools.accounts.badgeConfigured') : t('tools.accounts.badgeSignedIn') : login.state === 'signed_out' ? t('tools.accounts.badgeSignedOut') : accountStateLabel(login.state)}</Badge>{login.state !== 'signed_out' && <details><summary>{t('tools.accounts.detail')}</summary><p>{login.detail}</p></details>}</div>)}
     </section>
     {creating && <div className={`${styles.create} ${accountStyles.addForm}`}><label>{t('tools.accounts.accountName')}<input value={label} onChange={event => setLabel(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing && !busy && nativeAvailable && label.trim() && state.capability?.managedLogin && state.capability.methods.length) { event.preventDefault(); void run(async () => { const account = await native.createAccount(toolId, label.trim()); if (!isCurrent()) return; await native.startAccountLogin(account.id, account.version, state.capability!.methods.includes(method) ? method : state.capability!.methods[0]); }, t('tools.accounts.loginRequested')); } }} placeholder={t('tools.accounts.namePlaceholder')} /></label>
       <label>{t('tools.accounts.loginMethod')}<select value={state.capability?.methods.includes(method) ? method : state.capability?.methods[0] ?? ''} onChange={event => setMethod(event.target.value as 'browser' | 'device')}>{state.capability?.methods.map(value => <option key={value} value={value}>{metadata?.methods?.[value] ?? (value === 'device' ? t('tools.accounts.methodDevice') : t('tools.accounts.methodBrowser'))}</option>)}</select></label>
