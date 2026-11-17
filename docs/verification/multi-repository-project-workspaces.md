@@ -337,3 +337,18 @@ Twiglane 直接 28/28（`8f4528af2b47c727663bc696ea6613168f5809efdbfb1858591c813
 | remote-hosts 当前消费者 | 31/31；完整 `{items,total,tags,nextOffset:null}` 空页及原 hold/failure 先序保持，无需再改 mock | `82dc0a5d9d2fe9b7a6dba002fea27ef4b70bb23b38cdf3476c740a451f8fbb7d` |
 
 本轮结论为 12+1+31 项开发证据，不记作单次 13/13。最终单例与 remote-hosts 命令退出 0、清理 released；两个中间组退出 1、清理 released。无产品改动，复用既有 T3 生产/原生与图集的适用判断，不重复截图或原生构建。证据仍为本机 Chromium 测试，不代表原生鼠标/IME、Windows/Linux 实机或正式全量终端组验收，最终累计验证交 Delivery。
+
+## T3-A6：滚动基线与恢复队列布局就绪
+
+正式第三轮旧四项全部通过，新增 tracking wheel 与三尺寸恢复队列四项失败仍保留。tracking 用例仅等 `remaining<3`，空 buffer 也满足，实际取到 start0 后变为173；现先等最后输出行及正滚动范围，再保留原无修饰键发送 CLI 鼠标报告/viewport 不动、Shift 及后续上下滚动全部断言。相邻阅读位置、临时查看也补各自最终 marker 与正范围；已有正确前置的普通 wheel、回放、滚动条与 footer 保持，无 scrollback 的 alternate-screen 不强加正范围。
+
+队列观察命令 `fdd67dbad12418edda4c5bd320ed4615881d702467da1ef6ca6ea226ea427f99` 的九样本中七过、两项 1360px 初始测量失败；原 insideStage 仍使用首次同步值，未以随后采样替换。两个失败当时已 failed14/retry14、字体 loaded、无动画，但 stage/parent 高0、y36，queue 高18、y46；随后同语义状态下 stage/parent 高900、y0，queue 高890、y10。这反证了“尚未 failed、字体或动画导致”的假设，定位为测量早于父级布局空间分配，不能归为未证明的环境问题。完整初始/后续数据与观察源码存于 workflow `evidence/T3-A6-diagnostics/`。
+
+最小修复仅在共用队列 helper 等待 failed/可重试语义，再等 stage/parent 正尺寸以及 queue/stage/parent 几何连续三次不变（按帧，有界120帧/5秒）。等待不使用 insideStage 通过作为条件；稳定溢出仍由原断言拒绝。原 insideStage、滚动范围、每行可见、Tab/Enter 到达与重试末行均保留，不增加全局等待或固定 sleep。
+
+| A6 开发检查 | 实际结果 | 受控回执键 |
+| --- | --- | --- |
+| 三尺寸队列冷启动，每种三次 | 9/9；queue/stage 高仍为890/900、630/640、574/584，全部原可达性断言完成 | `da58c8078646ea1c1cf40f6f473607a0da4de9f4bd6c379fd0809e3b0fc0843c` |
+| wheel、阅读与临时查看直接边界 | 7/7；tracking、阅读位置、临时查看及普通 wheel、两种 alternate-screen、SGR | `c8ae51f067773724be0dc71db67872f3c926fd59ecde487f7f999b0e672f8b38` |
+
+修后两命令退出0、清理 released；观察命令退出1、清理 released。本轮为9个冷布局样本加7项直接边界，未宣称完整131项通过。无产品/Rust改动，既有生产、原生及图集证据按输入适用性复用，未重复截图或原生构建；真实平台与正式累计验证边界继续保留，交 Delivery 完成。

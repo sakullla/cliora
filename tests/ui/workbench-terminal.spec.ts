@@ -1181,6 +1181,8 @@ test('a mouse-tracking CLI receives the wheel, and Shift+wheel reads normal scro
   });
   const viewport = page.locator('.xterm-scrollable-element');
   const remaining = async () => (await readScroll(viewport)).remaining;
+  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('line-199');
+  await expect.poll(async () => (await readScroll(viewport)).max).toBeGreaterThan(0);
   await expect.poll(remaining).toBeLessThan(3);
   const scrollTop = async () => (await readScroll(viewport)).top;
   const screen = page.getByRole('region', { name: '当前会话' }).locator('.xterm-screen');
@@ -2365,6 +2367,8 @@ test('switching sessions preserves a reading position while background output ke
   await openWorkbench(page);
   await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output(Array.from({ length: 240 }, (_, index) => `reading-row-${index}`).join('\r\n') + '\r\n'));
   const viewport = page.locator('[data-pane-session="s1"] .xterm-scrollable-element');
+  await expect(page.locator('[data-pane-session="s1"] .xterm-accessibility-tree')).toContainText('reading-row-239');
+  await expect.poll(async () => (await readScroll(viewport)).max).toBeGreaterThan(0);
   await expect.poll(async () => (await readScroll(viewport)).remaining).toBe(0);
   const scrollbar = page.getByRole('scrollbar', { name: '终端滚动条', exact: true });
   await scrollbar.focus();
@@ -2662,6 +2666,36 @@ async function openManyRecordQueue(page: Page, count: number) {
   const queue = page.getByRole('group', { name: '待恢复的会话' });
   await expect(queue).toBeVisible();
   await expect(page.locator('[data-restore-row]')).toHaveCount(count);
+  await expect(page.locator('[data-restore-row][data-stage="failed"]')).toHaveCount(count);
+  const retries = queue.getByRole('button', { name: '重试恢复', exact: true });
+  await expect(retries).toHaveCount(count);
+  await expect.poll(() => retries.evaluateAll(buttons => buttons.every(button => !(button as HTMLButtonElement).disabled))).toBe(true);
+  // The rows can be ready while the page still gives the stage and its parent
+  // zero height. Wait for allocated, stable geometry before testing containment.
+  // Do not wait for containment itself: a stable overflowing queue must fail.
+  const layout = await queue.evaluate(async (node) => {
+    const stage = node.closest('section')!;
+    const parent = stage.parentElement!;
+    const read = () => [stage, parent, node].map(element => {
+      const { x, y, width, height } = element.getBoundingClientRect();
+      return { x, y, width, height };
+    });
+    let previous = '';
+    let stableFrames = 0;
+    let rects = read();
+    const deadline = performance.now() + 5000;
+    for (let frame = 0; frame < 120 && performance.now() < deadline; frame++) {
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      rects = read();
+      const key = JSON.stringify(rects);
+      const allocated = rects.slice(0, 2).every(rect => rect.width > 0 && rect.height > 0);
+      stableFrames = allocated && key === previous ? stableFrames + 1 : 0;
+      previous = key;
+      if (stableFrames >= 3) return { rects, frame, stableFrames };
+    }
+    throw new Error(`Restore queue layout did not settle: ${JSON.stringify(rects)}`);
+  });
+  await test.info().attach('restore-queue-ready-layout', { body: JSON.stringify(layout), contentType: 'application/json' });
   return queue;
 }
 
@@ -4027,6 +4061,8 @@ test('a temporary look keeps the selected terminal scroll, selection and input s
     const lines = Array.from({ length: 200 }, (_, index) => `line-${String(index).padStart(3, '0')}`).join('\r\n');
     (window as unknown as { __output: (text: string, id?: string) => void }).__output(`${lines}\r\n`, 's1');
   });
+  await expect(page.locator('[data-pane-session="s1"] .xterm-accessibility-tree')).toContainText('line-199');
+  await expect.poll(async () => (await readScroll(viewport)).max).toBeGreaterThan(0);
   await expect.poll(async () => (await readScroll(viewport)).remaining).toBeLessThan(3);
   let settled = -1;
   await expect.poll(async () => {
