@@ -34,6 +34,16 @@ test.use({ launchOptions: { args: ['--use-angle=swiftshader', '--enable-unsafe-s
 // worker so competing contexts cannot starve its rendering assertions.
 test.describe.configure({ mode: 'default' });
 
+// SessionTerminal batches output before xterm's asynchronous parser. A paint
+// frame is not a parse acknowledgement. DECRQM reads cursor visibility without
+// changing a cell or mode; placed last in this packet, its reply acknowledges
+// all preceding caret/prompt bytes. Replies may be coalesced by the input queue.
+async function hiddenCursorOutput(page: Page, text: string) {
+  const before = (await writes(page)).join('').length;
+  await page.evaluate(value => (window as unknown as { __output: (text: string) => void }).__output(`${value}\x1b[?25$p`), text);
+  await expect.poll(async () => (await writes(page)).join('').slice(before)).toContain('\x1b[?25;2$y');
+}
+
 test.describe('product WebGL input integration', () => {
   test('IME commit insertText is sent once and intentional repeated input remains intact', async ({ page }) => {
     await page.addInitScript(() => Object.defineProperty(navigator, 'webdriver', { get: () => false }));
@@ -119,11 +129,7 @@ test.describe('product WebGL input integration', () => {
     await commit('哈', ' ', 32);
     await expect.poll(async () => (await writes(page)).join('')).toBe('升级审计哈哈');
 
-    await page.evaluate(async () => {
-      (window as unknown as { __output: (text: string) => void }).__output('\x1b[?25l\x1b[3;1H\x1b[7mHIGHLIGHT\x1b[0m\x1b[8;10H\x1b[7m \x1b[0m\x1b[1;1H');
-      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
-      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
-    });
+    await hiddenCursorOutput(page, '\x1b[?25l\x1b[3;1H\x1b[7mHIGHLIGHT\x1b[0m\x1b[8;10H\x1b[7m \x1b[0m\x1b[1;1H');
     const anchor = await input.evaluate(node => {
       const textarea = node as HTMLTextAreaElement;
       textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
@@ -156,12 +162,7 @@ test.describe('product WebGL input integration', () => {
     await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
     const input = page.locator('.xterm-helper-textarea:visible');
     await input.focus();
-    await page.evaluate(async () => {
-      (window as unknown as { __output: (text: string) => void }).__output(
-        '\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l\x1b[41m!\x1b[49m\x1b[3;1HQoder CLI 1.2.3\x1b[8;10H\x1b[44m \x1b[49m\x1b[1;1H');
-      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
-      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
-    });
+    await hiddenCursorOutput(page, '\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l\x1b[41m!\x1b[49m\x1b[3;1HQoder CLI 1.2.3\x1b[8;10H\x1b[44m \x1b[49m\x1b[1;1H');
     const measure = async () => input.evaluate(node => {
       const textarea = node as HTMLTextAreaElement;
       textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
@@ -181,11 +182,7 @@ test.describe('product WebGL input integration', () => {
     expect(anchor.top).toBeLessThan(anchor.screenHeight);
     expect(anchor.left).toBeGreaterThan(30);
     // Once the block is gone, the last confirmed input point is kept, not the window origin.
-    await page.evaluate(async () => {
-      (window as unknown as { __output: (text: string) => void }).__output('\x1b[2J\x1b[H\x1b[3;1Hplain output only');
-      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
-      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
-    });
+    await hiddenCursorOutput(page, '\x1b[2J\x1b[H\x1b[3;1Hplain output only');
     expect(await measure()).toEqual(anchor);
   });
 
@@ -196,12 +193,7 @@ test.describe('product WebGL input integration', () => {
     await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
     const input = page.locator('.xterm-helper-textarea:visible');
     await input.focus();
-    await page.evaluate(async () => {
-      (window as unknown as { __output: (text: string) => void }).__output(
-        '\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l\x1b[41m!\x1b[49m\x1b[3;1HQoder CLI 1.2.3\r\n\x1b[20;1H> 帮我改一个 bug');
-      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
-      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
-    });
+    await hiddenCursorOutput(page, '\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l\x1b[41m!\x1b[49m\x1b[3;1HQoder CLI 1.2.3\r\n\x1b[20;1H> 帮我改一个 bug');
     const anchor = await input.evaluate(node => {
       const textarea = node as HTMLTextAreaElement;
       textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));

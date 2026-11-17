@@ -1064,6 +1064,26 @@ test('a long memory keeps the body in view while the list and toolbar stay put',
   await expect(page.getByRole('button', { name: '返回列表' })).toBeVisible();
   await expect(page.getByRole('searchbox', { name: '搜索记忆' })).toBeHidden();
   await expect(article.getByRole('heading', { name: 'Long note' })).toBeVisible();
+  // The narrow container styles and useFillHeight's ResizeObserver/RAF do not
+  // finish together. Scroll once only after the reader's allocated space settles;
+  // waiting for the marker itself would hide an actual clipping regression.
+  await bodyRegion.evaluate(async node => {
+    const region = node as HTMLElement;
+    const article = region.closest('article')!;
+    const content = region.closest('.content')!;
+    const deadline = performance.now() + 5000;
+    let previous = '';
+    let stable = 0;
+    for (let frame = 0; frame < 120 && performance.now() < deadline; frame += 1) {
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      const boxes = [region, article, content].map(element => element.getBoundingClientRect());
+      const geometry = JSON.stringify([boxes.map(box => [box.x, box.y, box.width, box.height]), region.clientHeight, region.scrollHeight]);
+      stable = boxes.every(box => box.width > 0 && box.height > 0) && geometry === previous ? stable + 1 : 0;
+      if (stable >= 3) return;
+      previous = geometry;
+    }
+    throw new Error('Memory reader geometry did not settle after resizing');
+  });
   expect(await shownInBody('已保存的正文')).toBeLessThanOrEqual(0);
   await bodyRegion.evaluate(node => { node.scrollTop = node.scrollHeight; });
   expect(await shownInBody('已保存的正文')).toBeGreaterThan(12);
