@@ -1,6 +1,18 @@
 import { expect, test, type Page } from '@playwright/test';
 import { installWorkspaceFixtures } from '../../scripts/capture-workspace-fixtures.mjs';
 
+async function projectAction(page: Page, name: string) {
+  await page.locator('[data-business-workspaces]').first().getByRole('button', { name: '项目操作', exact: true }).click();
+  await page.getByRole('menu', { name: '项目操作' }).getByRole('menuitem', { name, exact: true }).click();
+}
+
+async function chooseRepository(page: Page, search: string, option: RegExp) {
+  const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
+  await dialog.getByRole('button', { name: '工作目录 / 项目', exact: true }).click();
+  await page.getByRole('textbox', { name: /搜索/ }).last().fill(search);
+  await page.getByRole('option', { name: option }).first().click();
+}
+
 async function install(page: Page) {
   await page.addInitScript(() => {
     const callbacks: Array<(value: unknown) => void> = [];
@@ -76,12 +88,12 @@ test('scan cancellation preserves partial results and manifest attach requires p
   await install(page);
   await page.evaluate(() => { (window as any).__workspaceFixture.scanDelayed = true; });
   const project = page.locator('[data-business-workspaces]').first();
-  await project.getByRole('button', { name: '扫描目录', exact: true }).click();
+  await projectAction(page, '扫描目录');
   const dialog = page.getByRole('dialog', { name: '选择要添加的仓库' });
   await dialog.getByRole('button', { name: '停止扫描' }).click();
   await expect(dialog.getByRole('status')).toContainText('扫描未完成');
   await dialog.getByRole('button', { name: '关闭', exact: true }).click();
-  await project.getByRole('button', { name: '打开项目清单', exact: true }).click();
+  await projectAction(page, '打开项目清单');
   const preview = page.getByRole('dialog', { name: '关联项目清单' });
   await expect(preview.getByText('shared-api', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => (window as any).__workspaceFixture.workspaces.length)).toBe(2);
@@ -96,10 +108,9 @@ test('new workbench sessions carry the chosen business project without creating 
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await page.getByRole('button', { name: '新建会话', exact: true }).first().click();
   const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
-  const browser = dialog.locator('[data-business-workspaces]');
-  await browser.getByRole('textbox', { name: '搜索仓库名称或路径' }).fill('team-0/api');
-  await browser.getByRole('button', { name: '使用此仓库', exact: true }).click();
-  await expect(dialog.getByRole('status')).toContainText('电商平台 / api');
+  await expect(dialog.locator('[data-business-workspaces]')).toHaveCount(0);
+  await chooseRepository(page, 'team-0/api', /^api 电商平台/);
+  await expect(dialog.getByRole('button', { name: '工作目录 / 项目', exact: true })).toContainText('api');
   await dialog.getByRole('button', { name: '启动会话', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__workspaceFixture.launches.length)).toBe(1);
   const launched = await page.evaluate(() => (window as any).__workspaceFixture.launches[0]);
@@ -126,3 +137,40 @@ for (const action of ['cancel', 'accept'] as const) {
     expect(await page.evaluate(() => (window as any).__workspaceFixture.calls.filter((item: any) => item.command === 'attach_workspace_manifest').length)).toBe(action === 'accept' ? 1 : 0);
   });
 }
+
+test('missing repository directories are counted, filterable, and offer relinking without blocking the rest', async ({ page }) => {
+  await install(page);
+  const project = page.locator('[data-business-workspaces]').first();
+  await project.getByRole('button', { name: '需处理 1', exact: true }).click();
+  const rows = project.locator('[data-repository-id]');
+  await expect(rows).toHaveCount(1);
+  const moved = project.locator('[data-repository-id="repo-46"]');
+  await expect(moved).toHaveAttribute('data-state', 'unavailable');
+  await expect(moved).toContainText('目录失效');
+  await expect(moved.getByRole('button', { name: '启动会话', exact: true })).toHaveCount(0);
+  await expect(moved).toContainText('目录不存在');
+  await moved.getByRole('button', { name: '关联本机目录', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__workspaceFixture.calls.filter((call: any) => call.command === 'relink_workspace_repository').length)).toBe(1);
+  // Once relinked nothing needs attention: the list returns to every repository.
+  await expect(project.getByRole('button', { name: /^需处理/ })).toHaveCount(0);
+  await expect(rows).toHaveCount(48);
+});
+
+test('favorite repositories lead the list and the new-session directory picker', async ({ page }) => {
+  await install(page);
+  const project = page.locator('[data-business-workspaces]').first();
+  const last = project.locator('[data-repository-id="repo-47"]');
+  await last.getByRole('button', { name: '收藏仓库', exact: true }).click();
+  await expect(project.locator('[data-repository-id]').first()).toHaveAttribute('data-repository-id', 'repo-47');
+  await project.getByRole('button', { name: '收藏 1', exact: true }).click();
+  await expect(project.locator('[data-repository-id]')).toHaveCount(1);
+
+  // The new-session directory picker lists the favorite first and carries worktrees as choices.
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: '新建会话', exact: true }).first().click();
+  await page.getByRole('dialog', { name: '新建工作台会话' }).getByRole('button', { name: '工作目录 / 项目', exact: true }).click();
+  const options = page.getByRole('option');
+  await expect(options.nth(1)).toContainText('service-47');
+  await page.getByRole('textbox', { name: /搜索/ }).last().fill('team-1/api-feature');
+  await expect(page.getByRole('option', { name: /^api · feature\/search/ })).toHaveCount(1);
+});

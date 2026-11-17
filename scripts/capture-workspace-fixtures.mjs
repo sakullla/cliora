@@ -7,6 +7,9 @@ export function installWorkspaceFixtures() {
     { id: 'workspace-commerce', name: '电商平台', revision: 1, manifestPath: null, manifestRevision: null, error: null, repositories: Array.from({ length: 48 }, (_, i) => repository(`repo-${i}`, i < 2 ? 'api' : `service-${String(i).padStart(2, '0')}`, `/work/commerce/${i < 2 ? `team-${i}/api` : `service-${String(i).padStart(2, '0')}`}`)) },
     { id: 'workspace-payments', name: '支付系统', revision: 1, manifestPath: null, manifestRevision: null, error: null, repositories: [repository('pay-api', 'payment-api', '/work/payments/api')] },
   ];
+  // One moved checkout: the entry stays visible as missing and other repositories keep working.
+  const moved = workspaces[0].repositories[46];
+  moved.locations = [{ ...moved.locations[0], available: false, reason: '目录不存在', worktrees: [] }];
   const fixture = { workspaces, calls: [], launches: [], failBatch: false, scanDelayed: false, scanResolve: null, saved: [], dialogPath: null, contexts: [], sessions: [], preview: null };
   window.__workspaceFixture = fixture;
   const copy = value => structuredClone(value);

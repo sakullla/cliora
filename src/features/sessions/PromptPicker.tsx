@@ -5,13 +5,14 @@ import { formatFailure } from '../../lib/feedback';
 import { useRemoteIdentity } from '../../lib/remoteReads';
 import { GuideDialog } from '../../components/GuideDialog';
 import { Icon } from '../../components/Icon';
-import { Button } from '../../components/ui';
+import { Badge, Button, Segmented } from '../../components/ui';
+import { modLabel } from '../../lib/shortcut';
 import { SearchField } from '../../components/SearchField';
 import { FilterSelect } from '../../components/FilterSelect';
 import type { BusinessWorkspace } from '../../types/workspaces';
 import type { PromptContext, PromptDocument, PromptSummary } from '../../types/prompts';
 import { notifyPromptsChanged, promptContextKey, usePromptQuery } from '../prompts/usePromptQuery';
-import { scopeLabel } from '../prompts/promptScope';
+import { scopeLabel, scopeTone } from '../prompts/promptScope';
 import styles from '../prompts/Prompts.module.css';
 
 export function PromptPicker({ context, sourceKey, active = true, workspaces = [], onPick, className, labelClassName }: { context: PromptContext | null; sourceKey: string; active?: boolean; workspaces?: BusinessWorkspace[]; onPick: (prompt: PromptDocument) => void; className?: string; labelClassName?: string }) {
@@ -65,43 +66,76 @@ export function PromptPicker({ context, sourceKey, active = true, workspaces = [
     try { await native.recordPromptUsage(context, item.id, !item.favorite, false); if (latest.current === identity) notifyPromptsChanged(); }
     catch (value) { if (latest.current === identity) setError(formatFailure(value, t('prompts.readFailed'), t('prompts.retry'))); }
   }
+  const tagOptions = [...new Set([...(results.page.tags ?? []), ...(tag ? [tag] : [])])].sort();
+  const paged = offset > 0 || results.page.nextOffset !== null;
+  const contextScope = (() => {
+    if (!context) return t('prompts.unknownHost');
+    if (context.repositoryId) return scopeLabel({ kind: 'repository', repositoryId: context.repositoryId }, workspaces, t);
+    if (context.workspaceId) return scopeLabel({ kind: 'workspace', workspaceId: context.workspaceId }, workspaces, t);
+    return t('prompts.global');
+  })();
+  const filtered = !!search.trim() || !!tag || mode !== 'all';
   return <div className={`${styles.pickerBar} ${className ?? ''}`} role="group" aria-label={t('sessions.pickLibraryPrompt')}>
     <span className={labelClassName}><Icon name="library" size={12} /> {t('prompts.title')}</span>
-    {quick.page.items.map(item => <Button key={item.id} className={styles.pill} size="sm" variant="ghost" title={`${item.title} · ${scopeLabel(item.scope, workspaces, t)}`} disabled={reading || quick.loading} onClick={() => void read(item, true)}>{item.title}</Button>)}
+    {quick.page.items.map(item => <Button key={item.id} className={styles.pill} size="sm" variant="ghost" title={`${item.title} · ${scopeLabel(item.scope, workspaces, t)}`} disabled={reading || quick.loading} icon={item.favorite ? <Icon name="star" size={11} className={styles.pillStar} /> : undefined} onClick={() => void read(item, true)}>{item.title}</Button>)}
     <Button size="sm" variant="ghost" data-select-trigger="true" aria-haspopup="dialog" aria-expanded={open} disabled={!context} title={!context ? t('prompts.unknownHost') : t('prompts.keepDraft')} icon={<Icon name="search" size={13} />} onClick={() => { setRestoreFocus(true); setOpen(true); setError(''); }}>{t('prompts.open')}</Button>
     {(quick.error || (!open && error)) && <span role="alert"><span>{quick.error ? t(quick.stale ? 'sessions.promptsStale' : 'sessions.promptsFailed') : error}</span> <Button size="sm" variant="ghost" onClick={quick.reload}>{t('sessions.retryPrompts')}</Button></span>}
     {notice && <span role="status">{notice}</span>}
     <GuideDialog open={open} restoreFocus={restoreFocus} title={t('prompts.open')} hint={t('prompts.keepDraft')} wide onClose={close}>
-      <div className={styles.browser} onKeyDown={event => {
+      <div className={styles.picker} onKeyDown={event => {
         if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing && selected && !reading) { event.preventDefault(); event.stopPropagation(); void read(selected, true); }
       }}>
-        <div className={styles.searchPane} onKeyDown={event => {
-          if (event.key === 'ArrowDown' && event.target instanceof HTMLInputElement && event.target.getAttribute('aria-label') === t('prompts.search')) {
-            const first = event.currentTarget.querySelector<HTMLButtonElement>('[data-prompt-pick]:not(:disabled)');
+        <div className={styles.pickerTop}>
+          <div className={styles.pickerSearch} onKeyDown={event => {
+            if (event.key !== 'ArrowDown' || !(event.target instanceof HTMLInputElement)) return;
+            const first = event.currentTarget.closest(`.${styles.picker}`)?.querySelector<HTMLButtonElement>('[data-prompt-pick]:not(:disabled)');
             if (first) { event.preventDefault(); first.focus(); }
-          }
-        }}>
-          <SearchField label={t('prompts.search')} value={search} onChange={value => changeFilters(() => setSearch(value))} placeholder={t('prompts.searchPlaceholder')} />
-          <div className={styles.toolbar}><FilterSelect label={t('prompts.title')} value={mode} options={['all', 'favorites', 'recent'].map(value => ({ value, label: t(`prompts.${value}`) }))} onChange={value => changeFilters(() => setMode(value))} /><input aria-label={t('prompts.tagFilter')} placeholder={t('prompts.tagFilter')} value={tag} onChange={event => changeFilters(() => setTag(event.target.value))} /></div>
-          <label><input type="checkbox" checked={includeOther} onChange={event => changeFilters(() => setIncludeOther(event.target.checked))} /> {t('prompts.includeOther')}</label>
-          {(results.error || error) && <div className={styles.error} role="alert">{results.error || error}<Button size="sm" onClick={results.reload}>{t('prompts.retry')}</Button></div>}
-          {results.loading && <p className={styles.hint} role="status">{t('prompts.loading')}</p>}
-          <div className={styles.list} aria-label={t('prompts.title')} onKeyDown={event => {
-            if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-            const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[data-prompt-pick]'));
-            const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
-            if (at < 0 || !buttons.length) return;
-            event.preventDefault(); buttons[Math.max(0, Math.min(buttons.length - 1, at + (event.key === 'ArrowDown' ? 1 : -1)))].focus();
-          }}>
-            {results.page.items.map(item => <div className={styles.row} key={item.id} data-selected={selected?.id === item.id || undefined}><button type="button" data-prompt-pick aria-label={item.title} className={styles.rowButton} disabled={results.loading} onClick={() => void read(item)}><strong>{item.title}</strong><span className={styles.meta}>{scopeLabel(item.scope, workspaces, t)}{item.tags.map(tag => <span className={styles.tag} key={tag}>{tag}</span>)}</span><span className={styles.summary}>{item.preview}</span></button><Button size="sm" variant="ghost" aria-label={t(item.favorite ? 'prompts.unfavorite' : 'prompts.favorite')} aria-pressed={item.favorite} icon={<Icon name="star" size={13} />} onClick={() => void favorite(item)} /></div>)}
+          }}><SearchField label={t('prompts.search')} value={search} onChange={value => changeFilters(() => setSearch(value))} placeholder={t('prompts.searchPlaceholder')} /></div>
+          <div className={styles.pickerFilters}>
+            <Segmented size="sm" className={styles.scopeSwitch} label={t('prompts.scope')} value={includeOther ? 'all' : 'here'} options={[{ value: 'here', label: <><Icon name="folder" size={12} /><span className={styles.scopeName} title={contextScope}>{contextScope}</span></> }, { value: 'all', label: <><Icon name="globe" size={12} />{t('prompts.allPrompts')}</> }]} onChange={value => changeFilters(() => setIncludeOther(value === 'all'))} />
+            <span className={styles.filterGap} />
+            <button type="button" className={styles.chip} aria-pressed={mode === 'favorites'} onClick={() => changeFilters(() => setMode(mode === 'favorites' ? 'all' : 'favorites'))}><Icon name="star" size={12} />{t('prompts.favorites')}</button>
+            <button type="button" className={styles.chip} aria-pressed={mode === 'recent'} onClick={() => changeFilters(() => setMode(mode === 'recent' ? 'all' : 'recent'))}><Icon name="clock" size={12} />{t('prompts.recent')}</button>
+            {tagOptions.length > 0 && <FilterSelect className={styles.tagSelect} label={t('prompts.tagFilter')} value={tag || '*'} options={[{ value: '*', label: t('prompts.allTags') }, ...tagOptions.map(value => ({ value, label: value }))]} onChange={value => changeFilters(() => setTag(value === '*' ? '' : value))} />}
           </div>
-          {!results.loading && !results.error && !results.page.items.length && <p className={styles.empty}>{t(search || tag ? 'prompts.noMatches' : 'prompts.empty')}</p>}
-          <div className={styles.pageNav}><Button size="sm" disabled={!offset || results.loading} onClick={() => pageTo(Math.max(0, offset - 30))}>{t('prompts.previous')}</Button><span>{t('prompts.pageCount', { count: results.page.total })}</span><Button size="sm" disabled={results.page.nextOffset === null || results.loading} onClick={() => pageTo(results.page.nextOffset ?? 0)}>{t('prompts.next')}</Button></div>
         </div>
-        <div className={styles.detail}>
-          <strong>{selected?.title ?? t('prompts.preview')}</strong>
-          {reading ? <p role="status">{t('prompts.loading')}</p> : selected ? <><span className={styles.meta}>{scopeLabel(selected.scope, workspaces, t)}</span><pre className={styles.preview}>{selected.body}</pre><Button title={t('prompts.insertShortcut')} disabled={!selected.body} onClick={() => void read(selected, true)}>{t('prompts.insert')}</Button></> : <p className={styles.hint}>{t('prompts.emptyHint')}</p>}
+        <div className={styles.browser}>
+          <div className={styles.searchPane}>
+            {(results.error || error) && <div className={styles.error} role="alert"><span>{results.error || error}</span><Button size="sm" onClick={results.reload}>{t('prompts.retry')}</Button></div>}
+            {results.loading && !results.page.items.length && <p className={styles.hint} role="status">{t('prompts.loading')}</p>}
+            {results.page.items.length > 0 && <div className={styles.list} aria-label={t('prompts.title')} aria-busy={results.loading || undefined} onKeyDown={event => {
+              if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+              const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[data-prompt-pick]'));
+              const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+              if (at < 0 || !buttons.length) return;
+              event.preventDefault(); buttons[Math.max(0, Math.min(buttons.length - 1, at + (event.key === 'ArrowDown' ? 1 : -1)))].focus();
+            }}>
+              {results.page.items.map(item => <div className={styles.pickRow} key={item.id} data-selected={selected?.id === item.id || undefined}>
+                <button type="button" data-prompt-pick aria-label={item.title} className={styles.rowButton} disabled={results.loading} onClick={() => void read(item)} onDoubleClick={() => void read(item, true)}>
+                  <span className={styles.titleLine}><strong>{item.title}</strong></span>
+                  <span className={styles.meta}><Badge tone={scopeTone(item.scope, workspaces)}>{scopeLabel(item.scope, workspaces, t)}</Badge>{item.tags.map(tag => <span className={styles.tag} key={tag}>{tag}</span>)}</span>
+                  {item.preview && <span className={styles.summary}>{item.preview}</span>}
+                </button>
+                <Button size="sm" variant="ghost" className={styles.favorite} aria-label={t(item.favorite ? 'prompts.unfavorite' : 'prompts.favorite')} title={t(item.favorite ? 'prompts.unfavorite' : 'prompts.favorite')} aria-pressed={item.favorite} icon={<Icon name="star" size={13} />} onClick={() => void favorite(item)} />
+              </div>)}
+            </div>}
+            {!results.loading && !results.error && !results.page.items.length && <div className={styles.pickerEmpty}>
+              <strong>{t(filtered ? 'prompts.noMatches' : 'prompts.empty')}</strong>
+              {!includeOther ? <Button size="sm" icon={<Icon name="globe" size={13} />} onClick={() => changeFilters(() => setIncludeOther(true))}>{t('prompts.searchEverywhere')}</Button> : filtered && <Button size="sm" variant="ghost" onClick={() => changeFilters(() => { setSearch(''); setTag(''); setMode('all'); })}>{t('library.page.clearFilters')}</Button>}
+            </div>}
+            {results.page.items.length > 0 && (paged
+              ? <div className={styles.pageNav}><Button size="sm" variant="ghost" disabled={!offset || results.loading} icon={<Icon name="chevronLeft" size={13} />} onClick={() => pageTo(Math.max(0, offset - 30))}>{t('prompts.previous')}</Button><span className={styles.pageRange}><span>{offset + 1}–{offset + results.page.items.length}</span><span>{t('prompts.pageCount', { count: results.page.total })}</span></span><Button size="sm" variant="ghost" disabled={results.page.nextOffset === null || results.loading} onClick={() => pageTo(results.page.nextOffset ?? 0)}>{t('prompts.next')}<Icon name="chevronRight" size={13} /></Button></div>
+              : <p className={styles.listFoot}>{t('prompts.pageCount', { count: results.page.total })}</p>)}
+          </div>
+          <div className={styles.detail} aria-live="polite">
+            {reading ? <p className={styles.hint} role="status">{t('prompts.loading')}</p> : selected ? <>
+              <div className={styles.detailHead}><strong>{selected.title}</strong><span className={styles.meta}><Badge tone={scopeTone(selected.scope, workspaces)}>{scopeLabel(selected.scope, workspaces, t)}</Badge>{selected.tags.map(tag => <span className={styles.tag} key={tag}>{tag}</span>)}<span>{t('prompts.chars', { count: selected.body.length })}</span></span></div>
+              <pre className={styles.preview}>{selected.body}</pre>
+              <div className={styles.detailActions}><Button variant="primary" title={t('prompts.insertShortcut')} disabled={!selected.body} icon={<Icon name="arrowDown" size={14} />} onClick={() => void read(selected, true)}>{t('prompts.insert')}</Button></div>
+            </> : <div className={styles.previewEmpty}><Icon name="file" size={20} /><p>{t('prompts.pickToPreview')}</p></div>}
+          </div>
         </div>
+        <p className={styles.keyHints} aria-hidden="true"><span><kbd>↑</kbd><kbd>↓</kbd>{t('prompts.hintMove')}</span><span><kbd>Enter</kbd>{t('prompts.hintPreview')}</span><span><kbd>{modLabel}</kbd><kbd>Enter</kbd>{t('prompts.hintInsert')}</span></p>
       </div>
     </GuideDialog>
   </div>;

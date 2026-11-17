@@ -16,3 +16,12 @@ export function scopeOptions(workspaces: BusinessWorkspace[], t: TFunction) {
   for (const project of workspaces) for (const repository of project.repositories) repositories.set(repository.id, `${project.name} / ${repository.name}`);
   return [{ value: 'global', label: t('prompts.global') }, ...workspaces.map(item => ({ value: `workspace:${item.id}`, label: item.name, detail: t('prompts.projectScope') })), ...[...repositories].map(([id, label]) => ({ value: `repository:${id}`, label, detail: t('prompts.repositoryScope') }))];
 }
+/** Badge tone per scope kind, so general/project/repository/unresolved read the same in every prompt view. */
+export function scopeTone(scope: PromptScope, workspaces: BusinessWorkspace[]): 'neutral' | 'accent' | 'info' | 'warning' {
+  if (scope.kind === 'global') return 'neutral';
+  if (scope.kind === 'unresolved') return 'warning';
+  // Before project names load, do not flash every scoped prompt as missing.
+  if (!workspaces.length) return scope.kind === 'workspace' ? 'accent' : 'info';
+  if (scope.kind === 'workspace') return workspaces.some(item => item.id === scope.workspaceId) ? 'accent' : 'warning';
+  return workspaces.some(item => item.repositories.some(repo => repo.id === scope.repositoryId)) ? 'info' : 'warning';
+}

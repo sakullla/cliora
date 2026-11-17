@@ -34,13 +34,13 @@
      empty-state glyph is a small dark terminal in every app theme. */
   --wb-preview-dark-bg: #0b0e0d;
   --wb-preview-dark-line: #334155;
-  --wb-preview-dark-accent: #34d399;
+  --wb-preview-dark-accent: #2dd4bf;
   --wb-preview-light-bg: #fdfdfc;
   --wb-preview-light-frame: #dce3ee;
   --wb-preview-light-line: #cbd5e1;
-  --wb-preview-light-accent: #057a55;
+  --wb-preview-light-accent: #0f766e;
   --wb-preview-auto-line: #64748b;
-  --wb-preview-auto-accent: #10b981;
+  --wb-preview-auto-accent: #14b8a6;
   --wb-glyph-top: #172030;
   --wb-glyph-bottom: #0c1019;
   --wb-glyph-border: rgb(255 255 255 / 12%);
@@ -48,7 +48,7 @@
   --wb-glyph-dot: rgb(255 255 255 / 20%);
   --wb-glyph-red: #f87171;
   --wb-glyph-yellow: #fbbf24;
-  --wb-glyph-green: #34d399;
+  --wb-glyph-green: #2dd4bf;
   --wb-glyph-ink: #6ee7b7;
   --wb-raise-highlight: rgb(255 255 255 / 6%);
   --wb-grid-dot: rgb(15 23 42 / 8%);
@@ -85,13 +85,13 @@
   --term-text-3: #8fa2bc;
   --term-line: rgb(255 255 255 / 8%);
   --term-frame: rgb(255 255 255 / 12%);
-  --term-cursor: #34d399;
+  --term-cursor: #2dd4bf;
   --term-hover: rgb(255 255 255 / 7%);
   --term-press: rgb(255 255 255 / 11%);
   --term-thumb: rgb(255 255 255 / 20%);
   --term-float: #171d2a;
   --term-float-line: rgb(255 255 255 / 13%);
-  --term-accent: #34d399;
+  --term-accent: #2dd4bf;
   --term-accent-2: #38bdf8;
   --term-on-accent: #04130d;
   --term-success: #4ade80;
@@ -99,7 +99,7 @@
   --term-danger: #f87171;
   --term-on-danger: #1d0c0a;
   --term-shadow: rgb(0 0 0 / 60%);
-  --term-glow: rgb(52 211 153 / 20%);
+  --term-glow: rgb(45 212 191 / 20%);
   --term-card-shadow: 0 1px 0 rgb(255 255 255 / 5%) inset, 0 20px 44px -26px rgb(0 0 0 / 90%);
 }
 
@@ -115,13 +115,13 @@
   --term-text-3: #526075;
   --term-line: #e2e8f0;
   --term-frame: #cbd5e1;
-  --term-cursor: #057a55;
+  --term-cursor: #0f766e;
   --term-hover: rgb(15 23 42 / 5.5%);
   --term-press: rgb(15 23 42 / 9.5%);
   --term-thumb: rgb(15 23 42 / 20%);
   --term-float: #ffffff;
   --term-float-line: #cbd5e1;
-  --term-accent: #057a55;
+  --term-accent: #0f766e;
   --term-accent-2: #0284c7;
   --term-on-accent: #ffffff;
   --term-success: #15803d;
@@ -129,7 +129,7 @@
   --term-danger: #dc2626;
   --term-on-danger: #ffffff;
   --term-shadow: rgb(15 23 42 / 16%);
-  --term-glow: rgb(5 122 85 / 14%);
+  --term-glow: rgb(15 118 110 / 14%);
   --term-card-shadow: 0 1px 2px rgb(15 23 42 / 5%), 0 16px 36px -22px rgb(15 23 42 / 26%);
 }
 

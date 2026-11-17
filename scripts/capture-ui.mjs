@@ -763,13 +763,15 @@ for(const width of widths)for(const theme of themes){
   const project=page.locator('[data-business-workspaces]').first();
   await project.locator('[data-repository-id="repo-47"]').waitFor({state:'attached'});
   await capture('projects-many');
+  await project.getByRole('button',{name:/^需处理/}).click();await project.locator('[data-repository-id="repo-46"]').waitFor();await capture('projects-attention');
+  await project.getByRole('button',{name:/^需处理/}).click();
   await project.getByRole('textbox',{name:'搜索仓库名称或路径'}).fill('team-1/api');
   await project.locator('[data-repository-id]').first().waitFor();await capture('projects-same-name-search');
   await project.getByRole('textbox',{name:'搜索仓库名称或路径'}).fill('');
   await project.getByRole('button',{name:'添加仓库',exact:true}).click();
   await page.getByRole('dialog',{name:'选择要添加的仓库'}).getByText('Permission denied').waitFor();await capture('projects-batch-preview');
   await page.getByRole('dialog',{name:'选择要添加的仓库'}).getByRole('button',{name:'关闭',exact:true}).click();
-  await project.getByRole('button',{name:'打开项目清单',exact:true}).click();
+  await project.getByRole('button',{name:'项目操作',exact:true}).click();await page.getByRole('menuitem',{name:'打开项目清单',exact:true}).click();
   await page.getByRole('dialog',{name:'关联项目清单'}).getByText('shared-api',{exact:true}).waitFor();await capture('projects-manifest-preview');
   await page.getByRole('dialog',{name:'关联项目清单'}).getByRole('button',{name:'关联项目',exact:true}).click();
   await project.getByText('已关联项目清单',{exact:false}).waitFor();await capture('projects-linked');

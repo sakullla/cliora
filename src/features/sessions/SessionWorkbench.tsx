@@ -1,4 +1,4 @@
-import { WorkspaceBrowser, WORKSPACES_CHANGED } from '../workspaces/WorkspaceBrowser';
+import { repositoryPlaces, WORKSPACES_CHANGED } from '../workspaces/WorkspaceBrowser';
 import type { BusinessWorkspace, WorkspaceSelection, WorkspaceSessionContext } from '../../types/workspaces';
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -3184,6 +3184,27 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     const nextTool = terminalTools.find((item) => item.id === value);
     setLaunchMode(preferredLaunchMode(launchSettings, workspaceValue.startsWith('project:') || workspaceValue.startsWith('remote:') ? 'project' : 'cli', !!nextTool?.yoloAvailable));
   }
+  const businessRepositoryOptions = useMemo(() => {
+    const options: Array<{ value: string; label: string; detail: string; worktree: boolean; selection: WorkspaceSelection }> = [];
+    for (const workspace of businessWorkspaces) {
+      const repositories = [...workspace.repositories].sort((a, b) => Number(b.favorite) - Number(a.favorite));
+      for (const repository of repositories) {
+        const location = repository.locations.find(item => item.available && item.path);
+        if (!location) continue;
+        for (const [path, place] of repositoryPlaces(repository, t('workspaces.mainCheckout'), t('workspaces.worktreeKind'))) {
+          if (options.some(option => option.value === `custom:${path}`)) continue;
+          options.push({
+            value: `custom:${path}`,
+            label: place.main ? repository.name : `${repository.name} · ${place.label}`,
+            detail: t('workspaces.repoOption', { project: workspace.name, path: shortPath(displayPath(path)) }),
+            worktree: !place.main,
+            selection: { workspaceId: workspace.id, repositoryId: repository.id, directory: path, projectId: location.projectId, label: `${workspace.name} / ${repository.name}` },
+          });
+        }
+      }
+    }
+    return options;
+  }, [businessWorkspaces, t]);
   const cliSelectOptions = useMemo<FilterSelectOption[]>(() => toolOptions(terminalTools), [terminalTools]);
   const workspaceSelectOptions = useMemo<FilterSelectOption[]>(() => {
     // A host lists its own places only: its home folder, its saved folders and a picked one.
@@ -3197,11 +3218,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     }
     const list: FilterSelectOption[] = [
       { value: '__home', label: t('sessions.workspaceHome'), icon: <Icon name="home" size={14} /> },
+      // Project repositories (main checkout and attached worktrees) are ordinary directory choices.
+      ...businessRepositoryOptions.map(({ value, label, detail, worktree }) => ({ value, label, detail, icon: <Icon name={worktree ? 'gitWorktree' : 'branch'} size={14} /> })),
       ...availableProjects.map((project) => ({ value: `project:${project.id}`, label: project.name, detail: project.path ? shortPath(displayPath(project.path)) : undefined, icon: <Icon name="folder" size={14} /> })),
     ];
-    if (customFolderPath) list.push({ value: `custom:${customFolderPath}`, label: shortPath(displayPath(customFolderPath)), detail: displayPath(customFolderPath), icon: <Icon name="folder" size={14} /> });
+    if (customFolderPath && !businessRepositoryOptions.some(option => option.value === `custom:${customFolderPath}`)) list.push({ value: `custom:${customFolderPath}`, label: shortPath(displayPath(customFolderPath)), detail: displayPath(customFolderPath), icon: <Icon name="folder" size={14} /> });
     return list;
-  }, [activeRemoteTarget, availableProjects, availableRemoteProjects, customFolderPath, customRemotePath, remoteHomePath, t]);
+  }, [activeRemoteTarget, availableProjects, availableRemoteProjects, businessRepositoryOptions, customFolderPath, customRemotePath, remoteHomePath, t]);
   // Switching hosts can leave a folder from the other place selected; fall back to home.
   useEffect(() => {
     if (newDialogOpen && !workspaceSelectOptions.some((option) => option.value === workspaceValue)) setWorkspaceValue('__home');
@@ -3731,8 +3754,6 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     </GuideDialog>
     <GuideDialog open={newDialogOpen} title={t('sessions.newSessionDialogTitle')} hint={t('sessions.newSessionDialogHint')} wide onClose={() => setNewDialogOpen(false)}>
       <div className={styles.dialogForm}>
-        {!activeRemoteTarget && <WorkspaceBrowser compact onPick={selection => { setBusinessSelection(selection); setWorkspaceValue(`custom:${selection.directory}`); setCustomFolderPath(selection.directory); setDialogPlace('direct'); dialogPlaceTouched.current = true; setDialogError(''); }} />}
-        {businessSelection && !activeRemoteTarget && <p role="status">{t('workspaces.picked', { label: businessSelection.label })}</p>}
         {dialogError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{dialogError}</p></div></div>}
         <div className={styles.dialogPrimaryGrid}>
           <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.pickToolLabel')}</span><FilterSelect label={t('sessions.pickToolLabel')} value={effectiveLaunchToolId} options={cliSelectOptions} placeholder={t('home.launcher.pickTool')} searchLabel={t('sessions.searchCliTool')} onChange={pickLaunchTool} />
@@ -3741,7 +3762,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           </div>
           <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.pickWorkspaceLabel')}</span><FilterSelect label={t('sessions.pickWorkspaceLabel')} value={workspaceValue} options={workspaceSelectOptions} searchable searchLabel={t('sessions.searchWorkspace')} onPickFolder={() => void pickCustomWorkspaceFolder()} pickFolderLabel={t('sessions.pickFolder')} onChange={(value) => {
             setWorkspaceValue(value);
-            setBusinessSelection(null);
+            const repository = activeRemoteTarget ? undefined : businessRepositoryOptions.find(option => option.value === value);
+            setBusinessSelection(repository?.selection ?? null);
+            if (repository) { setDialogPlace('direct'); dialogPlaceTouched.current = true; setDialogError(''); }
             if (value.startsWith('project:')) {
               const project = availableProjects.find((item) => 'project:' + item.id === value);
               if (project?.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)) setLaunchToolId(project.preferredTool);

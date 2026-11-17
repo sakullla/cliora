@@ -50,7 +50,7 @@ test('full-body prompt search is paged, scope-aware, and inserts without sending
   const picker = page.getByRole('dialog', { name: '查找提示词' });
   await picker.getByRole('textbox', { name: '搜索提示词标题或完整正文' }).fill('项目 B 发布');
   await expect(picker.getByText('没有匹配的提示词', { exact: true })).toBeVisible();
-  await picker.getByLabel('搜索全部可访问提示词').check();
+  await picker.getByRole('radio', { name: '全部提示词', exact: true }).click();
   await picker.getByRole('button', { name: '项目 B 发布', exact: true }).click();
   await expect(picker).toContainText('支付系统');
   await expect(picker.locator('pre')).toHaveText('B-only-secret-scope');
@@ -193,17 +193,31 @@ test('failed prompt reads reuse a same-scope snapshot across entries but never a
   await page.evaluate(() => { (window as any).__promptFixture.failRead = true; });
   await page.getByRole('button', { name: '新建会话', exact: true }).first().click();
   const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
-  const browser = dialog.locator('[data-business-workspaces]');
-  await browser.getByRole('button', { name: '选择业务项目', exact: true }).click();
-  await page.getByRole('option', { name: /^支付系统/ }).click();
-  await browser.getByRole('button', { name: '使用此仓库', exact: true }).click();
+  const place = async (search: string, option: RegExp) => {
+    await dialog.getByRole('button', { name: '工作目录 / 项目', exact: true }).click();
+    await page.getByRole('textbox', { name: /搜索/ }).last().fill(search);
+    await page.getByRole('option', { name: option }).first().click();
+  };
+  await place('payment-api', /^payment-api 支付系统/);
   await expect(dialog.getByText('暂时无法读取此位置的提示词。', { exact: true })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'API 回归', exact: true })).toHaveCount(0);
   await expect(dialog.getByText('提示词刷新失败，当前显示上次成功读取的内容。', { exact: true })).toHaveCount(0);
-  await browser.getByRole('button', { name: '选择业务项目', exact: true }).click();
-  await page.getByRole('option', { name: /^电商平台/ }).click();
-  await browser.getByRole('textbox', { name: '搜索仓库名称或路径' }).fill('team-0/api');
-  await browser.getByRole('button', { name: '使用此仓库', exact: true }).click();
+  await place('team-0/api', /^api 电商平台/);
   await expect(dialog.getByText('提示词刷新失败，当前显示上次成功读取的内容。', { exact: true })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'API 回归', exact: true })).toBeVisible();
+});
+
+test('an empty scoped search offers the all-scope search and double-click inserts the prompt', async ({ page }) => {
+  await install(page);
+  const pane = await composer(page); const draft = pane.getByRole('textbox', { name: /编写多行内容/ });
+  await pane.getByRole('button', { name: '查找提示词', exact: true }).click();
+  const picker = page.getByRole('dialog', { name: '查找提示词' });
+  await expect(picker.getByRole('radio', { name: '电商平台 / api', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await picker.getByRole('textbox', { name: '搜索提示词标题或完整正文' }).fill('项目 B 发布');
+  await picker.getByRole('button', { name: '在全部范围中搜索', exact: true }).click();
+  await expect(picker.getByRole('radio', { name: '全部提示词', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await picker.getByRole('button', { name: '项目 B 发布', exact: true }).dblclick();
+  await expect(picker).not.toBeVisible();
+  await expect(draft).toHaveValue('B-only-secret-scope');
+  expect(await page.evaluate(() => (window as any).__promptBaseCalls.filter((call: any) => call.command === 'write_workbench_session').length)).toBe(0);
 });
