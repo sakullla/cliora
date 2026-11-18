@@ -24,6 +24,7 @@ import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, SavedWorkbenchSession, TwiglaneReviewSignal, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchExit, WorkbenchGitContext, WorkbenchWorktree, WorkbenchOutput, WorkbenchRestoreCandidate, WorkbenchRestoreEvent, WorkbenchRestoreStage, WorkbenchSession, WorktreeBase, WorktreeBasePreview, WorktreeLaunchEvent, WorktreeLaunchIntent, WorktreeLaunchStage, WorktreeLedgerEntry, WorktreeMenuStatus } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
 import type { PromptContext } from '../../types/prompts';
+import { inferWorkspaceScope } from '../../lib/workspaceScope';
 import type { AdapterDescriptor } from '../../types/native';
 import type { RemoteProject, RemoteTarget } from '../../types/remote';
 import { SessionTitle, stableTitle } from './SessionTitle';
@@ -1362,7 +1363,12 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   function sessionPromptContext(session: WorkbenchSession): PromptContext | null {
     const host = libraryHostId(session.projectId, remoteProjects);
     if (!host) return null;
-    const scope = businessContexts.find(item => item.sessionId === session.id);
+    // The binding saved at launch wins while its project still has that repository. A session continued
+    // from 记录 or restored by an older build has none, so a local one falls back to its directory.
+    const saved = businessContexts.find(item => item.sessionId === session.id);
+    const valid = saved && businessWorkspaces.some(workspace => workspace.id === saved.workspaceId && workspace.repositories.some(repository => repository.id === saved.repositoryId)) ? saved : null;
+    // Until the project list has loaded, a saved binding is kept as-is rather than judged stale.
+    const scope = valid ?? (host === 'local' ? inferWorkspaceScope(session, businessWorkspaces) : null) ?? (businessWorkspaces.length ? null : saved);
     return { targetId: host === 'local' ? null : host, workspaceId: scope?.workspaceId ?? null, repositoryId: scope?.repositoryId ?? null };
   }
   const dialogPromptContext: PromptContext = {
@@ -3223,11 +3229,12 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       { value: '__home', label: t('sessions.workspaceHome'), icon: <Icon name="home" size={14} /> },
       // Project repositories (main checkout and attached worktrees) are ordinary directory choices.
       ...businessRepositoryOptions.map(({ value, label, detail, worktree }) => ({ value, label, detail, icon: <Icon name={worktree ? 'gitWorktree' : 'branch'} size={14} /> })),
-      ...availableProjects.map((project) => ({ value: `project:${project.id}`, label: project.name, detail: project.path ? shortPath(displayPath(project.path)) : undefined, icon: <Icon name="folder" size={14} /> })),
+      // A directory that only backs a business-project repository is offered under that project.
+      ...availableProjects.filter((project) => !project.workspaceBacked || workspaceValue === `project:${project.id}`).map((project) => ({ value: `project:${project.id}`, label: project.name, detail: project.path ? shortPath(displayPath(project.path)) : undefined, icon: <Icon name="folder" size={14} /> })),
     ];
     if (customFolderPath && !businessRepositoryOptions.some(option => option.value === `custom:${customFolderPath}`)) list.push({ value: `custom:${customFolderPath}`, label: shortPath(displayPath(customFolderPath)), detail: displayPath(customFolderPath), icon: <Icon name="folder" size={14} /> });
     return list;
-  }, [activeRemoteTarget, availableProjects, availableRemoteProjects, businessRepositoryOptions, customFolderPath, customRemotePath, remoteHomePath, t]);
+  }, [activeRemoteTarget, availableProjects, availableRemoteProjects, businessRepositoryOptions, customFolderPath, customRemotePath, remoteHomePath, workspaceValue, t]);
   // Switching hosts can leave a folder from the other place selected; fall back to home.
   useEffect(() => {
     if (newDialogOpen && !workspaceSelectOptions.some((option) => option.value === workspaceValue)) setWorkspaceValue('__home');
@@ -3476,13 +3483,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                 <div className={styles.terminalActions} role="toolbar" aria-label={t('sessions.terminalMenu')}>
                   {/* Waiting and the temporary look stay in their own group: both are about another
                       session, while the groups after them act on the terminal in front of the user. */}
+                  {/* A compact bell + count: the full sentence lives in the accessible name and tooltip, so
+                      the waiting jump never pushes the terminal's own tools off the bar. */}
                   {stageAttentionTarget && <span className={styles.actionGroup}>
-                    <button type="button" className={styles.stageAttention} title={stageAttention.map((item) => item.title || item.name).join('\n')} onClick={() => { if (stageAttentionTarget) selectSession(stageAttentionTarget.session.id); }}>
+                    <button type="button" className={styles.stageAttention} aria-label={t('sessions.attentionJump', { count: stageAttention.length })} title={stageAttention.map((item) => item.title || item.name).join('\n')} onClick={() => { if (stageAttentionTarget) selectSession(stageAttentionTarget.session.id); }}>
                       <SessionActivityIcon tone="bell" slot="stage" className={styles.stageAttentionIcon} />
-                      <span>{t('sessions.attentionJump', { count: stageAttention.length })}</span>
-                      <Icon name="arrowRight" size={13} />
+                      <span className={styles.stageAttentionCount}>{stageAttention.length}</span>
                     </button>
-                    {peekOffered && <button type="button" className={styles.stagePeek} onClick={() => openPeek(stageAttentionTarget.session.id)}>{t('sessions.peekSession')}</button>}
                   </span>}
                   <span className={`${styles.actionGroup} ${styles.runningActions}`} data-running={current.running || undefined} aria-hidden={current.running ? undefined : true}>
                     <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.composerTrigger}`} aria-label={t('sessions.composerShort')} aria-pressed={composerOpen} title={t('sessions.composerShort') + ` (${modLabel}+Shift+M)`} disabled={!current.running} onClick={() => toggleComposer()} icon={<Icon name="pencil" size={14} />}><span className={styles.toolLabel}>{t('sessions.composerShort')}</span></Button>
@@ -3686,7 +3693,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         })()}
 
         {((loading && !scopedSessions.length) || (selectedId && !selected)) && <div className={styles.loading} role="status"><span className={styles.loadingMark} aria-hidden="true" /><p>{t('sessions.loading')}</p></div>}
-        {showEmpty && !listError && <WorkbenchEmpty tools={terminalTools} projects={availableProjects} remoteTargets={remoteTargets.filter((target) => target.enabled)} remoteEnabled={remoteSshEnabled} activeTargetId={activeTargetId} onTargetChange={(targetId) => { setActiveTargetId(targetId); onRemoteTargetChange?.(targetId); }} onManageHosts={() => setHostManagerOpen(true)} onNewSession={openNewSessionDialog} onOpenHome={onOpenHome} />}
+        {showEmpty && !listError && <WorkbenchEmpty tools={terminalTools} projects={availableProjects.filter((project) => !project.workspaceBacked)} remoteTargets={remoteTargets.filter((target) => target.enabled)} remoteEnabled={remoteSshEnabled} activeTargetId={activeTargetId} onTargetChange={(targetId) => { setActiveTargetId(targetId); onRemoteTargetChange?.(targetId); }} onManageHosts={() => setHostManagerOpen(true)} onNewSession={openNewSessionDialog} onOpenHome={onOpenHome} />}
       </section>
     </div>
 

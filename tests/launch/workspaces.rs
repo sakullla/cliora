@@ -123,7 +123,17 @@ fn batch_scan_and_members_preserve_repo_and_worktree_identity() {
     let (native, directory) =
         prepare_launch(&db, HOST, &workspace.id, first, linked.to_str()).unwrap();
     assert_eq!(Path::new(&directory), linked.canonicalize().unwrap());
-    assert!(crate::projects::get(&db, &native).is_ok());
+    // The launch context a business repository creates is not a standalone directory card.
+    assert!(crate::projects::get(&db, &native).unwrap().workspace_backed);
+    let standalone = crate::projects::add(
+        &db,
+        &crate::adapters::Registry::builtins(),
+        b.to_str().unwrap(),
+        None,
+        None,
+    )
+    .unwrap();
+    assert!(!standalone.workspace_backed);
     assert!(prepare_launch(&db, HOST, &workspace.id, first, b.to_str()).is_err());
     remove_member(&db, HOST, &workspace.id, first, view.revision).unwrap();
     assert!(a.join(".git").exists());

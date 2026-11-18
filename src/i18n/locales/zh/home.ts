@@ -278,6 +278,7 @@ export default {
     openDirTitle: '在文件管理器中打开',
     edit: '修改',
     toolUnmanaged: '此项目原来选择的工具未纳入管理。选择一个工具即可继续启动。',
+    toolMissing: '还没有选择工具，从「启动」右侧的菜单选一个即可。',
     reapplyRelinked: '目录已重新关联，启动时会恢复所选配置',
     pendingProfile: '此项目配置有待应用内容；普通启动保留已应用的原生文件',
     apply: '应用配置',

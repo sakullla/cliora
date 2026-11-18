@@ -120,6 +120,12 @@
 .list > button[aria-selected="true"]:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .list > button[aria-selected="true"] small { color: var(--text-2); }
 .list > button:disabled { opacity: .5; }
+/* A nested option (a repository under its project) is a shorter row behind a quiet guide line. */
+.list > button[data-indent] { position: relative; min-height: 32px; padding-left: calc(var(--space-2) + var(--space-5)); }
+.list > button[data-indent]::before { content: ''; position: absolute; top: 4px; bottom: 4px; left: calc(var(--space-2) + var(--space-1_75)); width: 1px; background: var(--line); }
+.list > button[data-indent] .optionCopy > strong { font-weight: var(--fw-medium); }
+.list > button[data-indent][aria-selected="true"] .optionCopy > strong { font-weight: var(--fw-semibold); }
+.list > button:not([data-indent]) + button[data-indent] { margin-top: calc(var(--space-0_5) * -1); }
 .list > p { margin: 0; padding: var(--space-2); color: var(--text-3); font-size: var(--fs-body); }
 
 .footerActions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0 calc(var(--space-1_5) * -1) calc(var(--space-1_5) * -1); border-top: 1px solid var(--line); }

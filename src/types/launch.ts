@@ -94,6 +94,8 @@ export type Project = {
   selectedProfiles: Record<string, string>;
   appliedProfiles: Record<string, string>;
   reapplyProfiles: Record<string, string>;
+  /** Created only as the launch context of a business-project repository; listed under that project. */
+  workspaceBacked?: boolean;
 };
 
 export type RemoteLaunchIntent = { kind: 'new' } | { kind: 'reattach'; remoteSessionId: string };

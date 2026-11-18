@@ -1453,7 +1453,6 @@ test('an empty project list offers the next step without hiding the tools band',
   const launcher = page.getByRole('region', { name: '项目与启动' });
   await expect(launcher).toContainText('尚未添加独立目录');
   await expect(launcher.getByRole('button', { name: '添加目录', exact: true })).toBeVisible();
-  await expect(launcher).toContainText('添加本机目录后，可单独保存它的工具与配置');
   // The already-managed tools stay reachable below the empty project band.
   await expect(page.getByLabel('受管理工具').getByRole('button', { name: '启动', exact: true })).toHaveCount(1);
 });

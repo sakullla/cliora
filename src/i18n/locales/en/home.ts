@@ -278,6 +278,7 @@ export default {
     openDirTitle: 'Open in file manager',
     edit: 'Edit',
     toolUnmanaged: 'The tool this project used is not managed. Pick a tool to keep launching.',
+    toolMissing: 'No tool chosen yet. Pick one from the menu beside Launch.',
     reapplyRelinked: 'Directory re-linked; the selected profile is restored on launch',
     pendingProfile: 'This project has a profile pending apply; a normal launch keeps the applied native file',
     apply: 'Apply profile',

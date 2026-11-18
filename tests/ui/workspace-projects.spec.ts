@@ -183,7 +183,9 @@ test('narrow repository rows keep their name, path and worktree from overlapping
   await install(page);
   const row = page.locator('[data-business-workspaces]').first().locator('[data-repository-id="repo-1"]');
   const name = await row.locator('strong').first().boundingBox();
-  const path = await row.getByText('/work/commerce/team-1/api', { exact: true }).boundingBox();
+  // Rows drop the folder every repository shares; the header names it once.
+  await expect(page.locator('[data-business-workspaces]').first()).toContainText('/work/commerce');
+  const path = await row.getByText('team-1/api', { exact: true }).boundingBox();
   const rowBox = await row.boundingBox();
   expect(name && path && rowBox).toBeTruthy();
   expect(path!.y).toBeGreaterThanOrEqual(name!.y + name!.height - 1);

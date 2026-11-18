@@ -919,22 +919,14 @@
 .statusButton:focus-visible,
 .findToggle:focus-visible,
 .stageAttention:focus-visible { outline: 2px solid var(--term-accent); outline-offset: 1px; }
-/* Same jump as the rail, only while that rail button is off screen. It yields before the icon tools. */
-.stageTail:has(.stageAttention) { flex: 0 1 auto; min-width: 0; }
-/* The group yields its label to the narrow window, but never below the peek entry inside it: a
-   group squeezed past its content would paint that entry under the terminal's own tools. On a
-   tight stage the waiting group therefore holds its width and the identity gives way instead. */
-.stageTail > .terminalActions > .actionGroup:has(> .stageAttention) { flex: 0 1 auto; min-width: min-content; }
-.root[data-tight] .stageTail:has(.stageAttention) { flex: 0 1 auto; min-width: min-content; }
+/* Same jump as the rail, only while that rail button is off screen: a bell and a count, sized like
+   the other tools. The tail never shrinks below its content, so nothing paints over 结束. */
 .stageAttention {
   display: inline-flex;
-  flex: 0 1 auto;
+  flex: none;
   align-items: center;
   gap: var(--space-1);
-  min-width: 0;
-  max-width: 16rem;
   height: 28px;
-  margin-right: var(--space-1);
   padding: 0 var(--space-2);
   border: 1px solid var(--warning-line);
   border-radius: var(--radius);
@@ -942,30 +934,14 @@
   color: var(--warning);
   font-size: var(--fs-caption);
   font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
   line-height: 1;
-  text-align: left;
   box-shadow: none;
   animation: wbFindIn 160ms var(--ease);
 }
-.stageAttention > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.stageAttention > :global(svg) { flex: none; }
 .stageAttention:hover:not(:disabled) { border-color: var(--warning); background: color-mix(in srgb, var(--warning) 16%, var(--warning-soft)); color: var(--warning); box-shadow: none; }
 .stageAttentionIcon { width: 14px; height: 14px; }
-.stagePeek {
-  flex: none;
-  height: 28px;
-  margin-right: var(--space-1);
-  padding: 0 var(--space-2);
-  border: 1px solid var(--term-line);
-  border-radius: var(--radius);
-  background: var(--term-raise);
-  color: var(--term-text-2);
-  font-size: var(--fs-caption);
-  font-weight: var(--fw-semibold);
-  line-height: 1;
-}
-.stagePeek:hover { background: var(--term-hover); color: var(--term-fg); }
-.stagePeek:focus-visible { outline: 2px solid var(--term-accent); outline-offset: 1px; }
+.stageAttentionCount { min-width: 1ch; text-align: center; }
 .peekOverlay {
   position: absolute;
   z-index: 24;

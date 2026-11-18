@@ -3858,7 +3858,8 @@ test('a covered session rail repeats the waiting count on the stage and selects 
   const waitingTitle = (await railJump.getAttribute('title')) ?? '';
   expect(waitingTitle).not.toBe('');
   const sameJump = async () => {
-    await expect(stageJump).toHaveText('1 个会话等你处理');
+    // The stage keeps a compact bell + count; the sentence stays its accessible name.
+    await expect(stageJump).toHaveText('1');
     await expect(stageJump).toHaveAttribute('title', waitingTitle);
     await expect(jumps).toHaveCount(1);
   };
@@ -4164,7 +4165,7 @@ test('one session does not offer a temporary look', async ({ page }) => {
   await expect(page.getByRole('button', { name: '临时查看', exact: true })).toHaveCount(0);
 });
 
-test('split view and a docked rail hide the temporary look, and focus mode opens it beside the waiting button', async ({ page }) => {
+test('split view and a docked rail hide the temporary look, and focus mode keeps only the waiting jump on the stage', async ({ page }) => {
   await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
   await page.setViewportSize({ width: 1280, height: 800 });
   await openWorkbench(page);
@@ -4204,18 +4205,13 @@ test('split view and a docked rail hide the temporary look, and focus mode opens
   await stage.getByRole('button', { name: '专注模式（隐藏侧栏）' }).click();
   await expect(root).toHaveAttribute('data-focus-mode', 'true');
   const waiting = toolbar.getByRole('button', { name: '1 个会话等你处理' });
-  const peek = toolbar.getByRole('button', { name: '临时查看', exact: true });
+  // The title bar keeps only the compact waiting jump; the temporary look lives in the row menu.
   await expect(waiting).toBeVisible();
-  await expect(peek).toBeVisible();
-  expect((await peek.boundingBox())!.x).toBeGreaterThan((await waiting.boundingBox())!.x);
+  await expect(waiting).toHaveText('1');
+  await expect(toolbar.getByRole('button', { name: '临时查看', exact: true })).toHaveCount(0);
   expect(await waiting.innerText()).not.toMatch(forbiddenPeekAction);
-  await peek.click();
-  await expect(dialog.getByRole('heading', { level: 2 })).toHaveText('Claude Code');
-  await expect(dialog.locator('[data-peek-icon]')).toHaveAttribute('data-tone', 'bell');
-  await expect(dialog).toContainText('待处理');
   await expect(stage.locator('header h2')).toHaveText('Codex');
   await waiting.click();
-  await expect(dialog).toHaveCount(0);
   await expect(stage.locator('header h2')).toHaveText('Claude Code');
 
   await stage.getByRole('button', { name: '退出专注模式（显示侧栏）' }).click();
@@ -4304,7 +4300,7 @@ test('other pages do not show the workbench waiting prompt or temporary look', a
   await page.getByRole('button', { name: '折叠侧栏', exact: true }).click();
   const stage = page.getByRole('region', { name: '当前会话' });
   await expect(stage.getByRole('toolbar', { name: '终端操作' }).getByRole('button', { name: '1 个会话等你处理' })).toBeVisible();
-  await expect(stage.getByRole('toolbar', { name: '终端操作' }).getByRole('button', { name: '临时查看', exact: true })).toBeVisible();
+  await expect(stage.getByRole('toolbar', { name: '终端操作' }).getByRole('button', { name: '临时查看', exact: true })).toHaveCount(0);
 
   for (const name of ['首页', '工具', '资料库', '记录']) {
     const nav = page.getByRole('navigation', { name: '页面' }).getByRole('button', { name, exact: true });
@@ -4323,11 +4319,11 @@ test('other pages do not show the workbench waiting prompt or temporary look', a
   expect(await visibleCopyHits(page)).toEqual([]);
   expect(await page.evaluate(() => {
     const root = document.querySelector('[data-term-theme]');
-    return !!root?.closest('[hidden]') && !!root.textContent?.includes('临时查看') && !!root.textContent?.includes('1 个会话等你处理');
+    return !!root?.closest('[hidden]') && !!root.querySelector('button[aria-label="1 个会话等你处理"]');
   })).toBe(true);
 });
 
-test('the stage groups its waiting and peek entries and the cover names the CLI it shows', async ({ page }) => {
+test('the stage keeps a compact waiting jump in its own group and the cover names the CLI it shows', async ({ page }) => {
   await page.addInitScript(() => {
     Object.assign(window, { __twoSessions: true });
     localStorage.setItem('cliora:language', 'en');
@@ -4347,64 +4343,47 @@ test('the stage groups its waiting and peek entries and the cover names the CLI 
   await expect(page.locator('[data-drag-id="s2"]')).toHaveAttribute('data-attention');
   await stage.getByRole('button', { name: 'Focus mode (hide sidebar)' }).click();
   const waiting = toolbar.getByRole('button', { name: '1 waiting for you' });
-  const peek = toolbar.getByRole('button', { name: 'Peek', exact: true });
   await expect(waiting).toBeVisible();
-  await expect(peek).toBeVisible();
-
-  // Both entries share one group of their own inside the toolbar, not the toolbar itself.
-  expect(await toolbar.evaluate((node) => {
-    const buttons = [...node.querySelectorAll('button')];
-    const jump = buttons.find((button) => /waiting for you/.test(button.textContent ?? ''));
-    const look = buttons.find((button) => button.textContent?.trim() === 'Peek');
-    return !!jump && !!look && jump.parentElement === look.parentElement && jump.parentElement?.parentElement === node;
-  })).toBe(true);
-  // The hairline the toolbar draws between groups marks that boundary, and the terminal's own
-  // tools keep their room to the right of it.
+  // A bell and a count: the sentence is the accessible name, the temporary look is not repeated here.
+  await expect(waiting).toHaveText('1');
+  await expect(toolbar.getByRole('button', { name: 'Peek', exact: true })).toHaveCount(0);
+  // The jump has a group of its own inside the toolbar; the hairline marks the boundary and the
+  // terminal's own tools keep their room to the right of it.
+  expect(await waiting.evaluate((node) => node.parentElement?.parentElement?.getAttribute('role'))).toBe('toolbar');
   expect(await waiting.evaluate((node) => {
     const next = node.parentElement?.nextElementSibling;
     const line = next ? getComputedStyle(next, '::before') : null;
     return line ? [line.width, line.height, line.visibility] : null;
   })).toEqual(['1px', '16px', 'visible']);
-  const peekBox = (await peek.boundingBox())!;
+  const waitingBox = (await waiting.boundingBox())!;
   const findBox = (await toolbar.getByRole('button', { name: 'Find in output', exact: true }).boundingBox())!;
-  expect(findBox.x).toBeGreaterThan(peekBox.x + peekBox.width);
+  expect(findBox.x).toBeGreaterThan(waitingBox.x + waitingBox.width);
+  expect(waitingBox.width).toBeLessThan(64);
 
-  // Tab order follows the DOM: the temporary look comes right after the waiting jump.
-  await waiting.focus();
-  await page.keyboard.press('Tab');
-  expect(await page.evaluate(() => document.activeElement?.textContent?.trim())).toBe('Peek');
-  await page.keyboard.press('Enter');
+  // The temporary look still opens from the row menu and names what it shows.
+  await stage.getByRole('button', { name: 'Exit focus mode (show sidebar)' }).click();
+  await page.locator('[role="tab"][data-session-id="s2"]').hover();
+  await page.getByRole('button', { name: 'Claude Code session actions', exact: true }).click();
+  await page.getByRole('menu', { name: 'Claude Code session actions', exact: true }).getByRole('menuitem', { name: 'Peek', exact: true }).click();
   await expect(dialog).toBeVisible();
   const heading = dialog.getByRole('heading', { level: 2 });
   await expect(heading).toHaveText(longTitle);
   await expect(heading).toHaveAttribute('title', 'Claude Code · ' + longTitle);
-  // Name, CLI and the reported state are all visible beside the two actions.
   await expect(dialog.getByText('Claude Code', { exact: true })).toBeVisible();
   await expect(dialog.getByText('Attention', { exact: true })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Open this session', exact: true })).toBeVisible();
-  await expect(dialog.getByRole('button', { name: 'Close', exact: true })).toBeVisible();
   await expect(stage.locator('header h2')).toHaveText('Codex');
-
-  // Closing the cover hands the keyboard back to the session that stayed selected.
-  await dialog.getByRole('button', { name: 'Close', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-  await expect(page.locator('[data-pane-session="s1"] .xterm-helper-textarea')).toBeFocused();
-  await expect(stage.locator('header h2')).toHaveText('Codex');
-  await emit('\u0007', 's2');
-  await peek.click();
-  await expect(dialog).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
   await expect(page.locator('[data-pane-session="s1"] .xterm-helper-textarea')).toBeFocused();
 });
 
-test('a long covered session title truncates and the waiting entries still fit at 640px', async ({ page }) => {
+test('long session titles at 640px keep the compact waiting jump and every title-bar control apart', async ({ page }) => {
   await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
   await page.setViewportSize({ width: 640, height: 860 });
   await openWorkbench(page);
   const stage = page.getByRole('region', { name: '当前会话' });
   const toolbar = stage.getByRole('toolbar', { name: '终端操作' });
-  const dialog = page.getByRole('dialog', { name: '临时查看' });
   const longTitle = '把工作台顶部待处理跳转与临时查看重新整理成不会挤压终端常用操作的紧凑分组';
   const noSidewaysScroll = () => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
   const barFits = () => stage.locator('header').first().evaluate((node) => node.scrollWidth <= node.clientWidth);
@@ -4420,32 +4399,18 @@ test('a long covered session title truncates and the waiting entries still fit a
   await page.evaluate(() => (window as unknown as { __output: (text: string, sessionId?: string) => void }).__output('\u0007', 's2'));
   await expect(page.locator('[data-drag-id="s2"]')).toHaveAttribute('data-attention');
   const jump = toolbar.getByRole('button', { name: '1 个会话等你处理' });
-  const peek = toolbar.getByRole('button', { name: '临时查看', exact: true });
   await expect(jump).toBeVisible();
-  await expect(peek).toBeVisible();
+  await expect(toolbar.getByRole('button', { name: '临时查看', exact: true })).toHaveCount(0);
   expect(await noSidewaysScroll()).toBe(true);
   expect(await barFits()).toBe(true);
-
-  await peek.click();
-  await expect(dialog).toBeVisible();
-  const heading = dialog.getByRole('heading', { level: 2 });
-  await expect(heading).toContainText(longTitle);
-  expect(await heading.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
-  await expect(dialog.getByText('Claude Code', { exact: true })).toBeVisible();
-  await expect(dialog.getByText('待处理', { exact: true })).toBeVisible();
-  const open = dialog.getByRole('button', { name: '打开此会话', exact: true });
-  const close = dialog.getByRole('button', { name: '关闭', exact: true });
-  await expect(open).toBeVisible();
-  await expect(close).toBeEnabled();
-  const dialogBox = (await dialog.boundingBox())!;
-  for (const button of [open, close]) {
-    const box = (await button.boundingBox())!;
-    expect(box.x).toBeGreaterThanOrEqual(dialogBox.x - 1);
-    expect(box.x + box.width).toBeLessThanOrEqual(dialogBox.x + dialogBox.width + 1);
+  // Nothing in the bar paints over another control, 结束 included.
+  const boxes = await stage.locator('header').first().evaluate((node) => [...node.querySelectorAll('button')].filter((button) => button.offsetParent && getComputedStyle(button).visibility !== 'hidden').map((button) => { const box = button.getBoundingClientRect(); return [box.left, box.right, box.top, box.bottom]; }));
+  for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+    const [a, b] = [boxes[i], boxes[j]];
+    const overlap = Math.min(a[1], b[1]) - Math.max(a[0], b[0]) > 1 && Math.min(a[3], b[3]) - Math.max(a[2], b[2]) > 1;
+    expect(overlap).toBe(false);
   }
-  expect(await noSidewaysScroll()).toBe(true);
-  await close.click();
-  await expect(dialog).toHaveCount(0);
-  await expect(page.locator('[role="tab"][aria-selected="true"]')).toHaveAttribute('data-session-id', 's1');
+  await jump.click();
+  await expect(page.locator('[role="tab"][aria-selected="true"]')).toHaveAttribute('data-session-id', 's2');
   expect(await noSidewaysScroll()).toBe(true);
 });

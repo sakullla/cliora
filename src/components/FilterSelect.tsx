@@ -5,7 +5,12 @@ import { highlightRuns } from './CommandPalette';
 import { Icon } from './Icon';
 import styles from './FilterSelect.module.css';
 
-export type FilterSelectOption = { value: string; label: string; detail?: string; note?: string; disabled?: boolean; icon?: ReactNode };
+/**
+ * `indent` nests an option under the one before it (a repository under its project); `keywords` are
+ * searched but not shown, except as the context line of an indented match; `triggerLabel` is the
+ * fuller name the closed trigger shows when the option label alone would be ambiguous.
+ */
+export type FilterSelectOption = { value: string; label: string; detail?: string; note?: string; disabled?: boolean; icon?: ReactNode; indent?: boolean; keywords?: string; triggerLabel?: string };
 
 const searchThreshold = 4;
 // Strip the leading verb so the search input label stays concise in both languages.
@@ -73,7 +78,7 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   const tokens = needle ? needle.split(/\s+/).filter(Boolean) : [];
   const matches = options.filter((item) => {
     if (!tokens.length) return true;
-    const haystack = `${item.label} ${item.detail ?? ''} ${item.note ?? ''} ${item.value}`.toLowerCase();
+    const haystack = `${item.label} ${item.detail ?? ''} ${item.note ?? ''} ${item.keywords ?? ''} ${item.value}`.toLowerCase();
     return tokens.every((token) => matchesFilterToken(haystack, token));
   });
 
@@ -173,8 +178,8 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   }
 
   return <div ref={anchor} className={className ? `${styles.select} ${className}` : styles.select}>
-    <button ref={setTriggerNode} type="button" className={styles.trigger} data-select-trigger="true" data-variant={variant} data-empty={!selected || undefined} data-open={open || undefined} data-value={value} aria-label={label} aria-haspopup="listbox" aria-expanded={open} aria-controls={listId} disabled={disabled} title={title ?? (selected ? [selected.label, selected.detail].filter(Boolean).join(' · ') : undefined)} onClick={() => setOpen((current) => !current)} onKeyDown={onTrigger}>
-      {selected?.icon && <span className={styles.triggerIcon}>{selected.icon}</span>}<span className={styles.triggerCopy}><span>{selected?.label ?? placeholder ?? t('common.filterSelect.placeholder')}</span>{triggerDetail && selected?.detail && <small>{selected.detail}</small>}</span>
+    <button ref={setTriggerNode} type="button" className={styles.trigger} data-select-trigger="true" data-variant={variant} data-empty={!selected || undefined} data-open={open || undefined} data-value={value} aria-label={label} aria-haspopup="listbox" aria-expanded={open} aria-controls={listId} disabled={disabled} title={title ?? (selected ? [selected.triggerLabel ?? selected.label, selected.detail].filter(Boolean).join(' · ') : undefined)} onClick={() => setOpen((current) => !current)} onKeyDown={onTrigger}>
+      {selected?.icon && <span className={styles.triggerIcon}>{selected.icon}</span>}<span className={styles.triggerCopy}><span>{selected ? selected.triggerLabel ?? selected.label : placeholder ?? t('common.filterSelect.placeholder')}</span>{triggerDetail && selected?.detail && <small>{selected.detail}</small>}</span>
     </button>
     {open && box && createPortal(<div ref={panel} className={styles.panel} style={{ top: box.top, bottom: box.bottom, left: box.left, width: box.width }} tabIndex={-1} onKeyDown={onPanelKey}>
       {showSearch && <div className={styles.searchRow} data-field-frame="">
@@ -183,8 +188,8 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
         {query && <button type="button" className={styles.searchClear} aria-label={t('common.search.clear')} title={t('common.search.clear')} onClick={() => { changeQuery(''); searchInputRef.current?.focus(); }}><Icon name="close" size={14} /></button>}
       </div>}
       <div className={styles.list} id={listId} role="listbox" aria-label={label} style={{ maxHeight: Math.max(140, box.maxHeight - (showSearch ? 52 : 8) - (onPickFolder || onPickRemote ? 40 : 0)) }}>
-        {matches.length ? matches.map((option, index) => <button key={option.value || '__all'} type="button" role="option" aria-selected={option.value === value} aria-disabled={option.disabled || undefined} data-value={option.value} data-option-index={index} data-active={index === active || undefined} disabled={option.disabled} onMouseEnter={() => setActive(index)} onClick={() => choose(option)}>
-          {option.icon && <span className={styles.optionIcon}>{option.icon}</span>}<span className={styles.optionCopy}><strong>{needle ? highlightRuns(option.label, query).map((run, runIndex) => run.hit ? <mark key={runIndex}>{run.text}</mark> : run.text) : option.label}</strong>{option.detail && <small>{option.detail}</small>}</span>
+        {matches.length ? matches.map((option, index) => <button key={option.value || '__all'} type="button" role="option" aria-selected={option.value === value} aria-disabled={option.disabled || undefined} data-value={option.value} data-indent={option.indent || undefined} data-option-index={index} data-active={index === active || undefined} disabled={option.disabled} onMouseEnter={() => setActive(index)} onClick={() => choose(option)}>
+          {option.icon && <span className={styles.optionIcon}>{option.icon}</span>}<span className={styles.optionCopy}><strong>{needle ? highlightRuns(option.label, query).map((run, runIndex) => run.hit ? <mark key={runIndex}>{run.text}</mark> : run.text) : option.label}</strong>{option.indent && needle && option.keywords ? <small>{[option.keywords, option.detail].filter(Boolean).join(' · ')}</small> : option.detail && <small>{option.detail}</small>}</span>
           <span className={styles.optionMarks}>{option.note && <em>{option.note}</em>}{option.value === value && <Icon name="check" size={14} />}</span>
         </button>) : <p>{emptyText ?? t('common.filterSelect.empty')}</p>}
       </div>

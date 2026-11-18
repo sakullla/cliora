@@ -9,6 +9,9 @@
 .meta { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; color: var(--text-3); font-size: var(--fs-caption); white-space: nowrap; }
 .meta > span + span::before { content: '·'; margin-inline-end: var(--space-2); color: var(--line-strong); }
 .linked { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--accent); }
+.root { display: inline-flex; align-items: center; gap: var(--space-1); min-width: 0; color: var(--text-3); }
+.root > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); white-space: nowrap; }
+.meta { overflow: hidden; }
 .headerActions { display: flex; flex: none; align-items: center; gap: var(--space-1_5); }
 
 /* Filters: one search field; chips only appear when they have something to show. */

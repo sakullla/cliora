@@ -7,6 +7,7 @@ import { confirmAction } from '../../lib/confirm';
 import { Badge, Button, Toolbar } from '../../components/ui';
 import { RowMenu } from '../../components/RowMenu';
 import { ToolIcon } from '../../components/ToolIcon';
+import { displayPath } from '../../lib/paths';
 import { Icon } from '../../components/Icon';
 import { FilterSelect } from '../../components/FilterSelect';
 import { SearchField } from '../../components/SearchField';
@@ -39,6 +40,26 @@ export function repositoryPlaces(repository: WorkspaceRepository, mainLabel: str
     for (const tree of location.worktrees) if (tree.path !== location.path) places.set(tree.path, { label: `${tree.branch || tree.name} · ${worktreeLabel}`, main: false });
   }
   return places;
+}
+
+/**
+ * The folder every repository of a project shares, so rows can drop the long common head. Only a
+ * real parent (two or more segments) of two or more repositories qualifies.
+ */
+export function commonRoot(paths: string[]): string | null {
+  if (paths.length < 2) return null;
+  const split = (path: string) => path.split(/[\\/]/);
+  let shared = split(paths[0]).slice(0, -1);
+  for (const path of paths.slice(1)) {
+    const parts = split(path);
+    let index = 0;
+    while (index < shared.length && index < parts.length - 1 && shared[index] === parts[index]) index++;
+    shared = shared.slice(0, index);
+    if (!shared.length) return null;
+  }
+  if (shared.filter(Boolean).length < 2) return null;
+  const separator = paths[0].includes('\\') && !paths[0].includes('/') ? '\\' : '/';
+  return shared.join(separator);
 }
 
 export function WorkspaceBrowser({ tools = [], onSession, incomingManifest, onManifestConsumed }: { tools?: AdapterDescriptor[]; incomingManifest?: WorkspaceManifestPreview | null; onManifestConsumed?: (preview: WorkspaceManifestPreview) => void; onSession?: (id: string) => void }) {
@@ -207,6 +228,13 @@ export function WorkspaceBrowser({ tools = [], onSession, incomingManifest, onMa
     });
   }
   const allRepositories = current?.repositories ?? [];
+  const root = useMemo(() => commonRoot(allRepositories.flatMap(repo => repo.locations.filter(location => location.path && !location.targetId).map(location => location.path!))), [allRepositories]);
+  /** A row's path below the shared folder; nothing when that is just the repository's own name. */
+  const relativePath = (path: string, name: string) => {
+    if (!root || !path.startsWith(root) || !/[\\/]/.test(path.charAt(root.length))) return displayPath(path);
+    const rest = path.slice(root.length + 1);
+    return rest === name ? '' : rest;
+  };
   const isBroken = (repo: WorkspaceRepository) => !repo.locations.some(location => location.available);
   const favoriteCount = allRepositories.filter(repo => repo.favorite).length;
   const brokenCount = allRepositories.filter(isBroken).length;
@@ -259,6 +287,7 @@ export function WorkspaceBrowser({ tools = [], onSession, incomingManifest, onMa
           <FilterSelect variant="title" className={styles.select} disabled={busy || scanBusy || candidates !== null} label={t('workspaces.select')} triggerDetail={false} value={selectedId} options={workspaces.map(item => ({ value: item.id, label: item.name, detail: t('workspaces.repositories', { count: item.repositories.length }) }))} onChange={id => { setSelectedId(id); setQuery(''); setPaths({}); setFilter('all'); }} />
           <span className={styles.meta}>
             <span>{t('workspaces.repositories', { count: allRepositories.length })}</span>
+            {root && <span className={styles.root} title={t('workspaces.rootHint', { path: displayPath(root) })}><Icon name="folder" size={12} /><span>{displayPath(root)}</span></span>}
             {current.manifestPath
               ? <span className={styles.linked} title={`${current.manifestPath} · ${t('workspaces.version', { revision: current.manifestRevision })}`}><Icon name="link" size={12} />{t('workspaces.linked')}</span>
               : <span>{t('workspaces.local')}</span>}
@@ -289,7 +318,7 @@ export function WorkspaceBrowser({ tools = [], onSession, incomingManifest, onMa
             const missing = repo.locations[0];
             return <article key={repo.id} className={styles.row} data-repository-id={repo.id} data-state={broken ? 'unavailable' : undefined} data-favorite={repo.favorite || undefined}>
               <span className={styles.name}>{broken && <span className={styles.dot} aria-hidden="true" />}<strong title={repo.name}>{repo.name}</strong>{available?.kind === 'legacy' && <Badge>{t('workspaces.legacy')}</Badge>}</span>
-              <span className={styles.path} title={broken ? missing?.path ?? '' : selectedPath}>{broken ? <><span>{missing?.path || t('workspaces.invalid')}</span><em>{t('workspaces.unavailable')}{missing?.reason ? ` · ${missing.reason}` : ''}</em></> : selectedPath}</span>
+              <span className={styles.path} title={broken ? missing?.path ?? '' : displayPath(selectedPath)}>{broken ? <><span>{missing?.path || t('workspaces.invalid')}</span><em>{t('workspaces.unavailable')}{missing?.reason ? ` · ${missing.reason}` : ''}</em></> : <span>{relativePath(selectedPath, repo.name)}</span>}</span>
               {places.size > 1 ? <select className={styles.place} aria-label={`${repo.name} ${t('workspaces.worktree')}`} title={selectedPath} value={selectedPath} onChange={event => setPaths(previous => ({ ...previous, [repo.id]: event.target.value }))}>{[...places].map(([path, place]) => <option key={path} value={path}>{place.label}</option>)}</select> : <span />}
               <span className={styles.rowActions}>
                 <Button size="sm" variant="ghost" className={styles.favorite} disabled={busy} aria-label={t(repo.favorite ? 'workspaces.unfavorite' : 'workspaces.favorite')} title={t(repo.favorite ? 'workspaces.unfavorite' : 'workspaces.favorite')} aria-pressed={repo.favorite} icon={<Icon name="star" size={14} />} onClick={() => void operate(() => native.favoriteWorkspaceRepository(current.id, repo.id, !repo.favorite))} />
@@ -337,7 +366,7 @@ export function WorkspaceBrowser({ tools = [], onSession, incomingManifest, onMa
         </label>)}</div>}
         {error && <p className={styles.error} role="alert">{error}</p>}
         <div className="dialog-footer">
-          <Button variant="primary" loading={busy} disabled={scanBusy || !checked.size || !current} onClick={() => current && void operate(async () => { const results = await native.addWorkspaceRepositories(current.id, [...checked], current.revision); const failed = results.filter(item => item.error); setNotice(t('workspaces.added', { count: results.length })); if (failed.length) { setChecked(new Set(failed.map(item => item.path))); throw new Error(failed.map(item => `${item.path}: ${item.error}`).join('\n')); } setCandidates(null); })}>{t('workspaces.selected', { count: checked.size })}</Button>
+          <Button variant="primary" loading={busy} disabled={scanBusy || !checked.size || !current} onClick={() => current && void operate(async () => { const results = await native.addWorkspaceRepositories(current.id, [...checked], current.revision); const failed = results.filter(item => item.error); if (results.length > failed.length) setNotice(t('workspaces.added', { count: results.length - failed.length })); if (failed.length) { setChecked(new Set(failed.map(item => item.path))); throw new Error(failed.map(item => `${item.path}: ${item.error}`).join('\n')); } setCandidates(null); })}>{t('workspaces.selected', { count: checked.size })}</Button>
         </div>
       </div>
     </GuideDialog>

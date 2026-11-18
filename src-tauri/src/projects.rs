@@ -22,6 +22,9 @@ pub struct Project {
     pub selected_profiles: BTreeMap<String, String>,
     pub applied_profiles: BTreeMap<String, String>,
     pub reapply_profiles: BTreeMap<String, String>,
+    /// Created only to give a business-project repository its native launch context. Such a
+    /// directory belongs to that project's list, not to the standalone directory list.
+    pub workspace_backed: bool,
 }
 
 fn timestamp() -> u64 {
@@ -70,6 +73,17 @@ pub fn list(db: &Database) -> Result<Vec<Project>, String> {
                 ))
             })
             .map_err(|error| error.to_string())?;
+        // Older databases may predate the mapping table; then nothing is workspace-backed.
+        let backed: std::collections::BTreeSet<String> = match conn.prepare(
+            "SELECT project_id FROM workspace_legacy_map WHERE workspace_id <> project_id",
+        ) {
+            Ok(mut query) => query
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|error| error.to_string())?
+                .collect::<Result<_, _>>()
+                .map_err(|error| error.to_string())?,
+            Err(_) => Default::default(),
+        };
         let mut projects = Vec::new();
         for row in rows {
             let (id, name, path, preferred_tool, last_opened) =
@@ -118,6 +132,7 @@ pub fn list(db: &Database) -> Result<Vec<Project>, String> {
                     if directory_recovery { reapply_profiles.insert(tool.clone(), profile.clone()); }
                 }
             }
+            let workspace_backed = backed.contains(&id);
             projects.push(Project {
                 id,
                 name,
@@ -129,6 +144,7 @@ pub fn list(db: &Database) -> Result<Vec<Project>, String> {
                 selected_profiles,
                 applied_profiles,
                 reapply_profiles,
+                workspace_backed,
             });
         }
         Ok(projects)
