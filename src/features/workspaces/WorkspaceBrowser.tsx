@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useDeferredValue, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
@@ -17,7 +17,17 @@ import styles from './WorkspaceBrowser.module.css';
 
 export const WORKSPACES_CHANGED = 'cliora:business-workspaces-changed';
 export const WORKSPACE_MANIFEST_OPEN = 'cliora:workspace-manifest-open';
-export function notifyWorkspacesChanged() { window.dispatchEvent(new Event(WORKSPACES_CHANGED)); }
+/** `workspace` is the project as the operation returned it; listeners patch it instead of
+ * listing and re-probing every repository. `source` lets the sender skip its own event. */
+export type WorkspacesChangedDetail = { source?: string; workspace?: BusinessWorkspace };
+export function notifyWorkspacesChanged(detail: WorkspacesChangedDetail = {}) { window.dispatchEvent(new CustomEvent<WorkspacesChangedDetail>(WORKSPACES_CHANGED, { detail })); }
+export function changedWorkspace(event: Event) { return (event as CustomEvent<WorkspacesChangedDetail | null>).detail ?? {}; }
+export function isBusinessWorkspace(value: unknown): value is BusinessWorkspace {
+  return !!value && typeof value === 'object' && typeof (value as BusinessWorkspace).id === 'string' && Array.isArray((value as BusinessWorkspace).repositories);
+}
+/** A focus refresh re-checks every repository directory; with hundreds of them, switching
+ * windows back and forth must not repeat that work each time. */
+const FOCUS_REFRESH_INTERVAL = 30_000;
 const failure = (value: unknown) => formatFailure(value, '项目操作失败', '请重试');
 
 /** Worktree choices of one repository: its main checkout first, then attached worktrees. */
@@ -36,6 +46,10 @@ export function WorkspaceBrowser({ tools = [], onSession, incomingManifest, onMa
   const [workspaces, setWorkspaces] = useState<BusinessWorkspace[]>([]);
   const [selectedId, setSelectedId] = useState('');
   const [query, setQuery] = useState('');
+  // Typing stays responsive while hundreds of rows are filtered behind it.
+  const deferredQuery = useDeferredValue(query);
+  const instance = useId();
+  const loadedAt = useRef(0);
   const [filter, setFilter] = useState<'all' | 'favorites' | 'attention'>('all');
   const listRef = useRef<HTMLDivElement>(null);
   const [toolId, setToolId] = useState('');
@@ -81,18 +95,25 @@ export function WorkspaceBrowser({ tools = [], onSession, incomingManifest, onMa
       setWorkspaces(rows);
       setSelectedId(previous => rows.some(item => item.id === previous) ? previous : rows[0]?.id ?? '');
       setLoadError('');
+      loadedAt.current = Date.now();
     } catch (value) { if (mounted.current && seq === sequence.current) setLoadError(failure(value)); }
     finally { if (mounted.current && seq === sequence.current) setLoading(false); }
   }, []);
   useEffect(() => {
     mounted.current = true;
     void reload();
-    const changed = () => void reload();
-    const focused = () => void reload(true);
+    const changed = (event: Event) => {
+      const detail = changedWorkspace(event);
+      if (detail.source === instance) return;
+      const workspace = detail.workspace;
+      if (workspace) setWorkspaces(previous => previous.some(item => item.id === workspace.id) ? previous.map(item => item.id === workspace.id ? workspace : item) : previous);
+      else void reload();
+    };
+    const focused = () => { if (Date.now() - loadedAt.current >= FOCUS_REFRESH_INTERVAL) void reload(true); };
     window.addEventListener(WORKSPACES_CHANGED, changed);
     window.addEventListener('focus', focused);
     return () => { mounted.current = false; sequence.current++; window.removeEventListener(WORKSPACES_CHANGED, changed); window.removeEventListener('focus', focused); if (scanId.current) void native.cancelWorkspaceScan(scanId.current); };
-  }, [reload]);
+  }, [reload, instance]);
   useEffect(() => {
     if (!selectedId || !nativeAvailable) return;
     let live = true;
@@ -114,8 +135,17 @@ export function WorkspaceBrowser({ tools = [], onSession, incomingManifest, onMa
   async function operate(action: () => Promise<unknown>) {
     if (busy) return;
     setBusy(true); setError(''); setNotice('');
-    try { await action(); if (mounted.current) { await reload(); notifyWorkspacesChanged(); } }
-    catch (value) { if (mounted.current) { await reload(); setError(failure(value)); notifyWorkspacesChanged(); } }
+    try {
+      const value = await action();
+      if (!mounted.current) return;
+      // An operation that returns its project updates only that project; listing would
+      // re-probe every repository of every project.
+      if (isBusinessWorkspace(value)) {
+        setWorkspaces(previous => previous.map(item => item.id === value.id ? value : item));
+        notifyWorkspacesChanged({ source: instance, workspace: value });
+      } else { await reload(); notifyWorkspacesChanged({ source: instance }); }
+    }
+    catch (value) { if (mounted.current) { await reload(); setError(failure(value)); notifyWorkspacesChanged({ source: instance }); } }
     finally { if (mounted.current) setBusy(false); }
   }
   async function chooseManifest() {
@@ -181,11 +211,21 @@ export function WorkspaceBrowser({ tools = [], onSession, incomingManifest, onMa
   const favoriteCount = allRepositories.filter(repo => repo.favorite).length;
   const brokenCount = allRepositories.filter(isBroken).length;
   const activeFilter = filter === 'favorites' && !favoriteCount ? 'all' : filter === 'attention' && !brokenCount ? 'all' : filter;
-  const needle = query.trim().toLowerCase();
-  // Favorites lead; everything else keeps the project's own order.
-  const shown = allRepositories
-    .filter(repo => (activeFilter !== 'favorites' || repo.favorite) && (activeFilter !== 'attention' || isBroken(repo)) && `${repo.name} ${repo.locations.map(location => location.path).join(' ')}`.toLowerCase().includes(needle))
-    .map((repo, index) => ({ repo, index })).sort((a, b) => Number(b.repo.favorite) - Number(a.repo.favorite) || a.index - b.index).map(item => item.repo);
+  const needle = deferredQuery.trim().toLowerCase();
+  // Favorites lead; everything else keeps the project's own order. Every word must match the
+  // name or a path, so `team api` narrows hundreds of repositories in one step.
+  const shown = useMemo(() => {
+    const tokens = needle.split(/\s+/).filter(Boolean);
+    return allRepositories
+      .filter(repo => {
+        if ((activeFilter === 'favorites' && !repo.favorite) || (activeFilter === 'attention' && repo.locations.some(location => location.available))) return false;
+        if (!tokens.length) return true;
+        const text = `${repo.name} ${repo.locations.map(location => location.path).join(' ')}`.toLowerCase();
+        return tokens.every(token => text.includes(token));
+      })
+      .map((repo, index) => ({ repo, index })).sort((a, b) => Number(b.repo.favorite) - Number(a.repo.favorite) || a.index - b.index).map(item => item.repo);
+  }, [allRepositories, activeFilter, needle]);
+  const filtered = shown.length !== allRepositories.length;
   const visibleCandidates = (candidates ?? []).filter(item => `${item.name} ${item.path}`.toLowerCase().includes(scanQuery.trim().toLowerCase()));
   const addable = (candidates ?? []).filter(item => item.kind === 'repository');
   const kindTone = { repository: 'success', directory: 'neutral', duplicate: 'neutral', unavailable: 'danger' } as const;
@@ -237,6 +277,7 @@ export function WorkspaceBrowser({ tools = [], onSession, incomingManifest, onMa
           <div className={styles.search} onKeyDown={event => moveFocus(event, true)}><SearchField label={t('workspaces.search')} value={query} onChange={setQuery} placeholder={t('workspaces.search')} /></div>
           {favoriteCount > 0 && <button type="button" className={styles.chip} aria-pressed={activeFilter === 'favorites'} onClick={() => setFilter(activeFilter === 'favorites' ? 'all' : 'favorites')}><Icon name="star" size={12} />{t('workspaces.filterFavorites', { count: favoriteCount })}</button>}
           {brokenCount > 0 && <button type="button" className={styles.chip} data-tone="danger" aria-pressed={activeFilter === 'attention'} title={t('workspaces.attentionHint', { count: brokenCount })} onClick={() => setFilter(activeFilter === 'attention' ? 'all' : 'attention')}><span className={styles.dot} aria-hidden="true" />{t('workspaces.filterAttention', { count: brokenCount })}</button>}
+          {filtered && <span className={styles.matchCount} role="status">{t('workspaces.matchCount', { shown: shown.length, total: allRepositories.length })}</span>}
           {enabledTools.length > 0 && <FilterSelect className={styles.toolPick} label={t('workspaces.tool')} value={launchTool} options={enabledTools.map(tool => ({ value: tool.id, label: tool.name, icon: <ToolIcon toolId={tool.id} size={14} /> }))} onChange={setToolId} />}
         </div>
         {shown.length > 0 ? <div className={styles.list} ref={listRef} aria-label={t('workspaces.previewRepositories')} onKeyDown={event => moveFocus(event)}>

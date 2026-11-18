@@ -1,4 +1,4 @@
-import { repositoryPlaces, WORKSPACES_CHANGED } from '../workspaces/WorkspaceBrowser';
+import { changedWorkspace, repositoryPlaces, WORKSPACES_CHANGED } from '../workspaces/WorkspaceBrowser';
 import type { BusinessWorkspace, WorkspaceSelection, WorkspaceSessionContext } from '../../types/workspaces';
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -461,8 +461,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         if (contexts.status === 'fulfilled') setBusinessContexts(Array.isArray(contexts.value) ? contexts.value : []);
       });
     };
-    reload(); window.addEventListener(WORKSPACES_CHANGED, reload);
-    return () => { live = false; generation++; window.removeEventListener(WORKSPACES_CHANGED, reload); };
+    // A change that carries its project patches that one; anything else lists again.
+    const changed = (event: Event) => {
+      const workspace = changedWorkspace(event).workspace;
+      if (!workspace) { reload(); return; }
+      setBusinessWorkspaces(previous => previous.some(item => item.id === workspace.id) ? previous.map(item => item.id === workspace.id ? workspace : item) : previous);
+    };
+    reload(); window.addEventListener(WORKSPACES_CHANGED, changed);
+    return () => { live = false; generation++; window.removeEventListener(WORKSPACES_CHANGED, changed); };
   }, [active, businessSessionKey]);
   const [remoteProjects, setRemoteProjects] = useState<RemoteProject[]>([]);
   const [loadedRemoteTargets, setLoadedRemoteTargets] = useState<RemoteTarget[] | null>(null);
@@ -3180,13 +3186,16 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
   const businessRepositoryOptions = useMemo(() => {
     const options: Array<{ value: string; label: string; detail: string; worktree: boolean; selection: WorkspaceSelection }> = [];
+    // Hundreds of repositories with their worktrees: a set keeps de-duplication linear.
+    const seen = new Set<string>();
     for (const workspace of businessWorkspaces) {
       const repositories = [...workspace.repositories].sort((a, b) => Number(b.favorite) - Number(a.favorite));
       for (const repository of repositories) {
         const location = repository.locations.find(item => item.available && item.path);
         if (!location) continue;
         for (const [path, place] of repositoryPlaces(repository, t('workspaces.mainCheckout'), t('workspaces.worktreeKind'))) {
-          if (options.some(option => option.value === `custom:${path}`)) continue;
+          if (seen.has(path)) continue;
+          seen.add(path);
           options.push({
             value: `custom:${path}`,
             label: place.main ? repository.name : `${repository.name} · ${place.label}`,

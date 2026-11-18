@@ -22,10 +22,14 @@
 .chip > svg { color: var(--warning); fill: currentColor; }
 .dot { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--danger); }
 .toolPick { flex: 0 0 160px; }
+.matchCount { flex: none; color: var(--text-3); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* Repository rows: one line each, quiet until hovered. */
 .list { display: grid; grid-auto-rows: max-content; max-height: 440px; overflow: auto; overscroll-behavior: contain; margin: 0 calc(var(--space-2) * -1); }
 .row { display: grid; grid-template-columns: minmax(120px, 220px) minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-3); min-height: 44px; padding: var(--space-1) var(--space-2); border-radius: var(--radius); transition: background-color var(--fast) var(--ease); }
+/* Hundreds of repositories: rows outside the scroll viewport skip layout and paint.
+   Row menus render in a portal, so the containment never clips them. */
+.list > .row, .candidates > .candidate { content-visibility: auto; contain-intrinsic-size: auto 44px; }
 .row:hover, .row:focus-within { background: var(--row-hover); }
 .name { display: flex; align-items: center; gap: var(--space-1_5); min-width: 0; }
 .name strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-body); font-weight: var(--fw-semibold); }

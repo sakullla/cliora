@@ -3,8 +3,10 @@ export function installWorkspaceFixtures() {
   const original = window.__TAURI_INTERNALS__.invoke;
   const host = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   const repository = (id, name, path) => ({ id, name, favorite: false, locations: [{ id: `location-${id}`, hostId: host, path, projectId: null, targetId: null, available: true, kind: 'repository', reason: null, worktrees: [{ name: 'main', branch: 'main', path, current: true }, { name: 'feature', branch: 'feature/search', path: `${path}-feature`, current: false }] }] });
+  // `__workspaceRepositoryCount` sizes the first project (a large-project scenario sets it to hundreds).
+  const count = Math.max(48, Number(window.__workspaceRepositoryCount) || 48);
   const workspaces = [
-    { id: 'workspace-commerce', name: '电商平台', revision: 1, manifestPath: null, manifestRevision: null, error: null, repositories: Array.from({ length: 48 }, (_, i) => repository(`repo-${i}`, i < 2 ? 'api' : `service-${String(i).padStart(2, '0')}`, `/work/commerce/${i < 2 ? `team-${i}/api` : `service-${String(i).padStart(2, '0')}`}`)) },
+    { id: 'workspace-commerce', name: '电商平台', revision: 1, manifestPath: null, manifestRevision: null, error: null, repositories: Array.from({ length: count }, (_, i) => repository(`repo-${i}`, i < 2 ? 'api' : `service-${String(i).padStart(2, '0')}`, `/work/commerce/${i < 2 ? `team-${i}/api` : `service-${String(i).padStart(2, '0')}`}`)) },
     { id: 'workspace-payments', name: '支付系统', revision: 1, manifestPath: null, manifestRevision: null, error: null, repositories: [repository('pay-api', 'payment-api', '/work/payments/api')] },
   ];
   // One moved checkout: the entry stays visible as missing and other repositories keep working.

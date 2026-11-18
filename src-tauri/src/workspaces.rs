@@ -417,74 +417,93 @@ pub fn get(db: &Database, host: &str, id: &str) -> Result<Workspace, String> {
         let mut value = conn.query_row("SELECT name,revision,manifest_path,manifest_revision,last_error FROM workspace_projects WHERE id=?1", [id], |row| Ok(Workspace { id:id.into(), name:row.get(0)?, revision:row.get::<_,i64>(1)?.max(0) as u64, manifest_path:row.get(2)?, manifest_revision:row.get::<_,Option<i64>>(3)?.map(|v|v.max(0) as u64), error:row.get(4)?, repositories:Vec::new() })).optional().map_err(sql)?.ok_or("业务项目不存在")?;
         let mut q = conn.prepare("SELECT r.id,r.name,m.favorite FROM workspace_members m JOIN workspace_repositories r ON r.id=m.repository_id WHERE m.workspace_id=?1 ORDER BY m.favorite DESC,r.name COLLATE NOCASE,r.id").map_err(sql)?;
         let repos = q.query_map([id], |row| Ok(WorkspaceRepository {id:row.get(0)?,name:row.get(1)?,favorite:row.get(2)?,locations:Vec::new()})).map_err(sql)?.collect::<Result<Vec<_>,_>>().map_err(sql)?;
+        let mut q = conn.prepare("SELECT l.id,l.host_id,l.path,l.native_project_id,l.target_id,l.kind FROM workspace_locations l JOIN workspace_member_locations m ON m.location_id=l.id WHERE m.repository_id=?1 AND m.workspace_id=?2 ORDER BY l.host_id,l.path").map_err(sql)?;
         for mut repo in repos {
-            let mut q = conn.prepare("SELECT l.id,l.host_id,l.path,l.native_project_id,l.target_id,l.kind FROM workspace_locations l JOIN workspace_member_locations m ON m.location_id=l.id WHERE m.repository_id=?1 AND m.workspace_id=?2 ORDER BY l.host_id,l.path").map_err(sql)?;
             repo.locations = q.query_map(params![repo.id,id], |row| Ok(WorkspaceLocation {id:row.get(0)?,host_id:row.get(1)?,path:row.get(2)?,project_id:row.get(3)?,target_id:row.get(4)?,kind:row.get(5)?,available:false,reason:None,worktrees:Vec::new()})).map_err(sql)?.collect::<Result<_,_>>().map_err(sql)?;
             value.repositories.push(repo);
         }
         Ok(value)
     })?;
-    for repo in &mut value.repositories {
-        for location in &mut repo.locations {
-            if location.host_id != host || location.target_id.is_some() {
-                location.reason = Some("其他主机的位置，请关联本机目录".into());
-                continue;
-            }
-            let Some(path) = location.path.as_deref().map(Path::new) else {
-                location.reason = Some("旧目录尚未关联，原记录已保留".into());
-                continue;
-            };
-            if !path.is_absolute() {
-                location.reason = Some("此位置不是本机绝对路径，请重新关联本机目录".into());
-                continue;
-            }
-            if !path.is_dir() {
-                location.reason = Some("目录不存在或不可访问".into());
-                continue;
-            }
-            location.available = true;
-            if let Some((root, common)) = crate::git_context::repository_identity(path) {
-                location.kind = "repository".into();
-                match crate::git_context::worktrees_checked(path) {
-                    Ok(trees) => {
-                        location.worktrees = trees
-                            .into_iter()
-                            .filter(|tree| {
-                                crate::git_context::repository_identity(Path::new(&tree.path))
-                                    .is_some_and(|(_, identity)| identity == common)
-                            })
-                            .collect()
-                    }
-                    Err(reason) => location.reason = Some(reason),
-                }
-                if !location.worktrees.iter().any(|tree| {
-                    Path::new(&tree.path)
-                        .canonicalize()
-                        .is_ok_and(|path| path == root)
-                }) {
-                    let context = crate::git_context::read(&root);
-                    location.worktrees.insert(
-                        0,
-                        crate::git_context::Worktree {
-                            name: root
-                                .file_name()
-                                .map(|name| name.to_string_lossy().into())
-                                .unwrap_or_else(|| repo.name.clone()),
-                            branch: context.and_then(|c| c.branch),
-                            path: text(&root)?,
-                            current: true,
-                        },
-                    );
-                }
-            } else if location.kind == "legacy" {
-                location.reason = Some("原目录可继续使用，尚未识别为 Git 仓库".into());
-            } else {
-                location.available = false;
-                location.reason = Some("工作位置未通过 Git 仓库校验，请重新关联".into());
-            }
-        }
-    }
+    // Each location is checked on disk (directory, Git identity, worktrees). A project with
+    // hundreds of repositories spreads that I/O over a few threads; results stay in order.
+    let mut pending: Vec<(&str, &mut WorkspaceLocation)> = value
+        .repositories
+        .iter_mut()
+        .flat_map(|repo| {
+            let name = repo.name.as_str();
+            repo.locations.iter_mut().map(move |location| (name, location))
+        })
+        .collect();
+    let workers = std::thread::available_parallelism().map_or(4, |count| count.get()).clamp(1, 8);
+    let chunk = pending.len().div_ceil(workers).max(16);
+    std::thread::scope(|scope| {
+        let jobs: Vec<_> = pending
+            .chunks_mut(chunk)
+            .map(|batch| scope.spawn(move || batch.iter_mut().try_for_each(|(name, location)| probe_location(host, name, location))))
+            .collect();
+        jobs.into_iter().try_for_each(|job| job.join().map_err(|_| "仓库状态检查失败".to_string())?)
+    })?;
     Ok(value)
+}
+
+fn probe_location(host: &str, repository_name: &str, location: &mut WorkspaceLocation) -> Result<(), String> {
+    if location.host_id != host || location.target_id.is_some() {
+        location.reason = Some("其他主机的位置，请关联本机目录".into());
+        return Ok(());
+    }
+    let Some(path) = location.path.as_deref().map(Path::new) else {
+        location.reason = Some("旧目录尚未关联，原记录已保留".into());
+        return Ok(());
+    };
+    if !path.is_absolute() {
+        location.reason = Some("此位置不是本机绝对路径，请重新关联本机目录".into());
+        return Ok(());
+    }
+    if !path.is_dir() {
+        location.reason = Some("目录不存在或不可访问".into());
+        return Ok(());
+    }
+    location.available = true;
+    if let Some((root, common)) = crate::git_context::repository_identity(path) {
+        location.kind = "repository".into();
+        match crate::git_context::worktrees_checked(path) {
+            Ok(trees) => {
+                location.worktrees = trees
+                    .into_iter()
+                    .filter(|tree| {
+                        crate::git_context::repository_identity(Path::new(&tree.path))
+                            .is_some_and(|(_, identity)| identity == common)
+                    })
+                    .collect()
+            }
+            Err(reason) => location.reason = Some(reason),
+        }
+        if !location.worktrees.iter().any(|tree| {
+            Path::new(&tree.path)
+                .canonicalize()
+                .is_ok_and(|path| path == root)
+        }) {
+            let context = crate::git_context::read(&root);
+            location.worktrees.insert(
+                0,
+                crate::git_context::Worktree {
+                    name: root
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into())
+                        .unwrap_or_else(|| repository_name.to_owned()),
+                    branch: context.and_then(|c| c.branch),
+                    path: text(&root)?,
+                    current: true,
+                },
+            );
+        }
+    } else if location.kind == "legacy" {
+        location.reason = Some("原目录可继续使用，尚未识别为 Git 仓库".into());
+    } else {
+        location.available = false;
+        location.reason = Some("工作位置未通过 Git 仓库校验，请重新关联".into());
+    }
+    Ok(())
 }
 pub fn create(db: &Database, host: &str, title: &str) -> Result<Workspace, String> {
     let id = Uuid::new_v4().to_string();

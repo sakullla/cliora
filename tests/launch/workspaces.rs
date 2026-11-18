@@ -288,10 +288,13 @@ fn contract_fixtures_and_deep_links_are_strict_and_preview_only() {
     let invalid: Manifest =
         serde_json::from_str(include_str!("../fixtures/workspaces/invalid-version.json")).unwrap();
     assert!(validate_manifest(&invalid).is_err());
-    assert_eq!(
-        manifest_link("cliora://workspace?v=1&file=%2Ftmp%2Fproject.dev-workspace.json").unwrap(),
-        "/tmp/project.dev-workspace.json"
-    );
+    // A local absolute path: rooted on Unix, drive-qualified on Windows.
+    let (encoded, path) = if cfg!(windows) {
+        ("C%3A%5Cwork%5Cproject.dev-workspace.json", r"C:\work\project.dev-workspace.json")
+    } else {
+        ("%2Ftmp%2Fproject.dev-workspace.json", "/tmp/project.dev-workspace.json")
+    };
+    assert_eq!(manifest_link(&format!("cliora://workspace?v=1&file={encoded}")).unwrap(), path);
     for url in [
         "cliora://workspace?v=1&file=relative.json",
         "cliora://workspace?v=1&file=%2Ftmp%2Fone&file=%2Ftmp%2Ftwo",
@@ -757,4 +760,42 @@ fn identity_reads_never_wait_for_or_fail_on_a_held_lock() {
     // Another window (or a sibling app) holds the identity lock: reading still succeeds.
     let _held = lock_file(&path).unwrap();
     assert_eq!(host_id_at(&path).unwrap(), id);
+}
+/// Timing evidence for a project with hundreds of repositories: the parallel
+/// location check against the same work done on one thread.
+#[test]
+#[ignore = "creates 400 Git repositories; run manually for timing evidence"]
+fn hundreds_of_repositories_are_checked_in_parallel() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths: Vec<String> = (0..400)
+        .map(|index| {
+            let root = temp.path().join(format!("service-{index:03}"));
+            fs::create_dir_all(&root).unwrap();
+            git(&root, &["init", "-q"]);
+            root.to_string_lossy().into()
+        })
+        .collect();
+    let db = db();
+    let workspace = create(&db, HOST, "Large").unwrap();
+    let added = add_paths(&db, HOST, &workspace.id, &paths, workspace.revision).unwrap();
+    assert!(added.iter().all(|item| item.error.is_none()));
+    let best = |run: &dyn Fn()| (0..3).map(|_| { let started = std::time::Instant::now(); run(); started.elapsed() }).min().unwrap();
+    let parallel = best(&|| {
+        let value = get(&db, HOST, &workspace.id).unwrap();
+        assert_eq!(value.repositories.len(), 400);
+        assert!(value.repositories.iter().all(|repo| repo.locations.iter().all(|location| location.available)));
+    });
+    let template = get(&db, HOST, &workspace.id).unwrap();
+    let sequential = best(&|| {
+        let mut value = template.clone();
+        for repo in &mut value.repositories {
+            let name = repo.name.clone();
+            for location in &mut repo.locations {
+                location.available = false;
+                location.worktrees.clear();
+                probe_location(HOST, &name, location).unwrap();
+            }
+        }
+    });
+    println!("400 repositories: parallel get {parallel:?}, one-thread location checks {sequential:?}");
 }

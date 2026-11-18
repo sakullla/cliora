@@ -13,7 +13,8 @@ async function chooseRepository(page: Page, search: string, option: RegExp) {
   await page.getByRole('option', { name: option }).first().click();
 }
 
-async function install(page: Page) {
+async function install(page: Page, repositories = 48) {
+  await page.addInitScript(count => { (window as any).__workspaceRepositoryCount = count; }, repositories);
   await page.addInitScript(() => {
     const callbacks: Array<(value: unknown) => void> = [];
     const handlers: Record<string, number> = {};
@@ -187,6 +188,35 @@ test('narrow repository rows keep their name, path and worktree from overlapping
   expect(name && path && rowBox).toBeTruthy();
   expect(path!.y).toBeGreaterThanOrEqual(name!.y + name!.height - 1);
   expect(path!.y + path!.height).toBeLessThanOrEqual(rowBox!.y + rowBox!.height + 1);
+});
+
+test('hundreds of repositories narrow by several words and favorites update without re-listing', async ({ page }) => {
+  await install(page, 400);
+  const project = page.locator('[data-business-workspaces]').first();
+  await expect(project.getByText('400 个仓库', { exact: true })).toBeVisible();
+  await expect(project.locator('[data-repository-id]')).toHaveCount(400);
+  const listings = () => page.evaluate(() => (window as any).__workspaceFixture.calls.filter((call: { command: string }) => call.command === 'list_business_workspaces').length);
+  const search = project.getByRole('textbox', { name: '搜索仓库名称或路径' });
+  // Every word must match the name or a path.
+  await search.fill('commerce 37');
+  // 37, 137, 237, 337 and 370-379.
+  await expect(project.locator('[data-repository-id]')).toHaveCount(14);
+  await expect(project.getByRole('status').filter({ hasText: '14 / 400 个' })).toBeVisible();
+  await search.fill('service 137');
+  const row = project.locator('[data-repository-id]');
+  await expect(row).toHaveCount(1);
+  await expect(row).toHaveAttribute('data-repository-id', 'repo-137');
+
+  // A favorite updates its project from the operation result; no project is listed and probed again.
+  const before = await listings();
+  await row.getByRole('button', { name: '收藏仓库', exact: true }).click();
+  await expect(row.getByRole('button', { name: '取消收藏', exact: true })).toBeVisible();
+  await search.fill('');
+  await expect(project.locator('[data-repository-id]').first()).toHaveAttribute('data-repository-id', 'repo-137');
+  // Returning to the window soon after a listing does not re-check every repository either.
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await page.waitForTimeout(200);
+  expect(await listings()).toBe(before);
 });
 
 test('a search with no matching repository clears in one action', async ({ page }) => {
