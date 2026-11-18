@@ -1333,6 +1333,8 @@ export default {
     pickAccount: 'Choose an account or sign in a new one',
     usedFor: 'For {{target}}; {{note}}',
     currentConnection: 'current connection',
+    usedForPending: 'The key is sent to the request address above; you can fill either one first.',
+    secretParked: 'The request address changed, so the key you typed stays with the previous address. Enter a key for the new one; switching back restores it.',
     currentNote: 'Saving updates the secret in the current files.',
     profileNote: 'The secret is stored in the local credential store.',
     noNewSecret: 'This scope does not accept new secrets. Choose another source explicitly.',

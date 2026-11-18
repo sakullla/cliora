@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type FocusEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ConfigurationField, type FieldPresentation } from './ConfigurationField';
 import { StepHead } from './ConfigurationStep';
@@ -11,6 +11,14 @@ type Run = (target: unknown, operation: string, value?: unknown, field?: string 
 type ListChoices = Record<string, readonly (readonly [string, string])[]>;
 type Connection = { baseUrl?: string; protocol?: string; readOnlyReason?: string };
 const targetIdentity = (target: unknown) => target && typeof target === 'object' ? JSON.stringify(target, Object.keys(target).sort()) : JSON.stringify(target);
+/** A provider id suggested from the address host: `https://cpa.example.com/v1` → `cpa`. */
+export function providerIdFromUrl(url: string): string {
+  try {
+    const host = new URL(url.trim()).hostname.replace(/^(api|www)\./, '');
+    const label = host.split('.').find(part => part && !/^\d+$/.test(part)) ?? '';
+    return label.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  } catch { return ''; }
+}
 const validIdentity = (id: string, maximum = 200) => Boolean(id.trim()) && id.length <= maximum && !/[\u0000-\u001f\u007f]/.test(id);
 export function objectFields(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -163,28 +171,38 @@ export function ProviderEditor({ provider, providers, connection, protocol, disa
   const selectId = useId();
   const [id, setId] = useState(provider);
   const [baseUrl, setBaseUrl] = useState(connection?.baseUrl ?? '');
-  const [format, setFormat] = useState(protocol);
+  // A brand-new provider starts on the format almost every gateway speaks; it stays changeable.
+  const [format, setFormat] = useState(protocol || (!provider && !connection?.protocol ? 'openai_completions' : ''));
+  const [idTouched, setIdTouched] = useState(Boolean(provider));
   const readOnly = id === provider && Boolean(connection?.readOnlyReason);
   const validity = useRef(onDraftValidityChange); validity.current = onDraftValidityChange;
-  const dirty = canConfigure && !(id === provider && baseUrl === (connection?.baseUrl ?? '') && format === protocol);
+  const dirty = canConfigure && !(id === provider && baseUrl === (connection?.baseUrl ?? '') && (format === protocol || !provider && !baseUrl));
   useEffect(() => { validity.current?.(!dirty); }, [dirty]);
   useEffect(() => () => validity.current?.(true), []);
-  const reset = () => { setId(provider); setBaseUrl(connection?.baseUrl ?? ''); setFormat(protocol); };
+  const reset = () => { setId(provider); setIdTouched(Boolean(provider)); setBaseUrl(connection?.baseUrl ?? ''); setFormat(protocol || (!provider && !connection?.protocol ? 'openai_completions' : '')); };
+  const complete = validIdentity(id, 80) && Boolean(baseUrl.trim()) && Boolean(format);
+  const configure = () => { if (!disabled && !readOnly && complete) void onConfigure(id, { baseUrl: baseUrl.trim(), interfaceFormat: format }); };
   const summary = provider || connection?.baseUrl ? <>{provider && <code>{provider}</code>}{provider && connection?.baseUrl ? ' · ' : ''}{connection?.baseUrl}</> : t('common.provider.metaEmpty');
-  return <section data-config-step="connection" className={`${styles.controls} ${styles.step}`}>
+  // A first provider applies itself once the card is complete and focus moves on (to the key or
+  // the models), so the usual top-to-bottom fill never stalls on a separate confirm button.
+  // Editing an existing provider still waits for the explicit button.
+  const settle = (event: FocusEvent<HTMLElement>) => {
+    if (!provider && dirty && complete && !event.currentTarget.contains(event.relatedTarget as Node | null)) configure();
+  };
+  return <section data-config-step="connection" data-config-required className={`${styles.controls} ${styles.step}`} onBlur={settle}>
     <StepHead step="connection" title={t('common.provider.title')} meta={summary} actions={canSelect && providers.length > 0 ? <select id={selectId} aria-label={t('common.provider.view')} title={t('common.provider.view')} value={provider} disabled={disabled} onChange={event => { void onSelect(event.target.value); }}><option value="" disabled>{t('common.provider.choose')}</option>{providers.map(item => <option key={item} value={item}>{item}</option>)}</select> : undefined} />
     {canConfigure ? <>
       <div className={styles.fieldGrid}>
-        <label>{t('common.provider.id')}<input value={id} maxLength={80} disabled={disabled} placeholder={t('common.provider.idPlaceholder')} spellCheck={false} onChange={event => setId(event.target.value)} /></label>
+        <label className={styles.span}>{t('common.provider.baseUrl')}<input value={baseUrl} disabled={disabled || readOnly} placeholder="https://api.example.com/v1" spellCheck={false} inputMode="url" autoFocus={!provider && !baseUrl && !disabled} onChange={event => { const next = event.target.value; setBaseUrl(next); if (!idTouched) setId(providerIdFromUrl(next)); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); configure(); } }} /></label>
+        <label>{t('common.provider.id')}<input value={id} maxLength={80} disabled={disabled} placeholder={t('common.provider.idPlaceholder')} spellCheck={false} onChange={event => { setIdTouched(true); setId(event.target.value); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); configure(); } }} /></label>
         <label>{t('common.provider.protocol')}<select value={format} disabled={disabled || readOnly} onChange={event => setFormat(event.target.value)}><option value="" disabled>{connection?.protocol ? t('common.provider.nativeProtocol', { protocol: connection.protocol }) : t('common.provider.chooseProtocol')}</option><option value="openai_completions">OpenAI Chat Completions</option><option value="openai_responses">OpenAI Responses</option><option value="anthropic_messages">Anthropic Messages</option></select></label>
-        <label className={styles.span}>{t('common.provider.baseUrl')}<input value={baseUrl} disabled={disabled || readOnly} placeholder="https://api.example.com/v1" spellCheck={false} inputMode="url" onChange={event => setBaseUrl(event.target.value)} /></label>
       </div>
       {connection?.readOnlyReason && <p className={styles.stepNote}>{t('common.provider.readOnlyHint', { reason: connection.readOnlyReason })}</p>}
       {dirty && <div className={styles.pendingBar}>
-        <span>{!validIdentity(id, 80) || !baseUrl.trim() || !format ? t('common.provider.pendingIncomplete') : t('common.provider.pending')}</span>
+        <span>{!baseUrl.trim() ? t('common.provider.needUrl') : !validIdentity(id, 80) ? t('common.provider.needId') : !format ? t('common.provider.needProtocol') : t('common.provider.pending')}</span>
         <div className={styles.buttons}>
           <button type="button" disabled={disabled} onClick={reset}>{t('common.provider.cancel')}</button>
-          <button type="button" className={styles.accent} disabled={disabled || readOnly || !validIdentity(id, 80) || !baseUrl.trim() || !format} onClick={() => { void onConfigure(id, { baseUrl: baseUrl.trim(), interfaceFormat: format }); }}>{t('common.provider.configure')}</button>
+          <button type="button" className={styles.accent} disabled={disabled || readOnly || !complete} onClick={configure}>{t('common.provider.configure')}</button>
         </div>
       </div>}
     </> : <p className={styles.stepNote}>{provider || t('common.provider.unsupported')}</p>}

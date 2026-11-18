@@ -225,7 +225,12 @@ pub fn validate_registered_files(
         if parsed.to_string().len() > 2_000_000 {
             return Err("单个配置文件解析后超过 2 MB 限制".into());
         }
-        reject_plaintext_secrets(&parsed)?;
+        // The adapter owns its reference syntax: OMP reads a bare `NAME` in apiKey as an
+        // environment variable, so the generic check must not call that a plaintext key.
+        let port = adapter.configuration();
+        reject_plaintext_secrets_with(&parsed, &|path, value| {
+            port.is_some_and(|port| port.portable_reference_valid(path, &serde_json::Value::String(value.to_owned())))
+        })?;
         adapter.validate_draft(role, &parsed)?;
     }
     Ok(())
@@ -263,18 +268,26 @@ pub(crate) fn env_ref_name(value: &str) -> Option<&str> {
 }
 
 pub(crate) fn reject_plaintext_secrets(value: &serde_json::Value) -> Result<(), String> {
-    fn visit(value: &serde_json::Value, path: &mut Vec<String>) -> Result<(), String> {
+    reject_plaintext_secrets_with(value, &|_, _| false)
+}
+
+/// `reference` accepts an adapter-specific reference form beyond `$NAME`, `${NAME}` and `{env:NAME}`.
+pub(crate) fn reject_plaintext_secrets_with(
+    value: &serde_json::Value,
+    reference: &dyn Fn(&[String], &str) -> bool,
+) -> Result<(), String> {
+    fn visit(value: &serde_json::Value, path: &mut Vec<String>, reference: &dyn Fn(&[String], &str) -> bool) -> Result<(), String> {
         match value {
             serde_json::Value::Object(map) => {
                 for (key, value) in map {
                     path.push(key.clone());
-                    visit(value, path)?;
+                    visit(value, path, reference)?;
                     path.pop();
                 }
             }
             serde_json::Value::Array(items) => {
                 for item in items {
-                    visit(item, path)?;
+                    visit(item, path, reference)?;
                 }
             }
             serde_json::Value::String(value) => {
@@ -294,7 +307,7 @@ pub(crate) fn reject_plaintext_secrets(value: &serde_json::Value) -> Result<(), 
                         | "token"
                         | "experimental_bearer_token"
                 );
-                if sensitive && env_ref_name(value).is_none() {
+                if sensitive && env_ref_name(value).is_none() && !reference(path, value) {
                     return Err(format!(
                         "原生字段 {} 可能包含明文密钥；请使用 CLI 原生登录或环境变量引用",
                         path.join(".")
@@ -305,7 +318,7 @@ pub(crate) fn reject_plaintext_secrets(value: &serde_json::Value) -> Result<(), 
         }
         Ok(())
     }
-    visit(value, &mut Vec::new())
+    visit(value, &mut Vec::new(), reference)
 }
 
 pub fn resolve_file(

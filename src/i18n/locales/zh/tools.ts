@@ -1333,6 +1333,8 @@ export default {
     pickAccount: '选择账号或登录新账号',
     usedFor: '用于 {{target}}；{{note}}',
     currentConnection: '当前连接',
+    usedForPending: '密钥会发往上方填写的请求地址；先填地址也可以，顺序不限。',
+    secretParked: '请求地址变了，刚才输入的密钥留给原地址；请为新地址输入密钥。改回原地址会恢复。',
     currentNote: '保存后更新当前文件中的密钥。',
     profileNote: '密钥由本机凭据库保存。',
     noNewSecret: '当前范围不接受新密钥，请明确选择其他来源。',

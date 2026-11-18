@@ -2603,3 +2603,38 @@ wire_api = \"responses\"
     assert!(text.contains("model = \"gpt-6-luna\""), "{text}");
     assert!(text.contains("experimental_bearer_token = \"synthetic-remote-key\""), "{text}");
 }
+
+#[test]
+fn omp_current_file_with_a_literal_provider_key_opens_without_exposing_the_key() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = Registry::builtins();
+    let sessions = DraftSessions::default();
+    let models = temp.path().join("models.yml");
+    let settings = temp.path().join("config.yml");
+    std::fs::write(&models, "providers:\n  cpa:\n    baseUrl: https://cpa.example.test/v1\n    api: openai-completions\n    apiKey: sk-synthetic-literal\n    models:\n      - id: claude-opus\n").unwrap();
+    std::fs::write(&settings, "modelRoles:\n  default: cpa/claude-opus\n").unwrap();
+    let files = vec![
+        crate::adapters::file("settings", settings, format::FileKind::Yaml, true, None, false),
+        crate::adapters::file("models", models, format::FileKind::Yaml, true, None, false),
+    ];
+    let request = ConfigurationBeginRequest {
+        tool_id: "omp".into(),
+        scope: Scope::Global,
+        project_path: None,
+        session_id: "omp-current".into(),
+        subject: ConfigurationSubject::Current,
+        profile: None,
+        remote_target_id: None,
+        remote_common: None, remote_files: std::collections::BTreeMap::new(),
+    };
+    let draft = sessions.begin(&registry, &db, request.clone(), None, files.clone(), None).unwrap();
+    assert!(draft.issues.is_empty(), "{:?}", draft.issues);
+    assert!(draft.descriptor.is_some());
+    assert!(!serde_json::to_string(&draft).unwrap().contains("sk-synthetic-literal"));
+    // OMP reads a bare NAME in apiKey as an environment variable; the file still opens.
+    std::fs::write(&files[1].path, "providers:\n  cpa:\n    baseUrl: https://cpa.example.test/v1\n    api: openai-completions\n    apiKey: CPA_API_KEY\n    models:\n      - id: claude-opus\n").unwrap();
+    let draft = sessions.begin(&registry, &db, ConfigurationBeginRequest { session_id: "omp-current-env".into(), ..request }, None, files, None).unwrap();
+    assert!(draft.issues.is_empty(), "{:?}", draft.issues);
+    assert!(draft.descriptor.is_some());
+}

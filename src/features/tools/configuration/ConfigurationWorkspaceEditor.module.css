@@ -10,12 +10,12 @@
 .level button:hover:not(:disabled):not([aria-pressed='true']) { background: color-mix(in srgb, var(--surface) 70%, transparent); color: var(--text); }
 .level button[aria-pressed='true'] { background: var(--surface); color: var(--text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-sm); }
 .level button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.quickNote { margin: 0 0 var(--space-2) !important; padding: 0 var(--space-1); color: var(--text-2) !important; font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.55; }
 .recommend { display: inline-flex; align-items: center; margin-left: var(--space-1_5); padding: 0 var(--space-1_5); border-radius: var(--radius-pill); background: var(--accent-soft); color: var(--accent); font-size: var(--fs-micro); font-weight: var(--fw-semibold); line-height: 18px; vertical-align: 1px; }
-/* The official/default path does not need provider or address fields. The
-   editors keep them mounted (advanced), while quick only hides that card. */
-.quickEditor :global([data-config-step='connection']) { display: none !important; }
-.tabs { position: sticky; top: 0; z-index: 2; display: inline-flex; align-items: center; width: fit-content; max-width: 100%; gap: var(--space-1); flex-wrap: nowrap; margin: 0 0 var(--space-2_5); padding: var(--space-1); background: color-mix(in srgb, var(--surface-2) 82%, transparent); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: none; }
+/* The official/default path does not need provider or address fields, so quick hides that
+   card. Multi-provider editors mark theirs required: without a provider and address there is
+   nothing to send a key to and no model can be added, so quick keeps it. */
+.quickEditor :global([data-config-step='connection']:not([data-config-required])) { display: none !important; }
+.tabs { display: inline-flex; align-items: center; width: fit-content; max-width: 100%; gap: var(--space-1); flex-wrap: nowrap; margin: 0 0 var(--space-2_5); padding: var(--space-1); background: color-mix(in srgb, var(--surface-2) 82%, transparent); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: none; }
 .tabs button { position: relative; min-height: 34px; padding: 0 var(--space-3); border: 0; border-radius: var(--radius); background: none; box-shadow: none; color: var(--text-2); font-size: var(--fs-control); font-weight: var(--fw-medium); }
 .tabs button::after { display: none; }
 .tabs button:hover:not(:disabled) { background: color-mix(in srgb, var(--surface) 70%, transparent); border-color: transparent; color: var(--text); }
@@ -58,8 +58,14 @@
 .modelPane { display: grid; gap: var(--space-4); min-width: 0; }
 /* Step progress: sticky under the tabs, each step jumps to its card and turns
    into a check mark once that part of the connection is filled in. */
-.chain { counter-reset: step; position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 0; margin: calc(var(--space-1_5) * -1) 0 calc(var(--space-1) * -1); padding: var(--space-2) 0; list-style: none; background: var(--surface); }
-.modelPane[data-under-tabs] .chain { top: 49px; }
+.chain { counter-reset: step; display: flex; align-items: center; gap: 0; margin: 0; padding: var(--space-2) 0; list-style: none; }
+/* Tabs and the step chain stick together as one opaque band spanning the scroll width, so
+   content scrolling underneath never shows through a gap beside or between them. */
+.stickyHead { position: sticky; top: 0; z-index: 2; display: grid; margin: 0 calc(var(--space-1) * -1) var(--space-2); padding: 0 var(--space-1); background: var(--surface); }
+.stickyHead:empty { display: none; }
+.stickyHead > .tabs { margin: 0; }
+.stickyHead > .tabs:not([hidden]) + .chain { margin-top: var(--space-1); }
+.stickyHead:has(> .chain) { border-bottom: 1px solid var(--line); }
 .chain li { counter-increment: step; display: flex; flex: 1 1 0; align-items: center; min-width: 0; }
 .chain li:last-child { flex: none; }
 .chain li:not(:last-child)::after { content: ''; flex: 1 1 12px; min-width: 12px; height: 1px; margin: 0 var(--space-2); background: var(--line-strong); }

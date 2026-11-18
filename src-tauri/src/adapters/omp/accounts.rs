@@ -85,7 +85,7 @@ pub(crate) fn capability() -> AccountCapability {
         managed_login: false,
         import_native: false,
         methods: Vec::new(),
-        reason: "OMP 账号仅只读发现：agent.db 混存认证与其他状态，且没有任何 provider 完成真实身份、隔离、登录、取消、refresh 归属与单账号退出验证；不提供托管登录、刷新或退出，也不把发现当作采纳。",
+        reason: "OMP 的登录由 OMP 自己管理：Cliora 只读取已有登录，不代为登录、刷新或退出。要换账号请在 OMP 里操作；配置里可用「本机登录」或 API 密钥。",
         identity_source: "agent.db 原生 provider 与脱敏账号元数据",
         identity_required: true,
         refresh_owner: "native_cli",

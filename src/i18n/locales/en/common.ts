@@ -239,6 +239,9 @@ export default {
     idPlaceholder: 'e.g. openrouter',
     pending: 'Connection changes not applied yet',
     pendingIncomplete: 'Fill in the provider ID, request address and protocol to apply',
+    needUrl: 'Enter the request address first',
+    needId: 'Then give this provider an ID (letters, digits, - or _)',
+    needProtocol: 'Choose a protocol to apply',
   },
   nav: {
     home: 'Home',

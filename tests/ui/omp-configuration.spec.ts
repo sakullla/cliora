@@ -250,3 +250,26 @@ test('OMP quick save never applies and leaves the current binding alone', async 
   expect(calls.filter((call: any) => call.command.includes('apply_'))).toEqual([]);
   expect(await page.evaluate(() => (window as any).workspaceFixture.binding.profileVersion)).toBe(3);
 });
+
+test('OMP quick setup shows the address, suggests a provider id and accepts a key typed before the address', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'omp');
+  await page.evaluate(() => { (window as any).configurationProtocol.blankConnection = true; });
+  await page.getByRole('button', { name: '新建配置' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('button', { name: '快速配置', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true }).click();
+  await expect(dialog.getByText('密钥会发往上方填写的请求地址', { exact: false })).toBeVisible();
+  await dialog.getByLabel('API 密钥', { exact: true }).fill('synthetic-early-key');
+  const address = dialog.getByLabel('请求地址', { exact: true });
+  await expect(address).toBeVisible();
+  await address.fill('https://cpa.example.test/v1');
+  await expect(dialog.getByLabel('供应商标识', { exact: true })).toHaveValue('cpa');
+  // Moving on to the key applies the complete first provider without the confirm button.
+  await dialog.getByLabel('API 密钥', { exact: true }).click();
+  await expect(dialog.getByText('用于 https://cpa.example.test/v1', { exact: false })).toBeVisible();
+  await expect(dialog.getByLabel('API 密钥', { exact: true })).toHaveValue('synthetic-early-key');
+  await dialog.getByRole('button', { name: '保存配置', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  const calls = await page.evaluate(() => (window as any).configurationProtocol.calls);
+  expect(calls.filter((call: any) => call.command === 'set_configuration_draft_secret')).toHaveLength(1);
+});

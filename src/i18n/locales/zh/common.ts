@@ -239,6 +239,9 @@ export default {
     idPlaceholder: '例如：openrouter',
     pending: '连接修改尚未应用',
     pendingIncomplete: '填写供应商标识、请求地址与接口协议后应用',
+    needUrl: '先填写请求地址',
+    needId: '再给这个供应商起个标识（字母、数字、- 或 _）',
+    needProtocol: '选择接口协议后应用',
   },
   nav: {
     home: '首页',

@@ -1720,14 +1720,16 @@ test('unfinished A key is retained for A and cannot be submitted to a changed AP
   await dialog.getByText('密钥已保存到系统 · 空输入保留', { exact: true }).click(); await dialog.getByRole('button', { name: '替换密钥' }).click();
   await dialog.getByLabel('API 密钥', { exact: true }).fill('synthetic-unfinished-a');
   await dialog.getByText('供应商连接', { exact: true }).click(); await dialog.getByLabel('请求地址', { exact: true }).fill('https://b.example.test/v1'); await expect(sourceNative).toBeEnabled();
-  await dialog.getByRole('button', { name: '保存配置', exact: true }).click();
-  await expect(dialog.getByRole('alert').filter({ hasText: '此密钥输入属于先前连接' })).toBeVisible();
+  // The typed A key leaves the box as soon as the address changes, with a reason; nothing is sent to B.
+  await expect(dialog.getByRole('status').filter({ hasText: '刚才输入的密钥留给原地址' })).toBeVisible();
+  await expect(dialog.getByLabel('API 密钥', { exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).configurationProtocol.calls.filter((call: any) => call.command === 'set_configuration_draft_secret'))).toEqual([]);
   await sourceNative.click(); await expect(sourceNative).toBeEnabled(); await sourceApi.click();
-  await expect(dialog.getByLabel('API 密钥', { exact: true })).toHaveValue('');
   await dialog.getByLabel('请求地址', { exact: true }).fill('https://gateway.example.test/v1'); await expect(sourceNative).toBeEnabled();
+  await expect(dialog.getByLabel('API 密钥', { exact: true })).toHaveValue('synthetic-unfinished-a');
   await sourceNative.click(); await expect(sourceNative).toBeEnabled(); await sourceApi.click();
   await expect(dialog.getByLabel('API 密钥', { exact: true })).toHaveValue('synthetic-unfinished-a');
+  expect(await page.evaluate(() => (window as any).configurationProtocol.calls.filter((call: any) => call.command === 'set_configuration_draft_secret'))).toEqual([]);
 });
 
 test('explicit B key input while API still carries A ref is restored separately without changing A ownership', async ({ page }) => {
@@ -1803,7 +1805,7 @@ test('new configuration opens quick, and advanced keeps the same draft and model
   const quick = dialog.getByRole('button', { name: '快速配置', exact: true });
   const advanced = dialog.getByRole('button', { name: '高级配置', exact: true });
   await expect(quick).toHaveAttribute('aria-pressed', 'true');
-  await expect(dialog.getByRole('note')).toContainText('保存只更新配置库');
+  await expect(dialog.getByRole('note')).toHaveCount(0);
   const nativeRadio = dialog.getByRole('radio', { name: '使用 CLI 当前登录或凭据', exact: true });
   const recommendedBy = await nativeRadio.getAttribute('aria-describedby');
   expect(recommendedBy).toBeTruthy();
