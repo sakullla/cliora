@@ -628,7 +628,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
       { value: '__global__', label: t('tools.workspace.scopeGlobal') },
       ...scopeRepositoryOptions.flatMap(({ path, label, detail, workspaceId, workspaceName }, index, all) => [
         ...(index === 0 || all[index - 1].workspaceId !== workspaceId ? [{ value: `group:${workspaceId}`, label: workspaceName, group: true, icon: <Icon name="package" size={14} /> }] : []),
-        { value: path, label, detail, parent: `group:${workspaceId}`, keywords: workspaceName, triggerLabel: `${workspaceName} / ${label}`, icon: <Icon name="branch" size={14} /> },
+        { value: path, label, detail, parent: `group:${workspaceId}`, keywords: workspaceName, triggerLabel: label === workspaceName ? undefined : `${workspaceName} / ${label}`, icon: <Icon name="branch" size={14} /> },
       ]),
       ...projects.filter(project => !project.workspaceBacked || !seenPaths.has(project.path ?? '')).map(project => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, disabled: !project.available || !project.path })),
       ...(projectPath && !seenPaths.has(projectPath) && !projects.some(project => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).at(-1) ?? projectPath }] : []),

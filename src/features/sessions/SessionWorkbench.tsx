@@ -3245,7 +3245,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       // projects with hundreds of repositories stay one short list; a search finds any of them by name.
       ...businessRepositoryOptions.flatMap(({ value, label, detail, worktree, workspaceId, workspaceName }, index, all) => [
         ...(index === 0 || all[index - 1].workspaceId !== workspaceId ? [{ value: `group:${workspaceId}`, label: workspaceName, group: true, icon: <Icon name="package" size={14} /> }] : []),
-        { value, label, detail, parent: `group:${workspaceId}`, keywords: workspaceName, icon: <Icon name={worktree ? 'gitWorktree' : 'branch'} size={14} /> },
+        { value, label, detail, parent: `group:${workspaceId}`, keywords: workspaceName, triggerLabel: label === workspaceName ? undefined : `${workspaceName} / ${label}`, icon: <Icon name={worktree ? 'gitWorktree' : 'branch'} size={14} /> },
       ]),
       // A directory that only backs a business-project repository is offered under that project.
       ...availableProjects.filter((project) => !project.workspaceBacked || workspaceValue === `project:${project.id}`).map((project) => ({ value: `project:${project.id}`, label: project.name, detail: project.path ? shortPath(displayPath(project.path)) : undefined, icon: <Icon name="folder" size={14} /> })),

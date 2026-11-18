@@ -637,7 +637,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     { value: '__home', label: t('sessions.workspaceHome'), icon: <Icon name="home" size={14} /> },
     ...businessRepositoryOptions.flatMap(({ value, label, detail, worktree, workspaceId, workspaceName }, index, all) => [
       ...(index === 0 || all[index - 1].workspaceId !== workspaceId ? [{ value: `group:${workspaceId}`, label: workspaceName, group: true, icon: <Icon name="package" size={14} /> }] : []),
-      { value, label, detail, parent: `group:${workspaceId}`, keywords: workspaceName, triggerLabel: `${workspaceName} / ${label}`, icon: <Icon name={worktree ? 'gitWorktree' : 'branch'} size={14} /> },
+      { value, label, detail, parent: `group:${workspaceId}`, keywords: workspaceName, triggerLabel: label === workspaceName ? undefined : `${workspaceName} / ${label}`, icon: <Icon name={worktree ? 'gitWorktree' : 'branch'} size={14} /> },
     ]),
     ...projects.filter((project) => project.available && (!project.workspaceBacked || launchPlace === `project:${project.id}`)).map((project) => ({ value: `project:${project.id}`, label: project.name, detail: project.path ? shortPath(displayPath(project.path)) : undefined, icon: <Icon name="folder" size={14} /> })),
     ...(launchFolder && !businessRepositoryOptions.some((option) => option.value === `custom:${launchFolder}`) ? [{ value: `custom:${launchFolder}`, label: shortPath(displayPath(launchFolder)), detail: displayPath(launchFolder), icon: <Icon name="folder" size={14} /> }] : []),

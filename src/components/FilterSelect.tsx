@@ -11,7 +11,8 @@ import styles from './FilterSelect.module.css';
  * short list; a search flattens the tree and names each match's parent. `group` marks a parent that is
  * only a heading: choosing it opens or closes its children instead of selecting it. `keywords` are
  * searched but not shown; `triggerLabel` is the fuller name the closed trigger shows when the label
- * alone would be ambiguous.
+ * alone would be ambiguous. A heading with a single child is not a tree: the child is listed in its place,
+ * one click away, with the heading's name when the two differ.
  */
 export type FilterSelectOption = { value: string; label: string; detail?: string; note?: string; disabled?: boolean; icon?: ReactNode; parent?: string; group?: boolean; keywords?: string; triggerLabel?: string };
 
@@ -86,13 +87,18 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   const childCount = new Map<string, number>();
   for (const item of options) if (item.parent) childCount.set(item.parent, (childCount.get(item.parent) ?? 0) + 1);
   const labels = new Map(options.map((item) => [item.value, item.label]));
+  const headings = new Map(options.filter((item) => item.group).map((item) => [item.value, item]));
+  // A heading over exactly one choice adds a click and a repeated name; its only child stands in for it.
+  const soleHeading = (item: FilterSelectOption) => !!item.group && childCount.get(item.value) === 1;
+  const standsAlone = (item: FilterSelectOption) => !!item.parent && childCount.get(item.parent) === 1 && headings.has(item.parent);
   const matches = options.filter((item) => {
-    if (!tokens.length) return !item.parent || expanded.has(item.parent);
+    if (!tokens.length) return soleHeading(item) ? false : !item.parent || standsAlone(item) || expanded.has(item.parent);
     // A search flattens the tree: a heading only groups, its children carry the parent's name.
     if (item.group) return false;
     const haystack = `${item.label} ${item.detail ?? ''} ${item.note ?? ''} ${item.keywords ?? ''} ${item.parent ? labels.get(item.parent) ?? '' : ''} ${item.value}`.toLowerCase();
     return tokens.every((token) => matchesFilterToken(haystack, token));
   });
+  const activeId = matches.length ? `${listId}-${Math.min(active, matches.length - 1)}` : undefined;
   function toggle(parent: string, open?: boolean) {
     setExpanded((current) => {
       const next = new Set(current);
@@ -219,19 +225,27 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
     <button ref={setTriggerNode} type="button" className={styles.trigger} data-select-trigger="true" data-variant={variant} data-empty={!selected || undefined} data-open={open || undefined} data-value={value} aria-label={label} aria-haspopup="listbox" aria-expanded={open} aria-controls={listId} disabled={disabled} title={title ?? (selected ? [selected.triggerLabel ?? selected.label, selected.detail].filter(Boolean).join(' · ') : undefined)} onClick={() => setOpen((current) => !current)} onKeyDown={onTrigger}>
       {selected?.icon && <span className={styles.triggerIcon}>{selected.icon}</span>}<span className={styles.triggerCopy}><span>{selected ? selected.triggerLabel ?? selected.label : placeholder ?? t('common.filterSelect.placeholder')}</span>{triggerDetail && selected?.detail && <small>{selected.detail}</small>}</span>
     </button>
-    {open && box && createPortal(<div ref={panel} className={styles.panel} style={{ top: box.top, bottom: box.bottom, left: box.left, width: box.width }} tabIndex={-1} onKeyDown={onPanelKey}>
+    {open && box && createPortal(<div ref={panel} className={styles.panel} style={{ top: box.top, bottom: box.bottom, left: box.left, width: box.width }} tabIndex={-1} aria-activedescendant={!showSearch && activeId ? activeId : undefined} onKeyDown={onPanelKey}>
       {showSearch && <div className={styles.searchRow} data-field-frame="">
         <Icon name="search" size={14} />
-        <input ref={searchInputRef} aria-label={searchLabel ?? t('common.filterSelect.search', { label: stripLabelVerb(label) })} placeholder={searchPlaceholder ?? t('common.filterSelect.searchPlaceholder')} value={query} autoFocus onChange={(event) => changeQuery(event.target.value)} />
+        <input ref={searchInputRef} aria-label={searchLabel ?? t('common.filterSelect.search', { label: stripLabelVerb(label) })} placeholder={searchPlaceholder ?? t('common.filterSelect.searchPlaceholder')} value={query} aria-controls={listId} aria-activedescendant={activeId} autoFocus onChange={(event) => changeQuery(event.target.value)} />
         {query && <button type="button" className={styles.searchClear} aria-label={t('common.search.clear')} title={t('common.search.clear')} onClick={() => { changeQuery(''); searchInputRef.current?.focus(); }}><Icon name="close" size={14} /></button>}
       </div>}
       <div className={styles.list} id={listId} role="listbox" aria-label={label} style={{ maxHeight: Math.max(140, box.maxHeight - (showSearch ? 52 : 8) - (onPickFolder || onPickRemote ? 40 : 0)) }}>
         {matches.length ? matches.map((option, index) => {
           const children = childCount.get(option.value) ?? 0;
           const open = expanded.has(option.value);
-          const context = option.parent && needle ? [labels.get(option.parent), option.detail].filter(Boolean).join(' · ') : option.detail;
-          return <button key={option.value || '__all'} type="button" role="option" aria-selected={option.value === value} aria-disabled={option.disabled || undefined} aria-expanded={children ? open : undefined} data-value={option.value} data-indent={(option.parent && !needle) || undefined} data-group={option.group || undefined} data-option-index={index} data-active={index === active || undefined} disabled={option.disabled} onMouseEnter={() => setActive(index)} onClick={() => choose(option)}>
-            {option.icon && <span className={styles.optionIcon}>{option.icon}</span>}<span className={styles.optionCopy}><strong>{needle ? highlightRuns(option.label, query).map((run, runIndex) => run.hit ? <mark key={runIndex}>{run.text}</mark> : run.text) : option.label}</strong>{context && <small>{context}</small>}</span>
+          const alone = !needle && standsAlone(option);
+          const heading = option.parent ? labels.get(option.parent) : undefined;
+          const context = option.parent && (needle || (alone && heading !== option.label)) ? [heading, option.detail].filter(Boolean).join(' · ') : option.detail;
+          const icon = alone && heading === option.label ? headings.get(option.parent!)?.icon ?? option.icon : option.icon;
+          // Under its heading a child drops the heading's name it repeats ("app · feature" under "app").
+          const nested = !!option.parent && !needle && !alone;
+          const shown = nested && heading && option.label.startsWith(`${heading} · `) ? option.label.slice(heading.length + 3) : option.label;
+          // Rows never take focus: it stays in the search field (or the panel), so a fold or a hover
+          // keeps typing and arrow keys where they were and no focus ring lands inside the scroller.
+          return <button key={option.value || '__all'} id={`${listId}-${index}`} type="button" role="option" tabIndex={-1} aria-selected={option.value === value} aria-disabled={option.disabled || undefined} aria-expanded={children ? open : undefined} data-value={option.value} data-indent={nested || undefined} data-group={option.group || undefined} data-option-index={index} data-active={index === active || undefined} disabled={option.disabled} onMouseDown={(event) => event.preventDefault()} onMouseMove={() => { if (active !== index) setActive(index); }} onClick={() => { setActive(index); choose(option); }}>
+            {icon && <span className={styles.optionIcon}>{icon}</span>}<span className={styles.optionCopy}><strong title={shown === option.label ? undefined : option.label}>{needle ? highlightRuns(option.label, query).map((run, runIndex) => run.hit ? <mark key={runIndex}>{run.text}</mark> : run.text) : shown}</strong>{context && <small>{context}</small>}</span>
             <span className={styles.optionMarks}>{option.note && <em>{option.note}</em>}{option.value === value && <Icon name="check" size={14} />}{children > 0 && !needle && <span className={styles.disclosure} role="presentation" title={t(open ? 'common.filterSelect.collapse' : 'common.filterSelect.expand', { count: children })} data-open={open || undefined} onClick={(event) => { event.stopPropagation(); toggle(option.value); }}><small>{children}</small><Icon name="chevronRight" size={13} /></span>}</span>
           </button>;
         }) : <p>{emptyText ?? t('common.filterSelect.empty')}</p>}

@@ -320,3 +320,41 @@ test('linked manifest opens in Twiglane with %20 encoding, Home slash focuses re
   await page.getByRole('button', { name: '配置范围', exact: true }).click();
   await expect(page.getByRole('option', { name: /^电商平台/ })).toBeVisible();
 });
+
+test('a single-checkout project is one choice and folding a project keeps the list steady', async ({ page }) => {
+  await install(page);
+  await page.evaluate(() => {
+    // The payments project keeps only its main checkout.
+    const payments = (window as any).__workspaceFixture.workspaces[1];
+    payments.repositories[0].locations[0].worktrees = [];
+    payments.revision++;
+    window.dispatchEvent(new CustomEvent('cliora:business-workspaces-changed', { detail: { workspace: payments } }));
+  });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: '新建会话', exact: true }).first().click();
+  const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
+  await dialog.getByRole('button', { name: '工作目录 / 项目', exact: true }).click();
+
+  // No "支付系统 ▸ payment-api" tree for one checkout: the repository row stands in for the project.
+  await expect(page.getByRole('option', { name: /^支付系统/ })).toHaveCount(0);
+  const single = page.getByRole('option', { name: /^payment-api/ });
+  await expect(single).toContainText('支付系统');
+  await expect(single).not.toHaveAttribute('data-indent', /.*/);
+
+  // Folding never moves focus out of the search field and never overflows the list.
+  const search = page.getByRole('textbox', { name: /搜索/ }).last();
+  await expect(search).toBeFocused();
+  const heading = page.getByRole('option', { name: /^电商平台/ });
+  const list = page.getByRole('listbox');
+  for (const expanded of ['true', 'false']) {
+    await heading.click();
+    await expect(heading).toHaveAttribute('aria-expanded', expanded);
+    await expect(search).toBeFocused();
+  }
+  const overflow = await list.evaluate((element) => ({ x: element.scrollWidth - element.clientWidth, y: element.scrollHeight - element.clientHeight }));
+  expect(overflow).toEqual({ x: 0, y: 0 });
+
+  await single.click();
+  await expect(dialog.getByRole('button', { name: '工作目录 / 项目', exact: true })).toContainText('payment-api');
+  await expect(dialog.getByRole('button', { name: '工作目录 / 项目', exact: true })).toHaveAttribute('title', /支付系统 \/ payment-api/);
+});
