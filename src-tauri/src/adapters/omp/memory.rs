@@ -1823,7 +1823,9 @@ mod tests {
     #[test]
     fn engine_roundtrip_switches_the_backend_without_touching_memory_data() {
         let temp = tempfile::tempdir().unwrap();
-        let home = temp.path().to_path_buf();
+        // macOS temp dirs sit behind the /var → /private/var link; saving resolves the
+        // project path, so the fixture uses the resolved home as well.
+        let home = temp.path().canonicalize().unwrap();
         write_config(&home, "memory:\n  backend: local\n");
         let (project, root) = project_fixture(&home);
         std::fs::write(

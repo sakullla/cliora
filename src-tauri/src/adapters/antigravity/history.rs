@@ -147,7 +147,8 @@ fn scan_root(
         .collect();
     for row in &summaries {
         check_cancelled(cancelled)?;
-        if row.parent.is_some()
+        // An empty or blank parent column means a root conversation (1.5.9 writes '').
+        if linked_parent(row.parent.as_deref()).is_some()
             || linked_children.contains(row.id.as_str())
             || !valid_native_id(&row.id)
         {
@@ -531,7 +532,7 @@ pub fn parse_controlled(
         Layout::Legacy => connection
             .query_row(
                 "SELECT title, workspace FROM conversation_summaries
-                 WHERE id = ?1 AND parent_conversation_id IS NULL",
+                 WHERE id = ?1 AND (parent_conversation_id IS NULL OR trim(parent_conversation_id) = '')",
                 [&id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -540,7 +541,7 @@ pub fn parse_controlled(
             let (title, uris): (Option<String>, Option<String>) = connection
                 .query_row(
                     "SELECT title, workspace_uris FROM conversation_summaries
-                     WHERE conversation_id = ?1 AND parent_conversation_id IS NULL",
+                     WHERE conversation_id = ?1 AND (parent_conversation_id IS NULL OR trim(parent_conversation_id) = '')",
                     [&id],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
@@ -569,6 +570,9 @@ pub fn parse_controlled(
         Ok(body) => {
             session.partial |= body.partial;
             session.messages = body.messages;
+            if body.model.is_some() {
+                session.model = body.model;
+            }
         }
         Err(error) if error == "missing" => session.partial = true,
         Err(error) => return Err(format!("Antigravity 会话记录无法读取：{error}")),
@@ -604,8 +608,26 @@ fn first_workspace_uri(value: String) -> Option<String> {
         item.as_str()
             .map(str::trim)
             .filter(|text| !text.is_empty())
-            .map(str::to_owned)
+            .and_then(workspace_path)
     })
+}
+
+/// A workspace entry is either a plain path or a `file://` URI (percent-encoded,
+/// optionally with a UNC host or a Windows drive). Other schemes are not a cwd.
+fn workspace_path(entry: &str) -> Option<String> {
+    if !entry.starts_with("file:") {
+        return Some(entry.to_owned());
+    }
+    let parsed = url::Url::parse(entry).ok()?;
+    if parsed.scheme() != "file" {
+        return None;
+    }
+    let path = percent_encoding::percent_decode_str(parsed.path()).decode_utf8().ok()?;
+    if let Some(host) = parsed.host_str().filter(|host| !host.is_empty() && *host != "localhost") {
+        return Some(format!("//{host}{path}"));
+    }
+    let path = if path.starts_with('/') && path.as_bytes().get(2) == Some(&b':') { &path[1..] } else { &path };
+    (!path.is_empty()).then(|| path.to_owned())
 }
 
 /// The 1.5.9 transcript-side counters of one PLANNER_RESPONSE row.
@@ -645,6 +667,11 @@ fn read_transcript(
             continue;
         };
         let kind = row.get("type").and_then(Value::as_str);
+        // The latest named model on any row is the session's model, even when that
+        // row carries no usage counters.
+        if let Some(model) = row.get("model").and_then(Value::as_str).filter(|model| !model.is_empty()) {
+            session.model = Some(model.to_owned());
+        }
         // Each layout admits only its documented row types; the 1.5.9-only
         // GENERIC/SYSTEM_MESSAGE/ERROR_MESSAGE/CHECKPOINT rows have no
         // verified timeline meaning and stay out of it.
@@ -819,9 +846,18 @@ fn attach_direct_children(
         check_cancelled(cancelled)?;
         children.push(row.map_err(|error| error.to_string())?);
     }
-    if layout == Layout::Cli {
-        // 1.5.9 also links children through conversation_parents; a child
-        // linked in both places is attached once.
+    // 1.5.9 also links children through conversation_parents; a child linked in
+    // both places is attached once. An index without that table has no extra links.
+    let has_parents_table = layout == Layout::Cli
+        && conversation_index
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='conversation_parents'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|_| "Antigravity 会话索引行缺失或结构变化".to_string())?
+            == 1;
+    if has_parents_table {
         let mut extra = conversation_index
             .prepare(
                 "SELECT p.conversation_id, s.title FROM conversation_parents p

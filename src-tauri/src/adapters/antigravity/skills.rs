@@ -138,11 +138,14 @@ pub(crate) fn declared_sources(project: &Path) -> Vec<SkillDeclaration> {
         let Ok(children) = fs::read_dir(&declared.dir) else {
             continue;
         };
+        // Directory order differs between filesystems; a stable name order keeps the
+        // list, the cap and same-name precedence identical on every platform.
+        let mut children: Vec<_> = children.flatten().collect();
+        children.sort_by_key(|child| child.file_name());
         for child in children {
             if state.sources.len() >= MAX_DECLARED {
                 break;
             }
-            let Ok(child) = child else { continue };
             let name = child.file_name().to_string_lossy().to_string();
             if name.starts_with('.') || !child.path().is_dir() {
                 continue;

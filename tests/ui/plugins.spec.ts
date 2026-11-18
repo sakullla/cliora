@@ -678,7 +678,7 @@ test('adapter-declared editable hooks files save through the shared transaction'
   const save = page.getByRole('button', { name: '保存', exact: true });
   await expect(save).toBeDisabled();
   await editor.click();
-  await page.keyboard.press('Control+A');
+  await page.keyboard.press('ControlOrMeta+A');
   await page.keyboard.type('{ "fixture-hook": { "Stop": [] } }');
   await expect(save).toBeEnabled();
   await save.click();
@@ -697,7 +697,7 @@ test('a rejected plugin file edit keeps the editor open with the original untouc
   await page.getByRole('button', { name: '编辑', exact: true }).click();
   const editor = page.getByRole('textbox', { name: 'fixture-hook 内容' });
   await editor.click();
-  await page.keyboard.press('Control+A');
+  await page.keyboard.press('ControlOrMeta+A');
   await page.keyboard.type('{ "fixture-hook": { "SessionEnd": [] } }');
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('不支持的事件「SessionEnd」；原文件未更改');

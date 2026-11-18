@@ -789,6 +789,29 @@ impl CliAdapter for Antigravity {
     ) -> Result<crate::history::ParsedSession, String> {
         history::parse_controlled(source, cancelled)
     }
+    fn remote_history_layout(&self) -> Option<super::RemoteHistoryLayout> {
+        Some(super::RemoteHistoryLayout {
+            relative: ".gemini/antigravity-cli", fallbacks: &[".gemini/antigravity"], pinned: &[], sessions: &["transcript_full.jsonl"], companion: None,
+            order: super::RemoteHistoryOrder::MtimeDesc, catalogs: &[],
+            sqlite: Some(super::RemoteHistorySqlite {
+                index: "conversation_summaries.db",
+                files: &["brain/{id}/.system_generated/logs/transcript_full.jsonl", "conversations/{id}.db"],
+                file_tables: &["gen_metadata"],
+                tables: &[
+                    super::RemoteHistoryTable {
+                        name: "conversation_summaries",
+                        query: "WITH roots AS (SELECT conversation_id FROM conversation_summaries WHERE parent_conversation_id IS NULL OR trim(parent_conversation_id) = '' ORDER BY last_modified_time DESC LIMIT :limit) SELECT conversation_id,title,workspace_uris,status,parent_conversation_id,last_modified_time FROM conversation_summaries WHERE conversation_id IN roots OR parent_conversation_id IN roots",
+                        required_columns: &["conversation_id", "workspace_uris", "last_modified_time", "parent_conversation_id"], id: Some("conversation_id"), link: None,
+                    },
+                    super::RemoteHistoryTable {
+                        name: "conversation_summaries",
+                        query: "WITH roots AS (SELECT id FROM conversation_summaries WHERE parent_conversation_id IS NULL OR trim(parent_conversation_id) = '' ORDER BY rowid DESC LIMIT :limit) SELECT id,title,workspace,status,parent_conversation_id FROM conversation_summaries WHERE id IN roots OR parent_conversation_id IN roots",
+                        required_columns: &["id", "workspace", "parent_conversation_id"], id: Some("id"), link: None,
+                    },
+                ],
+            }),
+        })
+    }
     fn history_supported(&self) -> bool {
         true
     }

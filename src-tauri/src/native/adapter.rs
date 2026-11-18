@@ -1742,8 +1742,22 @@ mod tests {
         assert_eq!(probe_failure_detail(true, Some(0), b"", b"\n"), "版本命令失败或工具身份无法确认");
     }
 
+    /// PATH is searched before the fixture home on purpose, so a real `omp` on this
+    /// machine's PATH would answer instead of the fixture. Those hosts skip the check.
+    fn host_omp_on_path() -> Option<PathBuf> {
+        let names: &[&str] = if cfg!(windows) { &["omp.exe", "omp.cmd", "omp.ps1"] } else { &["omp"] };
+        crate::process_environment::directories()
+            .into_iter()
+            .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
+            .find(|path| path.is_file())
+    }
+
     #[test]
     fn verification_failure_names_the_command_and_its_error() {
+        if let Some(host) = host_omp_on_path() {
+            eprintln!("skipped: host omp on PATH ({})", host.display());
+            return;
+        }
         let temp = tempfile::tempdir().unwrap();
         let bin = temp.path().join(".bun/bin");
         std::fs::create_dir_all(&bin).unwrap();
@@ -1766,6 +1780,10 @@ mod tests {
     /// broke every non-npm channel.
     #[test]
     fn verification_requires_the_expected_adapter_source() {
+        if let Some(host) = host_omp_on_path() {
+            eprintln!("skipped: host omp on PATH ({})", host.display());
+            return;
+        }
         let temp = tempfile::tempdir().unwrap();
         let bin = temp.path().join(".bun/bin");
         std::fs::create_dir_all(&bin).unwrap();
