@@ -24,6 +24,7 @@ use crate::database::Database;
 use crate::native::profile::{RegisteredCommon, RegisteredProfile};
 
 pub mod password;
+pub mod proxy;
 pub mod operations;
 pub mod read_cache;
 pub mod transactions;
@@ -1428,6 +1429,11 @@ pub fn connection_args(target: &RemoteTarget) -> Vec<String> {
     #[cfg(not(windows))]
     if socket.is_none() {
         args.extend(["-o".into(), "ControlMaster=no".into(), "-o".into(), "ControlPath=none".into()]);
+    }
+    // A proxy enabled on this computer is tried first; the helper falls back to a
+    // direct connection on its own.
+    if let Some(option) = proxy::ssh_option(target) {
+        args.extend(["-o".into(), option]);
     }
     args.push(format!("{}@{}", target.user, target.host));
     args

@@ -73,6 +73,26 @@ mod native {
     pub(super) fn user_value(path: &str, name: &str) -> Option<String> {
         read(open(HKEY_CURRENT_USER, path, 0)?.0, name)
     }
+    pub(super) fn user_dword(path: &str, name: &str) -> Option<u32> {
+        let key = open(HKEY_CURRENT_USER, path, 0)?;
+        let name = wide(name);
+        let mut kind = 0;
+        let mut value = 0u32;
+        let mut size = std::mem::size_of::<u32>() as u32;
+        (unsafe {
+            RegQueryValueExW(
+                key.0,
+                name.as_ptr(),
+                std::ptr::null(),
+                &mut kind,
+                (&mut value as *mut u32).cast(),
+                &mut size,
+            )
+        } == 0
+            && kind == REG_DWORD
+            && size == 4)
+            .then_some(value)
+    }
     pub(super) fn application(
         matches: impl Fn(&str) -> bool,
     ) -> Option<super::InstalledApplication> {
@@ -131,6 +151,17 @@ pub(crate) fn user_value(path: &str, name: &str) -> Option<String> {
     #[cfg(windows)]
     {
         native::user_value(path, name)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (path, name);
+        None
+    }
+}
+pub(crate) fn user_dword(path: &str, name: &str) -> Option<u32> {
+    #[cfg(windows)]
+    {
+        native::user_dword(path, name)
     }
     #[cfg(not(windows))]
     {
