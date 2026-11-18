@@ -366,6 +366,7 @@ export default {
     filtered: 'Filtered: {{parts}}',
     filterSearch: 'search "{{query}}"',
     overviewSubtitle: 'View tokens, cost and call counts in local records.',
+    liveQuotas: 'Live CLI quotas',
     priceSettings: 'Set estimated prices',
     toolFilter: 'Usage tool',
     modelFilter: 'Usage model',

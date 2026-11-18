@@ -14,6 +14,8 @@ import type { ConfigurationDraft, ConfigurationSaveResult, ConfigurationSubject 
 import type { AccountImpactScope } from '../../types/accounts';
 import type { Project, TrayRepairTarget } from '../../types/launch';
 import type { RemoteCliProbe, RemoteToolStore } from '../../types/remote';
+import type { BusinessWorkspace } from '../../types/workspaces';
+import { FOCUS_REFRESH_INTERVAL, WORKSPACES_CHANGED } from '../../lib/workspaceEvents';
 import { preferredLaunchMode, worktreeIntentForNewWorkbench } from '../../types/launch';
 import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/workbenchLaunch';
 import { ensureRemoteProject, lastRemoteDir, rememberRemoteDir, useRemoteFolderPicker } from '../remote/remoteLaunch';
@@ -22,25 +24,26 @@ import { AccountsPanel, useAccounts } from './AccountsPanel';
 import { ProfileQuota, QuotaEditor, useUsageQuota } from './UsageQuota';
 import { InstallPanel } from './InstallPanel';
 import { MaintenanceDialog, type MaintenanceAction, type MaintenanceState } from './MaintenanceDialog';
-const ConfigurationWorkspaceEditor = lazy(() => import('./configuration/ConfigurationWorkspaceEditor').then(module => ({ default: module.ConfigurationWorkspaceEditor })));
+const loadConfigurationWorkspaceEditor = () => import('./configuration/ConfigurationWorkspaceEditor').then(module => ({ default: module.ConfigurationWorkspaceEditor }));
+const ConfigurationWorkspaceEditor = lazy(loadConfigurationWorkspaceEditor);
 const SkillsWorkspace = lazy(() => import('./ResourceWorkspace').then(module => ({ default: module.SkillsWorkspace })));
 const MemoryWorkspace = lazy(() => import('../memory/MemoryWorkspace').then(module => ({ default: module.MemoryWorkspace })));
 const McpWorkspace = lazy(() => import('./McpWorkspace').then(module => ({ default: module.McpWorkspace })));
 const PluginsWorkspace = lazy(() => import('./PluginsWorkspace').then(module => ({ default: module.PluginsWorkspace })));
 const AgentsWorkspace = lazy(() => import('./AgentsWorkspace').then(module => ({ default: module.AgentsWorkspace })));
 import { ToolIcon } from '../../components/ToolIcon';
-import { PageSkeleton } from '../../components/Skeleton';
+import { PageSkeleton, SkeletonRows } from '../../components/Skeleton';
 import { EmptyState } from '../../components/EmptyState';
 import { Icon } from '../../components/Icon';
 import { StatusBanner } from '../../components/StatusBanner';
 import { ToastScope } from '../../components/Toast';
 import { useToasts } from '../../lib/toast';
-import { FilterSelect } from '../../components/FilterSelect';
+import { FilterSelect, type FilterSelectOption } from '../../components/FilterSelect';
 import { SearchField } from '../../components/SearchField';
 import { GuideDialog } from '../../components/GuideDialog';
 import { RowMenu } from '../../components/RowMenu';
 import { ConflictCompare } from '../../components/configuration/ConflictCompare';
-import { shortPath } from '../../lib/paths';
+import { displayPath, shortPath } from '../../lib/paths';
 import { navigateChoices } from '../../lib/choiceNavigation';
 import { Badge, Button, StatusBadge, Toolbar } from '../../components/ui';
 import i18n from '../../i18n';
@@ -80,6 +83,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   const remoteReads = useRemoteReads(remoteTargetId, JSON.stringify([toolId, scope, projectPath]), active);
   const native = remoteReads.native;
   const [projects, setProjects] = useState<Project[]>([]);
+  const [businessWorkspaces, setBusinessWorkspaces] = useState<BusinessWorkspace[]>([]);
   const [workspace, setWorkspace] = useState<RegisteredToolWorkspace | null>(null);
   // Whether the applied profile's native file still holds what it wrote. Read with the board,
   // because a binding alone cannot tell an unchanged file from one edited outside Cliora.
@@ -113,6 +117,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     const top = listScroll.current;
     requestAnimationFrame(() => { const main = document.getElementById('main'); if (main) main.scrollTop = top; });
   };
+  const warmEditor = useCallback(() => { void loadConfigurationWorkspaceEditor(); }, []);
   useEffect(() => {
     if (frame) { frameWasOpen.current = true; return; }
     if (!frameWasOpen.current) return;
@@ -292,6 +297,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   useEffect(() => {
     if (!nativeAvailable || !active) return;
     if (isRemote) {
+      setBusinessWorkspaces([]);
       void native.listRemoteProjects(remoteTargetId).then(items => {
         if (!alive.current) return;
         setProjects(items.map(item => ({
@@ -310,6 +316,19 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
       return;
     }
     void native.listProjects().then(value => { if (alive.current) setProjects(value); }).catch(value => { if (alive.current) setError(errorText(value)); });
+    let liveWorkspaces = true;
+    let generation = 0;
+    let loadedAt = 0;
+    const reloadWorkspaces = () => {
+      const request = ++generation;
+      loadedAt = Date.now();
+      void native.listBusinessWorkspaces().then(rows => { if (liveWorkspaces && alive.current && request === generation) setBusinessWorkspaces(Array.isArray(rows) ? rows : []); }).catch(() => {});
+    };
+    const focused = () => { if (Date.now() - loadedAt >= FOCUS_REFRESH_INTERVAL) reloadWorkspaces(); };
+    reloadWorkspaces();
+    window.addEventListener(WORKSPACES_CHANGED, reloadWorkspaces);
+    window.addEventListener('focus', focused);
+    return () => { liveWorkspaces = false; generation++; window.removeEventListener(WORKSPACES_CHANGED, reloadWorkspaces); window.removeEventListener('focus', focused); };
   }, [active, isRemote, remoteTargetId]);
   useEffect(() => {
     if (!active || !nativeAvailable) return;
@@ -573,11 +592,11 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     return <div className={styles.profileRow} role="listitem" data-profile-id={profile.id} data-profile-state={state} data-active={state === 'active' || undefined} key={profile.id}>
       <div className={styles.profileHead} data-tools-row-head>
         <span className={styles.profileMain}>
-          <span className={styles.profileTitle}><button className={styles.profileName} title={profile.name} onClick={() => void openFrame('profile', profile)}>{profile.name}</button>{state === 'active' || state === 'pending' || state === 'saved' ? <StatusBadge className={styles.profileState} domain="profile" state={state} dot={state === 'active'} /> : <Badge className={styles.profileState} tone="warning" dot={state === 'external'}>{t(state === 'external' ? 'tools.workspace.stateExternal' : 'tools.workspace.stateUnconfirmed')}</Badge>}</span>
+          <span className={styles.profileTitle}><button className={styles.profileName} title={profile.name} onPointerEnter={warmEditor} onFocus={warmEditor} onClick={() => void openFrame('profile', profile)}>{profile.name}</button>{state === 'active' || state === 'pending' || state === 'saved' ? <StatusBadge className={styles.profileState} domain="profile" state={state} dot={state === 'active'} /> : <Badge className={styles.profileState} tone="warning" dot={state === 'external'}>{t(state === 'external' ? 'tools.workspace.stateExternal' : 'tools.workspace.stateUnconfirmed')}</Badge>}</span>
           <span className={styles.profileMeta}>{model && <Badge className={styles.profileModel} title={model}>{model}</Badge>}<span data-tone={authentication?.kind === 'rebind_required' ? 'warn' : undefined}>{t('tools.workspace.savedAs', { credential })}{host(profile.connection?.baseUrl) && ` · ${host(profile.connection?.baseUrl)}`}</span>{state === 'external' && <span data-tone="warn" title={t('tools.workspace.liveExternalHint')}>{t('tools.workspace.rowExternalChanged')}</span>}{state === 'unconfirmed' && <span data-tone="warn" title={trusted ? t('tools.workspace.liveUnconfirmedLocalHint') : t('tools.workspace.liveUnconfirmedRecordHint')}>{t('tools.workspace.rowUnconfirmed')}</span>}</span>
           {(versionNote || usedNote) && <details className={styles.profileDetails}><summary>{t('tools.workspace.detailsSummary')}</summary><span className={styles.profileHistory}>{versionNote && <span title={versionNote}>{versionNote}</span>}{usedNote && <span title={usedNote}>{usedNote}</span>}</span></details>}
         </span>
-        <span className={styles.profileActions} data-tools-row-actions>{state !== 'active' && <Button size="sm" disabled={busy || !!applying || workspace?.probe.nativeWrites.state !== 'supported'} onClick={() => void apply(profile)}>{applying === profile.id ? t('tools.workspace.applying') : reapply ? t('tools.workspace.liveReapply') : same ? t('tools.workspace.useNew') : t('tools.workspace.use')}</Button>}<Button variant="ghost" size="sm" onClick={() => void openFrame('profile', profile)}>{t('tools.workspace.edit')}</Button><RowMenu label={t('tools.workspace.rowMenu', { name: profile.name })}><button role="menuitem" onClick={() => void duplicate(profile)}><Icon name="copy" size={14} /><span>{t('tools.workspace.duplicateConfig')}</span></button><button role="menuitem" onClick={() => setQuotaAddFor(profile.id)}><Icon name="plus" size={14} /><span>{t('tools.workspace.addQuota')}</span></button><button role="menuitem" data-danger="true" onClick={() => void remove(profile)}><Icon name="trash" size={14} /><span>{t('tools.workspace.deleteConfig')}</span></button></RowMenu></span>
+        <span className={styles.profileActions} data-tools-row-actions>{state !== 'active' && <Button size="sm" disabled={busy || !!applying || workspace?.probe.nativeWrites.state !== 'supported'} onClick={() => void apply(profile)}>{applying === profile.id ? t('tools.workspace.applying') : reapply ? t('tools.workspace.liveReapply') : same ? t('tools.workspace.useNew') : t('tools.workspace.use')}</Button>}<Button variant="ghost" size="sm" onPointerEnter={warmEditor} onFocus={warmEditor} onClick={() => void openFrame('profile', profile)}>{t('tools.workspace.edit')}</Button><RowMenu label={t('tools.workspace.rowMenu', { name: profile.name })}><button role="menuitem" onClick={() => void duplicate(profile)}><Icon name="copy" size={14} /><span>{t('tools.workspace.duplicateConfig')}</span></button><button role="menuitem" onClick={() => setQuotaAddFor(profile.id)}><Icon name="plus" size={14} /><span>{t('tools.workspace.addQuota')}</span></button><button role="menuitem" data-danger="true" onClick={() => void remove(profile)}><Icon name="trash" size={14} /><span>{t('tools.workspace.deleteConfig')}</span></button></RowMenu></span>
       </div>
       {!isRemote && <ProfileQuota profileId={profile.id} profileVersion={profile.version} toolId={toolId} profileAccountId={profile.authentication?.kind === 'oauth' ? profile.authentication.accountId : undefined} state={quota} addRequested={quotaAddFor === profile.id} onAddHandled={() => setQuotaAddFor(null)} />}
     </div>;
@@ -588,11 +607,39 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   const memoryProjects = useMemo(() => projects.flatMap(project => project.available && project.path ? [{ name: project.name, path: project.path }] : []), [projects]);
   const resourcesReady = resourceContext !== null && !resourceContext.nativeContextError;
   useFillHeight(configBoard, 'minHeight', !!workspace && resource === 'config');
+  const scopeRepositoryOptions = useMemo(() => {
+    if (isRemote) return [];
+    const items: Array<{ path: string; label: string; detail: string; workspaceId: string; workspaceName: string }> = [];
+    const seen = new Set<string>();
+    for (const ws of businessWorkspaces) {
+      const repos = [...ws.repositories].sort((a, b) => Number(b.favorite) - Number(a.favorite));
+      for (const repo of repos) {
+        const loc = repo.locations.find(item => item.available && item.path);
+        if (!loc?.path || seen.has(loc.path)) continue;
+        seen.add(loc.path);
+        items.push({ path: loc.path, label: repo.name, detail: shortPath(displayPath(loc.path)), workspaceId: ws.id, workspaceName: ws.name });
+      }
+    }
+    return items;
+  }, [businessWorkspaces, isRemote]);
+  const scopeOptions = useMemo<FilterSelectOption[]>(() => {
+    const seenPaths = new Set(scopeRepositoryOptions.map(item => item.path));
+    return [
+      { value: '__global__', label: t('tools.workspace.scopeGlobal') },
+      ...scopeRepositoryOptions.flatMap(({ path, label, detail, workspaceId, workspaceName }, index, all) => [
+        ...(index === 0 || all[index - 1].workspaceId !== workspaceId ? [{ value: `group:${workspaceId}`, label: workspaceName, group: true, icon: <Icon name="package" size={14} /> }] : []),
+        { value: path, label, detail, parent: `group:${workspaceId}`, keywords: workspaceName, triggerLabel: `${workspaceName} / ${label}`, icon: <Icon name="branch" size={14} /> },
+      ]),
+      ...projects.filter(project => !project.workspaceBacked || !seenPaths.has(project.path ?? '')).map(project => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, disabled: !project.available || !project.path })),
+      ...(projectPath && !seenPaths.has(projectPath) && !projects.some(project => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).at(-1) ?? projectPath }] : []),
+    ];
+  }, [scopeRepositoryOptions, projects, projectPath, t]);
   if (!descriptor) return <p>{t('tools.workspace.noTools')}</p>;
   const contextProject = projects.find(project => project.path === projectPath);
+  const contextRepo = scopeRepositoryOptions.find(item => item.path === projectPath);
   // A project scope without a project is a question, not a failed read: it gets its own state.
   const projectMissing = scope === 'project' && !projectPath;
-  const contextScope = resource === 'memory' ? '' : scope === 'global' ? t('tools.workspace.scopeGlobal') : contextProject?.name ?? projectPath;
+  const contextScope = resource === 'memory' ? '' : scope === 'global' ? t('tools.workspace.scopeGlobal') : contextProject?.name ?? (contextRepo ? `${contextRepo.workspaceName} / ${contextRepo.label}` : projectPath);
   const contextLabel = [t(`tools.workspace.view.${resource}`), contextScope].filter(Boolean).join(' · ');
   // The page header is the CLI switcher; picking routes through the app's open sequence so the
   // unsaved-changes prompt stays the single confirmation.
@@ -606,7 +653,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
       {toolHeading}
       {workspace && <div className={styles.chromeInstall}><InstallPanel toolName={descriptor.name} heading={false} collapsed={resource !== 'config'} probe={workspace.probe} customPath={customPath} busy={busy} loading={loading} onCustomPath={setCustomPath} onSavePath={() => void savePath()} onMaintain={(action, source, lineVersion, target) => void maintain(action, source, false, lineVersion, target)} onUsePath={path => void usePath(path)} /></div>}
     </div>
-    <div className={styles.taskBar} data-tools-taskbar><div className={styles.views} role="tablist" aria-label={t('tools.workspace.tasksAria')} onKeyDown={navigateChoices}>{resourceViews.filter((id) => supported[id]).map((id) => { const label = t(`tools.workspace.view.${id}`); const shortcutIndex = resourceViews.findIndex((view) => view === id) + 1; return <button role="tab" key={id} id={`tools-${id}-tab`} aria-controls={`tools-${id}-panel`} aria-selected={resource === id} aria-keyshortcuts={`Alt+${shortcutIndex}`} tabIndex={resource === id ? 0 : -1} title={t('tools.workspace.viewTitle', { label, index: shortcutIndex })} className={resource === id ? styles.selected : ''} onClick={() => void switchResource(id)}>{label}</button>; })}</div><div className={styles.contextTrail} data-tools-context aria-label={t('tools.workspace.contextAria', { context: contextLabel })}><Icon name={isRemote ? 'server' : 'monitor'} size={13} /><span>{t(isRemote ? 'tools.workspace.contextRemote' : 'tools.workspace.contextLocal')}</span><span aria-hidden="true">/</span><strong>{contextLabel}</strong></div><div className={styles.scopeBar} data-tools-scope hidden={resource === 'memory'}><FilterSelect className={styles.projectSelect} label={t('tools.workspace.scopeLabel')} value={scope === 'global' ? '__global__' : projectPath} forceSearch searchLabel={t('home.launcher.searchLabel')} options={[{ value: '__global__', label: t('tools.workspace.scopeGlobal') }, ...projects.map(project => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, disabled: !project.available || !project.path })), ...(projectPath && !projects.some(project => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).at(-1) ?? projectPath }] : [])]} onChange={value => void switchScope(value === '__global__' ? 'global' : 'project', value === '__global__' ? '' : value)} onPickFolder={() => void pickProject()} pickFolderLabel={t('common.filterSelect.pickFolder')} /></div></div>
+    <div className={styles.taskBar} data-tools-taskbar><div className={styles.views} role="tablist" aria-label={t('tools.workspace.tasksAria')} onKeyDown={navigateChoices}>{resourceViews.filter((id) => supported[id]).map((id) => { const label = t(`tools.workspace.view.${id}`); const shortcutIndex = resourceViews.findIndex((view) => view === id) + 1; return <button role="tab" key={id} id={`tools-${id}-tab`} aria-controls={`tools-${id}-panel`} aria-selected={resource === id} aria-keyshortcuts={`Alt+${shortcutIndex}`} tabIndex={resource === id ? 0 : -1} title={t('tools.workspace.viewTitle', { label, index: shortcutIndex })} className={resource === id ? styles.selected : ''} onClick={() => void switchResource(id)}>{label}</button>; })}</div><div className={styles.contextTrail} data-tools-context aria-label={t('tools.workspace.contextAria', { context: contextLabel })}><Icon name={isRemote ? 'server' : 'monitor'} size={13} /><span>{t(isRemote ? 'tools.workspace.contextRemote' : 'tools.workspace.contextLocal')}</span><span aria-hidden="true">/</span><strong>{contextLabel}</strong></div><div className={styles.scopeBar} data-tools-scope hidden={resource === 'memory'}><FilterSelect className={styles.projectSelect} label={t('tools.workspace.scopeLabel')} value={scope === 'global' ? '__global__' : projectPath} forceSearch searchLabel={t('home.launcher.searchLabel')} options={scopeOptions} onChange={value => void switchScope(value === '__global__' ? 'global' : 'project', value === '__global__' ? '' : value)} onPickFolder={() => void pickProject()} pickFolderLabel={t('common.filterSelect.pickFolder')} /></div></div>
     </div>
     <div id="tools-config-panel" role="tabpanel" aria-labelledby="tools-config-tab" hidden={resource !== 'config'}>
       {workspace?.nativeContextError && <div className={styles.feedback}><StatusBanner tone="error">{workspace.nativeContextError}</StatusBanner></div>}
@@ -617,7 +664,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
         ? <div className={styles.loadingList} role="status" aria-label={t(isRemote ? 'tools.workspace.loadingRemote' : 'tools.workspace.loading')}><p className={styles.loadingLabel}>{t(isRemote ? 'tools.workspace.loadingRemote' : 'tools.workspace.loading')}</p><span className="skeleton-block short" /><span className="skeleton-block" /><span className="skeleton-block" /></div>
         : <EmptyState icon={nativeAvailable ? 'alert' : 'monitor'} title={nativeAvailable ? t('tools.workspace.loadFailed') : t('tools.workspace.needDesktop')} detail={nativeAvailable ? t('tools.workspace.loadFailedHint') : t('tools.workspace.previewHint')} action={nativeAvailable ? <Button variant="primary" onClick={() => void reload(toolId, scope, projectPath)}>{t('tools.workspace.retryLoad')}</Button> : undefined} />)
       : <div ref={configBoard} className={styles.profileList} data-tools-board aria-label={t('tools.workspace.listAria')}>
-        <Toolbar className={styles.listHeading} title={t('tools.workspace.profilesTitle')} titleAs="h3" count={workspace.profiles.length > 0 ? workspace.profiles.length : undefined} actions={<><Button variant="ghost" size="sm" icon={<Icon name="play" size={14} />} title={descriptor.launchForm === 'desktop' ? t('tools.workspace.launchTitleDesktop', { name: descriptor.name }) : t('tools.workspace.launchTitle', { name: descriptor.name })} disabled={launching || !workspace} onClick={() => void launch()} onContextMenu={(event) => { event.preventDefault(); void launch(); }}>{launching ? t('tools.workspace.launching') : t('home.tools.launch')}</Button><Button variant="ghost" size="sm" icon={<Icon name="settings" size={14} />} title={t('tools.workspace.commonTitle')} onClick={() => void openFrame('common')}>{t('tools.workspace.common')}</Button></>} primary={<Button variant="primary" size="sm" icon={<Icon name="plus" size={14} />} onClick={() => void createProfile()}>{t('tools.workspace.frameNew')}</Button>} />
+        <Toolbar className={styles.listHeading} title={t('tools.workspace.profilesTitle')} titleAs="h3" count={workspace.profiles.length > 0 ? workspace.profiles.length : undefined} actions={<><Button variant="ghost" size="sm" icon={<Icon name="play" size={14} />} title={descriptor.launchForm === 'desktop' ? t('tools.workspace.launchTitleDesktop', { name: descriptor.name }) : t('tools.workspace.launchTitle', { name: descriptor.name })} disabled={launching || !workspace} onClick={() => void launch()} onContextMenu={(event) => { event.preventDefault(); void launch(); }}>{launching ? t('tools.workspace.launching') : t('home.tools.launch')}</Button><Button variant="ghost" size="sm" icon={<Icon name="settings" size={14} />} title={t('tools.workspace.commonTitle')} onPointerEnter={warmEditor} onFocus={warmEditor} onClick={() => void openFrame('common')}>{t('tools.workspace.common')}</Button></>} primary={<Button variant="primary" size="sm" icon={<Icon name="plus" size={14} />} onPointerEnter={warmEditor} onFocus={warmEditor} onClick={() => void createProfile()}>{t('tools.workspace.frameNew')}</Button>} />
         <div className={styles.boardBody}>
         <div className={styles.liveStrip} data-tools-live data-live-state={liveState} data-live-tone={liveTone} data-live-profile={live.profile?.id ?? ''} title={liveText.title}>
           <span className={styles.liveDot} aria-hidden="true" />
@@ -635,7 +682,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
         <div role="list" aria-label={t('tools.workspace.itemsAria')} className={`${styles.profileCards}${workspace.profiles.length > 6 ? ` ${styles.profileScroll}` : ''}`}>{profileGroups.map(group => <div key={group.id} className={styles.profileGroup} data-group={group.id}>{profileGroups.length > 1 && <div className={styles.groupLabel}><strong>{group.label}</strong><Badge>{query ? `${group.visible.length}/${group.profiles.length}` : group.profiles.length}</Badge></div>}{group.visible.map(row)}</div>)}</div>
         </div>
       </div>}
-      <GuideDialog wide suspended={!active} open={!!frame} title={frame?.title ?? t('tools.workspace.frameFallback')} hint={t(frame?.subject === 'current' ? 'tools.workspace.frameCurrentHint' : 'tools.workspace.frameHint', { tool: descriptor.name, scope: scope === 'global' ? t('tools.apply.global') : projectPath })} onClose={() => void closeFrame()} onBack={() => void closeFrame()}>{frame && !workspace && <p role="status">{t('tools.workspace.frameLoading')}</p>}{frame && workspace && <Suspense fallback={<PageSkeleton />}><ConfigurationWorkspaceEditor key={frame.key} toolId={toolId} subject={frame.subject} profile={frame.profile} scope={scope} projectPath={projectPath} remoteTargetId={isRemote ? remoteTargetId : null} workspace={workspace} accounts={accounts} onClose={() => void closeFrame()} onDirtyChange={value => { if (value) epoch.current++; setDirty(value); }} onDraftChange={changed} onStored={stored} onDone={(result, used) => { setFrame(null); setDirty(false); setNotice(result.application ? t('tools.workspace.doneUpdated') : used ? t('tools.workspace.doneSavedUsed') : t('tools.workspace.doneSaved')); void reload(toolId, scope, projectPath, true).then(() => restoreListScroll()); }} /></Suspense>}</GuideDialog>
+      <GuideDialog wide suspended={!active} open={!!frame} title={frame?.title ?? t('tools.workspace.frameFallback')} hint={t(frame?.subject === 'current' ? 'tools.workspace.frameCurrentHint' : 'tools.workspace.frameHint', { tool: descriptor.name, scope: scope === 'global' ? t('tools.apply.global') : projectPath })} onClose={() => void closeFrame()}>{frame && !workspace && <p role="status">{t('tools.workspace.frameLoading')}</p>}{frame && workspace && <Suspense fallback={<SkeletonRows count={3} />}><ConfigurationWorkspaceEditor key={frame.key} toolId={toolId} subject={frame.subject} profile={frame.profile} scope={scope} projectPath={projectPath} remoteTargetId={isRemote ? remoteTargetId : null} workspace={workspace} accounts={accounts} onClose={() => void closeFrame()} onDirtyChange={value => { if (value) epoch.current++; setDirty(value); }} onDraftChange={changed} onStored={stored} onDone={(result, used) => { setFrame(null); setDirty(false); setNotice(result.application ? t('tools.workspace.doneUpdated') : used ? t('tools.workspace.doneSavedUsed') : t('tools.workspace.doneSaved')); void reload(toolId, scope, projectPath, true).then(() => restoreListScroll()); }} /></Suspense>}</GuideDialog>
       <GuideDialog wide open={!!comparison} title={t('home.conflict.title')} onClose={closeComparison}>{comparison && <div>{comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('tools.workspace.compareBanner') : undefined} actions={false} currentContent={file.current} nextContent={file.proposedText} format={file.format} onUseNext={() => void compareUse()} onKeepCurrent={closeComparison} />)}{compareError && <div className={styles.feedback}><StatusBanner tone="error">{t('tools.workspace.compareFailed', { error: compareError })}</StatusBanner></div>}<div className="dialog-footer"><Button onClick={closeComparison}>{t('common.conflict.keepCurrent')}</Button><span className="dialog-footer-gap" /><Button variant="primary" disabled={busy} onClick={() => void compareUse()}>{busy ? t('tools.workspace.applying') : t('common.conflict.useNext')}</Button></div></div>}</GuideDialog>
     </div>
     <Suspense fallback={<PageSkeleton />}>

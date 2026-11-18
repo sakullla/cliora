@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChildSession, HistoryDetail, HistoryMessage } from '../../types/history';
 import { Icon } from '../../components/Icon';
@@ -84,6 +84,8 @@ export const SessionReader = memo(function SessionReader({ detail, toolName, chi
   const { t } = useTranslation();
   const [query, setQuery] = useState(context?.query ?? '');
   const [findOpen, setFindOpen] = useState(context?.findOpen ?? false);
+  const [toolbarHeight, setToolbarHeight] = useState(0);
+  const toolbarRef = useRef<HTMLDivElement>(null);
   const findButton = useRef<HTMLButtonElement>(null);
   const findInput = useRef<HTMLInputElement>(null);
   // Only a find the reader opens takes focus; a restored find stays where it was.
@@ -92,18 +94,30 @@ export const SessionReader = memo(function SessionReader({ detail, toolName, chi
   const [onlyQuestions, setOnlyQuestions] = useState(context?.onlyQuestions ?? false);
   const [raw, setRaw] = useState(context?.raw ?? false);
   const [current, setCurrent] = useState(context?.current ?? 0);
-  const findKey = useRef(`${(context?.query ?? '').trim()}\u0000${context?.onlyQuestions ?? false}`);
+  const initialSearch = context?.findOpen ? (context?.query ?? '').trim() : '';
+  const findKey = useRef(`${initialSearch}\u0000${context?.onlyQuestions ?? false}`);
   const contextChange = useRef(onContextChange); contextChange.current = onContextChange;
   useEffect(() => { contextChange.current?.({ query, findOpen, onlyQuestions, raw, current }); }, [query, findOpen, onlyQuestions, raw, current]);
   useEffect(() => {
     if (!findOpen || !focusFind.current) return;
     focusFind.current = false;
     findInput.current?.focus();
+    findInput.current?.select();
   }, [findOpen]);
+  useEffect(() => {
+    const element = toolbarRef.current;
+    if (!element) return;
+    const measure = () => setToolbarHeight(element.offsetHeight);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   const root = useRef<HTMLDivElement>(null);
   const steppedPrompt = useRef<{ index: number; scrollTop: number } | null>(null);
   const [rendered, setRendered] = useState(() => new Set(detail.messages.slice(0, 8).map((item) => item.id)));
-  const search = query.trim();
+  const search = findOpen ? query.trim() : '';
   const visible = useMemo(() => detail.messages.filter((item) => !onlyQuestions || item.role === 'user'), [detail.messages, onlyQuestions]);
   const userPromptIds = useMemo(
     () => visible.filter((item) => item.role === 'user' && item.kind !== 'project_context' && item.kind !== 'environment_context').map((item) => item.id),
@@ -184,7 +198,8 @@ export const SessionReader = memo(function SessionReader({ detail, toolName, chi
       .map((id) => ({ id, node: root.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(id)}"]`) ?? null }))
       .filter((entry): entry is { id: string; node: HTMLElement } => !!entry.node);
     if (elements.length < 2) return;
-    const scrollMarginTop = Number.parseFloat(getComputedStyle(elements[0].node).scrollMarginTop) || 145;
+    const liveToolbarHeight = toolbarRef.current?.offsetHeight ?? toolbarHeight;
+    const scrollMarginTop = liveToolbarHeight > 0 ? liveToolbarHeight + 16 : (Number.parseFloat(getComputedStyle(elements[0].node).scrollMarginTop) || 145);
     const anchorY = (scroller?.getBoundingClientRect().top ?? 0) + scrollMarginTop;
     const lastStep = steppedPrompt.current;
     let targetIndex: number;
@@ -220,13 +235,13 @@ export const SessionReader = memo(function SessionReader({ detail, toolName, chi
     setCurrent(0);
     if (search && matches.length) revealMatch(matches[0].item.id);
   }, [search, onlyQuestions]);
-  return <div className={styles.reader} data-reader-root="" aria-label={t('records.reader.label')} ref={root}>
-    <div className={styles.readerToolbar}>
+  return <div className={styles.reader} data-reader-root="" aria-label={t('records.reader.label')} ref={root} style={toolbarHeight > 0 ? { '--reader-toolbar-h': `${toolbarHeight + 16}px` } as CSSProperties : undefined}>
+    <div ref={toolbarRef} className={styles.readerToolbar}>
       <div className={styles.readerTitle}><strong>{onlyQuestions ? t('records.reader.onlyQuestions') : t('records.reader.allMessages')}</strong><span>{t('records.reader.messageCount', { count: visible.length.toLocaleString() })}{raw ? t('records.reader.rawSuffix') : ''}</span>
         {detail.session.messageCount > detail.messages.length && <span title={t('records.reader.indexedTitle')}>{t('records.reader.indexed', { count: detail.session.messageCount.toLocaleString() })}</span>}
       </div>
       <div className={styles.readerOptions}>
-        <button type="button" ref={findButton} data-reader-find="" aria-label={t('records.reader.findAria')} aria-expanded={findOpen} onClick={() => { focusFind.current = !findOpen; setFindOpen(!findOpen); setQuery(''); }}><Icon name="search" size={14} />{t('records.reader.find')}</button>
+        <button type="button" ref={findButton} data-reader-find="" aria-label={t('records.reader.findAria')} aria-expanded={findOpen} onClick={() => { const next = !findOpen; focusFind.current = next; setFindOpen(next); }}><Icon name="search" size={14} />{t('records.reader.find')}</button>
         <details className={styles.readingOptions} data-active={(onlyQuestions || raw) || undefined} ref={optionsRef}><summary>{t('records.reader.options')}</summary><div>
         <label><input type="checkbox" checked={onlyQuestions} onChange={(event) => setOnlyQuestions(event.target.checked)} />{t('records.reader.onlyQuestions')}</label>
         <label><input type="checkbox" checked={raw} onChange={(event) => setRaw(event.target.checked)} />{t('records.reader.showRaw')}</label>
@@ -241,7 +256,7 @@ export const SessionReader = memo(function SessionReader({ detail, toolName, chi
       {findOpen && <div className={styles.find} data-field-frame="">
         <Icon name="search" size={14} /><input ref={findInput} aria-label={t('records.reader.findAria')} placeholder={t('records.reader.findPlaceholder')} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
           if (event.key === 'Enter') { event.preventDefault(); jump(selected + (event.shiftKey ? -1 : 1)); }
-          if (event.key === 'Escape') { event.stopPropagation(); setQuery(''); setFindOpen(false); findButton.current?.focus(); }
+          if (event.key === 'Escape') { event.stopPropagation(); setFindOpen(false); findButton.current?.focus(); }
         }} />
         {search && <><span role="status">{matches.length ? t('records.reader.matchCount', { current: selected + 1, total: matches.length }) : t('records.reader.noMatch')}</span><button type="button" disabled={!matches.length} aria-label={t('records.reader.prevMatch')} title={`${t('records.reader.prevMatch')} (Shift+Enter)`} onClick={() => jump(selected - 1)}>↑</button><button type="button" disabled={!matches.length} aria-label={t('records.reader.nextMatch')} title={`${t('records.reader.nextMatch')} (Enter)`} onClick={() => jump(selected + 1)}>↓</button><button type="button" className={styles.findClear} aria-label={t('records.reader.clearFind')} title={t('records.reader.clearFind')} onClick={() => { setQuery(''); findInput.current?.focus(); }}><Icon name="close" size={16} /></button></>}
       </div>}

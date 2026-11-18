@@ -276,3 +276,27 @@ test('child session reader shows only that level and hides favorite, resume and 
   await expect(reader).not.toContainText('请检查缓存策略');
   await expect(reader.getByRole('article', { name: '子会话 Nested' })).toContainText('GRAND_ONLY_SENTINEL');
 });
+
+test('toggling find off preserves the search query without active highlights until reopened or explicitly cleared', async ({ page }) => {
+  const reader = page.getByLabel('会话正文');
+  const findToggle = reader.getByRole('button', { name: '查找本会话' });
+  await findToggle.click();
+  const input = reader.getByRole('textbox', { name: '查找本会话' });
+  await input.fill('缓存');
+  await expect(reader.locator('mark')).toHaveCount(4);
+
+  // Closing Find via the toggle button hides highlights but preserves the query in state.
+  await findToggle.click();
+  await expect(input).toBeHidden();
+  await expect(reader.locator('mark')).toHaveCount(0);
+
+  // Reopening Find restores the query and its match highlights immediately.
+  await findToggle.click();
+  await expect(input).toHaveValue('缓存');
+  await expect(reader.locator('mark')).toHaveCount(4);
+
+  // Explicit clear button wipes the query.
+  await reader.getByRole('button', { name: '清空会话内查找' }).click();
+  await expect(input).toHaveValue('');
+  await expect(reader.locator('mark')).toHaveCount(0);
+});

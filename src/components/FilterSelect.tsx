@@ -101,23 +101,26 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
     });
   }
 
+  const hasTree = childCount.size > 0;
   useLayoutEffect(() => {
     if (!open || !anchor.current) return;
     const place = () => {
       const rect = anchor.current?.getBoundingClientRect();
       if (!rect) return;
-      const width = Math.min(Math.max(rect.width, 240), window.innerWidth - 16);
+      const minWidth = hasTree ? 280 : 240;
+      const maxCap = hasTree ? 420 : 360;
+      const width = Math.min(Math.max(rect.width, minWidth), window.innerWidth - 16);
       const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
       const below = window.innerHeight - rect.bottom - 12;
       const above = rect.top - 12;
       const upward = below < 220 && above > below;
-      setBox({ left, width, maxHeight: Math.max(180, Math.min(320, upward ? above : below)), top: upward ? undefined : rect.bottom + 4, bottom: upward ? window.innerHeight - rect.top + 4 : undefined });
+      setBox({ left, width, maxHeight: Math.max(180, Math.min(maxCap, upward ? above : below)), top: upward ? undefined : rect.bottom + 4, bottom: upward ? window.innerHeight - rect.top + 4 : undefined });
     };
     place();
     window.addEventListener('resize', place);
     window.addEventListener('scroll', place, true);
     return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
-  }, [open]);
+  }, [open, hasTree]);
 
   useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
   useLayoutEffect(() => {

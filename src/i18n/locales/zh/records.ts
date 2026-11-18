@@ -366,6 +366,7 @@ export default {
     filtered: '筛选：{{parts}}',
     filterSearch: '搜索「{{query}}」',
     overviewSubtitle: '查看本机记录中的 Token、费用与调用次数。',
+    liveQuotas: '查看工具额度',
     priceSettings: '设置估算价格',
     toolFilter: '用量工具',
     modelFilter: '用量模型',

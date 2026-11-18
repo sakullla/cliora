@@ -99,7 +99,7 @@ function rangeCaption(from: string, to: string) {
   if (from) return i18n.t('records.page.captionFrom', { date: dayLabel(from) });
   return i18n.t('records.page.captionTo', { date: dayLabel(to) });
 }
-export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent = null, onOpenProjects, onWorkbenchSession, onWorkbenchFailure }: { active: boolean; remoteTargetId?: string; tools: AdapterDescriptor[]; tabIntent?: { tab: 'sessions' | 'usage'; sessionId?: string; token: number } | null; onOpenProjects: () => void; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
+export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent = null, onOpenProjects, onOpenConnections, onWorkbenchSession, onWorkbenchFailure }: { active: boolean; remoteTargetId?: string; tools: AdapterDescriptor[]; tabIntent?: { tab: 'sessions' | 'usage'; sessionId?: string; token: number } | null; onOpenProjects: () => void; onOpenConnections?: () => void; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t } = useTranslation();
   const remoteReads = useRemoteReads(remoteTargetId, '', active);
   const native = remoteReads.native;
@@ -808,7 +808,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent
       : <div className={styles.empty}><span className="empty-symbol"><Icon name="records" size={20} /></span><h3>{t('records.page.pickSessionTitle')}</h3><p>{t('records.page.pickSession')}</p></div>}</div>
     </div>
     {remoteTargetId === 'local' && <div className={styles.usagePane} id="records-usage-panel" role="tabpanel" aria-labelledby="records-usage-tab" hidden={tab !== 'usage'}><UsageDashboard search={search} onSearchChange={setSearch} favoriteOnly={favoriteOnly} onClearSearch={() => setSearch('')} onClearFavoriteOnly={() => setFavoriteOnly(false)} active={active && tab === 'usage'} tools={tools} projects={projects} prices={prices} onPricesChange={setPrices}
-      scanVersion={scanVersion} scanning={scanning || backgroundScanning} lastScanAt={lastScanAt} onOpenSession={openSession} notify={notify} /></div>}
+      scanVersion={scanVersion} scanning={scanning || backgroundScanning} lastScanAt={lastScanAt} onOpenSession={openSession} onOpenConnections={onOpenConnections} notify={notify} /></div>}
     </div>
   </section>;
 }

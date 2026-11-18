@@ -14,7 +14,7 @@ import { AccountPicker } from '../AccountPicker';
 import { ModelCombobox } from '../ModelCombobox';
 import { accountReadyForSelection, type useAccounts } from '../AccountsPanel';
 import { ConnectionCredential, ConnectionCredentialProvider } from '../../../components/configuration/ConnectionCredential';
-import { StepHead, configurationStepOrder, type ConfigurationStepKey } from '../../../components/configuration/ConfigurationStep';
+import { StepHead, VisibleStepsContext, configurationStepOrder, type ConfigurationStepKey } from '../../../components/configuration/ConfigurationStep';
 import styles from './ConfigurationWorkspaceEditor.module.css';
 import sharedStyles from '../../../components/configuration/configuration.module.css';
 import { saveShortcutHint } from '../../../lib/shortcut';
@@ -471,8 +471,13 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     const next = viewKey ? viewKey.split(',') as ConfigView[] : [];
     if (next.length && !next.includes(view)) setView(next[0]);
   }, [viewKey, view]);
-  if (loading) return <div className={`${styles.shell} config-editor ${sharedStyles.controls}`}><div className={styles.loading} role="status" aria-label={t('tools.config.loading')}><span className="skeleton-block short" /><span className="skeleton-block" /><span className="skeleton-block" /><span className="skeleton-block tall" /></div><footer className={styles.footer}><button onClick={props.onClose}>{t('common.dialog.cancel')}</button><span>{t('tools.config.loading')}</span></footer></div>;
-  if (!draft || Editor && !draft.descriptor) return <div className={`${styles.shell} config-editor ${sharedStyles.controls}`}><div className={styles.loadFailed}><strong>{t('tools.config.loadFailed')}</strong><p role="alert">{error || t('tools.config.editorUnavailable')}</p><p className={styles.hint}>{t('tools.config.loadFailedHint')}</p></div><footer className={styles.footer}><button onClick={props.onClose}>{t('tools.config.backToList')}</button></footer></div>;
+  const [quickConnectionRequired, setQuickConnectionRequired] = useState(false);
+  useLayoutEffect(() => {
+    const required = !!modelPane.current?.querySelector('[data-config-step="connection"][data-config-required]');
+    setQuickConnectionRequired(previous => previous === required ? previous : required);
+  });
+  if (loading) return <div className={`${styles.shell} config-editor ${sharedStyles.controls}`}><div className={styles.loading} role="status" aria-label={t('tools.config.loading')}><span className="skeleton-block short" /><span className="skeleton-block" /><span className="skeleton-block" /><span className="skeleton-block tall" /></div><footer className={styles.footer}><Button onClick={props.onClose}>{t('common.dialog.cancel')}</Button><span>{t('tools.config.loading')}</span></footer></div>;
+  if (!draft || Editor && !draft.descriptor) return <div className={`${styles.shell} config-editor ${sharedStyles.controls}`}><div className={styles.loadFailed}><strong>{t('tools.config.loadFailed')}</strong><p role="alert">{error || t('tools.config.editorUnavailable')}</p><p className={styles.hint}>{t('tools.config.loadFailedHint')}</p></div><footer className={styles.footer}><Button onClick={props.onClose}>{t('tools.config.backToList')}</Button></footer></div>;
   const canSubmit = valid && !pending && !busy && !picking && !querying && !cancelling;
   const format = workspace.probe.nativeFiles.find(file => file.role === rawRole)?.format ?? 'json';
   const files = [...new Set([...workspace.probe.nativeFiles.filter(file => !file.sensitive).map(file => file.role), ...Object.keys(draft.profile.files)])];
@@ -519,7 +524,9 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     login: source === 'native' || source === 'account' && accountReady || source === 'api_key' && (storedSecret || !!secretInput),
     model: !!connection?.model?.trim(),
   };
-  const steps = configurationStepOrder.filter(key => key !== 'connection' || connectionConfigurable).map(key => ({ key, label: stepLabels[key], done: stepDone[key] }));
+  const showConnectionStep = connectionConfigurable && (!quick || quickConnectionRequired);
+  const visibleStepKeys = configurationStepOrder.filter(key => key !== 'connection' || showConnectionStep);
+  const steps = visibleStepKeys.map(key => ({ key, label: stepLabels[key], done: stepDone[key] }));
   const visibleDirectory = directory ? directory.models.filter(id => id.toLowerCase().includes(search.toLowerCase())) : [];
   const loginSection = (
         <section data-config-step="login" className={`${styles.sources} ${sharedStyles.step}`} aria-label={t('tools.config.sourcesLabel')}>
@@ -547,13 +554,13 @@ export function ConfigurationWorkspaceEditor(props: Props) {
         {subject === 'profile' && <div className={styles.name} data-empty={!nameInput.trim() || undefined} data-quick={quick || undefined}><label htmlFor={nameId}>{t('tools.config.name')}<span className={styles.required} aria-hidden="true">*</span></label><input id={nameId} aria-label={t('tools.config.name')} aria-required="true" aria-invalid={!nameInput.trim() || undefined} title={quick ? t('tools.config.quickNameHint') : undefined} placeholder={t('tools.config.namePlaceholder')} value={nameInput} disabled={busy || cancelling} onChange={event => { setNameInput(event.target.value); metadata({ name: event.target.value }); }} /></div>}
         <div className={styles.stickyHead}>
           {views.length > 1 && <nav className={styles.tabs} hidden={quick} aria-label={t('tools.config.tabsLabel')}>{views.includes('models') && <button aria-pressed={activeView === 'models'} disabled={pending} onClick={() => setView('models')}>{t('tools.config.tabModels')}</button>}{views.includes('settings') && <button aria-pressed={activeView === 'settings'} disabled={pending} onClick={() => setView('settings')}>{t('tools.config.tabSettings')}</button>}{views.includes('raw') && <button aria-pressed={activeView === 'raw'} disabled={pending} onClick={() => setView('raw')}>{t('tools.config.tabRaw')}</button>}{views.includes('preview') && <button aria-pressed={activeView === 'preview'} title={!valid ? t('tools.config.previewDisabledTitle') : undefined} disabled={!valid || pending || cancelling} onClick={() => void showPreview()}>{t('tools.config.tabPreview')}</button>}</nav>}
-          {shownView === 'models' && subject !== 'common' && !connectionChainAbsent && (Editor || subject === 'profile' && source !== 'account') && <ol className={styles.chain} aria-label={t('tools.config.chainLabel')}>{steps.map(step => <li key={step.key} data-done={step.done || undefined}><button type="button" aria-label={step.done ? t('tools.config.stepDoneAria', { step: step.label }) : step.label} title={t('tools.config.stepJump', { step: step.label })} onClick={() => jumpTo(step.key)}>{step.label}</button></li>)}</ol>}
+          {shownView === 'models' && subject !== 'common' && !connectionChainAbsent && (Editor || subject === 'profile' && source !== 'account') && <div className={styles.chainBar}><ol className={styles.chain} aria-label={t('tools.config.chainLabel')}>{steps.map(step => <li key={step.key} data-done={step.done || undefined}><button type="button" aria-label={step.done ? t('tools.config.stepDoneAria', { step: step.label }) : step.label} title={t('tools.config.stepJump', { step: step.label })} onClick={() => jumpTo(step.key)}>{step.label}</button></li>)}</ol>{quick && connectionConfigurable && !showConnectionStep && <button type="button" className={styles.chainMore} data-done={stepDone.connection || undefined} aria-label={stepDone.connection ? t('tools.config.stepDoneAria', { step: stepLabels.connection }) : stepLabels.connection} title={t('tools.config.stepJump', { step: stepLabels.connection })} onClick={() => jumpTo('connection')}>{stepLabels.connection}</button>}</div>}
         </div>
-        <ConnectionCredentialProvider value={shownView === 'models' && subject !== 'common' && !connectionChainAbsent ? loginSection : null}><div ref={modelPane} className={styles.modelPane} data-under-tabs={!quick && views.length > 1 || undefined} hidden={!quick && (shownView === 'raw' || shownView === 'preview')}>
+        <VisibleStepsContext.Provider value={visibleStepKeys}><ConnectionCredentialProvider value={shownView === 'models' && subject !== 'common' && !connectionChainAbsent ? loginSection : null}><div ref={modelPane} className={styles.modelPane} data-under-tabs={!quick && views.length > 1 || undefined} hidden={!quick && (shownView === 'raw' || shownView === 'preview')}>
           {Editor ? <div className={quick ? styles.quickEditor : undefined}><Editor draft={draft} descriptor={draft.descriptor!} mode={subject} section={shownView === 'settings' ? 'settings' : 'models'} disabled={busy || cancelling} pending={pending} rawResetEpoch={rawResetEpoch} catalog={catalog} onAction={onAction} onValidityChange={onValidityChange} /></div>
           : connectionChainAbsent ? <p className={styles.hint}>{workspace.probe.connectionPolicy?.providerAddress.reason || workspace.probe.connectionPolicy?.apiKey.reason}</p>
           : subject === 'profile' && source !== 'account' ? <section aria-label={t('tools.config.legacyLabel')} className={`${styles.legacy}${quick ? ` ${styles.quickEditor}` : ''}`}>
-            {connectionConfigurable && <div data-config-step="connection" className={sharedStyles.step}>
+            {connectionConfigurable && <div data-config-step="connection" data-config-required={source === 'api_key' || Boolean(legacyInputs?.baseUrl?.trim()) ? '' : undefined} className={sharedStyles.step}>
               <StepHead step="connection" title={t('tools.config.legacyConnection', { provider: legacyInputs?.providerId || t('tools.config.providerMissing') })} meta={t('tools.config.legacyNote')} />
               <div className={sharedStyles.fieldGrid}>
                 <label>{t('tools.config.providerId')}<input aria-label={t('tools.config.providerId')} value={legacyInputs?.providerId ?? ''} spellCheck={false} placeholder={t('common.provider.idPlaceholder')} disabled={busy || cancelling} onChange={event => legacyConnection('providerId', event.target.value)} /></label>
@@ -568,7 +575,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
               {connectionConfigurable && <details className={styles.inlineDisclosure}><summary>{t('tools.config.advancedConnection')}</summary><label>{t('tools.config.authEnvVar')}<input aria-label={t('tools.config.authEnvVar')} spellCheck={false} disabled={busy || cancelling} value={legacyInputs?.authEnvVar ?? ''} onChange={event => legacyConnection('authEnvVar', event.target.value)} /></label></details>}
             </div>
           </section> : <><p className={styles.hint}>{t('tools.config.rawOnlyNote')}</p><ConnectionCredential /></>}
-        </div></ConnectionCredentialProvider>
+        </div></ConnectionCredentialProvider></VisibleStepsContext.Provider>
         {directoryOpen && directory && draft.catalogSupport?.multiple === true && <section ref={directoryPanel} aria-label={t('tools.config.directoryLabel')} className={styles.directory}>
           <div className={styles.directoryHead}><strong>{t('tools.config.directoryTitle', { source: directory.source || t('tools.config.sourceFallback'), time: directory.fetchedAt ? new Date(directory.fetchedAt * 1000).toLocaleString() : t('tools.config.timeMissing') })}</strong><Badge>{directory.models.length}</Badge></div>
           <p className={styles.hint}>{t('tools.config.directoryNote')}</p>

@@ -1968,7 +1968,15 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     let nextToolId = effectiveLaunchToolId;
     if (prefill?.projectId) {
       const project = projects.find((item) => item.id === prefill.projectId);
-      setWorkspaceValue('project:' + prefill.projectId);
+      const repoOption = project?.workspaceBacked ? businessRepositoryOptions.find((option) => !option.worktree && option.selection.projectId === prefill.projectId) : undefined;
+      if (repoOption) {
+        setWorkspaceValue(repoOption.value);
+        setBusinessSelection(repoOption.selection);
+        setDialogPlace('direct');
+        dialogPlaceTouched.current = true;
+      } else {
+        setWorkspaceValue('project:' + prefill.projectId);
+      }
       if (project?.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)) nextToolId = project.preferredTool;
     } else if (prefill?.directory) {
       setCustomFolderPath(prefill.directory);
@@ -3703,7 +3711,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         })()}
 
         {((loading && !scopedSessions.length) || (selectedId && !selected)) && <div className={styles.loading} role="status"><span className={styles.loadingMark} aria-hidden="true" /><p>{t('sessions.loading')}</p></div>}
-        {showEmpty && !listError && <WorkbenchEmpty tools={terminalTools} projects={availableProjects.filter((project) => !project.workspaceBacked)} remoteTargets={remoteTargets.filter((target) => target.enabled)} remoteEnabled={remoteSshEnabled} activeTargetId={activeTargetId} onTargetChange={(targetId) => { setActiveTargetId(targetId); onRemoteTargetChange?.(targetId); }} onManageHosts={() => setHostManagerOpen(true)} onNewSession={openNewSessionDialog} onOpenHome={onOpenHome} />}
+        {showEmpty && !listError && (() => {
+          const standalone = [...availableProjects.filter((project) => !project.workspaceBacked)].sort((a, b) => (b.lastOpened ?? 0) - (a.lastOpened ?? 0));
+          const emptyProjects = standalone.length >= 4
+            ? standalone.slice(0, 4)
+            : [...standalone, ...[...availableProjects.filter((project) => project.workspaceBacked)].sort((a, b) => (b.lastOpened ?? 0) - (a.lastOpened ?? 0)).slice(0, 4 - standalone.length)];
+          return <WorkbenchEmpty tools={terminalTools} projects={emptyProjects} remoteTargets={remoteTargets.filter((target) => target.enabled)} remoteEnabled={remoteSshEnabled} activeTargetId={activeTargetId} onTargetChange={(targetId) => { setActiveTargetId(targetId); onRemoteTargetChange?.(targetId); }} onManageHosts={() => setHostManagerOpen(true)} onNewSession={openNewSessionDialog} onOpenHome={onOpenHome} />;
+        })()}
       </section>
     </div>
 

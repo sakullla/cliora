@@ -160,6 +160,12 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
   const revealedSpotlight = useRef<number | null>(null);
   useLayoutEffect(() => {
     if (!spotlight || revealedSpotlight.current === spotlight.token) return;
+    const spotlightTarget = projects.find((item) => item.id === spotlight.id);
+    if (spotlightTarget?.workspaceBacked && spotlightTarget.id !== repair?.projectId) {
+      revealedSpotlight.current = spotlight.token;
+      document.querySelector<HTMLElement>('[data-business-workspaces]')?.scrollIntoView({ block: 'start', behavior: 'auto' });
+      return;
+    }
     if (projectQuery) {
       setProjectQuery('');
       return;
@@ -174,7 +180,7 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
       card.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
-  }, [spotlight?.id, spotlight?.token, projects, projectQuery]);
+  }, [spotlight?.id, spotlight?.token, projects, projectQuery, repair?.projectId]);
 
   async function refresh() {
     if (!nativeAvailable) return;
@@ -526,8 +532,9 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
   if (!nativeAvailable) return <p className={styles.note}>{t('home.launcher.nativeOnly')}</p>;
   const projectNeedle = projectQuery.trim().toLowerCase();
   // A directory that only backs a business-project repository is listed under that project below,
-  // not here as a standalone directory without a tool. A repair or spotlight request still reaches it.
-  const scopedProjects = remoteTargetId === 'local' ? projects.filter((project) => !project.workspaceBacked || project.id === repair?.projectId || project.id === spotlight?.id) : [];
+  // not here as a standalone directory without a tool. A repair request still reaches it.
+  const spotlightProject = spotlight ? projects.find((project) => project.id === spotlight.id) : undefined;
+  const scopedProjects = remoteTargetId === 'local' ? projects.filter((project) => !project.workspaceBacked || project.id === repair?.projectId) : [];
   const scopedRemoteProjects = remoteTargetId === 'local' ? [] : remoteProjects.filter((project) => project.targetId === remoteTargetId);
   const visibleProjects = projectNeedle ? scopedProjects.filter((project) => projectMatches(project, projectNeedle)) : scopedProjects;
   const visibleRemoteProjects = projectNeedle ? scopedRemoteProjects.filter((project) => `${project.name} ${project.path} ${remoteTargets.find((target) => target.id === project.targetId)?.host ?? ''}`.toLowerCase().includes(projectNeedle)) : scopedRemoteProjects;
@@ -672,7 +679,7 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
       {!resumable.length && managed.filter((item) => item.resume != null && item.resume.state !== 'available').map((item) => <p key={item.id}>{item.name}：{item.resume.reason}</p>)}
     </div></details>}
     {/* Business projects group repositories for management; launching from a directory comes first. */}
-    {remoteTargetId === 'local' && <WorkspaceBrowser tools={tools} onSession={onWorkbenchSession} incomingManifest={incomingManifest} onManifestConsumed={onManifestConsumed} />}
+    {remoteTargetId === 'local' && <WorkspaceBrowser tools={tools} enablePageSearch={!(totalProjects > 4 || projectQuery)} spotlightProject={spotlightProject?.workspaceBacked && spotlightProject.id !== repair?.projectId ? spotlight : null} onSession={onWorkbenchSession} incomingManifest={incomingManifest} onManifestConsumed={onManifestConsumed} />}
     {remotePicker.element}
   </section>;
 }

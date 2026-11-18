@@ -1,14 +1,17 @@
-import type { ReactNode } from 'react';
+import { createContext, useContext, type ReactNode } from 'react';
 import i18n from '../../i18n';
 import styles from './configuration.module.css';
 
 /** Connection editors share one numbered order: connection → sign-in → model. */
 export type ConfigurationStepKey = 'connection' | 'login' | 'model';
 export const configurationStepOrder: readonly ConfigurationStepKey[] = ['connection', 'login', 'model'];
+export const VisibleStepsContext = createContext<readonly ConfigurationStepKey[]>(configurationStepOrder);
 
 export function StepHead({ step, title, meta, actions }: { step: ConfigurationStepKey; title: ReactNode; meta?: ReactNode; actions?: ReactNode }) {
+  const visibleSteps = useContext(VisibleStepsContext);
+  const index = visibleSteps.indexOf(step);
   return <div className={styles.stepHead}>
-    <span className={styles.stepIndex} aria-hidden="true">{configurationStepOrder.indexOf(step) + 1}</span>
+    <span className={styles.stepIndex} aria-hidden="true">{(index >= 0 ? index : configurationStepOrder.indexOf(step)) + 1}</span>
     <span className={styles.stepHeading}>
       <strong className={styles.sectionTitle}>{title}</strong>
       {meta ? <span className={styles.stepMeta}>{meta}</span> : null}
@@ -26,10 +29,10 @@ export function connectionMeta(provider: unknown, baseUrl: unknown, empty = i18n
 }
 
 /** A numbered card. `label` names the region for assistive technology only when it does not collide with a field label. */
-export function ConfigurationStep({ step, title, meta, actions, label, className, hidden, children }: {
-  step: ConfigurationStepKey; title: ReactNode; meta?: ReactNode; actions?: ReactNode; label?: string; className?: string; hidden?: boolean; children?: ReactNode;
+export function ConfigurationStep({ step, title, meta, actions, label, className, hidden, requiredInQuick, children }: {
+  step: ConfigurationStepKey; title: ReactNode; meta?: ReactNode; actions?: ReactNode; label?: string; className?: string; hidden?: boolean; requiredInQuick?: boolean; children?: ReactNode;
 }) {
-  return <section data-config-step={step} aria-label={label} hidden={hidden} className={`${styles.step}${className ? ` ${className}` : ''}`}>
+  return <section data-config-step={step} data-config-required={requiredInQuick ? '' : undefined} aria-label={label} hidden={hidden} className={`${styles.step}${className ? ` ${className}` : ''}`}>
     <StepHead step={step} title={title} meta={meta} actions={actions} />
     {children}
   </section>;

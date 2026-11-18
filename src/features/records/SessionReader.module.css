@@ -28,7 +28,7 @@
 .messages { width: 100%; max-width: 820px; margin: 0 auto; padding: 0 var(--space-6) var(--space-8); }
 .dayDivider { display: flex; align-items: center; gap: var(--space-2_5); margin: var(--space-5) 0 var(--space-1); color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
 .dayDivider::before, .dayDivider::after { content: ''; flex: 1; height: 1px; background: var(--line); }
-.message { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3) 0; scroll-margin: 145px 0 24px; }
+.message { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3) 0; scroll-margin: var(--reader-toolbar-h, 145px) 0 24px; }
 .avatar { display: grid; flex: none; place-items: center; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-2); color: var(--text-2); font-size: var(--fs-micro); font-weight: var(--fw-semibold); box-shadow: var(--shadow-xs); }
 .message[data-role="user"] .avatar { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); box-shadow: none; }
 .messageContent { flex: 1; min-width: 0; }

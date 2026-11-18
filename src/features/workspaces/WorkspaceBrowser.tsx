@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
@@ -14,6 +14,7 @@ import { SearchField } from '../../components/SearchField';
 import { GuideDialog } from '../../components/GuideDialog';
 import type { AdapterDescriptor } from '../../types/native';
 import type { BusinessWorkspace, WorkspaceCandidate, WorkspaceManifestPreview, WorkspaceRepository } from '../../types/workspaces';
+import i18n from '../../i18n';
 import styles from './WorkspaceBrowser.module.css';
 import { WORKSPACES_CHANGED, notifyWorkspacesChanged, changedWorkspace, FOCUS_REFRESH_INTERVAL } from '../../lib/workspaceEvents';
 
@@ -22,7 +23,7 @@ export const WORKSPACE_MANIFEST_OPEN = 'cliora:workspace-manifest-open';
 export function isBusinessWorkspace(value: unknown): value is BusinessWorkspace {
   return !!value && typeof value === 'object' && typeof (value as BusinessWorkspace).id === 'string' && Array.isArray((value as BusinessWorkspace).repositories);
 }
-const failure = (value: unknown) => formatFailure(value, '项目操作失败', '请重试');
+const failure = (value: unknown) => formatFailure(value, i18n.t('workspaces.failed'), i18n.t('workspaces.retry'));
 
 /** Worktree choices of one repository: its main checkout first, then attached worktrees. */
 export function repositoryPlaces(repository: WorkspaceRepository, mainLabel: string, worktreeLabel: string) {
@@ -55,7 +56,7 @@ export function commonRoot(paths: string[]): string | null {
   return shared.join(separator);
 }
 
-export function WorkspaceBrowser({ tools = [], onSession, incomingManifest, onManifestConsumed }: { tools?: AdapterDescriptor[]; incomingManifest?: WorkspaceManifestPreview | null; onManifestConsumed?: (preview: WorkspaceManifestPreview) => void; onSession?: (id: string) => void }) {
+export function WorkspaceBrowser({ tools = [], enablePageSearch = false, spotlightProject = null, onSession, incomingManifest, onManifestConsumed }: { tools?: AdapterDescriptor[]; enablePageSearch?: boolean; spotlightProject?: { id: string; token: number } | null; incomingManifest?: WorkspaceManifestPreview | null; onManifestConsumed?: (preview: WorkspaceManifestPreview) => void; onSession?: (id: string) => void }) {
   const { t } = useTranslation();
   const [workspaces, setWorkspaces] = useState<BusinessWorkspace[]>([]);
   const [selectedId, setSelectedId] = useState('');
@@ -175,6 +176,13 @@ export function WorkspaceBrowser({ tools = [], onSession, incomingManifest, onMa
       if (path) await operate(async () => { await native.exportWorkspaceManifest(current.id, path, current.revision); setNotice(t('workspaces.publishHint')); });
     } catch (value) { setError(failure(value)); }
   }
+  async function openInTwiglane() {
+    if (!current?.manifestPath || busy) return;
+    setError(''); setNotice('');
+    const url = `twiglane://workspace?v=1&file=${encodeURIComponent(current.manifestPath)}`;
+    try { await native.openExternalUrl(url); }
+    catch (value) { if (mounted.current) setError(failure(value)); }
+  }
   async function discover(recursive: boolean) {
     if (!current || busy || scanBusy) return;
     try {
@@ -222,11 +230,19 @@ export function WorkspaceBrowser({ tools = [], onSession, incomingManifest, onMa
   }
   const allRepositories = current?.repositories ?? [];
   const root = useMemo(() => commonRoot(allRepositories.flatMap(repo => repo.locations.filter(location => location.path && !location.targetId).map(location => location.path!))), [allRepositories]);
-  /** A row's path below the shared folder; nothing when that is just the repository's own name. */
+  const duplicateNames = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const repo of allRepositories) counts.set(repo.name, (counts.get(repo.name) ?? 0) + 1);
+    return new Set([...counts.entries()].filter(([, count]) => count > 1).map(([name]) => name));
+  }, [allRepositories]);
+  /** A row's path below the shared folder; nothing when that is just a unique repository's own name. */
   const relativePath = (path: string, name: string) => {
     if (!root || !path.startsWith(root) || !/[\\/]/.test(path.charAt(root.length))) return displayPath(path);
     const rest = path.slice(root.length + 1);
-    return rest === name ? '' : rest;
+    if (rest !== name) return rest;
+    if (!duplicateNames.has(name)) return '';
+    const parent = displayPath(root).split(/[\\/]/).filter(Boolean).at(-1);
+    return parent ? `${parent}/${rest}` : displayPath(path);
   };
   const isBroken = (repo: WorkspaceRepository) => !repo.locations.some(location => location.available);
   const favoriteCount = allRepositories.filter(repo => repo.favorite).length;
@@ -262,16 +278,47 @@ export function WorkspaceBrowser({ tools = [], onSession, incomingManifest, onMa
     event.preventDefault();
     buttons[Math.max(0, Math.min(buttons.length - 1, at + (event.key === 'ArrowDown' ? 1 : -1)))].focus();
   }
+  const revealedSpotlight = useRef<number | null>(null);
+  const blockRef = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    if (!spotlightProject || revealedSpotlight.current === spotlightProject.token || loading) return;
+    const matchedWorkspace = workspaces.find(ws => ws.repositories.some(repo => repo.locations.some(loc => loc.projectId === spotlightProject.id)));
+    if (matchedWorkspace) {
+      if (selectedId !== matchedWorkspace.id || query || filter !== 'all') {
+        setSelectedId(matchedWorkspace.id);
+        setQuery('');
+        setFilter('all');
+        return;
+      }
+      const matchedRepo = matchedWorkspace.repositories.find(repo => repo.locations.some(loc => loc.projectId === spotlightProject.id));
+      const row = matchedRepo ? blockRef.current?.querySelector<HTMLElement>(`[data-repository-id="${CSS.escape(matchedRepo.id)}"]`) : null;
+      if (row) {
+        revealedSpotlight.current = spotlightProject.token;
+        row.scrollIntoView({ block: 'center', behavior: 'auto' });
+        const frame = requestAnimationFrame(() => {
+          row.scrollIntoView({ block: 'center', behavior: 'auto' });
+          (row.querySelector<HTMLElement>('[data-row-primary]:not(:disabled)') ?? row).focus({ preventScroll: true });
+        });
+        return () => cancelAnimationFrame(frame);
+      }
+    }
+    if (workspaces.length > 0 || !nativeAvailable) {
+      revealedSpotlight.current = spotlightProject.token;
+      blockRef.current?.scrollIntoView({ block: 'start', behavior: 'auto' });
+    }
+  }, [spotlightProject?.id, spotlightProject?.token, workspaces, selectedId, query, filter, loading]);
+
   const projectMenu = <RowMenu label={t('workspaces.projectActions')}>
     {current && <button type="button" role="menuitem" disabled={busy || scanBusy} onClick={() => void discover(true)}>{t('workspaces.discover')}</button>}
     <button type="button" role="menuitem" disabled={busy} onClick={startCreate}>{t('workspaces.create')}</button>
     {current && <button type="button" role="menuitem" disabled={busy} onClick={() => { setRenaming(true); setEditName(current.name); }}>{t('workspaces.rename')}</button>}
     <button type="button" role="menuitem" disabled={busy} onClick={() => void chooseManifest()}>{t('workspaces.openManifest')}</button>
+    {current?.manifestPath && <button type="button" role="menuitem" disabled={busy} onClick={() => void openInTwiglane()}>{t('workspaces.openInTwiglane')}</button>}
     {current && !current.manifestPath && <button type="button" role="menuitem" disabled={busy} onClick={() => void publish()}>{t('workspaces.publish')}</button>}
     <button type="button" role="menuitem" disabled={busy || loading} onClick={() => void reload(true)}>{t('workspaces.refresh')}</button>
     {current && <button type="button" role="menuitem" data-danger="true" disabled={busy} onClick={() => void deleteProject()}>{t('workspaces.deleteProject')}</button>}
   </RowMenu>;
-  return <section className={styles.block} aria-label={t('workspaces.title')} data-business-workspaces>
+  return <section ref={blockRef} className={styles.block} aria-label={t('workspaces.title')} data-business-workspaces>
     <Toolbar className={styles.heading} title={t('workspaces.title')} count={workspaces.length ? <Badge>{workspaces.length}</Badge> : undefined} />
     <div className={styles.browser}>
     {workspaces.length > 0 && current ? <>
@@ -296,7 +343,7 @@ export function WorkspaceBrowser({ tools = [], onSession, incomingManifest, onMa
       {notice && <p className={styles.notice} role="status"><span>{notice}</span><button type="button" className={styles.dismiss} aria-label={t('workspaces.dismiss')} title={t('workspaces.dismiss')} onClick={() => setNotice('')}><Icon name="close" size={13} /></button></p>}
       {allRepositories.length > 0 ? <>
         <div className={styles.filters}>
-          <div className={styles.search} onKeyDown={event => moveFocus(event, true)}><SearchField label={t('workspaces.search')} value={query} onChange={setQuery} placeholder={t('workspaces.search')} /></div>
+          <div className={styles.search} onKeyDown={event => moveFocus(event, true)}><SearchField label={t('workspaces.search')} pageSearch={enablePageSearch} value={query} onChange={setQuery} placeholder={t('workspaces.search')} /></div>
           {favoriteCount > 0 && <button type="button" className={styles.chip} aria-pressed={activeFilter === 'favorites'} onClick={() => setFilter(activeFilter === 'favorites' ? 'all' : 'favorites')}><Icon name="star" size={12} />{t('workspaces.filterFavorites', { count: favoriteCount })}</button>}
           {brokenCount > 0 && <button type="button" className={styles.chip} data-tone="danger" aria-pressed={activeFilter === 'attention'} title={t('workspaces.attentionHint', { count: brokenCount })} onClick={() => setFilter(activeFilter === 'attention' ? 'all' : 'attention')}><span className={styles.dot} aria-hidden="true" />{t('workspaces.filterAttention', { count: brokenCount })}</button>}
           {filtered && <span className={styles.matchCount} role="status">{t('workspaces.matchCount', { shown: shown.length, total: allRepositories.length })}</span>}

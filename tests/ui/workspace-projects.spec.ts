@@ -266,3 +266,57 @@ test('project errors can be dismissed and the workbench rail is not filtered by 
   await expect(page.getByText('所有业务项目')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '项目会话' })).toHaveCount(0);
 });
+
+test('linked manifest opens in Twiglane with %20 encoding, Home slash focuses repo search, and same-name root repos stay disambiguated', async ({ page }) => {
+  await install(page, 2);
+  await page.evaluate(() => {
+    const win = window as any;
+    win.__openedUrls = [] as string[];
+    win.__failTwiglaneOpen = false;
+    const orig = win.__TAURI_INTERNALS__.invoke;
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: Record<string, any> = {}) => {
+      if (command === 'open_external_url') {
+        if (win.__failTwiglaneOpen) throw { message: '无法打开 Twiglane' };
+        win.__openedUrls.push(args.url);
+        return null;
+      }
+      return orig(command, args);
+    };
+    const ws = win.__workspaceFixture.workspaces[0];
+    ws.manifestPath = '/work/my team/commerce.dev-workspace.json';
+    ws.manifestRevision = 3;
+    ws.repositories = [
+      { id: 'r-root', name: 'api', favorite: false, locations: [{ id: 'l1', path: '/work/commerce/api', available: true, kind: 'git', worktrees: [] }] },
+      { id: 'r-sub', name: 'api', favorite: false, locations: [{ id: 'l2', path: '/work/commerce/services/api', available: true, kind: 'git', worktrees: [] }] },
+    ];
+    window.dispatchEvent(new CustomEvent('cliora:business-workspaces-changed', { detail: { workspace: ws } }));
+  });
+
+  const project = page.locator('[data-business-workspaces]').first();
+  // Same-name repositories never leave the root-level one with an empty relative path.
+  await expect(project.locator('[data-repository-id="r-root"]')).toContainText('commerce/api');
+  await expect(project.locator('[data-repository-id="r-sub"]')).toContainText('services/api');
+
+  // With <= 4 standalone projects, pressing "/" on Home focuses the Business Project search input.
+  await page.locator('main').click({ position: { x: 8, y: 8 } });
+  await page.keyboard.press('/');
+  await expect(project.getByRole('textbox', { name: '搜索仓库名称或路径' })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await project.getByRole('textbox', { name: '搜索仓库名称或路径' }).blur();
+
+  // Linked manifest exposes 1-click Twiglane handoff with %20 (never '+') encoding.
+  await projectAction(page, '在 Twiglane 中打开');
+  await expect.poll(() => page.evaluate(() => (window as any).__openedUrls)).toEqual([
+    'twiglane://workspace?v=1&file=%2Fwork%2Fmy%20team%2Fcommerce.dev-workspace.json',
+  ]);
+
+  // Failure surfaces cleanly in the project error banner.
+  await page.evaluate(() => { (window as any).__failTwiglaneOpen = true; });
+  await projectAction(page, '在 Twiglane 中打开');
+  await expect(project.getByRole('alert')).toContainText('无法打开 Twiglane');
+
+  // Tools scope picker folds Business Project repositories under their project heading.
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具', exact: true }).click();
+  await page.getByRole('button', { name: '配置范围', exact: true }).click();
+  await expect(page.getByRole('option', { name: /^电商平台/ })).toBeVisible();
+});

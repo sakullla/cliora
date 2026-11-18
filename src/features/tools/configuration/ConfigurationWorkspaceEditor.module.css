@@ -1,5 +1,5 @@
 .shell { display: flex; flex-direction: column; min-height: 0; height: min(720px, calc(100dvh - 180px)); gap: 0; color: var(--text); }
-.scroll { flex: 1; min-height: 0; overflow: auto; padding: 0 var(--space-1) var(--space-8); overscroll-behavior: contain; }
+.scroll { flex: 1; min-height: 0; overflow: auto; padding: 0 var(--space-2) var(--space-8); overscroll-behavior: contain; }
 .scroll > div:not([hidden]) { display: grid; gap: var(--space-4); }
 .shell [hidden] { display: none !important; }
 .tabs, .buttons { display: flex; gap: var(--space-2); flex-wrap: wrap; }
@@ -58,13 +58,19 @@
 .modelPane { display: grid; gap: var(--space-4); min-width: 0; }
 /* Step progress: sticky under the tabs, each step jumps to its card and turns
    into a check mark once that part of the connection is filled in. */
-.chain { counter-reset: step; display: flex; align-items: center; gap: 0; margin: 0; padding: var(--space-2) 0; list-style: none; }
+.chainBar { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.chain { counter-reset: step; flex: 1 1 auto; display: flex; align-items: center; gap: 0; min-width: 0; margin: 0; padding: var(--space-2) 0; list-style: none; }
+.chainMore { flex: none; display: inline-flex; align-items: center; gap: var(--space-1_5); min-height: 26px; padding: 0 var(--space-2_5); border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface-2); box-shadow: none; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-medium); white-space: nowrap; }
+.chainMore::after { content: '→'; color: var(--text-3); font-size: var(--fs-micro); }
+.chainMore:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface-3); color: var(--text); }
 /* Tabs and the step chain stick together as one opaque band spanning the scroll width, so
    content scrolling underneath never shows through a gap beside or between them. */
-.stickyHead { position: sticky; top: 0; z-index: 2; display: grid; margin: 0 calc(var(--space-1) * -1) var(--space-2); padding: 0 var(--space-1); background: var(--surface); }
+.stickyHead { position: sticky; top: 0; z-index: 2; display: grid; margin: 0 calc(var(--space-2) * -1) var(--space-2); padding: 0 var(--space-2); background: var(--surface); }
 .stickyHead:empty { display: none; }
 .stickyHead > .tabs { margin: 0; }
+.stickyHead > .tabs:not([hidden]) + .chainBar,
 .stickyHead > .tabs:not([hidden]) + .chain { margin-top: var(--space-1); }
+.stickyHead:has(> .chainBar),
 .stickyHead:has(> .chain) { border-bottom: 1px solid var(--line); }
 .chain li { counter-increment: step; display: flex; flex: 1 1 0; align-items: center; min-width: 0; }
 .chain li:last-child { flex: none; }

@@ -1933,3 +1933,36 @@ test('closing an edit restores the configuration list scroll position', async ({
   await expect(dialog).toHaveCount(0);
   await expect.poll(() => main.evaluate(element => element.scrollTop)).toBe(top);
 });
+
+test('quick setup numbers visible steps from 1, avoids redundant back-dismiss chrome, and reveals gateway URL on API key selection', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  await page.getByRole('button', { name: '新建配置' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('button', { name: '快速配置', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  // No redundant "← 返回列表" button alongside "关闭" and "取消".
+  await expect(dialog.getByRole('button', { name: '返回列表' })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: '关闭', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '取消', exact: true })).toBeVisible();
+
+  // Default native-login quick setup hides step 1 (connection) and numbers visible steps 1 -> 2.
+  await expect(dialog.getByRole('list', { name: '连接顺序' }).locator('li')).toHaveText(['登录', '模型']);
+  const visibleBadges = () => dialog.evaluate(element =>
+    [...element.querySelectorAll<HTMLElement>('[data-config-step]')]
+      .filter(step => step.getClientRects().length > 0)
+      .map(step => step.querySelector('[class*="stepIndex"]')?.textContent?.trim() ?? ''),
+  );
+  await expect.poll(visibleBadges).toEqual(['1', '2']);
+
+  // Horizontal scroll padding leaves >= 8px room so 4px focus rings never clip.
+  const scrollPadding = await dialog.evaluate(element => {
+    const scroller = element.querySelector<HTMLElement>('[class*="scroll"]');
+    return scroller ? Number.parseFloat(getComputedStyle(scroller).paddingLeft) : 0;
+  });
+  expect(scrollPadding).toBeGreaterThanOrEqual(8);
+
+  // Selecting API key in Quick mode reveals the gateway/request URL directly and renumbers 1 -> 2 -> 3.
+  await dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true }).click();
+  await expect(dialog.getByLabel('请求地址', { exact: true })).toBeVisible();
+  await expect(dialog.getByRole('list', { name: '连接顺序' }).locator('li')).toHaveText(['供应商', '登录', '模型']);
+  await expect.poll(visibleBadges).toEqual(['1', '2', '3']);
+});

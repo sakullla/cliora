@@ -131,9 +131,10 @@
 .list > button[data-group] { min-height: 32px; color: var(--text-2); }
 .list > button[data-group] .optionCopy > strong { font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
 /* The fold control: the child count and a chevron that turns when the branch is open. */
-.disclosure { display: inline-flex; align-items: center; gap: var(--space-0_5); min-height: 24px; padding: 0 var(--space-1) 0 var(--space-1_5); border-radius: var(--radius-sm); color: var(--text-3); cursor: pointer; }
-.disclosure:hover { background: var(--surface-3); color: var(--text); }
-.disclosure > small { font-size: var(--fs-micro); font-variant-numeric: tabular-nums; }
+.disclosure { display: inline-flex; align-items: center; gap: var(--space-0_5); min-height: 22px; padding: 0 var(--space-1) 0 var(--space-1_5); border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface-2); color: var(--text-2); transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), color var(--fast) var(--ease); cursor: pointer; }
+.disclosure:hover { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+.disclosure[data-open] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+.disclosure > small { font-size: var(--fs-micro); font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
 .disclosure > svg { color: inherit !important; transition: transform var(--fast) var(--ease); }
 .disclosure[data-open] > svg { transform: rotate(90deg); }
 .list > p { margin: 0; padding: var(--space-2); color: var(--text-3); font-size: var(--fs-body); }

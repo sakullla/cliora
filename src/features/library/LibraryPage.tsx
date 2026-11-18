@@ -12,10 +12,13 @@ import { preferredLaunchMode, worktreeIntentForNewWorkbench } from '../../types/
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../../types/library';
 import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { PluginTarget, RulePlacement, RuleSyncResult } from '../../types/resources';
+import type { BusinessWorkspace, WorkspaceSelection } from '../../types/workspaces';
+import { FOCUS_REFRESH_INTERVAL, WORKSPACES_CHANGED } from '../../lib/workspaceEvents';
+import { repositoryPlaces } from '../workspaces/WorkspaceBrowser';
 import { LibraryResources } from './LibraryResources';
 import { LibraryMcp } from './LibraryMcp';
 import { NativeRuleEditor } from './NativeRuleEditor';
-import { FilterSelect } from '../../components/FilterSelect';
+import { FilterSelect, type FilterSelectOption } from '../../components/FilterSelect';
 import { SearchField } from '../../components/SearchField';
 import { GuideDialog } from '../../components/GuideDialog';
 import { RowMenu } from '../../components/RowMenu';
@@ -140,6 +143,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   const [countsFailed, setCountsFailed] = useState<LibrarySection[]>([]);
   const [countStamp, setCountStamp] = useState(0);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [businessWorkspaces, setBusinessWorkspaces] = useState<BusinessWorkspace[]>([]);
   const [draft, setDraft] = useState<LibraryDraft | null>(null);
   const [savedText, setSavedText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -266,10 +270,21 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   }, [active, reloadRulePlacements]);
   useEffect(() => {
     if (!nativeAvailable || !active) return;
-    if (remoteTargetId !== 'local') { setProjects([]); return; }
+    if (remoteTargetId !== 'local') { setProjects([]); setBusinessWorkspaces([]); return; }
     let live = true;
+    let generation = 0;
+    let loadedAt = 0;
     void hostNative.listProjects().then(rows => { if (live) setProjects(rows); }).catch(value => { if (live) showError(formatFailure(value, t('library.page.projectsFailed'), t('library.page.projectsFailedNext'))); });
-    return () => { live = false; };
+    const reloadWorkspaces = () => {
+      const request = ++generation;
+      loadedAt = Date.now();
+      void hostNative.listBusinessWorkspaces().then(rows => { if (live && request === generation) setBusinessWorkspaces(Array.isArray(rows) ? rows : []); }).catch(() => {});
+    };
+    const focused = () => { if (Date.now() - loadedAt >= FOCUS_REFRESH_INTERVAL) reloadWorkspaces(); };
+    reloadWorkspaces();
+    window.addEventListener(WORKSPACES_CHANGED, reloadWorkspaces);
+    window.addEventListener('focus', focused);
+    return () => { live = false; generation++; window.removeEventListener(WORKSPACES_CHANGED, reloadWorkspaces); window.removeEventListener('focus', focused); };
   }, [active, remoteTargetId, hostNative]);
   useEffect(() => {
     if (!nativeAvailable || !active) return;
@@ -558,17 +573,44 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
       setLaunchMode(preferredLaunchMode(settings, initialPlace.startsWith('project:') ? 'project' : 'cli', !!descriptor?.yoloAvailable));
     }).catch(() => {});
   }
+  const businessRepositoryOptions = useMemo(() => {
+    if (remoteTargetId !== 'local') return [];
+    const options: Array<{ value: string; label: string; detail: string; worktree: boolean; workspaceId: string; workspaceName: string; selection: WorkspaceSelection }> = [];
+    const seen = new Set<string>();
+    for (const workspace of businessWorkspaces) {
+      const repositories = [...workspace.repositories].sort((a, b) => Number(b.favorite) - Number(a.favorite));
+      for (const repository of repositories) {
+        const location = repository.locations.find((item) => item.available && item.path);
+        if (!location) continue;
+        for (const [path, place] of repositoryPlaces(repository, t('workspaces.mainCheckout'), t('workspaces.worktreeKind'))) {
+          if (seen.has(path)) continue;
+          seen.add(path);
+          options.push({
+            value: `custom:${path}`,
+            label: place.main ? repository.name : `${repository.name} · ${place.label}`,
+            detail: shortPath(displayPath(path)),
+            worktree: !place.main,
+            workspaceId: workspace.id,
+            workspaceName: workspace.name,
+            selection: { workspaceId: workspace.id, repositoryId: repository.id, directory: path, projectId: location.projectId, label: `${workspace.name} / ${repository.name}` },
+          });
+        }
+      }
+    }
+    return options;
+  }, [businessWorkspaces, remoteTargetId, t]);
   async function startSession() {
     if (!launchItem || !launchTool || launchBusy) return;
     setLaunchBusy(true); setLaunchError('');
     const selectedDescriptor = scopedTools.find((item) => item.id === launchTool);
     const desktop = selectedDescriptor?.launchForm === 'desktop';
-    const projectId = !desktop && launchPlace.startsWith('project:') ? launchPlace.slice('project:'.length) : null;
+    const repoOption = !desktop && remoteTargetId === 'local' ? businessRepositoryOptions.find((option) => option.value === launchPlace) : undefined;
+    const projectId = !desktop ? (repoOption?.selection.projectId ?? (launchPlace.startsWith('project:') ? launchPlace.slice('project:'.length) : null)) : null;
     // Desktop apps open without a directory, as on the home page.
-    const directory = !desktop && launchPlace.startsWith('custom:') ? launchPlace.slice('custom:'.length) : null;
+    const directory = !desktop ? (repoOption?.selection.directory ?? (launchPlace.startsWith('custom:') ? launchPlace.slice('custom:'.length) : null)) : null;
     const settings = await native.getLaunchSettings().catch(() => launchSettings);
     const mode: LaunchMode = launchMode === 'yolo' && selectedDescriptor?.yoloAvailable ? 'yolo' : 'normal';
-    const request = { toolId: launchTool, projectId, sessionId: null, mode, directory, initialPrompt: launchText, worktreeIntent: worktreeIntentForNewWorkbench(settings, { desktop }), agent: selectedDescriptor?.agentLaunchAvailable && launchAgent ? launchAgent : null };
+    const request = { ...(repoOption ? { workspaceId: repoOption.selection.workspaceId, repositoryId: repoOption.selection.repositoryId } : {}), toolId: launchTool, projectId, sessionId: null, mode, directory, initialPrompt: launchText, worktreeIntent: repoOption ? 'given' as const : worktreeIntentForNewWorkbench(settings, { desktop }), agent: selectedDescriptor?.agentLaunchAvailable && launchAgent ? launchAgent : null };
     try {
       const result = await native.launchCli(request);
       const opened = workbenchSessionId(result);
@@ -591,10 +633,14 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
       if (typeof picked === 'string' && picked.trim()) { setLaunchFolder(picked.trim()); setLaunchPlace(`custom:${picked.trim()}`); }
     } catch { /* Folder dialog cancellation needs no feedback. */ }
   }
-  const launchPlaces = [
+  const launchPlaces: FilterSelectOption[] = [
     { value: '__home', label: t('sessions.workspaceHome'), icon: <Icon name="home" size={14} /> },
-    ...projects.filter((project) => project.available).map((project) => ({ value: `project:${project.id}`, label: project.name, detail: project.path ? shortPath(displayPath(project.path)) : undefined, icon: <Icon name="folder" size={14} /> })),
-    ...(launchFolder ? [{ value: `custom:${launchFolder}`, label: shortPath(displayPath(launchFolder)), detail: displayPath(launchFolder), icon: <Icon name="folder" size={14} /> }] : []),
+    ...businessRepositoryOptions.flatMap(({ value, label, detail, worktree, workspaceId, workspaceName }, index, all) => [
+      ...(index === 0 || all[index - 1].workspaceId !== workspaceId ? [{ value: `group:${workspaceId}`, label: workspaceName, group: true, icon: <Icon name="package" size={14} /> }] : []),
+      { value, label, detail, parent: `group:${workspaceId}`, keywords: workspaceName, triggerLabel: `${workspaceName} / ${label}`, icon: <Icon name={worktree ? 'gitWorktree' : 'branch'} size={14} /> },
+    ]),
+    ...projects.filter((project) => project.available && (!project.workspaceBacked || launchPlace === `project:${project.id}`)).map((project) => ({ value: `project:${project.id}`, label: project.name, detail: project.path ? shortPath(displayPath(project.path)) : undefined, icon: <Icon name="folder" size={14} /> })),
+    ...(launchFolder && !businessRepositoryOptions.some((option) => option.value === `custom:${launchFolder}`) ? [{ value: `custom:${launchFolder}`, label: shortPath(displayPath(launchFolder)), detail: displayPath(launchFolder), icon: <Icon name="folder" size={14} /> }] : []),
   ];
   async function duplicateItem(item: LibraryItem) {
     if (busy || !nativeAvailable) return;

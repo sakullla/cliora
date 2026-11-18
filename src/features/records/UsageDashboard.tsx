@@ -209,9 +209,9 @@ function Breakdown({ report, toolName, filter, onFilter, onPrice, view, onView }
 
 export type UsageNotify = { status: (text: string, protect?: boolean) => void; alert: (value: unknown) => void; readAlert: (value: unknown) => void; clear: () => void };
 
-export function UsageDashboard({ search, onSearchChange, favoriteOnly, onClearSearch, onClearFavoriteOnly, active, tools, projects, prices, onPricesChange, scanVersion, scanning, lastScanAt, onOpenSession, notify }: {
+export function UsageDashboard({ search, onSearchChange, favoriteOnly, onClearSearch, onClearFavoriteOnly, active, tools, projects, prices, onPricesChange, scanVersion, scanning, lastScanAt, onOpenSession, onOpenConnections, notify }: {
   search: string; onSearchChange: (value: string) => void; favoriteOnly: boolean; onClearSearch: () => void; onClearFavoriteOnly: () => void; active: boolean; tools: AdapterDescriptor[]; projects: Project[]; prices: HistoryPrice[]; onPricesChange: (prices: HistoryPrice[]) => void;
-  scanVersion: number; scanning: boolean; lastScanAt: number | null;   onOpenSession: (id: string) => void; notify: UsageNotify;
+  scanVersion: number; scanning: boolean; lastScanAt: number | null; onOpenSession: (id: string) => void; onOpenConnections?: () => void; notify: UsageNotify;
 }) {
   const { t } = useTranslation();
   const [range, setRange] = useState<UsageRange>(storedRange);
@@ -347,7 +347,10 @@ export function UsageDashboard({ search, onSearchChange, favoriteOnly, onClearSe
 
   return <div className={styles.dashboard} data-loading={loading || undefined} aria-busy={loading || undefined}>
     <div className={styles.overviewHead}><div><h2>{t('records.usage.title')}</h2><p>{search.trim() || favoriteOnly ? t('records.usage.filtered', { parts: [search.trim() ? t('records.usage.filterSearch', { query: search.trim() }) : '', favoriteOnly ? t('records.page.favoriteOnly') : ''].filter(Boolean).join(' · ') }) : t('records.usage.overviewSubtitle')}</p></div>
-      <Button variant="ghost" size="sm" icon={<Icon name="settings" size={14} />} onClick={() => openPrice()}>{t('records.usage.priceSettings')}</Button>
+      <div className={styles.overviewActions}>
+        {onOpenConnections && <Button variant="ghost" size="sm" icon={<Icon name="connections" size={14} />} onClick={onOpenConnections}>{t('records.usage.liveQuotas')}</Button>}
+        <Button variant="ghost" size="sm" icon={<Icon name="settings" size={14} />} onClick={() => openPrice()}>{t('records.usage.priceSettings')}</Button>
+      </div>
     </div>
     <div className={styles.header} role="group" aria-label={t('records.usage.filterBarAria')}>
       <DateRangeFilter variant="toolbar" value={range} customFrom={customFrom} customTo={customTo} presets={ranges()} onChange={setRange}

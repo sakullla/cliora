@@ -102,9 +102,12 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
     }
   };
   const customAddress = typeof values.base_url === 'string' && values.base_url.trim() !== '';
+  const hasCustomBaseUrl = Boolean(draft.profile.id && (draft.profile.connection?.baseUrl?.trim() || customAddress))
+    || Boolean(draft.profile.editing?.intents.some(action => action.operation === 'set' && action.field === 'base_url'));
+  const requiredInQuick = draft.credential?.source === 'api_key' || hasCustomBaseUrl;
   return <section className={styles.editor} aria-label={t('tools.adapters.claude.label')}>
     <div hidden={section === 'settings'}>
-      <ConfigurationStep step="connection" label={t('common.provider.title')} title={t('common.provider.title')} meta={connectionMeta(null, values.base_url)}>
+      <ConfigurationStep step="connection" requiredInQuick={requiredInQuick} label={t('common.provider.title')} title={t('common.provider.title')} meta={connectionMeta(null, values.base_url)}>
         <div className={styles.fields}>{render('base_url')}</div>
         {view?.baseUrlSource && <p className={styles.note}>{t('tools.adapters.claude.baseUrlSource', { source: view.baseUrlSource })}</p>}
       </ConfigurationStep>

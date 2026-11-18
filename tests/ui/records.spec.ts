@@ -1550,3 +1550,30 @@ test('failed history sources expose their native reason instead of only a failed
   await expect(coverage).toContainText('future-a.jsonl');
   await expect(coverage).toContainText('future-b.jsonl');
 });
+
+test('usage dashboard header bridges to live CLI quotas on the tools page', async ({ page }) => {
+  await page.addInitScript((value) => {
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: ['openai_responses'], history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+        if (['list_projects', 'list_business_workspaces', 'list_history_prices', 'refresh_history', 'list_history_sessions', 'list_usage_queries', 'list_usage_cache', 'usage_presets', 'list_accounts'].includes(command)) return [];
+        if (command === 'get_usage_report') return value;
+        if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+        if (command === 'get_registered_tool_workspace') return { probe: { selectedPath: '/fixture/codex', installations: [{ path: '/fixture/codex', version: '1.0.0', status: 'available' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['openai_responses'], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' }, profiles: [], common: null, binding: null, snapshots: [], recoveryNeeded: [], customPath: null };
+        if (command.startsWith('plugin:event|')) return 1;
+        return null;
+      } },
+    });
+  }, emptyReport());
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
+  await page.getByRole('tab', { name: '用量', exact: true }).click();
+  const quotasLink = page.getByRole('button', { name: '查看工具额度', exact: true });
+  await expect(quotasLink).toBeVisible();
+  await quotasLink.click();
+  await expect(page.getByRole('region', { name: '工具' })).toBeVisible();
+});

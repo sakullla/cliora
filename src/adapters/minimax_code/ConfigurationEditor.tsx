@@ -45,9 +45,12 @@ function Editor(props: ConfigurationContentProps) {
     if (!ok) throw new Error(t('tools.adapters.minimaxCode.writeFailed'));
   }
   const known = provider === 'token_plan' || provider === 'minimax' || providers.includes(provider);
+  const requiredInQuick = provider !== 'token_plan'
+    || props.draft.credential?.source === 'api_key'
+    || Boolean(!view.addressLocked && view.baseUrl?.trim());
   return <section className={styles.editor} aria-label={t('tools.adapters.minimaxCode.label')}>
     <div hidden={props.section === 'settings'}>
-      <ConfigurationStep step="connection" title={t('common.provider.title')} meta={<code>{provider}</code>}>
+      <ConfigurationStep step="connection" requiredInQuick={requiredInQuick} title={t('common.provider.title')} meta={<code>{provider}</code>}>
         <div className={shared.fieldGrid}>
           <label>{t('tools.adapters.minimaxCode.provider')}
             <select aria-label={t('tools.adapters.minimaxCode.provider')} value={known ? provider : ''} disabled={blocked} onChange={event => {

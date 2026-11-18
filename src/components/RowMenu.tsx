@@ -10,11 +10,13 @@ export function RowMenu({ label, children, className, icon, title, side = false 
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [box, setBox] = useState<{ top: number; left: number } | null>(null);
+  const [portalTarget, setPortalTarget] = useState<HTMLElement>(document.body);
   const ref = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const items = () => [...panel.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? []];
   const dismiss = (restoreFocus: boolean) => { setOpen(false); if (restoreFocus) trigger.current?.focus(); };
+  useLayoutEffect(() => { setPortalTarget(ref.current?.closest('dialog') ?? document.body); }, [open]);
   // Keyboard users land on the first action once the menu has been placed.
   useEffect(() => { if (open && box) items()[0]?.focus({ preventScroll: true }); }, [open, box !== null]);
   useEffect(() => { if (!open) setBox(null); }, [open]);
@@ -30,30 +32,41 @@ export function RowMenu({ label, children, className, icon, title, side = false 
   useLayoutEffect(() => {
     if (!open) return;
     const place = () => {
-      const trigger = ref.current?.getBoundingClientRect();
+      const triggerRect = ref.current?.getBoundingClientRect();
       const menu = panel.current;
-      if (!trigger || !menu) return;
+      if (!triggerRect || !menu) return;
       const width = menu.offsetWidth;
       const height = menu.offsetHeight;
+      // If an open <dialog> is mid-animation (transform !== 'none'), it acts as the fixed containing block.
+      const containing = menu.offsetParent instanceof HTMLElement ? menu.offsetParent : null;
+      const containingRect = containing?.getBoundingClientRect();
+      const originLeft = containingRect ? containingRect.left + containing!.clientLeft : 0;
+      const originTop = containingRect ? containingRect.top + containing!.clientTop : 0;
       if (side) {
         setBox({
-          top: Math.max(8, Math.min(trigger.top, window.innerHeight - height - 8)),
-          left: Math.max(8, Math.min(trigger.right + 6, window.innerWidth - width - 8)),
+          top: Math.max(8, Math.min(triggerRect.top, window.innerHeight - height - 8)) - originTop,
+          left: Math.max(8, Math.min(triggerRect.right + 6, window.innerWidth - width - 8)) - originLeft,
         });
         return;
       }
-      const left = Math.max(8, Math.min(trigger.right - width, window.innerWidth - width - 8));
-      const spaceBelow = window.innerHeight - trigger.bottom - 8;
-      const top = spaceBelow >= height || trigger.top < height + 8
-        ? Math.min(trigger.bottom + 4, Math.max(8, window.innerHeight - height - 8))
-        : trigger.top - height - 4;
+      const left = Math.max(8, Math.min(triggerRect.right - width, window.innerWidth - width - 8)) - originLeft;
+      const spaceBelow = window.innerHeight - triggerRect.bottom - 8;
+      const top = (spaceBelow >= height || triggerRect.top < height + 8
+        ? Math.min(triggerRect.bottom + 4, Math.max(8, window.innerHeight - height - 8))
+        : triggerRect.top - height - 4) - originTop;
       setBox({ top, left });
     };
     place();
+    const dialogHost = portalTarget !== document.body ? portalTarget : null;
     window.addEventListener('resize', place);
     window.addEventListener('scroll', place, true);
-    return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
-  }, [open, side]);
+    dialogHost?.addEventListener('animationend', place);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+      dialogHost?.removeEventListener('animationend', place);
+    };
+  }, [open, side, portalTarget]);
   useEffect(() => {
     if (!open) return;
     const close = (event: MouseEvent) => {
@@ -61,13 +74,13 @@ export function RowMenu({ label, children, className, icon, title, side = false 
       if (ref.current?.contains(target) || panel.current?.contains(target)) return;
       setOpen(false);
     };
-    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); dismiss(true); } };
+    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismiss(true); } };
     document.addEventListener('mousedown', close);
-    document.addEventListener('keydown', key);
-    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', key); };
+    document.addEventListener('keydown', key, true);
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', key, true); };
   }, [open]);
   return <div className={styles.rowMenu} ref={ref}>
     <button ref={trigger} type="button" className={className ?? styles.rowMenuButton} aria-label={label} title={title ?? t('tools.workspace.moreActions')} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen(value => !value)} onKeyDown={event => { if (event.key === 'ArrowDown' && !open) { event.preventDefault(); setOpen(true); } }}>{icon ?? <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>}</button>
-    {open && createPortal(<div ref={panel} className={styles.rowMenuList} role="menu" aria-label={label} style={box ? { top: box.top, left: box.left } : { top: 0, left: -10000 }} onKeyDown={keyNavigate} onClick={() => dismiss(true)}>{children}</div>, document.body)}
+    {open && createPortal(<div ref={panel} className={styles.rowMenuList} role="menu" aria-label={label} style={box ? { top: box.top, left: box.left } : { top: 0, left: -10000 }} onKeyDown={keyNavigate} onClick={() => dismiss(true)}>{children}</div>, portalTarget)}
   </div>;
 }

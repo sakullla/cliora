@@ -16,6 +16,9 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
   const values = view?.values ?? {};
   const provider = typeof values.model_provider === 'string' && values.model_provider.trim() ? values.model_provider : 'openai';
   const customConnection = view?.customConnection ?? (typeof values.base_url === 'string' && values.base_url.trim() !== '');
+  const hasCustomBaseUrl = Boolean(draft.profile.id && draft.profile.connection?.baseUrl?.trim())
+    || Boolean(draft.profile.editing?.intents.some(action => action.operation === 'set' && (action.field === 'base_url' || action.field === 'model_provider')));
+  const requiredInQuick = draft.credential?.source === 'api_key' || hasCustomBaseUrl;
   const wireProtocol = typeof view?.wireProtocol === 'string' && view.wireProtocol.trim() ? view.wireProtocol : 'responses';
   const validity = useRef(onValidityChange);
   validity.current = onValidityChange;
@@ -34,7 +37,7 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
   };
   return <section className={styles.editor} aria-label={t('tools.adapters.codex.label')}>
     <div hidden={section === 'settings'}>
-      <ConfigurationStep step="connection" label={t('common.provider.title')} title={t('common.provider.title')} meta={connectionMeta(values.model_provider, values.base_url)}>
+      <ConfigurationStep step="connection" requiredInQuick={requiredInQuick} label={t('common.provider.title')} title={t('common.provider.title')} meta={connectionMeta(values.model_provider, values.base_url)}>
         <div className={styles.fields}>{render('model_provider')}{render('base_url')}</div>
         <p className={styles.note} role="note">{t('tools.adapters.codex.protocolBoundary', { protocol: wireProtocol })}</p>
         {view?.defaultAddressReason && <p className={styles.note}>{view.defaultAddressReason}</p>}
