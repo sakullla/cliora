@@ -6,11 +6,17 @@ import { Icon } from './Icon';
 import styles from './FilterSelect.module.css';
 
 /**
- * `indent` nests an option under the one before it (a repository under its project); `keywords` are
- * searched but not shown, except as the context line of an indented match; `triggerLabel` is the
- * fuller name the closed trigger shows when the option label alone would be ambiguous.
+ * `parent` nests an option under another one (a repository under its project). Children stay folded
+ * until their parent is opened, so dozens of projects with hundreds of repositories still read as one
+ * short list; a search flattens the tree and names each match's parent. `group` marks a parent that is
+ * only a heading: choosing it opens or closes its children instead of selecting it. `keywords` are
+ * searched but not shown; `triggerLabel` is the fuller name the closed trigger shows when the label
+ * alone would be ambiguous.
  */
-export type FilterSelectOption = { value: string; label: string; detail?: string; note?: string; disabled?: boolean; icon?: ReactNode; indent?: boolean; keywords?: string; triggerLabel?: string };
+export type FilterSelectOption = { value: string; label: string; detail?: string; note?: string; disabled?: boolean; icon?: ReactNode; parent?: string; group?: boolean; keywords?: string; triggerLabel?: string };
+
+/** Folding everything would hide a small tree for no gain; past this many children only the selected branch opens. */
+const unfoldAllUpTo = 12;
 
 const searchThreshold = 4;
 // Strip the leading verb so the search input label stays concise in both languages.
@@ -59,6 +65,7 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [box, setBox] = useState<{ top?: number; bottom?: number; left: number; width: number; maxHeight: number } | null>(null);
   const anchor = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -76,11 +83,23 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   const showSearch = searchable && (forceSearch || options.length > searchThreshold);
   const needle = query.trim().toLowerCase();
   const tokens = needle ? needle.split(/\s+/).filter(Boolean) : [];
+  const childCount = new Map<string, number>();
+  for (const item of options) if (item.parent) childCount.set(item.parent, (childCount.get(item.parent) ?? 0) + 1);
+  const labels = new Map(options.map((item) => [item.value, item.label]));
   const matches = options.filter((item) => {
-    if (!tokens.length) return true;
-    const haystack = `${item.label} ${item.detail ?? ''} ${item.note ?? ''} ${item.keywords ?? ''} ${item.value}`.toLowerCase();
+    if (!tokens.length) return !item.parent || expanded.has(item.parent);
+    // A search flattens the tree: a heading only groups, its children carry the parent's name.
+    if (item.group) return false;
+    const haystack = `${item.label} ${item.detail ?? ''} ${item.note ?? ''} ${item.keywords ?? ''} ${item.parent ? labels.get(item.parent) ?? '' : ''} ${item.value}`.toLowerCase();
     return tokens.every((token) => matchesFilterToken(haystack, token));
   });
+  function toggle(parent: string, open?: boolean) {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (open ?? !next.has(parent)) next.add(parent); else next.delete(parent);
+      return next;
+    });
+  }
 
   useLayoutEffect(() => {
     if (!open || !anchor.current) return;
@@ -101,6 +120,13 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   }, [open]);
 
   useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const total = [...childCount.values()].reduce((sum, count) => sum + count, 0);
+    const initial = new Set(total <= unfoldAllUpTo ? childCount.keys() : []);
+    if (selected?.parent) initial.add(selected.parent);
+    setExpanded(initial);
+  }, [open]);
   useLayoutEffect(() => {
     if (!open) return;
     const index = Math.max(0, matches.findIndex((item) => item.value === value));
@@ -143,6 +169,7 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
 
   function choose(option: FilterSelectOption) {
     if (option.disabled) return;
+    if (option.group) { toggle(option.value); return; }
     setOpen(false);
     setQuery('');
     onChange(option.value);
@@ -161,6 +188,14 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
     if (event.key === 'End' && (!showSearch || !query)) { event.preventDefault(); const last = Math.max(matches.length - 1, 0); revealIndex.current = last; setActive(last); return; }
     const current = matches[Math.min(active, matches.length - 1)];
     if (event.key === 'Enter' && current) { event.preventDefault(); choose(current); return; }
+    // → opens a folded parent, ← folds it or steps from a child back to its parent.
+    if (!needle && current && (event.key === 'ArrowRight' || event.key === 'ArrowLeft') && (childCount.has(current.value) || current.parent)) {
+      event.preventDefault();
+      if (event.key === 'ArrowRight' && childCount.has(current.value)) toggle(current.value, true);
+      else if (event.key === 'ArrowLeft' && childCount.has(current.value) && expanded.has(current.value)) toggle(current.value, false);
+      else if (event.key === 'ArrowLeft' && current.parent) { const at = matches.findIndex((item) => item.value === current.parent); if (at >= 0) { revealIndex.current = at; setActive(at); } }
+      return;
+    }
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
@@ -188,10 +223,15 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
         {query && <button type="button" className={styles.searchClear} aria-label={t('common.search.clear')} title={t('common.search.clear')} onClick={() => { changeQuery(''); searchInputRef.current?.focus(); }}><Icon name="close" size={14} /></button>}
       </div>}
       <div className={styles.list} id={listId} role="listbox" aria-label={label} style={{ maxHeight: Math.max(140, box.maxHeight - (showSearch ? 52 : 8) - (onPickFolder || onPickRemote ? 40 : 0)) }}>
-        {matches.length ? matches.map((option, index) => <button key={option.value || '__all'} type="button" role="option" aria-selected={option.value === value} aria-disabled={option.disabled || undefined} data-value={option.value} data-indent={option.indent || undefined} data-option-index={index} data-active={index === active || undefined} disabled={option.disabled} onMouseEnter={() => setActive(index)} onClick={() => choose(option)}>
-          {option.icon && <span className={styles.optionIcon}>{option.icon}</span>}<span className={styles.optionCopy}><strong>{needle ? highlightRuns(option.label, query).map((run, runIndex) => run.hit ? <mark key={runIndex}>{run.text}</mark> : run.text) : option.label}</strong>{option.indent && needle && option.keywords ? <small>{[option.keywords, option.detail].filter(Boolean).join(' · ')}</small> : option.detail && <small>{option.detail}</small>}</span>
-          <span className={styles.optionMarks}>{option.note && <em>{option.note}</em>}{option.value === value && <Icon name="check" size={14} />}</span>
-        </button>) : <p>{emptyText ?? t('common.filterSelect.empty')}</p>}
+        {matches.length ? matches.map((option, index) => {
+          const children = childCount.get(option.value) ?? 0;
+          const open = expanded.has(option.value);
+          const context = option.parent && needle ? [labels.get(option.parent), option.detail].filter(Boolean).join(' · ') : option.detail;
+          return <button key={option.value || '__all'} type="button" role="option" aria-selected={option.value === value} aria-disabled={option.disabled || undefined} aria-expanded={children ? open : undefined} data-value={option.value} data-indent={(option.parent && !needle) || undefined} data-group={option.group || undefined} data-option-index={index} data-active={index === active || undefined} disabled={option.disabled} onMouseEnter={() => setActive(index)} onClick={() => choose(option)}>
+            {option.icon && <span className={styles.optionIcon}>{option.icon}</span>}<span className={styles.optionCopy}><strong>{needle ? highlightRuns(option.label, query).map((run, runIndex) => run.hit ? <mark key={runIndex}>{run.text}</mark> : run.text) : option.label}</strong>{context && <small>{context}</small>}</span>
+            <span className={styles.optionMarks}>{option.note && <em>{option.note}</em>}{option.value === value && <Icon name="check" size={14} />}{children > 0 && !needle && <span className={styles.disclosure} role="presentation" title={t(open ? 'common.filterSelect.collapse' : 'common.filterSelect.expand', { count: children })} data-open={open || undefined} onClick={(event) => { event.stopPropagation(); toggle(option.value); }}><small>{children}</small><Icon name="chevronRight" size={13} /></span>}</span>
+          </button>;
+        }) : <p>{emptyText ?? t('common.filterSelect.empty')}</p>}
       </div>
       {(onPickFolder || onPickRemote) && <div className={styles.footerActions}>{onPickFolder && <button type="button" className={styles.folderPick} onClick={() => { setOpen(false); setQuery(''); onPickFolder(); }}><Icon name="folder" size={14} />{pickFolderLabel ?? t('common.filterSelect.pickFolder')}</button>}{onPickRemote && <button type="button" className={styles.folderPick} onClick={() => { setOpen(false); setQuery(''); onPickRemote(); }}><Icon name="globe" size={14} />{pickRemoteLabel ?? t('home.remote.add')}</button>}</div>}
     </div>, portalTarget)}

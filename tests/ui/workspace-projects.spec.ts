@@ -172,8 +172,14 @@ test('favorite repositories lead the list and the new-session directory picker',
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await page.getByRole('button', { name: '新建会话', exact: true }).first().click();
   await page.getByRole('dialog', { name: '新建工作台会话' }).getByRole('button', { name: '工作目录 / 项目', exact: true }).click();
+  // Repositories fold under their project: the heading shows the count and opens with a click.
   const options = page.getByRole('option');
-  await expect(options.nth(1)).toContainText('service-47');
+  const heading = options.nth(1);
+  await expect(heading).toContainText('电商平台');
+  await expect(heading).toHaveAttribute('aria-expanded', 'false');
+  await heading.click();
+  await expect(heading).toHaveAttribute('aria-expanded', 'true');
+  await expect(options.nth(2)).toContainText('service-47');
   await page.getByRole('textbox', { name: /搜索/ }).last().fill('team-1/api-feature');
   await expect(page.getByRole('option', { name: /^api · feature\/search/ })).toHaveCount(1);
 });

@@ -19,17 +19,17 @@ export function scopeLabel(scope: PromptScope, workspaces: BusinessWorkspace[], 
  */
 export function scopeOptions(workspaces: BusinessWorkspace[], t: TFunction) {
   return [
-    { value: 'global', label: t('prompts.global'), note: t('prompts.globalNote') },
+    { value: 'global', label: t('prompts.global'), detail: t('prompts.globalNote') },
     ...workspaces.flatMap(project => {
       // Two repositories with one name are told apart by where they live.
       const names = new Map<string, number>();
       for (const repository of project.repositories) names.set(repository.name, (names.get(repository.name) ?? 0) + 1);
       return [
-        { value: `workspace:${project.id}`, label: project.name, note: t('prompts.projectScope') },
+        { value: `workspace:${project.id}`, label: project.name, keywords: t('prompts.projectScope') },
         ...project.repositories.map(repository => {
           const path = repository.locations.find(location => location.path)?.path;
           const detail = (names.get(repository.name) ?? 0) > 1 && path ? shortPath(path) : undefined;
-          return { value: `repository:${repository.id}`, label: repository.name, detail, indent: true, keywords: project.name, triggerLabel: `${project.name} / ${repository.name}` };
+          return { value: `repository:${repository.id}`, label: repository.name, detail, parent: `workspace:${project.id}`, triggerLabel: `${project.name} / ${repository.name}` };
         }),
       ];
     }),

@@ -117,11 +117,28 @@ test('batch classification changes scope and tags while preserving full text', a
   await panel.getByRole('button', { name: '批量归类', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '批量归类' });
   await dialog.getByRole('button', { name: '适用范围', exact: true }).click();
-  await page.getByRole('option', { name: /^电商平台 项目专用/ }).click();
+  await page.getByRole('option', { name: /^电商平台/ }).first().click();
   await dialog.getByRole('button', { name: '应用到所选条目' }).click();
   await expect(dialog.getByRole('status')).toContainText('已保存');
   const saved = await page.evaluate(() => (window as any).__promptFixture.documents.local.find((item: any) => item.id === 'general'));
   expect(saved.body).toBe('先检查边界，再检查错误恢复。'); expect(saved.scope).toEqual({ kind: 'workspace', workspaceId: 'workspace-commerce' });
+});
+
+test('scope choices follow project edits made elsewhere without reopening the library', async ({ page }) => {
+  await install(page); const panel = await library(page);
+  await panel.getByRole('textbox', { name: '搜索资料' }).fill('通用审查');
+  await panel.getByLabel('选择 通用审查', { exact: true }).check();
+  await panel.getByRole('button', { name: '批量归类', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '批量归类' });
+  await page.evaluate(() => {
+    const fixture = (window as any).__workspaceFixture;
+    fixture.workspaces[0].name = '电商平台（改名）';
+    fixture.workspaces.push({ id: 'workspace-new', name: '新建的项目', revision: 1, manifestPath: null, manifestRevision: null, error: null, repositories: [] });
+    window.dispatchEvent(new CustomEvent('cliora:business-workspaces-changed', { detail: {} }));
+  });
+  await dialog.getByRole('button', { name: '适用范围', exact: true }).click();
+  await expect(page.getByRole('option', { name: /^电商平台（改名）/ }).first()).toBeVisible();
+  await expect(page.getByRole('option', { name: /^新建的项目/ })).toBeVisible();
 });
 
 test('incoming batch duplicates are visible in an empty library without becoming replacement targets', async ({ page }) => {

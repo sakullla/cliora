@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { native } from '../../lib/native';
+import { FOCUS_REFRESH_INTERVAL, WORKSPACES_CHANGED } from '../../lib/workspaceEvents';
 import { useRemoteIdentity } from '../../lib/remoteReads';
 import { confirmAction } from '../../lib/confirm';
 import { formatFailure } from '../../lib/feedback';
@@ -76,10 +77,26 @@ export function PromptLibrary({ context, active, createSignal, discardSignal, sp
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; documentRead.current++; if (noticeTimer.current) clearTimeout(noticeTimer.current); if (editorNoticeTimer.current) clearTimeout(editorNoticeTimer.current); }; }, []);
   useEffect(() => {
     setSelected({}); setOffset(0); documentRead.current++; setNotice(''); setEditorNotice('');
+    return () => { documentRead.current++; };
+  }, [source]);
+  // Scope choices follow project edits: a change announced inside Cliora, returning to the
+  // window (Twiglane edits the same shared projects) and coming back to this page all list again.
+  useEffect(() => {
+    if (!active) return;
     let live = true;
-    void native.listBusinessWorkspaces().then(rows => { if (live) { setWorkspaces(Array.isArray(rows) ? rows : []); setScopeError(''); } }).catch(() => { if (live) setScopeError(t('prompts.loadScopes')); });
-    return () => { live = false; documentRead.current++; };
-  }, [source, t]);
+    let generation = 0;
+    let loadedAt = 0;
+    const reload = () => {
+      const request = ++generation;
+      loadedAt = Date.now();
+      void native.listBusinessWorkspaces().then(rows => { if (live && request === generation) { setWorkspaces(Array.isArray(rows) ? rows : []); setScopeError(''); } }).catch(() => { if (live && request === generation) setScopeError(t('prompts.loadScopes')); });
+    };
+    const focused = () => { if (Date.now() - loadedAt >= FOCUS_REFRESH_INTERVAL) reload(); };
+    reload();
+    window.addEventListener(WORKSPACES_CHANGED, reload);
+    window.addEventListener('focus', focused);
+    return () => { live = false; generation++; window.removeEventListener(WORKSPACES_CHANGED, reload); window.removeEventListener('focus', focused); };
+  }, [source, active, t]);
   useEffect(() => { if (createSignal === seenCreate.current) return; seenCreate.current = createSignal; if (active) void create(); }, [createSignal, active]);
   useEffect(() => { if (discardSignal === seenDiscard.current) return; seenDiscard.current = discardSignal; setDraft(null); setImportOpen(false); setAssignOpen(false); setError(''); documentRead.current++; }, [discardSignal]);
   useEffect(() => { if (!active || !spotlight || seenSpotlight.current === spotlight.token) return; seenSpotlight.current = spotlight.token; void edit(spotlight.id, null); }, [active, spotlight?.id, spotlight?.token]);

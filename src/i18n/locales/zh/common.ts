@@ -53,6 +53,8 @@ export default {
     searchPlaceholder: '输入名称',
     empty: '没有匹配的选项',
     pickFolder: '选择文件夹…',
+    expand: '展开 {{count}} 项',
+    collapse: '收起 {{count}} 项',
   },
   dialog: {
     back: '返回列表',

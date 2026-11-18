@@ -522,7 +522,7 @@ test('library keyword matches titles and bodies and combines with the project an
   await expect(card('发布检查')).toHaveCount(0);
   // Project on top of both: no row carries the keyword, the tag and this project.
   await library.getByRole('button', { name: '项目筛选' }).click();
-  await page.getByRole('option', { name: /^cliora 项目专用$/ }).click();
+  await page.getByRole('option', { name: /^cliora\b/ }).first().click();
   await expect(library.getByText('命中 0 / 共 3')).toBeVisible();
   await expect(library.getByText(/筛选结果为空/)).toBeVisible();
   // One clear returns the whole list with every condition gone.

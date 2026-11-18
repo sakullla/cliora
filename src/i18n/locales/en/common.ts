@@ -53,6 +53,8 @@ export default {
     searchPlaceholder: 'Type a name',
     empty: 'No matching options',
     pickFolder: 'Choose folder…',
+    expand: 'Show {{count}}',
+    collapse: 'Hide {{count}}',
   },
   dialog: {
     back: 'Back to list',

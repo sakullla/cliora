@@ -15,20 +15,13 @@ import { GuideDialog } from '../../components/GuideDialog';
 import type { AdapterDescriptor } from '../../types/native';
 import type { BusinessWorkspace, WorkspaceCandidate, WorkspaceManifestPreview, WorkspaceRepository } from '../../types/workspaces';
 import styles from './WorkspaceBrowser.module.css';
+import { WORKSPACES_CHANGED, notifyWorkspacesChanged, changedWorkspace, FOCUS_REFRESH_INTERVAL } from '../../lib/workspaceEvents';
 
-export const WORKSPACES_CHANGED = 'cliora:business-workspaces-changed';
+export { WORKSPACES_CHANGED, notifyWorkspacesChanged, changedWorkspace, type WorkspacesChangedDetail } from '../../lib/workspaceEvents';
 export const WORKSPACE_MANIFEST_OPEN = 'cliora:workspace-manifest-open';
-/** `workspace` is the project as the operation returned it; listeners patch it instead of
- * listing and re-probing every repository. `source` lets the sender skip its own event. */
-export type WorkspacesChangedDetail = { source?: string; workspace?: BusinessWorkspace };
-export function notifyWorkspacesChanged(detail: WorkspacesChangedDetail = {}) { window.dispatchEvent(new CustomEvent<WorkspacesChangedDetail>(WORKSPACES_CHANGED, { detail })); }
-export function changedWorkspace(event: Event) { return (event as CustomEvent<WorkspacesChangedDetail | null>).detail ?? {}; }
 export function isBusinessWorkspace(value: unknown): value is BusinessWorkspace {
   return !!value && typeof value === 'object' && typeof (value as BusinessWorkspace).id === 'string' && Array.isArray((value as BusinessWorkspace).repositories);
 }
-/** A focus refresh re-checks every repository directory; with hundreds of them, switching
- * windows back and forth must not repeat that work each time. */
-const FOCUS_REFRESH_INTERVAL = 30_000;
 const failure = (value: unknown) => formatFailure(value, '项目操作失败', '请重试');
 
 /** Worktree choices of one repository: its main checkout first, then attached worktrees. */

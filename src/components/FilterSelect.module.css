@@ -21,6 +21,8 @@
 }
 .trigger:hover:not(:disabled) { border-color: var(--control-line-hover); background-color: var(--surface-2); }
 .trigger[data-open="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+/* The shared button hover sets the `background` shorthand; keep the chevron through hover and open. */
+.trigger:hover:not(:disabled), .trigger[data-open="true"] { background-image: var(--chevron); background-repeat: no-repeat; background-position: right 10px center; }
 .trigger:focus-visible { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: -1px; box-shadow: 0 0 0 4px var(--accent-ring); }
 .trigger[data-empty="true"] .triggerCopy > span { color: var(--text-2); }
 .trigger:disabled { opacity: .5; }
@@ -125,7 +127,15 @@
 .list > button[data-indent]::before { content: ''; position: absolute; top: 4px; bottom: 4px; left: calc(var(--space-2) + var(--space-1_75)); width: 1px; background: var(--line); }
 .list > button[data-indent] .optionCopy > strong { font-weight: var(--fw-medium); }
 .list > button[data-indent][aria-selected="true"] .optionCopy > strong { font-weight: var(--fw-semibold); }
-.list > button:not([data-indent]) + button[data-indent] { margin-top: calc(var(--space-0_5) * -1); }
+/* A heading-only parent reads as a section label, not a choice. */
+.list > button[data-group] { min-height: 32px; color: var(--text-2); }
+.list > button[data-group] .optionCopy > strong { font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
+/* The fold control: the child count and a chevron that turns when the branch is open. */
+.disclosure { display: inline-flex; align-items: center; gap: var(--space-0_5); min-height: 24px; padding: 0 var(--space-1) 0 var(--space-1_5); border-radius: var(--radius-sm); color: var(--text-3); cursor: pointer; }
+.disclosure:hover { background: var(--surface-3); color: var(--text); }
+.disclosure > small { font-size: var(--fs-micro); font-variant-numeric: tabular-nums; }
+.disclosure > svg { color: inherit !important; transition: transform var(--fast) var(--ease); }
+.disclosure[data-open] > svg { transform: rotate(90deg); }
 .list > p { margin: 0; padding: var(--space-2); color: var(--text-3); font-size: var(--fs-body); }
 
 .footerActions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0 calc(var(--space-1_5) * -1) calc(var(--space-1_5) * -1); border-top: 1px solid var(--line); }

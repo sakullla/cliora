@@ -1,4 +1,5 @@
 import { changedWorkspace, repositoryPlaces, WORKSPACES_CHANGED } from '../workspaces/WorkspaceBrowser';
+import { FOCUS_REFRESH_INTERVAL } from '../../lib/workspaceEvents';
 import type { BusinessWorkspace, WorkspaceSelection, WorkspaceSessionContext } from '../../types/workspaces';
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -468,8 +469,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       if (!workspace) { reload(); return; }
       setBusinessWorkspaces(previous => previous.some(item => item.id === workspace.id) ? previous.map(item => item.id === workspace.id ? workspace : item) : previous);
     };
-    reload(); window.addEventListener(WORKSPACES_CHANGED, changed);
-    return () => { live = false; generation++; window.removeEventListener(WORKSPACES_CHANGED, changed); };
+    // Twiglane edits the same shared projects; coming back to the window lists them again.
+    let loadedAt = Date.now();
+    const focused = () => { if (Date.now() - loadedAt >= FOCUS_REFRESH_INTERVAL) { loadedAt = Date.now(); reload(); } };
+    reload(); window.addEventListener(WORKSPACES_CHANGED, changed); window.addEventListener('focus', focused);
+    return () => { live = false; generation++; window.removeEventListener(WORKSPACES_CHANGED, changed); window.removeEventListener('focus', focused); };
   }, [active, businessSessionKey]);
   const [remoteProjects, setRemoteProjects] = useState<RemoteProject[]>([]);
   const [loadedRemoteTargets, setLoadedRemoteTargets] = useState<RemoteTarget[] | null>(null);
@@ -3191,7 +3195,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setLaunchMode(preferredLaunchMode(launchSettings, workspaceValue.startsWith('project:') || workspaceValue.startsWith('remote:') ? 'project' : 'cli', !!nextTool?.yoloAvailable));
   }
   const businessRepositoryOptions = useMemo(() => {
-    const options: Array<{ value: string; label: string; detail: string; worktree: boolean; selection: WorkspaceSelection }> = [];
+    const options: Array<{ value: string; label: string; detail: string; worktree: boolean; workspaceId: string; workspaceName: string; selection: WorkspaceSelection }> = [];
     // Hundreds of repositories with their worktrees: a set keeps de-duplication linear.
     const seen = new Set<string>();
     for (const workspace of businessWorkspaces) {
@@ -3205,8 +3209,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           options.push({
             value: `custom:${path}`,
             label: place.main ? repository.name : `${repository.name} · ${place.label}`,
-            detail: t('workspaces.repoOption', { project: workspace.name, path: shortPath(displayPath(path)) }),
+            detail: shortPath(displayPath(path)),
             worktree: !place.main,
+            workspaceId: workspace.id,
+            workspaceName: workspace.name,
             selection: { workspaceId: workspace.id, repositoryId: repository.id, directory: path, projectId: location.projectId, label: `${workspace.name} / ${repository.name}` },
           });
         }
@@ -3227,8 +3233,12 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     }
     const list: FilterSelectOption[] = [
       { value: '__home', label: t('sessions.workspaceHome'), icon: <Icon name="home" size={14} /> },
-      // Project repositories (main checkout and attached worktrees) are ordinary directory choices.
-      ...businessRepositoryOptions.map(({ value, label, detail, worktree }) => ({ value, label, detail, icon: <Icon name={worktree ? 'gitWorktree' : 'branch'} size={14} /> })),
+      // Project repositories (main checkout and attached worktrees) fold under their project, so dozens of
+      // projects with hundreds of repositories stay one short list; a search finds any of them by name.
+      ...businessRepositoryOptions.flatMap(({ value, label, detail, worktree, workspaceId, workspaceName }, index, all) => [
+        ...(index === 0 || all[index - 1].workspaceId !== workspaceId ? [{ value: `group:${workspaceId}`, label: workspaceName, group: true, icon: <Icon name="package" size={14} /> }] : []),
+        { value, label, detail, parent: `group:${workspaceId}`, keywords: workspaceName, icon: <Icon name={worktree ? 'gitWorktree' : 'branch'} size={14} /> },
+      ]),
       // A directory that only backs a business-project repository is offered under that project.
       ...availableProjects.filter((project) => !project.workspaceBacked || workspaceValue === `project:${project.id}`).map((project) => ({ value: `project:${project.id}`, label: project.name, detail: project.path ? shortPath(displayPath(project.path)) : undefined, icon: <Icon name="folder" size={14} /> })),
     ];
