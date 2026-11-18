@@ -158,16 +158,10 @@ pub(crate) fn user_value(path: &str, name: &str) -> Option<String> {
         None
     }
 }
+/// Only the Windows proxy detection reads a DWORD; other platforms have no caller.
+#[cfg(windows)]
 pub(crate) fn user_dword(path: &str, name: &str) -> Option<u32> {
-    #[cfg(windows)]
-    {
-        native::user_dword(path, name)
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (path, name);
-        None
-    }
+    native::user_dword(path, name)
 }
 pub(crate) fn application(matches: impl Fn(&str) -> bool) -> Option<InstalledApplication> {
     #[cfg(windows)]
