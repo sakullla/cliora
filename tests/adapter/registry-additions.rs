@@ -628,15 +628,184 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
             true
         )
         .is_empty());
-    // antigravity (local agy 1.3.1 + [RE] codeburn on 1.2.x): settings.json
-    // editing, --conversation resume, MCP (config/mcp_config.json) + Skills,
-    // conversation index + gen_metadata protobuf ModelUsageStats usage with
-    // strict degrade; headless GEMINI_API_KEY is the only managed credential
-    // channel; keyring login is never adopted.
+    // antigravity (local agy 1.3.1 + [RE] codeburn on 1.2.x, extended by the
+    // isolated 1.5.9 remote evidence run 2026-11-16): settings.json editing,
+    // --conversation resume, version-shaped MCP (config/mcp_config.json —
+    // 1.5+ writes the per-entry `disabled` contract, 1.3.x stays flag-free
+    // with remove-on-disable; the project .agents/mcp_config.json runtime
+    // scope is a directly managed native file) + Skills + standalone Agents
+    // (workspace .agents/agents/{name}/agent.md and global
+    // ~/.gemini/config/agents/{name}/agent.md; the --agent launch flag is
+    // 1.5+-verified and publishes agent launchability) + Plugins
+    // (~/.gemini/config/plugins/ directories with the config.json
+    // plugins.<dir>.enabled ledger; file-backed listing, native
+    // install/uninstall commands, shared-transaction enable/disable, builtins
+    // read-only; mutations gated to >=1.5 because the 1.3.x plugin storage is
+    // undocumented) + Hooks (standalone hooks.json native-file roles on both
+    // scopes and an editable plugin-root hooks.json through the shared
+    // plugin-file write path, both schema-checked against the 1.5.9 named
+    // hooks contract before any write), conversation index +
+    // gen_metadata protobuf ModelUsageStats usage with strict degrade;
+    // headless GEMINI_API_KEY is the only managed credential channel; keyring
+    // login is never adopted.
     let antigravity = registry.get("antigravity").unwrap();
     assert!(antigravity.supports_skills());
-    assert!(antigravity.configuration().is_none());
-    assert!(antigravity.agents().is_none());
+    // Typed settings (1.5.9 evidence): exactly the two persisted keys of the
+    // signed-in machine's settings.json are mapped — no invented model lists,
+    // execution-mode or reasoning-effort settings fields (those are verified
+    // session-only launch flags that never persist).
+    let agy_settings = antigravity.configuration().expect("typed settings port");
+    assert_eq!(
+        agy_settings
+            .describe(crate::native::adapter::Scope::Global)
+            .fields
+            .iter()
+            .map(|field| field.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["model", "trustedWorkspaces"]
+    );
+    let settings_159: serde_json::Value = serde_json::from_str(include_str!(
+        "../fixtures/native/antigravity-cli-1.5.9.json"
+    ))
+    .unwrap();
+    let mut documents = std::collections::BTreeMap::new();
+    documents.insert(
+        "settings".to_string(),
+        settings_159.clone(),
+    );
+    // The typed keys are gated on the resolved 1.5 native form; the shared
+    // draft/apply paths resolve it from the selected installation.
+    let verified = crate::adapters::configuration::EditingState {
+        native_form: Some("1.5".to_string()),
+        ..Default::default()
+    };
+    let view = agy_settings
+        .read(&documents, &verified)
+        .unwrap();
+    assert_eq!(view["typedSettings"], serde_json::json!(true));
+    assert_eq!(view["values"]["model"], settings_159["model"]);
+    assert_eq!(view["values"]["trustedWorkspaces"], settings_159["trustedWorkspaces"]);
+    // Session-only launch parameters are not persisted settings and are no
+    // longer published through the configuration view.
+    assert!(view.get("launchParameters").is_none());
+    // The adapter publishes the verified 1.5 session parameters through the
+    // launch contract with the evidence-fixed choice sets.
+    let published = crate::adapters::PublishedDescriptor::from_adapter(antigravity);
+    assert_eq!(
+        published.launch_session_options.iter().map(|option| option.id).collect::<Vec<_>>(),
+        vec!["mode", "effort"]
+    );
+    assert_eq!(
+        published.launch_session_options[1].choices,
+        ["low", "medium", "high", "xhigh", "max"]
+    );
+    assert_eq!(published.launch_session_options_since, Some("1.5"));
+    assert_eq!(published.launch_session_options_before, Some("2.0"));
+    assert_eq!(published.project_model_override_since, Some("1.5"));
+    assert_eq!(
+        antigravity.launch_session_options(Some("1.5.9")).len(),
+        2
+    );
+    assert!(antigravity.launch_session_options(Some("1.3.1")).is_empty());
+    // Invalid typed values are refused before any document change; unknown
+    // fields and wrong shapes surface typed issues.
+    let bad_action: crate::adapters::configuration::ConfigurationAction =
+        serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "target": "settings",
+            "operation": "set",
+            "field": "trustedWorkspaces",
+            "value": "not-an-array",
+        }))
+        .unwrap();
+    assert!(agy_settings
+        .edit(&mut documents, &mut verified.clone(), &bad_action)
+        .is_err());
+    documents.insert(
+        "settings".to_string(),
+        serde_json::json!({"model": "", "trustedWorkspaces": ["/ok"], "futureNative": true}),
+    );
+    let issues = agy_settings.validate(&documents, &verified, crate::native::adapter::Scope::Global);
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].field.as_deref(), Some("model"));
+    // A 1.3/unresolved form keeps raw JSON only: no typed write is accepted
+    // and the 1.5 value shapes are not judged on that line.
+    let legacy = crate::adapters::configuration::EditingState {
+        native_form: Some("1.3".to_string()),
+        ..Default::default()
+    };
+    assert!(agy_settings
+        .edit(&mut documents, &mut legacy.clone(), &bad_action)
+        .is_err());
+    assert!(agy_settings
+        .validate(&documents, &legacy, crate::native::adapter::Scope::Global)
+        .is_empty());
+    // The per-project model preference is the verified channel for the
+    // session-only --model flag; invalid names refuse the launch.
+    assert!(antigravity.supports_project_model_override());
+    assert_eq!(
+        antigravity
+            .project_model_args(Some("Gemini 4 Carbon (Medium)"))
+            .unwrap(),
+        vec!["--model".to_string(), "Gemini 4 Carbon (Medium)".to_string()]
+    );
+    assert!(antigravity.project_model_args(Some(" ")).is_err());
+    assert!(antigravity.project_model_args(None).unwrap().is_empty());
+    let agy_agents = antigravity.agents().expect("agents port");
+    assert!(agy_agents.capability().supported);
+    assert_eq!(agy_agents.capability().format, "markdown");
+    assert_eq!(
+        agy_agents
+            .writable_definition(
+                &agy_agents
+                    .root(crate::native::adapter::Scope::Global, home, None)
+                    .unwrap(),
+                "reviewer"
+            )
+            .unwrap()
+            .display()
+            .to_string()
+            .replace('\\', "/"),
+        format!(
+            "{}/.gemini/config/agents/reviewer/agent.md",
+            home.display().to_string().replace('\\', "/")
+        )
+    );
+    assert_eq!(
+        agy_agents
+            .writable_definition(
+                &agy_agents
+                    .root(crate::native::adapter::Scope::Project, home, Some(work))
+                    .unwrap(),
+                "reviewer"
+            )
+            .unwrap()
+            .display()
+            .to_string()
+            .replace('\\', "/"),
+        format!(
+            "{}/.agents/agents/reviewer/agent.md",
+            work.display().to_string().replace('\\', "/")
+        )
+    );
+    assert!(antigravity.descriptor().management.agents);
+    // The agent launch selection is a verified extension point: antigravity
+    // (1.5+) carries --agent, older or unverified lines refuse it, and every
+    // other CLI keeps the default refusal so its launch args never change.
+    assert_eq!(
+        antigravity
+            .launch_agent_args_for_version("1.5.9", Some("probe-main"))
+            .unwrap(),
+        vec!["--agent".to_string(), "probe-main".to_string()]
+    );
+    assert!(antigravity
+        .launch_agent_args_for_version("1.3.1", Some("probe-main"))
+        .is_err());
+    assert!(antigravity.launch_agent_args(None).unwrap().is_empty());
+    assert!(crate::adapters::PublishedDescriptor::from_adapter(antigravity).agent_launch_available);
+    assert!(registry.get("grok").unwrap().launch_agent_args(Some("probe")).is_err());
+    assert!(!crate::adapters::PublishedDescriptor::from_adapter(registry.get("grok").unwrap())
+        .agent_launch_available);
     assert!(antigravity.descriptor().yolo_available);
     assert!(antigravity
         .launch_args(Some("conv_1"), crate::adapters::LaunchMode::Normal)
@@ -645,14 +814,304 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
         antigravity.auth_env_name(&env_key_connection()).as_deref(),
         Some("GEMINI_API_KEY")
     );
+    // The MCP entry shape follows the probed install line; the location stays
+    // the documented file for both verified lines and refuses an unverified
+    // major instead of guessing.
+    assert!(antigravity.mcp_requires_version());
     assert!(antigravity
-        .native_files(
-            crate::native::adapter::Scope::Project,
+        .mcp_location_for_version(
+            crate::native::adapter::Scope::Global,
             home,
-            Some(work),
-            true
+            None,
+            Some("1.5.9")
         )
-        .is_empty());
+        .is_some());
+    assert!(antigravity
+        .mcp_location_for_version(
+            crate::native::adapter::Scope::Global,
+            home,
+            None,
+            Some("2.0.0")
+        )
+        .is_none());
+    // 1.5.9 disable keeps the native entry with disabled:true; 1.3.x disable
+    // removes it; an enabled 1.5.9 write stamps the native writer's flag.
+    let location = antigravity
+        .mcp_location(crate::native::adapter::Scope::Global, home, None)
+        .unwrap();
+    let mut shape_definition = crate::resources::mcp::McpDefinition {
+        id: "fixture-shape".into(),
+        name: "shape".into(),
+        cwd: String::new(),
+        transport: crate::resources::mcp::McpTransport::Stdio,
+        command: "npx".into(),
+        args: Vec::new(),
+        url: String::new(),
+        env: indexmap::IndexMap::new(),
+        headers: indexmap::IndexMap::new(),
+        in_library: true,
+        version: 0,
+        updated_at: None,
+    };
+    let written_159 = antigravity
+        .mcp_document_for_version(&shape_definition, true, None, &location, Some("1.5.9"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(written_159["disabled"], false);
+    let disabled_159 = antigravity
+        .mcp_document_for_version(
+            &shape_definition,
+            false,
+            Some(&written_159),
+            &location,
+            Some("1.5.9")
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(disabled_159["disabled"], true);
+    assert!(antigravity
+        .mcp_document_for_version(
+            &shape_definition,
+            false,
+            Some(&written_159),
+            &location,
+            Some("1.3.1")
+        )
+        .unwrap()
+        .is_none());
+    shape_definition.transport = crate::resources::mcp::McpTransport::Http;
+    shape_definition.url = "https://shape.example.com/mcp".into();
+    let legacy_entry = serde_json::json!({"url": "https://legacy.example.com/mcp"});
+    let rewritten = antigravity
+        .mcp_document_for_version(
+            &shape_definition,
+            true,
+            Some(&legacy_entry),
+            &location,
+            Some("1.5.9")
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(rewritten["serverUrl"], "https://shape.example.com/mcp");
+    assert!(rewritten.get("url").is_none(), "不允许 url/serverUrl 双写");
+    assert!(antigravity
+        .mcp_document_for_version(
+            &shape_definition,
+            true,
+            Some(&legacy_entry),
+            &location,
+            Some("1.3.1")
+        )
+        .is_err());
+    // The project runtime MCP scope is a native config file role, joined by
+    // the standalone project hooks document (1.5.9 evidence:
+    // <workspace>/.agents/hooks.json; the global standalone hooks.json lives
+    // under ~/.gemini/config/).
+    let project_files = antigravity.native_files(
+        crate::native::adapter::Scope::Project,
+        home,
+        Some(work),
+        true,
+    );
+    assert_eq!(project_files.len(), 2);
+    assert_eq!(project_files[0].role, "mcp");
+    assert_eq!(antigravity.file_kind("mcp").unwrap(), crate::native::format::FileKind::Json);
+    assert_eq!(project_files[1].role, "hooks");
+    assert!(project_files[1].writable && !project_files[1].sensitive);
+    assert_eq!(antigravity.file_kind("hooks").unwrap(), crate::native::format::FileKind::Json);
+    let global_files = antigravity.native_files(
+        crate::native::adapter::Scope::Global,
+        home,
+        None,
+        true,
+    );
+    assert!(global_files
+        .iter()
+        .any(|file| file.role == "hooks"
+            && file.path.replace('\\', "/").ends_with(".gemini/config/hooks.json")));
+    // The standalone hooks role is schema-checked before any write (the
+    // registered-file editor calls validate_draft with the parsed document).
+    assert!(antigravity
+        .validate_draft(
+            "hooks",
+            &serde_json::json!({"probe": {"PreToolUse": [
+                {"matcher": "run_command", "hooks": [{"type": "command", "command": "./check.sh", "timeout": 10}]}
+            ]}})
+        )
+        .is_ok());
+    assert!(antigravity
+        .validate_draft("hooks", &serde_json::json!({"probe": {"Webhook": []}}))
+        .is_err());
+    // Plugins (1.5.9 evidence run, tests/fixtures/plugins/sources.json
+    // antigravity_2026_11_16): the storage layout is verified on the 1.5 line
+    // only, so the accepted range excludes the undocumented 1.3.x plugin
+    // surface while ordinary 1.5+/1.6 movement stays accepted.
+    let agy_plugins = antigravity.plugins().expect("antigravity plugins port");
+    assert_eq!(
+        agy_plugins.capability().actions,
+        ["list", "install", "enable", "disable", "uninstall"]
+    );
+    assert!(!agy_plugins.capability().project);
+    assert!(agy_plugins.discovery_only(), "列举读目录与分类账，不启动 CLI");
+    assert!(antigravity.descriptor().management.plugins);
+    assert!(!antigravity.descriptor().management.project_plugins);
+    let plugin_policy = agy_plugins.version_policy();
+    assert!(plugin_policy.accepts("1.5.9"));
+    assert!(plugin_policy.accepts("1.6.0"));
+    assert!(!plugin_policy.accepts("1.3.1"));
+    assert!(!plugin_policy.accepts("2.0.0"));
+    let plugin_target = crate::resources::plugins::PluginTarget {
+        tool_id: "antigravity".into(),
+        scope: crate::native::adapter::Scope::Global,
+        project_path: None,
+        context_id: None,
+    };
+    let (plugin_ledger, plugin_kind) = agy_plugins
+        .config_location(home, &plugin_target)
+        .unwrap()
+        .unwrap();
+    assert_eq!(plugin_kind, crate::native::format::FileKind::Json);
+    assert_eq!(
+        plugin_ledger.display().to_string().replace('\\', "/"),
+        format!(
+            "{}/.gemini/config/config.json",
+            home.display().to_string().replace('\\', "/")
+        )
+    );
+    // Enable/disable plan one ledger leaf write (a shared config
+    // transaction); install/uninstall stay native plugin subcommands.
+    assert!(agy_plugins.config_only("disable", None));
+    assert!(!agy_plugins.config_only("install", None));
+    let mut plugin_saved = serde_json::Map::new();
+    let ledger_change = agy_plugins
+        .config_changes(
+            &serde_json::json!({}),
+            &mut plugin_saved,
+            &crate::resources::plugins::PluginRequest {
+                target: plugin_target,
+                action: "disable".into(),
+                source: "probe-kit".into(),
+                baseline: String::new(),
+                trusted: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        ledger_change[0].path,
+        vec![
+            "plugins".to_string(),
+            "probe-kit".to_string(),
+            "enabled".to_string()
+        ]
+    );
+    assert_eq!(ledger_change[0].value, Some(serde_json::json!(false)));
+    assert_eq!(
+        agy_plugins
+            .command_args("install", "/tmp/probe-kit", false)
+            .unwrap(),
+        [
+            "plugin".to_string(),
+            "install".to_string(),
+            "/tmp/probe-kit".to_string()
+        ]
+    );
+    assert_eq!(
+        agy_plugins
+            .command_args("uninstall", "probe-kit", false)
+            .unwrap(),
+        ["plugin".to_string(), "uninstall".to_string(), "probe-kit".to_string()]
+    );
+    // The plugin-root hooks.json is the one editable bundled resource: the
+    // adapter declares the kind, owns the schema check that runs before any
+    // write, and parses its named-hooks detail rows itself (the committed
+    // 1.5.9 sample is the contract).
+    assert_eq!(agy_plugins.editable_resource_kinds(), ["hooks"]);
+    let hooks_text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/native/antigravity-cli-1.5.9/plugin/hooks.json")).unwrap();
+    assert!(agy_plugins.validate_resource_text("hooks", &hooks_text).is_ok());
+    assert!(agy_plugins
+        .validate_resource_text("hooks", "{\"a\":{\"NotAnEvent\":[]}}")
+        .unwrap_err()
+        .contains("不支持的事件"));
+    assert!(agy_plugins.validate_resource_text("hooks", "{not json").is_err());
+    assert!(agy_plugins
+        .validate_resource_text(
+            "hooks",
+            "{\"a\":{\"PreToolUse\":[{\"matcher\":\"x\",\"hooks\":[{\"type\":\"http\"}]}]}}"
+        )
+        .is_err());
+    // Undeclared kinds are refused even for a valid hooks document.
+    assert!(agy_plugins.validate_resource_text("agents", &hooks_text).is_err());
+    let hooks_document: serde_json::Value = serde_json::from_str(&hooks_text).unwrap();
+    let rows = agy_plugins
+        .hooks_items(&hooks_document, "/plugins/probe/hooks.json")
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].name, "fixture-plugin-hook");
+    assert_eq!(rows[0].description.as_deref(), Some("PostToolUse"));
+    // A Claude-style wrapper document goes back to the shared generic parser.
+    assert!(agy_plugins
+        .hooks_items(&serde_json::json!({"hooks": {"Stop": []}}), "/p/hooks.json")
+        .is_none());
+    // Every other CLI keeps declaring no editable plugin resources, so their
+    // packages stay read-only exactly as before.
+    for tool in ["cursor", "kiro", "codex"] {
+        assert!(
+            registry
+                .get(tool)
+                .and_then(|adapter| adapter.plugins())
+                .map(|port| port.editable_resource_kinds().is_empty())
+                .unwrap_or(true),
+            "{tool} 不应新增可编辑插件资源"
+        );
+    }
+    // Rules (1.5.9 evidence run, evidence/rules.json): the single-file port
+    // manages the hierarchical AGENTS.md standard on both scopes and the
+    // catalog covers global (~/.gemini/config/rules/) and project
+    // (.agents/rules/) trigger rules plus hierarchical AGENTS.md/GEMINI.md
+    // entries — the adapter-declared widening of the shared catalog policy.
+    // Only the .md directory kinds are removable/toggleable; hierarchical
+    // documents stay edit-only.
+    assert_eq!(
+        antigravity
+            .rule_path(crate::native::adapter::Scope::Global, home, None)
+            .unwrap(),
+        home.join(".gemini").join("config").join("AGENTS.md")
+    );
+    assert_eq!(
+        antigravity
+            .rule_path(crate::native::adapter::Scope::Project, home, Some(work))
+            .unwrap(),
+        work.join("AGENTS.md")
+    );
+    assert_eq!(
+        antigravity.remote_rule_relative(crate::native::adapter::Scope::Global).as_deref(),
+        Some(".gemini/config/AGENTS.md")
+    );
+    assert!(antigravity.uses_rule_catalog(crate::native::adapter::Scope::Global));
+    assert!(antigravity.uses_rule_catalog(crate::native::adapter::Scope::Project));
+    let agy_rules = &antigravity.descriptor().management.rules;
+    assert!(agy_rules.global && agy_rules.project && agy_rules.catalog);
+    assert!(agy_rules.catalog_global, "agy 目录规则覆盖全局范围");
+    let agy_md_policy = antigravity.rule_kind_policy("md");
+    assert!(agy_md_policy.removable && agy_md_policy.toggleable);
+    for kind in ["agents", "gemini"] {
+        let policy = antigravity.rule_kind_policy(kind);
+        assert!(!policy.removable && !policy.toggleable, "agy {kind} 只编辑");
+    }
+    // Memory (1.5.9 evidence run, evidence/memory.json — verdict absent,
+    // confirming the 1.3.1 finding): no editable native store exists, so no
+    // management entry publishes and the recorded reason reaches the
+    // descriptor, keeping the shared memory tab unavailable-with-reason
+    // instead of hidden (session brain/ trees, transcripts, implicit data
+    // and cloud summaries are never treated as memory).
+    assert!(antigravity.memory().is_some());
+    assert!(antigravity.published_memory().is_none());
+    let agy_descriptor = antigravity.descriptor();
+    assert!(agy_descriptor.management.memory.is_none());
+    assert_eq!(
+        agy_descriptor.management.memory_reason,
+        crate::adapters::antigravity::memory::UNVERIFIED_REASON
+    );
     // kiro (official docs + real local install %LOCALAPPDATA%\kiro-cli,
     // 2.34.2/V3): cli.json editing, --resume-id, dual-scope MCP, Skills
     // (~/.kiro/skills + .kiro/skills), agents (~/.kiro/agents + .kiro/agents
@@ -673,6 +1132,17 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
     assert!(kiro_management.skills);
     assert!(kiro_management.agents);
     assert!(kiro_management.rules.global && kiro_management.rules.project);
+    // Rules policy pins: the steering catalog stays project-scope only and
+    // the kind policy keeps the historical mdc-only delete/toggle whitelist
+    // — kiro's declarations are unchanged by the shared policy extension.
+    assert!(!kiro.uses_rule_catalog(crate::native::adapter::Scope::Global));
+    assert!(!kiro_management.rules.catalog_global);
+    let kiro_mdc = kiro.rule_kind_policy("mdc");
+    assert!(kiro_mdc.removable && kiro_mdc.toggleable);
+    for kind in ["md", "permissions"] {
+        let policy = kiro.rule_kind_policy(kind);
+        assert!(!policy.removable && !policy.toggleable, "kiro {kind} 不可删除/启停");
+    }
     assert!(kiro_management.plugins);
     assert!(kiro.descriptor().yolo_available);
     assert!(kiro
@@ -809,6 +1279,16 @@ fn cursor_and_minimax_code_stay_separate_from_the_minimax_quota_provider() {
     assert!(!cursor.descriptor().management.rules.global);
     assert!(cursor.descriptor().management.rules.project);
     assert!(cursor.descriptor().management.rules.catalog);
+    // Rules policy pins: the .cursor catalog stays project-scope only and
+    // keeps the historical mdc-only delete/toggle whitelist.
+    assert!(!cursor.uses_rule_catalog(crate::native::adapter::Scope::Global));
+    assert!(!cursor.descriptor().management.rules.catalog_global);
+    let cursor_mdc = cursor.rule_kind_policy("mdc");
+    assert!(cursor_mdc.removable && cursor_mdc.toggleable);
+    for kind in ["agents", "inert"] {
+        let policy = cursor.rule_kind_policy(kind);
+        assert!(!policy.removable && !policy.toggleable, "cursor {kind} 不可删除/启停");
+    }
     assert_eq!(cursor.descriptor().history.state, "available");
     assert!(cursor.descriptor().resume.state == "unsupported");
     assert!(cursor.history_supported());
@@ -1167,6 +1647,11 @@ fn builtin_memory_declarations_follow_the_three_state_publication_contract() {
                 .management
                 .memory
                 .unwrap_or_else(|| panic!("{} 完整声明应发布记忆入口", adapter.id()));
+            assert_eq!(
+                descriptor.management.memory_reason, "",
+                "{} 发布记忆入口时不应再记录不可用原因",
+                adapter.id()
+            );
             assert_eq!(published.scope, declaration.scope, "{}", adapter.id());
             assert_eq!(
                 published.targets,
@@ -1194,6 +1679,34 @@ fn builtin_memory_declarations_follow_the_three_state_publication_contract() {
             );
         }
     }
+
+    // Third publication state — unpublished with the recorded reason on the
+    // descriptor: the antigravity absence verdict (1.3.1 finding confirmed by
+    // the 1.5.9 evidence run) keeps the entry off the descriptor while
+    // `memory_reason` carries the text, so the shared tab renders
+    // unavailable-with-reason instead of hiding (the kiro tab already works
+    // this way; antigravity joins it with a confirmed-absence verdict).
+    let antigravity = registry.get("antigravity").unwrap();
+    assert!(antigravity.memory().is_some());
+    assert!(antigravity.published_memory().is_none());
+    let agy_descriptor = antigravity.descriptor();
+    assert!(agy_descriptor.management.memory.is_none());
+    assert_eq!(
+        agy_descriptor.management.memory_reason,
+        crate::adapters::antigravity::memory::UNVERIFIED_REASON
+    );
+    let agy_json = serde_json::to_value(&agy_descriptor).unwrap();
+    assert!(agy_json["management"].get("memory").is_none());
+    assert_eq!(
+        agy_json["management"]["memoryReason"],
+        crate::adapters::antigravity::memory::UNVERIFIED_REASON
+    );
+    // The serialized reason keeps the truthful history: original finding,
+    // confirmation line, and the not-memory boundary.
+    let agy_reason = agy_json["management"]["memoryReason"].as_str().unwrap();
+    assert!(agy_reason.contains("1.3.1") && agy_reason.contains("1.5.9"));
+    assert!(agy_reason.contains("云端协议"));
+    assert!(agy_reason.contains("会话产物"));
 
     static PROJECT: MemoryFixture = MemoryFixture { kind: MemoryFixtureKind::Project };
     static GLOBAL: MemoryFixture = MemoryFixture { kind: MemoryFixtureKind::GlobalReadOnly };

@@ -10,7 +10,7 @@ export type PluginResult = { status: string; detail: string; transactionId: stri
 export type PluginManifest = { description: string | null; author: string | null; homepage: string | null; license: string | null; keywords: string[]; path: string | null };
 export type PluginItem = { kind: string; name: string; description: string | null; path: string; location: string; format: string };
 export type PluginContents = { pluginId: string; root: string | null; manifest: PluginManifest; items: PluginItem[]; truncated: boolean };
-export type PluginFile = { path: string; content: string; format: string; truncated: boolean };
+export type PluginFile = { path: string; content: string; format: string; truncated: boolean; editable: boolean };
 
 /** http is Streamable HTTP. sse is the legacy standalone HTTP+SSE transport, kept for configuration compatibility only. */
 export type McpTransport = 'stdio' | 'http' | 'sse';
@@ -56,15 +56,15 @@ export type NativeMcpIssue = { kind: string; source: string; path: string; messa
 export type NativeMcpStore = { entries: NativeMcpEntry[]; issues: NativeMcpIssue[] };
 
 export type RuleTarget = { contextId?: string | null; toolId: string; scope: Scope; projectPath: string | null; baselineHash?: string | null };
-export type NativeRuleFile = { id: string; path: string; name: string; kind: 'mdc' | 'inert' | 'agents' | string; enabled: boolean; writable: boolean; detail: string; text: string; fingerprint: string };
+export type NativeRuleFile = { id: string; path: string; name: string; kind: 'mdc' | 'inert' | 'agents' | 'gemini' | string; enabled: boolean; writable: boolean; removable: boolean; toggleable: boolean; detail: string; text: string; fingerprint: string };
 export type RulePreview = { target: RuleTarget; path: string | null; status: 'ready' | 'unsupported'; detail: string; existing: string; proposed: string; changed: boolean };
 export type RuleApplyResult = { target: RuleTarget; path: string | null; status: 'written' | 'failed'; detail: string };
 export type RulePlacement = { contextId?: string | null; ruleId: string; toolId: string; scope: Scope; projectPath: string | null; state?: 'current' | 'drifted' | 'unavailable' };
 export type RuleClientSelection = { toolIds: string[]; scope: Scope; projectPath: string | null; allowReplace?: boolean };
 export type RuleSyncResult = { toolId: string; path: string | null; status: 'written' | 'conflict' | 'failed' | 'unchanged'; detail: string; existing: string; proposed: string };
 
-/** Agent Skills specification issue codes reported by the backend reader. Display only; never blocking. */
-export type SkillIssueCode = 'frontmatter_missing' | 'yaml_invalid' | 'name_missing' | 'name_invalid' | 'name_mismatch' | 'description_missing' | 'description_too_long' | 'compatibility_empty' | 'compatibility_too_long' | 'metadata_invalid' | 'too_many_lines';
+/** Agent Skills specification issue codes reported by the backend reader. Display only; never blocking. `duplicate_name` is a scan-level marker: the same skill name exists in several discovered sources. */
+export type SkillIssueCode = 'frontmatter_missing' | 'yaml_invalid' | 'name_missing' | 'name_invalid' | 'name_mismatch' | 'description_missing' | 'description_too_long' | 'compatibility_empty' | 'compatibility_too_long' | 'metadata_invalid' | 'too_many_lines' | 'duplicate_name';
 export type SkillIssue = { code: SkillIssueCode; limit: number | null; actual: number | null };
 export type SkillManifestField = { key: string; value: string };
 /** SKILL.md read by `analyze_skill_document`; `bodyLine` is the zero-based line where Markdown starts (lines split on \n). */
@@ -87,7 +87,7 @@ export type SkillFileListing = { files: SkillFileEntry[]; truncated: boolean };
 export type SkillFilePreview = { path: string; size: number; digest: string | null; text: string | null };
 export type SkillTargetPreview = { path: string; status: 'ready' | 'conflict'; detail: string; previewToken: string | null; existingDigest: string | null; packageDigest: string; changes: SkillFileChange[] };
 
-export type AgentEntry = { id: string; name: string; description: string; path: string; format: 'toml' | 'markdown' | 'json'; content: string; enabled: boolean; readOnly: boolean; builtin: boolean; owner: string; detail: string };
+export type AgentEntry = { id: string; name: string; description: string; path: string; format: 'toml' | 'markdown' | 'json'; content: string; enabled: boolean; readOnly: boolean; builtin: boolean; owner: string; detail: string; /** Roster membership when the adapter verified launch-selection semantics; absent otherwise. */ launchable?: boolean | null };
 export type AgentSnapshot = { target: PluginTarget; capability: { version: string; supported: boolean; format: 'toml' | 'markdown' | 'text'; detail: string; template: string }; entries: AgentEntry[]; baseline: string; detail: string };
 export type AgentRequest = { target: PluginTarget; action: 'create' | 'save' | 'enable' | 'disable' | 'delete' | 'restore'; id: string | null; name: string; content: string; baseline: string; transactionId: string | null };
 export type AgentResult = { transactionId: string; changedPaths: string[]; restorePath: string; snapshot: AgentSnapshot; detail: string };

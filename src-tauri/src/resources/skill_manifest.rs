@@ -60,6 +60,22 @@ impl SkillManifest {
     }
 }
 
+/// Whether an issue code breaks the shared load contract: the frontmatter
+/// block exists and parses, `name` is valid and matches the directory, and
+/// `description` is present. Adapters whose CLI refuses to load such skills
+/// (verified for agy 1.5.9) gate their enable action on this set.
+pub fn contract_blocking_code(code: &str) -> bool {
+    matches!(
+        code,
+        "frontmatter_missing"
+            | "yaml_invalid"
+            | "name_missing"
+            | "name_invalid"
+            | "name_mismatch"
+            | "description_missing"
+    )
+}
+
 /// Specification name rule: 1-64 of `a-z`, `0-9`, `-`; no leading,
 /// trailing or doubled hyphen.
 pub fn valid_name(value: &str) -> bool {

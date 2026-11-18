@@ -415,7 +415,8 @@ fn restore_items(
         let attempt = (|| -> Result<String, String> {
             let mut plan = launch::plan_history_context(db, registry, home, launch::LaunchRequest {
                 tool_id: session.tool_id.clone(), project_id: session.project_id.clone(), session_id: Some(native),
-                directory: None, initial_prompt: None, mode: session.mode, resume_latest: false, remote_intent: None,
+                directory: None, initial_prompt: None, mode: session.mode, resume_latest: false, remote_intent: None, agent: None,
+                session_options: None,
             }, Path::new(&session.directory), context.cloned()).map_err(|error| error.message)?;
             plan.terminal = TerminalId::Workbench;
             let baseline = saved_baseline(db, &session.id)?;

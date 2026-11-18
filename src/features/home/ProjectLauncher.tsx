@@ -7,7 +7,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable, onLaunchSettingsChange } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
 import type { LaunchRequest, LaunchSettings, Project, TrayRepairTarget } from '../../types/launch';
-import { preferredLaunchMode, worktreeIntentForNewWorkbench } from '../../types/launch';
+import { preferredLaunchMode, versionInRange, worktreeIntentForNewWorkbench } from '../../types/launch';
 import type { AdapterDescriptor } from '../../types/native';
 import type { RemoteProject, RemoteTarget } from '../../types/remote';
 import { displayPath, shortPath } from '../../lib/paths';
@@ -104,6 +104,8 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
   const [relink, setRelink] = useState<Record<string, string>>({});
   const [pasteOpen, setPasteOpen] = useState<Record<string, boolean>>({});
   const [modelEdits, setModelEdits] = useState<Record<string, string>>({});
+  const [sessionOptionEdits, setSessionOptionEdits] = useState<Record<string, Record<string, string>>>({});
+  const [toolVersions, setToolVersions] = useState<Record<string, string | null>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [copiedPath, setCopiedPath] = useState('');
   const copiedTimer = useRef(0);
@@ -289,6 +291,32 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
     for (let index = 0; index < Math.min(3, ids.length); index++) void worker();
     return () => { active = false; };
   }, [profileTools, projects]);
+  // Version-shaped launch capabilities (project model, session parameters)
+  // only publish on a resolved install line. Resolve that line from the same
+  // workspace probe the profile summary uses; an unverified read keeps the
+  // selectors hidden instead of offering a flag the CLI may not know.
+  const versionTools = remoteTargetId === 'local' ? managed.filter(tool => tool.projectModelOverrideSince || tool.launchSessionOptionsSince).map(tool => tool.id).sort().join('\n') : '';
+  useEffect(() => {
+    let active = true;
+    const ids = versionTools.split('\n').filter(Boolean);
+    setToolVersions(old => Object.fromEntries(Object.entries(old).filter(([id]) => ids.includes(id))));
+    let next = 0;
+    const worker = async () => {
+      while (active && next < ids.length) {
+        const id = ids[next++];
+        try {
+          const workspace = await native.getRegisteredToolWorkspace(id, 'global', undefined, true);
+          const probe = workspace?.probe;
+          const selected = probe?.installations.find(item => item.path === probe.selectedPath)?.version
+            ?? (probe?.installations.length === 1 ? probe.installations[0].version : null)
+            ?? null;
+          if (active) setToolVersions(old => ({ ...old, [id]: selected }));
+        } catch { if (active) setToolVersions(old => ({ ...old, [id]: null })); }
+      }
+    };
+    for (let index = 0; index < Math.min(2, ids.length); index++) void worker();
+    return () => { active = false; };
+  }, [versionTools]);
   const defaultTool = managed.some((tool) => tool.id === globalTool) ? globalTool : managed[0]?.id ?? '';
   const resumable = managed.filter((tool) => tool.resume?.state === 'available' && tool.history?.state !== 'unsupported');
   const unindexedResume = managed.filter((tool) => tool.resume?.state === 'available' && tool.history?.state === 'unsupported');
@@ -434,7 +462,8 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
     launchPending.current = true;
     begin(projectId ?? 'global');
     const desktop = managed.find((item) => item.id === toolId)?.launchForm === 'desktop';
-    const request: LaunchRequest = { toolId, projectId, sessionId: resumeLatest ? null : (resumeId?.trim() || null), mode, directory: null, ...(projectId?.startsWith('remote:') ? { remoteIntent: { kind: 'new' as const } } : {}), ...(resumeLatest ? { resumeLatest: true } : {}), worktreeIntent: worktreeIntentForNewWorkbench(launchSettings, { desktop, remote: !!projectId?.startsWith('remote:'), resume: resumeLatest || !!resumeId?.trim() }) };
+    const chosenOptions = Object.fromEntries(Object.entries(sessionOptionEdits[`${projectId}:${toolId}`] ?? {}).filter(([, value]) => value));
+    const request: LaunchRequest = { toolId, projectId, sessionId: resumeLatest ? null : (resumeId?.trim() || null), mode, directory: null, ...(projectId?.startsWith('remote:') ? { remoteIntent: { kind: 'new' as const } } : {}), ...(resumeLatest ? { resumeLatest: true } : {}), ...(Object.keys(chosenOptions).length ? { sessionOptions: chosenOptions } : {}), worktreeIntent: worktreeIntentForNewWorkbench(launchSettings, { desktop, remote: !!projectId?.startsWith('remote:'), resume: resumeLatest || !!resumeId?.trim() }) };
     const text = (resultMode: string) => t('home.launcher.launched', { action: t(resumeLatest || resumeId?.trim() ? 'home.launcher.actionResume' : 'home.launcher.actionLaunch'), mode: resultMode === 'yolo' ? ' YOLO' : '' });
     try {
       const result = await native.launchCli(request);
@@ -527,6 +556,13 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
       const toolId = managed.some((tool) => tool.id === project.preferredTool) ? project.preferredTool! : '';
       const descriptor = managed.find((tool) => tool.id === toolId);
       const modelKey = `${project.id}:${toolId}`;
+      const toolVersion = toolVersions[toolId];
+      const modelAvailable = !!descriptor?.projectModelOverride && descriptor?.launchForm !== 'desktop'
+        && versionInRange(toolVersion, descriptor?.projectModelOverrideSince, descriptor?.projectModelOverrideBefore);
+      const sessionSpecs = descriptor?.launchForm !== 'desktop'
+        && versionInRange(toolVersion, descriptor?.launchSessionOptionsSince, descriptor?.launchSessionOptionsBefore)
+        ? descriptor?.launchSessionOptions ?? [] : [];
+      const chosenSession = sessionOptionEdits[modelKey] ?? {};
       const pendingProfile = !!project.selectedProfiles[toolId] && project.selectedProfiles[toolId] !== project.appliedProfiles[toolId];
       const projectMode = preferredLaunchMode(launchSettings, 'project', !!descriptor?.yoloAvailable);
       const marked = repair?.projectId === project.id || spotlight?.id === project.id;
@@ -568,7 +604,14 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
             <h3 id={`${project.id}-basics`}>{t('home.launcher.sectionBasics')}</h3>
             <div className={styles.editField}><span>{t('home.launcher.toolFor', { name: project.name })}</span><FilterSelect label={t('home.launcher.toolFor', { name: project.name })} value={toolId} options={[{ value: '', label: t('home.launcher.pickTool') }, ...toolOptions(managed)]} placeholder={t('home.launcher.pickTool')} disabled={busy === project.id || !managed.length} searchLabel={t('home.launcher.searchTool')} onChange={(value) => void updateTool(project, value)} triggerRef={repair?.projectId === project.id ? repairToolSelect : editToolSelect} /></div>
             <label className={styles.editField}><span>{t('home.launcher.nameLabel')}</span><span className={styles.editInline}><input aria-label={t('home.launcher.nameAria', { name: project.name })} value={names[project.id] ?? project.name} onChange={event => setNames({ ...names,[project.id]:event.target.value })} onKeyDown={event => { if (event.key === 'Enter' && names[project.id]?.trim() && !busy) { event.preventDefault(); void rename(project); } }} /><Button disabled={!!busy || !names[project.id]?.trim() || names[project.id]?.trim() === project.name} onClick={() => void rename(project)}>{t('home.launcher.saveName')}</Button></span></label>
-            {descriptor?.projectModelOverride && <label className={styles.editField}><span>{t('home.launcher.modelLabel')}</span><span className={styles.editInline}><input aria-label={t('home.launcher.modelAria', { name: project.name })} value={modelEdits[modelKey] ?? project.modelOverrides[toolId] ?? ''} placeholder={t('home.launcher.modelPlaceholder')} onChange={(event) => setModelEdits((old) => ({ ...old, [modelKey]: event.target.value }))} onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing && busy !== project.id) { event.preventDefault(); void saveModel(project, toolId); } }} /><Button disabled={busy === project.id} onClick={() => void saveModel(project, toolId)}>{t('home.launcher.save')}</Button></span></label>}
+            {modelAvailable && <label className={styles.editField}><span>{t('home.launcher.modelLabel')}</span><span className={styles.editInline}><input aria-label={t('home.launcher.modelAria', { name: project.name })} value={modelEdits[modelKey] ?? project.modelOverrides[toolId] ?? ''} placeholder={t('home.launcher.modelPlaceholder')} onChange={(event) => setModelEdits((old) => ({ ...old, [modelKey]: event.target.value }))} onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing && busy !== project.id) { event.preventDefault(); void saveModel(project, toolId); } }} /><Button disabled={busy === project.id} onClick={() => void saveModel(project, toolId)}>{t('home.launcher.save')}</Button></span></label>}
+            {sessionSpecs.length > 0 && <>
+              <p className={styles.note}>{t('home.launcher.sessionOptionsHint')}</p>
+              {sessionSpecs.map(option => {
+                const label = i18n.language.startsWith('en') ? option.labelEn ?? option.label : option.label;
+                return <label className={styles.editField} key={option.id}><span>{label}</span><span className={styles.editInline}><select aria-label={t('home.launcher.sessionOptionAria', { name: project.name, option: label })} value={chosenSession[option.id] ?? ''} disabled={busy === project.id} onChange={event => { const value = event.target.value; setSessionOptionEdits(old => ({ ...old, [modelKey]: { ...(old[modelKey] ?? {}), [option.id]: value } })); }}><option value="">{t('home.launcher.sessionOptionUnset')}</option>{option.choices.map(choice => <option value={choice} key={choice}>{choice}</option>)}</select></span></label>;
+              })}
+            </>}
           </section>
           <section className={styles.editSection} aria-labelledby={`${project.id}-directory`}>
             <h3 id={`${project.id}-directory`}>{t('home.launcher.sectionDirectory')}</h3>

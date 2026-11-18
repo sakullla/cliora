@@ -261,6 +261,12 @@ pub struct RuleSupport {
     pub project_reason: &'static str,
     #[serde(default, skip_serializing_if = "is_false")]
     pub catalog: bool,
+    /// The catalog port also covers the global scope (adapter-declared
+    /// through `uses_rule_catalog(Scope::Global)`). Absent keeps the
+    /// historical project-only catalog surface, so every existing adapter
+    /// serializes exactly as before.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub catalog_global: bool,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -275,6 +281,7 @@ impl RuleSupport {
             global_reason: "",
             project_reason: "",
             catalog: false,
+            catalog_global: false,
         }
     }
 }
@@ -291,11 +298,48 @@ pub struct RuleFileSpec {
     pub detail: &'static str,
 }
 
+/// Catalog operations one adapter's rule kind supports, declared next to
+/// `rule_file_specs`. Editability stays the per-file `writable` flag; this
+/// policy covers the destructive/structural operations of the shared
+/// catalog service (`delete_file`, `set_file_enabled`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RuleKindPolicy {
+    /// The kind's files may be removed through the catalog delete port.
+    pub removable: bool,
+    /// The kind's files may be switched on/off through relocation.
+    pub toggleable: bool,
+}
+
+/// Historical shared create template: the Cursor `.mdc` frontmatter, and a
+/// plain heading for layouts whose native files are plain markdown. It is
+/// the default of [`CliAdapter::rule_create_template`].
+fn default_rule_create_template(path: &Path, name: &str) -> String {
+    if path.extension().and_then(|ext| ext.to_str()) == Some("mdc") {
+        "---\ndescription: \"\"\nalwaysApply: false\n---\n".to_owned()
+    } else {
+        format!("# {name}\n")
+    }
+}
+
 /// A skill directory that can be listed but not written by this CLI.
 #[derive(Clone, Debug)]
 pub struct SkillObservation {
     pub root: PathBuf,
     pub detail: &'static str,
+}
+
+/// One skill directory an adapter resolved from a native declaration
+/// manifest (for example agy 1.5.9 `<workspace>/.agents/skills.json`).
+/// The adapter owns the manifest semantics and name filters; the shared
+/// scan only reads the resolved directory, listed read-only with the
+/// declaration's own label. Declared directories never become write targets.
+#[derive(Clone, Debug)]
+pub struct SkillDeclaration {
+    /// A concrete skill directory (`<declared dir>/<name>`), already filtered
+    /// by the manifest's `include_only`/`exclude` name rules.
+    pub root: PathBuf,
+    /// Source label shown in the list, e.g. `skills.json · shared-skills`.
+    pub label: String,
 }
 
 /// A read-only MCP server discovered from another tool or plugin package.
@@ -523,6 +567,46 @@ pub struct InspectionFields {
     pub wire: Option<&'static str>,
     pub env: Option<String>,
     pub reasoning_effort: Option<String>,
+}
+
+/// One session-only launch parameter an adapter can receive. Choices are
+/// native values from verified CLI evidence; `default` is the native default
+/// when the flag is omitted (`None` keeps the CLI's own default).
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchSessionOption {
+    pub id: &'static str,
+    pub label: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label_en: Option<&'static str>,
+    pub choices: &'static [&'static str],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<&'static str>,
+}
+
+/// Major/minor installation line (`v1.5.9` -> `(1, 5)`). Unparseable values
+/// stay unverified instead of matching a guessed line.
+fn version_line(value: &str) -> Option<(u32, u32)> {
+    let value = value.trim().trim_start_matches('v');
+    let mut parts = value.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().and_then(|part| part.parse().ok()).unwrap_or(0);
+    Some((major, minor))
+}
+
+/// Whether an installation version falls inside an adapter-declared
+/// `[since, before)` line. `None` means the capability is not version-shaped;
+/// an unverified version never satisfies a declared range.
+fn version_in_range(version: Option<&str>, range: Option<(&'static str, &'static str)>) -> bool {
+    let Some((since, before)) = range else { return true };
+    let (Some(version), Some(since), Some(before)) = (
+        version.and_then(version_line),
+        version_line(since),
+        version_line(before),
+    ) else {
+        return false;
+    };
+    version >= since && version < before
 }
 
 pub type NativeCredentialRefs = BTreeMap<String, BTreeMap<String, String>>;
@@ -1248,6 +1332,81 @@ pub trait CliAdapter: Sync {
         }
         Ok(Vec::new())
     }
+    /// Installation range that publishes the project model override. `None`
+    /// keeps the historical fixed-shape behavior for every verified install;
+    /// a declared range hides the field and refuses the flag outside it.
+    fn project_model_override_range(&self) -> Option<(&'static str, &'static str)> {
+        None
+    }
+    /// Version-aware project model arguments. The default keeps
+    /// `project_model_args` for fixed-shape adapters; a version-shaped
+    /// override is composed by the shared launch service with the resolved
+    /// installation version.
+    fn project_model_args_for_version(
+        &self,
+        version: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<Vec<String>, String> {
+        if !version_in_range(version, self.project_model_override_range()) {
+            if model.is_some() {
+                return Err("此 CLI 安装版本未核验项目启动模型参数；请清除项目模型或升级 CLI".into());
+            }
+            return Ok(Vec::new());
+        }
+        self.project_model_args(model)
+    }
+    /// Static declaration of the session-only launch parameters this adapter
+    /// can receive. The catalog publishes the specs plus the version range so
+    /// the UI hides selectors for an unverified install; `launch_session_options`
+    /// applies that range to the resolved installation.
+    fn launch_session_option_specs(&self) -> Vec<LaunchSessionOption> {
+        Vec::new()
+    }
+    fn launch_session_options_range(&self) -> Option<(&'static str, &'static str)> {
+        None
+    }
+    /// Session parameters published for one resolved installation. The shared
+    /// launch service validates the request against this list, so an older or
+    /// unverified install accepts none.
+    fn launch_session_options(&self, version: Option<&str>) -> Vec<LaunchSessionOption> {
+        if version_in_range(version, self.launch_session_options_range()) {
+            self.launch_session_option_specs()
+        } else {
+            Vec::new()
+        }
+    }
+    /// Map the already-validated session parameters to native arguments. The
+    /// default adds nothing; an adapter that publishes options above maps them
+    /// here instead of relying on a shared guess.
+    fn launch_session_args(
+        &self,
+        _version: Option<&str>,
+        _options: &BTreeMap<String, String>,
+    ) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
+    /// Optional agent selection for a new session, composed by the shared
+    /// launch service after `launch_args`. `None` keeps the historical
+    /// argument list; a selection is refused unless the adapter verified a
+    /// native flag for it. The default has no verified selection.
+    fn launch_agent_args(&self, agent: Option<&str>) -> Result<Vec<String>, String> {
+        if agent.is_some() {
+            return Err("此 CLI 不支持启动时选择 Agent".into());
+        }
+        Ok(Vec::new())
+    }
+    /// Version-aware agent selection arguments. The default ignores the
+    /// version and keeps `launch_agent_args`, so fixed-shape adapters never
+    /// change. Adapters whose selection flag follows the install line refuse
+    /// unverified versions here instead of guessing.
+    fn launch_agent_args_for_version(
+        &self,
+        version: &str,
+        agent: Option<&str>,
+    ) -> Result<Vec<String>, String> {
+        let _ = version;
+        self.launch_agent_args(agent)
+    }
     fn skill_switch_location(
         &self,
         _scope: Scope,
@@ -1321,6 +1480,11 @@ pub trait CliAdapter: Sync {
     ) -> Option<McpLocation> {
         None
     }
+    /// Whether the native MCP contract (location or entry shape) follows the
+    /// identified native version. The shared MCP service then resolves the
+    /// probed install version once per target and hands it to the
+    /// `*_for_version` hooks, so a read and a later write agree on the same
+    /// evidence.
     fn mcp_requires_version(&self) -> bool {
         false
     }
@@ -1403,8 +1567,28 @@ pub trait CliAdapter: Sync {
     ) -> Result<Option<Value>, String> {
         self.mcp_document(definition, enabled, existing)
     }
+    /// Version-aware native entry shape. The default keeps the location-shaped
+    /// document; adapters whose verified entry shape follows the install line
+    /// override this together with `mcp_requires_version`.
+    fn mcp_document_for_version(
+        &self,
+        definition: &McpDefinition,
+        enabled: bool,
+        existing: Option<&Value>,
+        location: &McpLocation,
+        version: Option<&str>,
+    ) -> Result<Option<Value>, String> {
+        let _ = version;
+        self.mcp_document_at(definition, enabled, existing, location)
+    }
     fn mcp_disabled_description(&self) -> Option<&'static str> {
         None
+    }
+    /// Version-aware disable description for previews. The default keeps the
+    /// static description.
+    fn mcp_disabled_description_for_version(&self, version: Option<&str>) -> Option<&'static str> {
+        let _ = version;
+        self.mcp_disabled_description()
     }
     /// Whether the native format has a verified stdio working-directory mapping.
     /// Undeclared targets report unsupported instead of dropping a non-empty `cwd`.
@@ -1431,6 +1615,34 @@ pub trait CliAdapter: Sync {
         _project: Option<&Path>,
     ) -> Vec<SkillObservation> {
         Vec::new()
+    }
+    /// Skill directories a native declaration manifest resolved for this
+    /// scope (agy 1.5.9 `.agents/skills.json`). They join the scan read-only
+    /// with their own source label and are never write targets. The default
+    /// keeps every adapter without a declaration manifest unchanged.
+    fn skill_declarations(
+        &self,
+        _scope: Scope,
+        _home: &Path,
+        _project: Option<&Path>,
+    ) -> Vec<SkillDeclaration> {
+        Vec::new()
+    }
+    /// Whether the shared scan marks skills whose name exists in several
+    /// discovered sources with the `duplicate_name` issue. The CLI's own
+    /// native precedence stays authoritative; the marker only states that
+    /// several sources carry the name. The default keeps every adapter's
+    /// listing unchanged.
+    fn skill_marks_duplicate_names(&self) -> bool {
+        false
+    }
+    /// When Some, enabling a package whose SKILL.md breaks the shared load
+    /// contract (frontmatter present and parseable, name valid and matching
+    /// the directory, description non-empty) is refused with this reason
+    /// instead of claiming the CLI will use it. The default keeps the shared
+    /// enable behavior.
+    fn skill_enable_requires_contract(&self) -> Option<&'static str> {
+        None
     }
     /// Remote POSIX inventory under the login home. The adapter's writable root
     /// is scanned by default; adapters add bundled/observed roots explicitly.
@@ -1472,6 +1684,48 @@ pub trait CliAdapter: Sync {
     fn rule_relocate(&self, _project: &Path, _path: &Path, _enabled: bool) -> Result<PathBuf, String> {
         Err("此 CLI 不能启停目录型规则".into())
     }
+    /// Catalog operations one rule kind supports. The default pins the
+    /// historical shared-service whitelist — only `mdc` rules are removable
+    /// or toggleable — so every existing adapter keeps today's behavior.
+    /// Adapters whose verified native contract covers other kinds (for
+    /// example plain-markdown directory rules) override this together with
+    /// `rule_file_specs`.
+    fn rule_kind_policy(&self, kind: &str) -> RuleKindPolicy {
+        let historical = kind == "mdc";
+        RuleKindPolicy { removable: historical, toggleable: historical }
+    }
+    /// Scope-aware create target for catalog rules. The default keeps the
+    /// project-only port; the shared service calls it only for scopes the
+    /// adapter declared through `uses_rule_catalog`.
+    fn rule_create_path_scoped(
+        &self,
+        _scope: Scope,
+        _home: &Path,
+        project: Option<&Path>,
+        name: &str,
+    ) -> Result<PathBuf, String> {
+        self.rule_create_path(project.ok_or("请选择项目目录")?, name)
+    }
+    /// Scope-aware relocation target for catalog enable/disable. The default
+    /// keeps the project-only port.
+    fn rule_relocate_scoped(
+        &self,
+        _scope: Scope,
+        _home: &Path,
+        project: Option<&Path>,
+        path: &Path,
+        enabled: bool,
+    ) -> Result<PathBuf, String> {
+        self.rule_relocate(project.ok_or("请选择项目目录")?, path, enabled)
+    }
+    /// Body for a newly created catalog rule when the caller passes no text.
+    /// The default keeps the historical template (Cursor `.mdc` frontmatter;
+    /// a plain heading for plain-markdown layouts); adapters whose native
+    /// rule files carry required frontmatter of their own override this so a
+    /// created file is actually loaded by the CLI.
+    fn rule_create_template(&self, path: &Path, name: &str) -> String {
+        default_rule_create_template(path, name)
+    }
     fn rule_unavailable_reason(&self, _scope: Scope) -> Option<&'static str> {
         None
     }
@@ -1483,6 +1737,7 @@ pub trait CliAdapter: Sync {
             self.rule_path(Scope::Project, home, Some(project)).is_some() || self.uses_rule_catalog(Scope::Project),
         );
         support.catalog = self.uses_rule_catalog(Scope::Global) || self.uses_rule_catalog(Scope::Project);
+        support.catalog_global = self.uses_rule_catalog(Scope::Global);
         support
     }
     fn published_memory(&self) -> Option<super::memory::MemoryManagement> {
@@ -1736,6 +1991,24 @@ pub struct PublishedDescriptor {
     #[serde(flatten)]
     pub descriptor: AdapterDescriptor,
     pub resume_latest_available: bool,
+    /// Whether a new-session launch may carry an agent selection
+    /// (`LaunchRequest::agent`). Derived from `launch_agent_args`, never
+    /// inferred from the tool id.
+    pub agent_launch_available: bool,
+    /// Session-only launch parameters this adapter publishes. The UI renders
+    /// selectors only when the resolved installation satisfies the range.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub launch_session_options: Vec<LaunchSessionOption>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launch_session_options_since: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launch_session_options_before: Option<&'static str>,
+    /// Installation range that publishes the project model override; `None`
+    /// means the adapter's declaration is not version-shaped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_model_override_since: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_model_override_before: Option<&'static str>,
     /// Omitted when this CLI does not provide usage records.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub association: Option<Facet>,
@@ -1752,8 +2025,16 @@ fn remote_native_files_empty(files: &&'static [RemoteNativeDocument]) -> bool {
 
 impl PublishedDescriptor {
     pub fn from_adapter(adapter: &dyn CliAdapter) -> Self {
+        let session_range = adapter.launch_session_options_range();
+        let model_range = adapter.project_model_override_range();
         Self {
             resume_latest_available: adapter.resume_latest_args(LaunchMode::Normal).is_ok(),
+            agent_launch_available: adapter.launch_agent_args(Some("probe")).is_ok(),
+            launch_session_options: adapter.launch_session_option_specs(),
+            launch_session_options_since: session_range.map(|(since, _)| since),
+            launch_session_options_before: session_range.map(|(_, before)| before),
+            project_model_override_since: model_range.map(|(since, _)| since),
+            project_model_override_before: model_range.map(|(_, before)| before),
             association: history_association_facet(adapter),
             descriptor: adapter.descriptor(),
             remote_resources: adapter.remote_resource_layout(),

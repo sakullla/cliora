@@ -832,6 +832,8 @@ mod tests {
                 mode,
                 resume_latest,
                 remote_intent: None,
+                agent: None,
+                session_options: None,
             }
         };
         let latest = crate::launch::plan(&db, &registry, temp.path(), request(None, true, LaunchMode::Normal)).unwrap();
@@ -872,7 +874,8 @@ mod tests {
                 directory: None,
                 initial_prompt: None,
                 mode: LaunchMode::Normal,
-                resume_latest: false, remote_intent: None,
+                resume_latest: false, remote_intent: None, agent: None,
+                session_options: None,
             },
         )
         .unwrap_err();

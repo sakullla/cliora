@@ -214,6 +214,7 @@ impl CliAdapter for Cursor {
             global_reason: rules::GLOBAL_REASON,
             project_reason: "",
             catalog: true,
+            catalog_global: false,
         }
     }
     fn native_files(

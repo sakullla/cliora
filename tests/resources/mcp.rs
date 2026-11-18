@@ -8,6 +8,9 @@ fn fixture_registry() -> Registry {
         .with_fixture_installation("claude_code", "2.1.284")
         .with_fixture_installation("grok", "1.0.41")
         .with_fixture_installation("open_code", "1.18.33")
+        // The antigravity entry shape is version-gated; pin the 1.3.x line so
+        // the legacy-shape test never depends on the developer machine.
+        .with_fixture_installation("antigravity", "1.3.1")
 }
 
 #[derive(Default)]
@@ -1326,6 +1329,111 @@ fn antigravity_cwd_round_trips_clears_and_rejects_sse() {
     let preview = preview_targets(&db, &registry, temp.path(), &legacy.id, vec![target("antigravity", true)]);
     assert_eq!(preview[0].status, "unsupported", "{preview:?}");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+}
+
+/// The 1.5.9 install line (remote evidence 2026-11-16): the native writer
+/// spells remote entries `serverUrl` with an explicit per-entry `disabled`
+/// boolean, disable keeps the entry, enable removes the key, legacy `url`
+/// entries canonicalize back to `serverUrl` without dual writes, and the
+/// project `.agents/mcp_config.json` runtime scope is managed directly.
+#[test]
+fn antigravity_159_shape_writes_per_entry_disabled_and_manages_the_runtime_project_scope() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let keys = MemoryStore::default();
+    let registry = fixture_registry().with_fixture_installation("antigravity", "1.5.9");
+    let file = temp.path().join(".gemini/config/mcp_config.json");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(
+        &file,
+        include_str!("../fixtures/native/antigravity-cli-1.5.9/mcp-config.json"),
+    )
+    .unwrap();
+    // Reads accept every verified spelling and the per-entry disabled flag.
+    let read = list_native(&db, &registry, temp.path(), &target("antigravity", true)).unwrap();
+    let current = read.iter().find(|entry| entry.name == "fixture-http-current").unwrap();
+    assert_eq!(current.transport, McpTransport::Http);
+    assert_eq!(current.url, "https://mcp.fixture.invalid/mcp");
+    assert!(current.enabled);
+    let legacy = read.iter().find(|entry| entry.name == "fixture-http-legacy-url").unwrap();
+    assert_eq!(legacy.url, "https://legacy.fixture.invalid/mcp");
+    assert!(!legacy.enabled, "disabled:true 条目应读为停用");
+    assert!(read.iter().any(|entry| entry.name == "fixture-stdio" && entry.enabled));
+
+    // An enabled HTTP write stamps disabled:false and leaves other entries
+    // untouched.
+    let mut http = interop_draft("probe-http", McpTransport::Http);
+    http.headers = IndexMap::from([("X-Probe".into(), "fixture".into())]);
+    let saved = save_definition(&db, http).unwrap();
+    let written = distribute(&db, &keys, &registry, temp.path(), &saved.id, previewed(&db, &registry, temp.path(), &saved.id, vec![target("antigravity", true)]));
+    assert_eq!(written[0].status, "written", "{written:?}");
+    let native: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(native["mcpServers"]["probe-http"]["serverUrl"], "https://mcp.example.com/mcp");
+    assert!(native["mcpServers"]["probe-http"].get("url").is_none());
+    assert_eq!(native["mcpServers"]["probe-http"]["disabled"], false);
+    assert_eq!(native["mcpServers"]["probe-http"]["headers"]["X-Probe"], "fixture");
+    assert_eq!(native["mcpServers"]["fixture-http-legacy-url"]["url"], "https://legacy.fixture.invalid/mcp");
+    assert_eq!(native["mcpServers"]["fixture-http-legacy-url"]["disabled"], true);
+
+    // Disable keeps the native entry with disabled:true; the preview says so.
+    let disable_preview = preview_targets(&db, &registry, temp.path(), &saved.id, vec![target("antigravity", false)]);
+    assert_eq!(disable_preview[0].status, "ready", "{disable_preview:?}");
+    assert!(disable_preview[0].detail.contains("disabled:true"), "{:?}", disable_preview[0].detail);
+    let disabled = distribute(&db, &keys, &registry, temp.path(), &saved.id, previewed(&db, &registry, temp.path(), &saved.id, vec![target("antigravity", false)]));
+    assert_eq!(disabled[0].status, "written", "{disabled:?}");
+    let native: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(native["mcpServers"]["probe-http"]["disabled"], true);
+    assert_eq!(native["mcpServers"]["probe-http"]["serverUrl"], "https://mcp.example.com/mcp");
+    assert!(!list_native(&db, &registry, temp.path(), &target("antigravity", true)).unwrap().iter().find(|entry| entry.name == "probe-http").unwrap().enabled);
+
+    // Enable removes the key entirely (implicit enabled, `agy mcp enable`).
+    let enabled = distribute(&db, &keys, &registry, temp.path(), &saved.id, previewed(&db, &registry, temp.path(), &saved.id, vec![target("antigravity", true)]));
+    assert_eq!(enabled[0].status, "written", "{enabled:?}");
+    let native: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert!(native["mcpServers"]["probe-http"].get("disabled").is_none());
+    assert_eq!(native["mcpServers"]["probe-http"]["serverUrl"], "https://mcp.example.com/mcp");
+
+    // Editing the legacy url entry canonicalizes to serverUrl after an
+    // explicit replace; the entry never carries both keys.
+    let mut legacy_edit = interop_draft("fixture-http-legacy-url", McpTransport::Http);
+    legacy_edit.url = "https://rewritten.example.com/mcp".into();
+    let legacy_definition = save_definition(&db, legacy_edit).unwrap();
+    let preview = preview_targets(&db, &registry, temp.path(), &legacy_definition.id, vec![target("antigravity", true)]);
+    assert_eq!(preview[0].status, "conflict", "{preview:?}");
+    let mut confirmed = target("antigravity", true);
+    confirmed.allow_replace = true;
+    confirmed.baseline_hash = preview[0].baseline_hash.clone();
+    confirmed.preview_token = preview[0].preview_token.clone();
+    let replaced = distribute(&db, &keys, &registry, temp.path(), &legacy_definition.id, vec![confirmed]);
+    assert_eq!(replaced[0].status, "written", "{replaced:?}");
+    let native: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    let rewritten = &native["mcpServers"]["fixture-http-legacy-url"];
+    assert_eq!(rewritten["serverUrl"], "https://rewritten.example.com/mcp");
+    assert!(rewritten.get("url").is_none(), "不允许 url/serverUrl 双写");
+    // The fixture entry was disabled (disabled:true); an enabled write onto a
+    // disabled entry applies the enable semantics — the key is removed, which
+    // is the native post-enable state (implicit enabled).
+    assert!(rewritten.get("disabled").is_none());
+
+    // SSE stays rejected on the 1.5.9 line.
+    let sse = save_definition(&db, interop_draft("sse-probe", McpTransport::Sse)).unwrap();
+    let preview = preview_targets(&db, &registry, temp.path(), &sse.id, vec![target("antigravity", true)]);
+    assert_eq!(preview[0].status, "unsupported", "{preview:?}");
+
+    // The project runtime scope is written directly as a native file: agy
+    // sessions load `<workspace>/.agents/mcp_config.json` (delivery-stage
+    // acceptance covers the in-session load; `agy mcp list` never shows it).
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let mut project_target = target("antigravity", true);
+    project_target.scope = Scope::Project;
+    project_target.project_path = Some(project.display().to_string());
+    let project_written = distribute(&db, &keys, &registry, temp.path(), &saved.id, previewed(&db, &registry, temp.path(), &saved.id, vec![project_target]));
+    assert_eq!(project_written[0].status, "written", "{project_written:?}");
+    let project_file = project.join(".agents/mcp_config.json");
+    let native: Value = serde_json::from_str(&std::fs::read_to_string(&project_file).unwrap()).unwrap();
+    assert_eq!(native["mcpServers"]["probe-http"]["serverUrl"], "https://mcp.example.com/mcp");
+    assert_eq!(native["mcpServers"]["probe-http"]["disabled"], false);
 }
 
 #[test]

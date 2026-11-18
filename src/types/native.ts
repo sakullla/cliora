@@ -95,6 +95,15 @@ export type AdapterDescriptor = {
   projectModelOverride: boolean;
   yoloAvailable: boolean;
   resumeLatestAvailable?: boolean;
+  /** Whether a new-session launch may carry an agent selection. */
+  agentLaunchAvailable?: boolean;
+  /** Session-only launch parameters; selectors render only inside the published version range. */
+  launchSessionOptions?: { id: string; label: string; labelEn?: string; choices: string[]; default?: string | null }[];
+  launchSessionOptionsSince?: string;
+  launchSessionOptionsBefore?: string;
+  /** Installation range that publishes the project model override; absent means not version-shaped. */
+  projectModelOverrideSince?: string;
+  projectModelOverrideBefore?: string;
   launchForm: 'terminal' | 'desktop';
   nativeConfig: AdapterFacet;
   launch: AdapterFacet;
@@ -103,7 +112,7 @@ export type AdapterDescriptor = {
   history: AdapterFacet;
   association?: AssociationFacet;
   login?: { hint: string } | null;
-  management?: { accounts: boolean; mcp: boolean; skills: boolean; agents: boolean; plugins: boolean; projectPlugins: boolean; rules?: { global: boolean; project: boolean; globalReason?: string; projectReason?: string; catalog?: boolean }; memory?: MemoryManagement; memoryReason?: string };
+  management?: { accounts: boolean; mcp: boolean; skills: boolean; agents: boolean; plugins: boolean; projectPlugins: boolean; rules?: { global: boolean; project: boolean; globalReason?: string; projectReason?: string; catalog?: boolean; catalogGlobal?: boolean }; memory?: MemoryManagement; memoryReason?: string };
   remote?: RemoteCapabilities;
   remoteNativeFiles?: RemoteNativeDocument[];
   remoteResources?: import('./remote').RemoteResourceLayout;

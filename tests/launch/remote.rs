@@ -43,7 +43,8 @@ fn remote_project_plan_uses_strict_ssh_and_remote_working_directory() {
         directory: None,
         initial_prompt: Some("hello remote".into()),
         mode: LaunchMode::Normal,
-        resume_latest: false, remote_intent: None,
+        resume_latest: false, remote_intent: None, agent: None,
+        session_options: None,
     };
     let remote_plan = plan(&db, &Registry::builtins(), directory.path(), request).unwrap();
     assert_eq!(remote_plan.directory, PathBuf::from("/srv/project"));
@@ -61,7 +62,8 @@ fn remote_project_plan_uses_strict_ssh_and_remote_working_directory() {
         directory: None,
         initial_prompt: None,
         mode: LaunchMode::Normal,
-        resume_latest: false, remote_intent: None,
+        resume_latest: false, remote_intent: None, agent: None,
+        session_options: None,
     };
     let claude = plan(&db, &Registry::builtins(), directory.path(), claude_request).unwrap();
     let command = claude.cli_args.last().unwrap();
@@ -85,7 +87,8 @@ fn remote_plan_uses_persistent_mux_and_refuses_plain_ssh_fallback() {
     let plan = plan(&db, &Registry::builtins(), directory.path(), LaunchRequest {
         tool_id: "codex".into(), project_id: Some(format!("remote:{}", project.id)),
         session_id: None, directory: None, initial_prompt: None, mode: LaunchMode::Normal,
-        resume_latest: false, remote_intent: None,
+        resume_latest: false, remote_intent: None, agent: None,
+        session_options: None,
     }).unwrap();
     let command = plan.cli_args.last().unwrap();
     assert!(command.contains("tmux -u new-session -d -s"));
@@ -581,7 +584,8 @@ fn remote_claude_yolo_marks_root_as_sandbox_and_normal_does_not() {
     let yolo = plan(&db, &Registry::builtins(), directory.path(), LaunchRequest {
         tool_id: "claude_code".into(), project_id: Some(format!("remote:{}", project.id)),
         session_id: None, directory: None, initial_prompt: None, mode: LaunchMode::Yolo,
-        resume_latest: false, remote_intent: None,
+        resume_latest: false, remote_intent: None, agent: None,
+        session_options: None,
     }).unwrap();
     let yolo_command = yolo.cli_args.last().unwrap();
     assert!(yolo_command.contains("--dangerously-skip-permissions"));
@@ -590,7 +594,8 @@ fn remote_claude_yolo_marks_root_as_sandbox_and_normal_does_not() {
     let normal = plan(&db, &Registry::builtins(), directory.path(), LaunchRequest {
         tool_id: "claude_code".into(), project_id: Some(format!("remote:{}", project.id)),
         session_id: None, directory: None, initial_prompt: None, mode: LaunchMode::Normal,
-        resume_latest: false, remote_intent: None,
+        resume_latest: false, remote_intent: None, agent: None,
+        session_options: None,
     }).unwrap();
     let normal_command = normal.cli_args.last().unwrap();
     assert!(!normal_command.contains("IS_SANDBOX"));
@@ -618,7 +623,8 @@ fn independent_request(project: &crate::remote::RemoteProject) -> LaunchRequest 
     LaunchRequest {
         tool_id: "codex".into(), project_id: Some(format!("remote:{}", project.id)),
         session_id: None, directory: None, initial_prompt: None, mode: LaunchMode::Normal,
-        resume_latest: false, remote_intent: Some(RemoteLaunchIntent::New),
+        resume_latest: false, remote_intent: Some(RemoteLaunchIntent::New), agent: None,
+        session_options: None,
     }
 }
 

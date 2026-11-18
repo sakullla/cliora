@@ -445,7 +445,7 @@ pub fn remove_native(
 ) -> Result<(), String> {
     let name = name.trim();
     if name.is_empty() { return Err("请选择要删除的 MCP".into()); }
-    let (location, scope_key) = target_location(db, registry, target, home, true)?;
+    let (location, scope_key, _) = target_location(db, registry, target, home, true)?;
     let (baseline, parsed) = parse_native(&location)?;
     let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
     let name_owned = name.to_owned();
@@ -509,7 +509,7 @@ fn target_location(
     target: &McpTargetRequest,
     home: &Path,
     for_write: bool,
-) -> Result<(McpLocation, String), String> {
+) -> Result<(McpLocation, String, Option<String>), String> {
     let _context = crate::accounts::selection::enter_bound(db, home, &target.tool_id, target.scope, target.project_path.as_deref().map(Path::new))?;
     crate::accounts::selection::validate_expected(&target.tool_id,target.context_id.as_deref())?;
     let cli = registry
@@ -565,7 +565,7 @@ fn target_location(
         || "global".to_owned(),
         |path| format!("project:{}", path.display()),
     );
-    Ok((location, crate::accounts::selection::key(&key)))
+    Ok((location, crate::accounts::selection::key(&key), version))
 }
 
 fn parse_native(location: &McpLocation) -> Result<(String, Value), String> {
@@ -687,7 +687,7 @@ pub fn list_native(
     home: &Path,
     target: &McpTargetRequest,
 ) -> Result<NativeMcpStore, String> {
-    let (location, _) = target_location(db, registry, target, home, false)?;
+    let (location, _, _) = target_location(db, registry, target, home, false)?;
     let (_, parsed) = parse_native(&location)?;
     let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
     let entries = adapter.mcp_entries(&parsed, &location)?;
@@ -811,7 +811,7 @@ pub fn set_external_mcp_enabled(
     if name.is_empty() {
         return Err("请选择要启停的外部 MCP".into());
     }
-    let (location, _) = target_location(db, registry, target, home, true)?;
+    let (location, _, _) = target_location(db, registry, target, home, true)?;
     let adapter = registry
         .get(&target.tool_id)
         .ok_or("此 CLI 尚无注册适配器")?;
@@ -1002,7 +1002,7 @@ fn preview_definition(
         let mut result = McpTargetResult { operation, context_id:target.context_id.clone(), tool_id: target.tool_id.clone(), scope: target.scope,
             project_path: target.project_path.clone(), path: None, status: "unsupported", detail: String::new(), baseline_hash: None, preview_token: None, existing: None, proposed: None };
         match target_location(db, registry, &target, home, true) {
-            Ok((location, scope_key)) => {
+            Ok((location, scope_key, version)) => {
                 result.path = Some(location.path.display().to_string());
                 if operation == McpTargetOperation::Write {
                     if let (Ok(definition), Some(adapter)) = (definition.as_ref(), registry.get(&target.tool_id)) {
@@ -1021,7 +1021,7 @@ fn preview_definition(
                     let actual = entry_hash(existing)?;
                     let owned = managed_hash(db, &definition.id, &target.tool_id, &scope_key)?;
                     let proposal = match operation {
-                        McpTargetOperation::Write => adapter.mcp_document_at(definition, target.enabled, existing, &location)?,
+                        McpTargetOperation::Write => adapter.mcp_document_for_version(definition, target.enabled, existing, &location, version.as_deref())?,
                         McpTargetOperation::Remove => None,
                     };
                     let redact = adapter.mcp_redacts_secrets();
@@ -1049,7 +1049,7 @@ fn preview_definition(
                             }
                         };
                         if operation == McpTargetOperation::Write && !target.enabled {
-                            if let Some(description) = registry.get(&target.tool_id).and_then(|adapter| adapter.mcp_disabled_description()) {
+                            if let Some(description) = registry.get(&target.tool_id).and_then(|adapter| adapter.mcp_disabled_description_for_version(version.as_deref())) {
                                 result.detail.push('；');
                                 result.detail.push_str(description);
                             }
@@ -1148,7 +1148,7 @@ fn commit_targets(
             project_path: target.project_path.clone(), path: None, status: "failed", detail: String::new(), baseline_hash: None, preview_token: None, existing: None, proposed: None };
         let attempt = (|| {
             let definition = definition.as_ref().map_err(Clone::clone)?;
-            let (location, scope_key) = target_location(db, registry, &target, home, true)?;
+            let (location, scope_key, version) = target_location(db, registry, &target, home, true)?;
             result.path = Some(location.path.display().to_string());
             if operation == McpTargetOperation::Write {
                 if let Some(adapter) = registry.get(&target.tool_id) {
@@ -1216,7 +1216,7 @@ fn commit_targets(
             } else {
                 existing_owned.clone()
             };
-            let document = adapter.mcp_document_at(definition, target.enabled, source.as_ref(), &location)?;
+            let document = adapter.mcp_document_for_version(definition, target.enabled, source.as_ref(), &location, version.as_deref())?;
             let written_hash = entry_hash(document.as_ref())?;
             // Value equality ignores object key order, but key order is part of the
             // desired native state (R3): a pure reorder must still reach the disk.

@@ -35,12 +35,12 @@ async function closeInstall(page: Page) {
   await page.getByRole('dialog', { name: '安装新插件' }).getByRole('button', { name: '取消', exact: true }).click();
 }
 
-async function setup(page: Page, deferFull = false, deferWorkspace = false, deferContext = deferWorkspace, catalog = false, extended = false, noPreview = false, emptyEntries = false, installless = false, updateOnly = false, toolId = 'claude_code', initialScanFailure = false, skillsCapability = true) {
+async function setup(page: Page, deferFull = false, deferWorkspace = false, deferContext = deferWorkspace, catalog = false, extended = false, noPreview = false, emptyEntries = false, installless = false, updateOnly = false, toolId = 'claude_code', initialScanFailure = false, skillsCapability = true, editableHooks = false, failPluginSave = false) {
   const extendedPath = String.raw`\\?\C:\Users\fixture\.grok\plugins\example-dev`;
   const extendedResource = String.raw`\\?\UNC\server\share\plugins\example-dev\agents`;
-  await page.addInitScript(({ holdFull, holdWorkspace, holdContext, catalog, extended, noPreview, emptyEntries, installless, updateOnly, toolId, initialScanFailure, skillsCapability, extendedPath, extendedResource }) => {
+  await page.addInitScript(({ holdFull, holdWorkspace, holdContext, catalog, extended, noPreview, emptyEntries, installless, updateOnly, toolId, initialScanFailure, skillsCapability, editableHooks, failPluginSave, extendedPath, extendedResource }) => {
     const entry = { id: 'fixture@market', name: 'Fixture plugin', source: 'fixture@market', version: '1.0.0', scope: 'user', enabled: true, state: 'installed_load_unknown', policy: 'AVAILABLE · ON_INSTALL', readOnly: false, root: '/fixture/plugins/fixture', resources: [{ kind: 'agents', path: '/fixture/plugins/fixture/agents', ownerId: 'fixture@market' }] };
-    const state = { holdWorkspace, calls: [] as any[], entries: emptyEntries ? [] : [entry, { ...entry, id: 'required@market', name: 'Organization plugin', policy: 'REQUIRED', readOnly: true }], fail: false, releaseFull: null as (() => void) | null, releaseWorkspace: null as (() => void) | null, releaseContext: null as (() => void) | null, contextId: 'ctx-fixture', baseline: 'fixture-baseline', failScan: initialScanFailure, holdFirstOperation: false, releaseOperation: null as (() => void) | null, operationCalls: 0, nullOperationSnapshot: false, rewriteInstall: false, holdNextScan: false, releaseNextScan: null as (() => void) | null, inspectCalls: [] as string[], readCalls: [] as string[], revealCalls: [] as Array<string | null>, failInspect: false };
+    const state = { holdWorkspace, calls: [] as any[], entries: emptyEntries ? [] : [entry, { ...entry, id: 'required@market', name: 'Organization plugin', policy: 'REQUIRED', readOnly: true }], fail: false, releaseFull: null as (() => void) | null, releaseWorkspace: null as (() => void) | null, releaseContext: null as (() => void) | null, contextId: 'ctx-fixture', baseline: 'fixture-baseline', failScan: initialScanFailure, holdFirstOperation: false, releaseOperation: null as (() => void) | null, operationCalls: 0, nullOperationSnapshot: false, rewriteInstall: false, holdNextScan: false, releaseNextScan: null as (() => void) | null, inspectCalls: [] as string[], readCalls: [] as string[], revealCalls: [] as Array<string | null>, failInspect: false, saveCalls: [] as any[], failPluginSave };
     if (catalog) state.entries.push({ ...entry, id: 'lark@official', name: 'Lark', source: 'lark@official', enabled: null, readOnly: true, state: 'not_installed', policy: '官方市场条目未安装', resources: [] });
     if (extended) state.entries.push({ ...entry, id: 'example-dev', name: 'example-dev', source: extendedPath, root: extendedPath, readOnly: true, resources: [{ kind: 'agents', path: extendedResource, ownerId: 'example-dev' }] });
     const snapshot = (target: any) => ({ target, capability: { version: '2.1.287', sources: 'plugin@marketplace', actions: updateOnly ? ['update'] : installless ? ['enable', 'disable', 'uninstall'] : ['install', 'update', 'enable', 'disable', 'uninstall'], project: true, detail: '重启会话后加载' }, entries: state.entries.map(item => ({ ...item })), baseline: state.baseline, detail: '静态列表，加载未验证' });
@@ -84,7 +84,9 @@ async function setup(page: Page, deferFull = false, deferWorkspace = false, defe
           { kind: 'skills', name: 'lint-check', description: 'Runs lint', path: `${root}/skills/lint/SKILL.md`, location: `${root}/skills/lint`, format: 'markdown' },
           { kind: 'commands', name: 'review', description: 'Review the current diff', path: `${root}/commands/review.md`, location: `${root}/commands/review.md`, format: 'markdown' },
           { kind: 'mcp', name: 'docs', description: 'npx -y docs-server', path: `${root}/.mcp.json`, location: `${root}/.mcp.json`, format: 'json' },
-          { kind: 'hooks', name: 'PreToolUse', description: '2', path: `${root}/hooks/hooks.json`, location: `${root}/hooks/hooks.json`, format: 'json' },
+          editableHooks
+            ? { kind: 'hooks', name: 'fixture-hook', description: 'PostToolUse', path: `${root}/hooks.json`, location: `${root}/hooks.json`, format: 'json' }
+            : { kind: 'hooks', name: 'PreToolUse', description: '2', path: `${root}/hooks/hooks.json`, location: `${root}/hooks/hooks.json`, format: 'json' },
         ] : args.pluginId === 'example-dev' ? [
           { kind: 'agents', name: 'explorer', description: 'Explore', path: `${extendedResource}\\explorer.md`, location: `${extendedResource}\\explorer.md`, format: 'markdown' },
         ] : [];
@@ -92,8 +94,15 @@ async function setup(page: Page, deferFull = false, deferWorkspace = false, defe
       }
       if (command === 'read_native_plugin_file') {
         state.readCalls.push(args.path);
-        const content = args.path.endsWith('.json') ? '{\n  "mcpServers": { "docs": { "command": "npx" } }\n}' : '---\nname: reviewer\ndescription: Reviews code\n---\n# Reviewer\n\nRead the diff first.';
-        return { path: args.path, content, format: args.path.endsWith('.json') ? 'json' : 'markdown', truncated: false };
+        const content = args.path.endsWith('.json') ? (editableHooks && args.path.endsWith('hooks.json')
+          ? '{\n  "fixture-hook": {\n    "PostToolUse": [\n      { "matcher": "run_command", "hooks": [ { "type": "command", "command": "./fixture-hook.sh", "timeout": 10 } ] }\n    ]\n  }\n}\n'
+          : '{\n  "mcpServers": { "docs": { "command": "npx" } }\n}') : '---\nname: reviewer\ndescription: Reviews code\n---\n# Reviewer\n\nRead the diff first.';
+        return { path: args.path, content, format: args.path.endsWith('.json') ? 'json' : 'markdown', truncated: false, editable: editableHooks && args.path.endsWith('hooks.json') };
+      }
+      if (command === 'save_native_plugin_file') {
+        state.saveCalls.push({ pluginId: args.pluginId, path: args.path, original: args.original, edited: args.edited });
+        if (state.failPluginSave) throw { message: 'hook「fixture-hook」包含不支持的事件「SessionEnd」；原文件未更改' };
+        return { transactionId: 'tx-plugin-edit', changedFiles: [args.path], status: 'applied' };
       }
       if (command === 'reveal_native_plugin_path') { state.revealCalls.push(args.path ?? null); return null; }
       // The Skills workspace reads one plugin skill so a contents jump can land on it.
@@ -120,7 +129,7 @@ async function setup(page: Page, deferFull = false, deferWorkspace = false, defe
       }
       return null;
     } } });
-  }, { holdFull: deferFull, holdWorkspace: deferWorkspace, holdContext: deferContext, catalog, extended, noPreview, emptyEntries, installless, updateOnly, toolId, initialScanFailure, skillsCapability, extendedPath, extendedResource });
+  }, { holdFull: deferFull, holdWorkspace: deferWorkspace, holdContext: deferContext, catalog, extended, noPreview, emptyEntries, installless, updateOnly, toolId, initialScanFailure, skillsCapability, editableHooks, failPluginSave, extendedPath, extendedResource });
   await page.goto('/'); await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
   await page.getByRole('tab', { name: '插件', exact: true }).click();
   if (!deferWorkspace && !emptyEntries && !(deferFull && noPreview)) await expect(page.getByText('Fixture plugin', { exact: true })).toBeVisible();
@@ -646,4 +655,54 @@ test('a failed contents read explains the problem and retries', async ({ page })
   await page.evaluate(() => { (window as any).pluginsHarness.failInspect = false; });
   await alert.getByRole('button', { name: '重试' }).click();
   await expect(details.getByRole('list', { name: '插件内容' }).getByRole('listitem')).toHaveCount(6);
+});
+
+test('adapter-declared editable hooks files save through the shared transaction', async ({ page }) => {
+  await setup(page, false, false, false, false, false, false, false, false, false, 'antigravity', false, true, true);
+  const details = await openFixture(page);
+  // The named-hook row shows the adapter-owned description, and the plugin
+  // source note separates these hooks from the standalone hooks.json.
+  await expect(details.getByRole('list', { name: '插件内容' }).getByRole('listitem').filter({ hasText: 'fixture-hook' })).toContainText('PostToolUse');
+  await expect(details.getByText('这些 Hook 来自该插件（区别于独立的 hooks.json），仅在插件启用时生效。')).toBeVisible();
+  await details.getByRole('button', { name: /fixture-hook/ }).click();
+  const editor = page.getByRole('textbox', { name: 'fixture-hook 内容' });
+  await expect(editor).toBeVisible();
+  await expect(page.getByRole('button', { name: '编辑', exact: true })).toBeVisible();
+  // Read-only views never offer editing for other bundled files.
+  await page.getByRole('button', { name: '返回插件' }).click();
+  await details.getByRole('button', { name: /reviewer/ }).click();
+  await expect(page.getByRole('button', { name: '编辑', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '返回插件' }).click();
+  await details.getByRole('button', { name: /fixture-hook/ }).click();
+  await page.getByRole('button', { name: '编辑', exact: true }).click();
+  const save = page.getByRole('button', { name: '保存', exact: true });
+  await expect(save).toBeDisabled();
+  await editor.click();
+  await page.keyboard.press('Control+A');
+  await page.keyboard.type('{ "fixture-hook": { "Stop": [] } }');
+  await expect(save).toBeEnabled();
+  await save.click();
+  await expect(page.getByRole('status').filter({ hasText: '已保存，插件文件已更新。' })).toBeVisible();
+  const saves = await page.evaluate(() => (window as any).pluginsHarness.saveCalls);
+  expect(saves).toHaveLength(1);
+  expect(saves[0].pluginId).toBe('fixture@market');
+  expect(saves[0].path).toContain('hooks.json');
+  expect(saves[0].edited).toBe('{ "fixture-hook": { "Stop": [] } }');
+});
+
+test('a rejected plugin file edit keeps the editor open with the original untouched', async ({ page }) => {
+  await setup(page, false, false, false, false, false, false, false, false, false, 'antigravity', false, true, true, true);
+  const details = await openFixture(page);
+  await details.getByRole('button', { name: /fixture-hook/ }).click();
+  await page.getByRole('button', { name: '编辑', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: 'fixture-hook 内容' });
+  await editor.click();
+  await page.keyboard.press('Control+A');
+  await page.keyboard.type('{ "fixture-hook": { "SessionEnd": [] } }');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('不支持的事件「SessionEnd」；原文件未更改');
+  // The edit stays open for fixing; cancelling returns to the read-only view.
+  await expect(page.getByRole('button', { name: '取消编辑' })).toBeVisible();
+  await page.getByRole('button', { name: '取消编辑' }).click();
+  await expect(page.getByRole('button', { name: '编辑', exact: true })).toBeVisible();
 });

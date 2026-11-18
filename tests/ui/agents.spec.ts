@@ -18,15 +18,21 @@ function row(page: Page, name: string) {
   return page.getByRole('listitem').filter({ has: page.getByText(name, { exact: true }) });
 }
 
-async function setup(page: Page, holdScan = false, emptyEntries = false, supported = true, longBody = false, remote = false) {
-  await page.addInitScript(({ holdScan, emptyEntries, supported, longBody, remote }) => {
+async function setup(page: Page, holdScan = false, emptyEntries = false, supported = true, longBody = false, remote = false, typed = false) {
+  await page.addInitScript(({ holdScan, emptyEntries, supported, longBody, remote, typed }) => {
     const body = longBody ? Array.from({ length: 80 }, (_, index) => `## Step ${index + 1}\n\nReview code carefully.\n`).join('\n') : 'Review code.\n';
     const entry = { id: 'fixture', name: 'reviewer', description: 'Reviews code', path: remote ? '/root/.claude/agents/reviewer.md' : '/fixture/agents/reviewer.md', format: 'markdown', content: `---\nname: reviewer\ndescription: Reviews code\ntools: Read\ncustom: preserved\n---\n${body}`, enabled: true, readOnly: false, owner: '独立定义', detail: '' };
     const conflicted = { ...entry, id: 'conflicted', name: 'planner', description: 'Plan', path: '/fixture/opencode.json', format: 'json', content: '{"description":"Plan"}', readOnly: true, detail: 'agent 与 agents 同义并存，原生形态冲突；请在原生配置统一为一种形态后再编辑' };
+    // Roster-typed rows only exist for adapters that verified launch-selection
+    // semantics (antigravity agent.md frontmatter).
+    const typedEntries = typed ? [
+      { ...entry, id: 'typed-plugin-main', name: 'probe-plugin-main', owner: '插件：fixture@market', readOnly: true, launchable: true },
+      { ...entry, id: 'typed-subagent', name: 'probe-subagent', launchable: false, detail: ' · 子代理（不在 --agent 启动名单，仅会话内调用）' },
+    ] : [];
     const host = { id: 'agent-host', name: 'Agent fixture', host: 'fixture.invalid', port: 22, user: 'root', authMethod: 'key', enabled: true, createdAt: 1, updatedAt: 1 };
     if (remote) localStorage.setItem('cliora:remote-target', host.id);
     const versions = new Map<string, Record<string, string>>();
-    const state = { version: 'old', saves: 0, attempts: [] as string[], calls: [] as any[], entries: emptyEntries ? [] : [entry, { ...entry, id: 'owned', name: 'plugin-agent', owner: '插件：fixture@market', readOnly: true }, conflicted], fail: false, releaseScan: null as (() => void) | null };
+    const state = { version: 'old', saves: 0, attempts: [] as string[], calls: [] as any[], entries: emptyEntries ? [] : [entry, { ...entry, id: 'owned', name: 'plugin-agent', owner: '插件：fixture@market', readOnly: true }, conflicted, ...typedEntries], fail: false, releaseScan: null as (() => void) | null };
     const snapshot = (target: any) => ({ target, capability: { version: '2.1.287', supported, format: 'markdown', template: entry.content, detail: supported ? '下一次委派加载' : '此版本未证实统一的原生 agent 定义格式。' }, entries: supported ? state.entries : [], baseline: 'fixture-baseline', detail: supported ? '原生定义管理' : '规则与扩展可在各自入口管理。' });
     Object.assign(window, { isTauri: true, agentsHarness: state, __TAURI_INTERNALS__: { invoke: async (command: string, args: any) => {
       state.calls.push({ command, args });
@@ -63,11 +69,27 @@ async function setup(page: Page, holdScan = false, emptyEntries = false, support
       if (remote && command.startsWith('list_')) return [];
       return null;
     } } });
-  }, { holdScan, emptyEntries, supported, longBody, remote });
+  }, { holdScan, emptyEntries, supported, longBody, remote, typed });
   await page.goto('/'); await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
   await page.getByRole('tab', { name: 'Agents', exact: true }).click();
   if (!holdScan && !emptyEntries && supported) await expect(page.getByText('reviewer', { exact: true })).toBeVisible();
 }
+
+// Only adapters with verified launch-selection semantics type their rows; the
+// badge then names main (roster-selectable) versus subagent (in-session only)
+// entries, including plugin-owned ones.
+test('roster-typed rows show the main and subagent badges', async ({ page }) => {
+  await setup(page, false, false, true, false, false, true);
+  await expect(row(page, 'probe-plugin-main').getByText('主 Agent', { exact: true })).toBeVisible();
+  await expect(row(page, 'probe-subagent').getByText('子代理', { exact: true })).toBeVisible();
+  // Untyped rows (no verified roster contract) carry no badge.
+  await expect(row(page, 'reviewer').getByText('主 Agent', { exact: true })).toHaveCount(0);
+  await expect(row(page, 'reviewer').getByText('子代理', { exact: true })).toHaveCount(0);
+  await row(page, 'probe-subagent').getByRole('button').click();
+  const article = page.getByRole('article', { name: 'probe-subagent' });
+  await expect(article.getByText('子代理', { exact: true })).toBeVisible();
+  await expect(article.getByText('不在 --agent 启动名单', { exact: false })).toBeVisible();
+});
 
 test('first load shows skeleton rows with status semantics until the agent scan returns', async ({ page }) => {
   await setup(page, true);

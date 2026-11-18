@@ -34,23 +34,6 @@ impl<'a> Field<'a> {
         }
     }
     /// Repeated varints may be unpacked (legacy) or packed (current CLI).
-    pub(crate) fn as_varints(&self) -> Result<Vec<u64>, Mismatch> {
-        match self {
-            Field::Varint(value) => Ok(vec![*value]),
-            Field::Bytes(bytes) => {
-                let mut values = Vec::new();
-                let mut rest = *bytes;
-                while !rest.is_empty() {
-                    if values.len() >= 4096 { return Err(Mismatch); }
-                    let (value, used) = read_varint(rest)?;
-                    values.push(value);
-                    rest = &rest[used..];
-                }
-                Ok(values)
-            }
-            _ => Err(Mismatch),
-        }
-    }
     /// Documented submessage/string fields must arrive length-delimited. The
     /// returned slice borrows the underlying buffer, not the field handle.
     pub(crate) fn as_bytes(&self) -> Result<&'a [u8], Mismatch> {
@@ -170,6 +153,16 @@ pub(crate) mod encode {
     pub(crate) fn varint_field(number: u64, value: u64) -> Vec<u8> {
         let mut out = tag(number, 0);
         push_varint(value, &mut out);
+        out
+    }
+
+    /// Concatenated varints without a field tag: the payload of a packed
+    /// repeated field (the 1.5.9 encoding of gen_metadata field 2).
+    pub(crate) fn packed_varints(values: &[u64]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for value in values {
+            push_varint(*value, &mut out);
+        }
         out
     }
 

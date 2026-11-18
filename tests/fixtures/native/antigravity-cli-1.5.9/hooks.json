@@ -1,0 +1,26 @@
+{
+  "description": "Antigravity CLI (agy) 1.5.9 sanitized hooks.json sample. Standalone hooks live at <workspace>/.agents/hooks.json and ~/.gemini/config/hooks.json; plugin hooks must sit at the plugin root (hooks/hooks.json is only staged there when importing Gemini/Claude extensions and is not read for native plugins). Verified on the remote 1.5.9 machine: the hooks manager loads all roots headless before sign-in (log line 'loaded N named hooks from M hooks.json file(s)'). Schema per builtin docs/hooks.md: top-level keys are hook names; events SessionStart/PreToolUse/PostToolUse/PreInvocation/PostInvocation/Stop; tool events use grouped {matcher, hooks[]} with a regex matcher; handler objects are {type:'command', command, timeout?} with JSON stdin/stdout contracts (camelCase protojson payloads).",
+  "fixture-workspace-hook": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/fixture-check.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "fixture-disabled-hook": {
+    "enabled": false,
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "/bin/true"
+      }
+    ]
+  }
+}

@@ -361,6 +361,17 @@ fn skill_markdown(
             });
         }
     }
+    for declaration in adapter.skill_declarations(scope, home, project.as_deref()) {
+        if declaration.root.is_dir() && same_directory(requested, &declaration.root) {
+            return Ok(SkillFile {
+                name: name.to_owned(),
+                file: declaration.root.join("SKILL.md"),
+                writable: false,
+                plugin: false,
+                plugin_root: None,
+            });
+        }
+    }
     for skill in plugin_skill_directories(db, registry, home, tool, scope, project_path)? {
         if same_directory(requested, &skill.path) {
             return Ok(SkillFile {
@@ -1157,6 +1168,7 @@ fn snapshot(path: &Path) -> Result<SkillSnapshot, String> {
 
 /// Read-only inventory: retain paths and stream each attachment into the same
 /// canonical digest used by packages. No base64 attachment map or JSON copy.
+#[cfg(test)]
 fn inventory_digest(path: &Path) -> Result<String, String> {
     fn paths(root: &Path, dir: &Path, files: &mut BTreeMap<String, PathBuf>, bytes: &mut u64) -> Result<(), String> {
         for entry in fs::read_dir(dir).map_err(|error| error.to_string())? {
@@ -1686,6 +1698,29 @@ pub fn scan_native(
             )?;
         }
     }
+    // Manifest-declared sources (agy 1.5.9 skills.json): the adapter resolved
+    // concrete, name-filtered skill directories; they are read-only rows with
+    // their own source label and never write targets.
+    for declaration in adapter.skill_declarations(scope, home, project.as_deref()) {
+        if entries.len() >= 128 {
+            return Err("原生 Skills 目录超过 128 个，请缩小管理范围".into());
+        }
+        if !declaration.root.exists() {
+            continue;
+        }
+        if let Some(item) = scan_one_skill_dir(
+            db,
+            tool,
+            &scope_key,
+            &declaration.root,
+            Some(&declaration.label),
+            require_manifest,
+            None,
+            adapter,
+        )? {
+            entries.push(item);
+        }
+    }
     for skill in plugin_skill_directories(db, registry, home, tool, scope, project_path)? {
         if entries.len() >= 128 {
             return Err("原生 Skills 目录超过 128 个，请缩小管理范围".into());
@@ -1704,6 +1739,25 @@ pub fn scan_native(
             switchable: false,
             enabled: None,
         });
+    }
+    // Same-name skills across discovery sources (adapter opt-in): mark every
+    // copy so override stays distinguishable from unreadable/not-loaded. The
+    // native precedence itself stays with the CLI; the marker only states
+    // that several sources carry the name.
+    if adapter.skill_marks_duplicate_names() {
+        let mut counts = std::collections::BTreeMap::new();
+        for entry in &entries {
+            *counts.entry(entry.name.as_str()).or_insert(0usize) += 1;
+        }
+        let duplicated: Vec<bool> = entries
+            .iter()
+            .map(|entry| counts.get(entry.name.as_str()).is_some_and(|count| *count > 1))
+            .collect();
+        for (entry, duplicated) in entries.iter_mut().zip(duplicated) {
+            if duplicated && !entry.issues.iter().any(|code| code == "duplicate_name") {
+                entry.issues.push("duplicate_name".into());
+            }
+        }
     }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(entries)
@@ -1958,72 +2012,104 @@ fn scan_skill_children(
         if entries.len() >= 128 {
             return Err("原生 Skills 目录超过 128 个，请缩小管理范围".into());
         }
-        let path = entry.path();
-        if require_manifest && !has_skill_manifest(&path) {
-            continue;
+        if let Some(item) = scan_one_skill_dir(
+            db,
+            tool,
+            scope_key,
+            &entry.path(),
+            read_only_detail,
+            require_manifest,
+            external_switch,
+            adapter,
+        )? {
+            entries.push(item);
         }
-        let read_only = read_only_detail.is_some();
-        let switchable = read_only && external_switch.is_some();
-        let enabled = switchable.then(|| {
-            adapter.skill_switch_enabled(
-                &external_switch.expect("switchable implies a state").current,
-                &path,
-            )
-        });
-        let package_id: Option<String> = if read_only {
-            None
-        } else {
-            db.with_connection(|conn| {
-                conn.query_row(
-                    "SELECT id FROM skill_packages WHERE name = ?1",
-                    [&name],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|error| error.to_string())
-            })?
-        };
-        let managed: Option<String> = if let Some(id) = package_id.as_deref() {
-            db.with_connection(|conn| conn.query_row("SELECT digest FROM skill_installations WHERE package_id = ?1 AND tool = ?2 AND scope_key = ?3 AND target_path = ?4", params![id, tool, scope_key, path.display().to_string()], |row| row.get(0)).optional().map_err(|error| error.to_string()))?
-        } else {
-            None
-        };
-        let inspected = if managed.is_some() {
-            inventory_digest(&path).and_then(|checksum| native_description(&path)
-                .map(|(description, issues)| (Some(checksum), description, issues)))
-        } else {
-            native_description(&path).map(|(description, issues)| (None, description, issues))
-        };
-        let readable = inspected.is_ok();
-        let (checksum, mut detail, issues) = inspected.unwrap_or_else(|error| (None, error, Vec::new()));
-        if let Some(note) = read_only_detail {
-            detail = if detail.is_empty() { note.to_owned() } else { format!("{note} · {detail}") };
-        }
-        let state = if read_only {
-            "read_only"
-        } else if !readable {
-            "unreadable"
-        } else if managed.is_some() && managed.as_deref() == checksum.as_deref() {
-            "managed"
-        } else {
-            "external"
-        };
-        entries.push(NativeSkillEntry {
-            name,
-            path: path.display().to_string(),
-            digest: checksum,
-            state,
-            detail,
-            package_id,
-            source: if read_only { "read_only" } else { "writable" },
-            plugin_name: None,
-            plugin_enabled: None,
-            issues,
-            switchable,
-            enabled,
-        });
     }
     Ok(())
+}
+
+/// Reads one native skill directory into a list entry. `note` marks
+/// read-only roots (observations and declared sources) and prefixes the
+/// displayed detail. `Ok(None)` means the directory is not a skill here,
+/// for example no SKILL.md where the adapter requires one.
+#[allow(clippy::too_many_arguments)]
+fn scan_one_skill_dir(
+    db: &Database,
+    tool: &str,
+    scope_key: &str,
+    path: &Path,
+    note: Option<&str>,
+    require_manifest: bool,
+    external_switch: Option<&ExternalSwitchState>,
+    adapter: &dyn crate::adapters::CliAdapter,
+) -> Result<Option<NativeSkillEntry>, String> {
+    if require_manifest && !has_skill_manifest(path) {
+        return Ok(None);
+    }
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or("Skills 目录名无效")?
+        .to_owned();
+    let read_only = note.is_some();
+    let switchable = read_only && external_switch.is_some();
+    let enabled = switchable.then(|| {
+        adapter.skill_switch_enabled(
+            &external_switch.expect("switchable implies a state").current,
+            path,
+        )
+    });
+    let package_id: Option<String> = if read_only {
+        None
+    } else {
+        db.with_connection(|conn| {
+            conn.query_row(
+                "SELECT id FROM skill_packages WHERE name = ?1",
+                [&name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())
+        })?
+    };
+    let managed: Option<String> = if let Some(id) = package_id.as_deref() {
+        db.with_connection(|conn| conn.query_row("SELECT digest FROM skill_installations WHERE package_id = ?1 AND tool = ?2 AND scope_key = ?3 AND target_path = ?4", params![id, tool, scope_key, path.display().to_string()], |row| row.get(0)).optional().map_err(|error| error.to_string()))?
+    } else {
+        None
+    };
+    let inspected = if managed.is_some() {
+        snapshot(path).map(|(_, manifest, _, checksum)| { let issues = manifest.issue_codes(); (Some(checksum), manifest.description, issues) })
+    } else {
+        native_description(path).map(|(description, issues)| (None, description, issues))
+    };
+    let readable = inspected.is_ok();
+    let (checksum, mut detail, issues) = inspected.unwrap_or_else(|error| (None, error, Vec::new()));
+    if let Some(note) = note {
+        detail = if detail.is_empty() { note.to_owned() } else { format!("{note} · {detail}") };
+    }
+    let state = if read_only {
+        "read_only"
+    } else if !readable {
+        "unreadable"
+    } else if managed.is_some() && managed.as_deref() == checksum.as_deref() {
+        "managed"
+    } else {
+        "external"
+    };
+    Ok(Some(NativeSkillEntry {
+        name,
+        path: path.display().to_string(),
+        digest: checksum,
+        state,
+        detail,
+        package_id,
+        source: if read_only { "read_only" } else { "writable" },
+        plugin_name: None,
+        plugin_enabled: None,
+        issues,
+        switchable,
+        enabled,
+    }))
 }
 
 pub fn preview_target(
@@ -2224,6 +2310,22 @@ pub fn set_enabled(db: &Database, credentials: &dyn crate::credentials::Credenti
     let _context = crate::accounts::selection::enter_bound(db,home,tool,scope,project_path.map(Path::new))?;
     let (package,_)=package(db,package_id)?; let (path,key)=target(registry,home,tool,scope,project_path,&package.name)?;
     let adapter=registry.get(tool).ok_or("未注册的 CLI")?;
+    // Adapters whose CLI refuses to load contract-breaking SKILL.md (verified
+    // for agy 1.5.9) never report such a package as usable: enabling is
+    // refused with the blocking codes instead of claiming the CLI will load it.
+    if enabled {
+        if let Some(reason) = adapter.skill_enable_requires_contract() {
+            let blocking: Vec<&str> = package
+                .issues
+                .iter()
+                .map(String::as_str)
+                .filter(|code| skill_manifest::contract_blocking_code(code))
+                .collect();
+            if !blocking.is_empty() {
+                return Err(format!("{reason}（{}）", blocking.join("、")));
+            }
+        }
+    }
     let located=switch_location(db,registry,home,adapter,scope,project_path,&package.name)?;
     if located.is_none() && adapter.skill_switch_requires_version() {
         // Unverified version and no explicit v1/v2 form signal in the settings

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "fixture-plugin-mcp": {
+      "command": "/bin/cat",
+      "args": ["-n"],
+      "disabled": false
+    }
+  }
+}

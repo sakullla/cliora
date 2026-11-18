@@ -165,6 +165,83 @@ test('a failed prompt launch keeps the edited message, its error and the dialog'
   expect(request[0]).toMatchObject({ toolId: 'kimi_code', projectId: 'docs', initialPrompt: '请审查本次改动\n并说明风险\n只列出阻塞问题' });
 });
 
+// The agent picker exists only for CLIs that publish agentLaunchAvailable,
+// lists the launchable main agents of the workspace and global scans (same-name
+// duplicates, subagent-only, builtin and disabled rows excluded), and carries
+// the selection on the launch request.
+test('the launch dialog picks a roster agent only for CLIs that publish it', async ({ page }) => {
+  await page.addInitScript(() => {
+    const prompt = { id: 'prompt-1', kind: 'prompt', title: '审查改动', body: '请审查本次改动', category: '', projectId: 'cliora', version: 1, updatedAt: 1 };
+    const control = { launches: [] as Array<Record<string, unknown>>, scans: [] as Array<Record<string, unknown>> };
+    const facet = { state: 'available', reason: '' };
+    const entry = (over: Record<string, unknown>) => ({ id: 'fixture', name: 'fixture', description: '', path: '/fixture/agents/fixture/agent.md', format: 'markdown', content: '', enabled: true, readOnly: false, builtin: false, owner: '独立定义', detail: '', ...over });
+    Object.assign(window, {
+      isTauri: true, __launchControl: control,
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: Record<string, any> = {}) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex', 'antigravity'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex' }, { id: 'antigravity', name: 'Antigravity' }] };
+          if (command === 'list_cli_adapters') return { registered: [
+            { id: 'codex', name: 'Codex', interfaceFormats: [], launchForm: 'terminal', yoloAvailable: false, nativeConfig: facet, launch: facet, resources: facet },
+            { id: 'antigravity', name: 'Antigravity', interfaceFormats: [], launchForm: 'terminal', yoloAvailable: false, agentLaunchAvailable: true, nativeConfig: facet, launch: facet, resources: facet },
+          ], managedIds: ['codex', 'antigravity'], preservedUnknown: [] };
+          if (command === 'list_projects') return [
+            { id: 'cliora', name: 'cliora', path: '/tmp/cliora', available: true, preferredTool: 'codex', modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} },
+          ];
+          if (command === 'list_library_items') return args.kind === 'prompt' ? [prompt] : [];
+          if (command === 'get_launch_settings') return { selected: 'terminal', terminals: [], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'scan_native_agents') {
+            control.scans.push(args.target);
+            const entries = args.target.scope === 'global' ? [
+              entry({ id: 'g-main', name: 'global-main', description: '全局主代理', launchable: true }),
+              entry({ id: 'g-sub', name: 'global-subagent', description: '全局子代理', launchable: false }),
+            ] : [
+              entry({ id: 'w-main', name: 'workspace-main', description: '工作区主代理', launchable: true }),
+              entry({ id: 'w-dup', name: 'global-main', description: '工作区同名主代理', launchable: true }),
+              entry({ id: 'w-builtin', name: 'default', description: '内置', builtin: true, launchable: true }),
+              entry({ id: 'w-off', name: 'disabled-main', description: '已停用主代理', enabled: false, launchable: true }),
+            ];
+            return { target: args.target, capability: { version: '1.5.9', supported: true, format: 'markdown', detail: '', template: '' }, entries, baseline: 'fixture', detail: '' };
+          }
+          if (command === 'launch_cli') { control.launches.push(args.request); return { status: 'terminal_requested', mode: args.request.mode, toolId: args.request.toolId, projectId: args.request.projectId, terminal: 'auto' }; }
+          if (command.startsWith('plugin:event|')) return 1;
+          if (command.startsWith('list_')) return [];
+          return null;
+        },
+      },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('button', { name: '启动会话', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '用这条提示词启动' });
+  // The prompt belongs to the cliora project, so the dialog starts there.
+  await expect(dialog.getByRole('button', { name: '工作目录 / 项目' })).toContainText('cliora');
+  // Codex publishes no agent launchability: no picker, no roster scan.
+  await expect(dialog.getByRole('button', { name: '启动 Agent' })).toHaveCount(0);
+  expect(await page.evaluate(() => (window as unknown as { __launchControl: { scans: unknown[] } }).__launchControl.scans)).toEqual([]);
+  await dialog.getByRole('button', { name: '启动 CLI' }).click();
+  await page.getByRole('option', { name: /Antigravity/ }).click();
+  const picker = dialog.getByRole('button', { name: '启动 Agent' });
+  await expect(picker).toBeVisible();
+  await expect(picker).toContainText('默认');
+  // Both the workspace and the global scan feed the roster.
+  const scans = await page.evaluate(() => (window as unknown as { __launchControl: { scans: Array<Record<string, unknown>> } }).__launchControl.scans);
+  expect(scans.map((scan) => scan.scope).sort()).toEqual(['global', 'project']);
+  await picker.click();
+  await expect(page.getByRole('option', { name: /workspace-main/ })).toBeVisible();
+  await expect(page.getByRole('option', { name: /global-main/ })).toContainText('工作区同名主代理');
+  await expect(page.getByRole('option', { name: /global-subagent|default|disabled-main/ })).toHaveCount(0);
+  await page.getByRole('option', { name: /workspace-main/ }).click();
+  await expect(picker).toContainText('workspace-main');
+  await dialog.getByLabel('启动提示词').fill('请审查本次改动');
+  await dialog.getByRole('button', { name: '在外部终端启动' }).click();
+  await expect(dialog).toHaveCount(0);
+  const request = await page.evaluate(() => (window as unknown as { __launchControl: { launches: Array<Record<string, unknown>> } }).__launchControl.launches);
+  expect(request).toHaveLength(1);
+  expect(request[0]).toMatchObject({ toolId: 'antigravity', projectId: 'cliora', agent: 'workspace-main' });
+});
+
 // Cancel has to leave no launch behind and keep the record in the library.
 test('cancelling a prompt launch closes the dialog without launching', async ({ page }) => {
   await page.addInitScript(() => {

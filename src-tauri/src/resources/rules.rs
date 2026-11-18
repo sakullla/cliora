@@ -101,16 +101,24 @@ pub struct NativeRuleFile {
     pub kind: String,
     pub enabled: bool,
     pub writable: bool,
+    pub removable: bool,
+    pub toggleable: bool,
     pub detail: String,
     pub text: String,
     pub fingerprint: String,
 }
 
-fn catalog_project(target: &RuleTarget) -> Result<std::path::PathBuf, String> {
-    if target.scope != Scope::Project {
-        return Err("目录型规则只存在于项目范围".into());
+/// Project directory for a catalog target, or `None` for a global catalog.
+/// The global branch is reached only after `require_catalog` verified the
+/// adapter declared `uses_rule_catalog(Scope::Global)`, so project-only
+/// catalogs never land here.
+fn catalog_directory(target: &RuleTarget) -> Result<Option<std::path::PathBuf>, String> {
+    match target.scope {
+        Scope::Project => Ok(Some(projects::checked_directory(
+            target.project_path.as_deref().ok_or("请选择项目目录")?,
+        )?)),
+        Scope::Global => Ok(None),
     }
-    projects::checked_directory(target.project_path.as_deref().ok_or("请选择项目目录")?)
 }
 
 fn require_catalog<'a>(
@@ -142,8 +150,8 @@ pub fn list_files(
         target.project_path.as_deref().map(Path::new),
     )?;
     let adapter = require_catalog(registry, target)?;
-    let project = catalog_project(target)?;
-    let specs = adapter.rule_file_specs(target.scope, home, Some(&project))?;
+    let project = catalog_directory(target)?;
+    let specs = adapter.rule_file_specs(target.scope, home, project.as_deref())?;
     specs
         .into_iter()
         .map(|spec| {
@@ -151,6 +159,7 @@ pub fn list_files(
             if text.len() > 1024 * 1024 {
                 return Err("规则内容超过 1 MiB".into());
             }
+            let policy = adapter.rule_kind_policy(spec.kind);
             Ok(NativeRuleFile {
                 id: spec.id,
                 path: spec.path.display().to_string(),
@@ -158,6 +167,8 @@ pub fn list_files(
                 kind: spec.kind.to_owned(),
                 enabled: spec.enabled,
                 writable: spec.writable,
+                removable: policy.removable,
+                toggleable: policy.toggleable,
                 detail: spec.detail.to_owned(),
                 fingerprint: transaction::fingerprint(text.as_bytes()),
                 text,
@@ -199,8 +210,8 @@ pub fn save_file(
         return Err("规则内容超过 1 MiB".into());
     }
     let adapter = require_catalog(registry, target)?;
-    let project = catalog_project(target)?;
-    let specs = adapter.rule_file_specs(target.scope, home, Some(&project))?;
+    let project = catalog_directory(target)?;
+    let specs = adapter.rule_file_specs(target.scope, home, project.as_deref())?;
     let spec = find_spec(&specs, path)?;
     if spec.kind == "inert" || !spec.writable {
         return Err(if spec.detail.is_empty() {
@@ -234,17 +245,10 @@ pub fn save_file(
 }
 
 /// Default body for a newly created catalog rule when the caller passes no
-/// text. The historical template is the Cursor `.mdc` frontmatter; layouts
-/// whose native files are plain markdown (Kiro steering `.md`) get a plain
-/// heading instead of tool-specific frontmatter their CLI does not interpret.
-fn default_create_template(path: &Path, name: &str) -> String {
-    if path.extension().and_then(|ext| ext.to_str()) == Some("mdc") {
-        "---\ndescription: \"\"\nalwaysApply: false\n---\n".to_owned()
-    } else {
-        format!("# {name}\n")
-    }
-}
-
+/// text: the adapter's `rule_create_template` (historically the Cursor
+/// `.mdc` frontmatter; layouts whose native files are plain markdown get a
+/// plain heading instead of tool-specific frontmatter their CLI does not
+/// interpret).
 pub fn create_file(
     db: &Database,
     credentials: &dyn CredentialStore,
@@ -263,10 +267,10 @@ pub fn create_file(
     )?;
     crate::accounts::selection::validate_expected(&target.tool_id, target.context_id.as_deref())?;
     let adapter = require_catalog(registry, target)?;
-    let project = catalog_project(target)?;
-    let path = adapter.rule_create_path(&project, name)?;
+    let project = catalog_directory(target)?;
+    let path = adapter.rule_create_path_scoped(target.scope, home, project.as_deref(), name)?;
     let text = if text.is_empty() {
-        default_create_template(&path, name)
+        adapter.rule_create_template(&path, name)
     } else {
         text.to_owned()
     };
@@ -303,11 +307,11 @@ pub fn delete_file(
     )?;
     crate::accounts::selection::validate_expected(&target.tool_id, target.context_id.as_deref())?;
     let adapter = require_catalog(registry, target)?;
-    let project = catalog_project(target)?;
-    let specs = adapter.rule_file_specs(target.scope, home, Some(&project))?;
+    let project = catalog_directory(target)?;
+    let specs = adapter.rule_file_specs(target.scope, home, project.as_deref())?;
     let spec = find_spec(&specs, path)?;
-    if spec.kind != "mdc" {
-        return Err("只有 .mdc 规则可以删除".into());
+    if !adapter.rule_kind_policy(spec.kind).removable {
+        return Err("此规则类型不支持删除".into());
     }
     let current = transaction::read_native(&spec.path)?;
     if current != original {
@@ -345,11 +349,11 @@ pub fn set_file_enabled(
     )?;
     crate::accounts::selection::validate_expected(&target.tool_id, target.context_id.as_deref())?;
     let adapter = require_catalog(registry, target)?;
-    let project = catalog_project(target)?;
-    let specs = adapter.rule_file_specs(target.scope, home, Some(&project))?;
+    let project = catalog_directory(target)?;
+    let specs = adapter.rule_file_specs(target.scope, home, project.as_deref())?;
     let spec = find_spec(&specs, path)?;
-    if spec.kind != "mdc" {
-        return Err("只有 .mdc 规则可以启停".into());
+    if !adapter.rule_kind_policy(spec.kind).toggleable {
+        return Err("此规则类型不支持启停".into());
     }
     if spec.enabled == enabled {
         return Err("状态未改变".into());
@@ -358,7 +362,7 @@ pub fn set_file_enabled(
     if current != original {
         return Err("规则已被外部修改，请重新打开".into());
     }
-    let dest = adapter.rule_relocate(&project, &spec.path, enabled)?;
+    let dest = adapter.rule_relocate_scoped(target.scope, home, project.as_deref(), &spec.path, enabled)?;
     transaction::apply_files(
         db,
         credentials,

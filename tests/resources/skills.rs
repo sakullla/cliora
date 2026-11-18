@@ -1526,6 +1526,230 @@ fn codebuddy_user_plugin_skills_stay_global_and_leave_the_project_list() {
     assert!(project_entries.iter().any(|entry| entry.name == "project-skill" && entry.source == "plugin"));
 }
 
+#[test]
+fn antigravity_global_scan_lists_the_159_read_only_discovery_roots() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let home = temp.path().join("home");
+    let gemini = home.join(".gemini");
+    // Writable brand root: one valid skill and one directory without SKILL.md.
+    write_skill(
+        &gemini.join("antigravity-cli/skills/demo-skill"),
+        "---\nname: demo-skill\ndescription: brand root copy\n---\nbody",
+    );
+    fs::create_dir_all(gemini.join("antigravity-cli/skills/no-manifest")).unwrap();
+    // Shared root carries the same name; config and builtin roots carry more.
+    write_skill(
+        &gemini.join("skills/demo-skill"),
+        "---\nname: demo-skill\ndescription: shared root copy\n---\nbody",
+    );
+    write_skill(
+        &gemini.join("config/skills/config-skill"),
+        "---\nname: config-skill\ndescription: config root copy\n---\nbody",
+    );
+    write_skill(
+        &gemini.join("antigravity-cli/builtin/skills/builtin-skill"),
+        "---\nname: builtin-skill\ndescription: builtin copy\n---\nbody",
+    );
+    let entries = scan_native(&db, &registry, &home, "antigravity", Scope::Global, None).unwrap();
+    let by_name: std::collections::BTreeMap<&str, Vec<&NativeSkillEntry>> =
+        entries.iter().fold(std::collections::BTreeMap::new(), |mut map, entry| {
+            map.entry(entry.name.as_str()).or_default().push(entry);
+            map
+        });
+    // Directory contract: no SKILL.md means it is not a skill for agy.
+    assert!(!by_name.contains_key("no-manifest"));
+    let demo = &by_name["demo-skill"];
+    assert_eq!(demo.len(), 2);
+    let brand = demo.iter().find(|entry| entry.source == "writable").unwrap();
+    assert_eq!(brand.state, "external");
+    let shared = demo.iter().find(|entry| entry.source == "read_only").unwrap();
+    assert_eq!(shared.state, "read_only");
+    assert!(shared.detail.starts_with("Shared 目录"), "{}", shared.detail);
+    // Same-name sources are marked on every copy; the precedence itself is
+    // the CLI's own and is not claimed.
+    for entry in demo {
+        assert!(entry.issues.iter().any(|code| code == "duplicate_name"), "{entry:?}");
+    }
+    for name in ["config-skill", "builtin-skill"] {
+        let entry = &by_name[name][0];
+        assert_eq!(entry.state, "read_only");
+        assert!(!entry.issues.iter().any(|code| code == "duplicate_name"));
+    }
+}
+
+#[test]
+fn antigravity_project_scan_reads_skills_json_sources_and_keeps_them_read_only() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let home = temp.path().join("home");
+    let project_path = temp.path().join("project");
+    fs::create_dir_all(project_path.join(".agents")).unwrap();
+    fs::write(
+        project_path.join(".agents").join("skills.json"),
+        r#"{"entries":[{"path":"shared-skills","exclude":["experimental-.*"]}]}"#,
+    )
+    .unwrap();
+    write_skill(
+        &project_path.join(".agents/skills/workspace-skill"),
+        "---\nname: workspace-skill\ndescription: standard root\n---\nbody",
+    );
+    write_skill(
+        &project_path.join("shared-skills/declared-skill"),
+        "---\nname: declared-skill\ndescription: declared source\n---\nbody",
+    );
+    // Excluded by the manifest's name filter: not part of the discovery.
+    write_skill(
+        &project_path.join("shared-skills/experimental-mock"),
+        "---\nname: experimental-mock\ndescription: excluded\n---\nbody",
+    );
+    // Contract-breaking frontmatter stays on the list with its issues; the
+    // state is the directory's actual status, never a claimed load.
+    write_skill(
+        &project_path.join("shared-skills/declared-broken"),
+        "# no frontmatter\n",
+    );
+    let entries = scan_native(
+        &db,
+        &registry,
+        &home,
+        "antigravity",
+        Scope::Project,
+        Some(&project_path.display().to_string()),
+    )
+    .unwrap();
+    let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
+    assert!(names.contains(&"workspace-skill"), "{entries:?}");
+    assert!(names.contains(&"declared-skill"), "{entries:?}");
+    assert!(names.contains(&"declared-broken"), "{entries:?}");
+    assert!(!names.contains(&"experimental-mock"), "{entries:?}");
+    let declared = entries.iter().find(|entry| entry.name == "declared-skill").unwrap();
+    assert_eq!(declared.state, "read_only");
+    assert_eq!(declared.source, "read_only");
+    assert!(declared.detail.starts_with("skills.json · shared-skills"), "{}", declared.detail);
+    let broken = entries.iter().find(|entry| entry.name == "declared-broken").unwrap();
+    assert_eq!(broken.state, "read_only");
+    assert!(broken.issues.iter().any(|code| code == "frontmatter_missing"), "{broken:?}");
+    // The declared document reads through the same locator, and writing it
+    // stays refused: declared sources are discovery rows, not write targets.
+    let document = read_document(
+        &db,
+        &registry,
+        &home,
+        "antigravity",
+        Scope::Project,
+        Some(&project_path.display().to_string()),
+        &declared.path.clone(),
+    )
+    .unwrap();
+    assert!(document.content.contains("declared source"));
+    #[derive(Default)]
+    struct SaveStore(Mutex<std::collections::HashMap<String, String>>);
+    impl crate::credentials::CredentialStore for SaveStore {
+        fn put(&self, key: &str, value: &str) -> Result<(), String> { self.0.lock().unwrap().insert(key.into(), value.into()); Ok(()) }
+        fn get(&self, key: &str) -> Result<String, String> { self.0.lock().unwrap().get(key).cloned().ok_or("missing".into()) }
+        fn delete(&self, key: &str) -> Result<(), String> { self.0.lock().unwrap().remove(key); Ok(()) }
+    }
+    let credentials = SaveStore::default();
+    assert!(save_document(
+        &db,
+        &credentials,
+        &registry,
+        &home,
+        "antigravity",
+        Scope::Project,
+        Some(&project_path.display().to_string()),
+        &declared.path.clone(),
+        &document.content,
+        "edited",
+    )
+    .is_err());
+    // The standard project root stays writable: editing SKILL.md there goes
+    // through the shared transactional save and re-reads as the new content.
+    let workspace = entries.iter().find(|entry| entry.name == "workspace-skill").unwrap();
+    let original = read_document(
+        &db,
+        &registry,
+        &home,
+        "antigravity",
+        Scope::Project,
+        Some(&project_path.display().to_string()),
+        &workspace.path.clone(),
+    )
+    .unwrap();
+    let edited = original.content.replace("standard root", "standard root edited");
+    save_document(
+        &db,
+        &credentials,
+        &registry,
+        &home,
+        "antigravity",
+        Scope::Project,
+        Some(&project_path.display().to_string()),
+        &workspace.path.clone(),
+        &original.content,
+        &edited,
+    )
+    .unwrap();
+    let reread = read_document(
+        &db,
+        &registry,
+        &home,
+        "antigravity",
+        Scope::Project,
+        Some(&project_path.display().to_string()),
+        &workspace.path.clone(),
+    )
+    .unwrap();
+    assert!(reread.content.contains("standard root edited"));
+    assert_eq!(
+        reread.content,
+        fs::read_to_string(project_path.join(".agents/skills/workspace-skill/SKILL.md")).unwrap()
+    );
+}
+
+#[test]
+fn antigravity_enable_refuses_contract_breaking_packages_while_others_stay_enabled() {
+    #[derive(Default)]
+    struct Store(Mutex<std::collections::HashMap<String, String>>);
+    impl crate::credentials::CredentialStore for Store {
+        fn put(&self, key: &str, value: &str) -> Result<(), String> { self.0.lock().unwrap().insert(key.into(), value.into()); Ok(()) }
+        fn get(&self, key: &str) -> Result<String, String> { self.0.lock().unwrap().get(key).cloned().ok_or("missing".into()) }
+        fn delete(&self, key: &str) -> Result<(), String> { self.0.lock().unwrap().remove(key); Ok(()) }
+    }
+    let credentials = Store::default();
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let home = temp.path().join("home");
+    let broken_source = temp.path().join("broken-skill");
+    write_skill(&broken_source, "---\nname: broken-skill\ndescription: \n---\nbody");
+    let broken = import_local(&db, broken_source.to_str().unwrap(), None, None).unwrap();
+    assert!(broken.issues.iter().any(|code| code == "description_missing"), "{broken:?}");
+    assert_eq!(
+        install(&db, &registry, &home, &broken.id, "antigravity", Scope::Global, None).status,
+        "installed"
+    );
+    // Disabling still works; re-enabling is refused with the verified
+    // frontmatter contract instead of claiming agy will load it.
+    set_enabled(&db, &credentials, &registry, &home, &broken.id, "antigravity", Scope::Global, None, false).unwrap();
+    let error = set_enabled(&db, &credentials, &registry, &home, &broken.id, "antigravity", Scope::Global, None, true).unwrap_err();
+    assert!(error.contains("frontmatter") && error.contains("description_missing"), "{error}");
+    // The default adapters keep the shared behavior: the same broken package
+    // still enables on a CLI without the verified contract.
+    let claude_source = temp.path().join("claude-copy");
+    write_skill(&claude_source, "---\nname: broken-skill\ndescription: \n---\nbody");
+    let claude_package = import_local(&db, claude_source.to_str().unwrap(), None, None).unwrap();
+    assert_eq!(
+        install(&db, &registry, &home, &claude_package.id, "claude_code", Scope::Global, None).status,
+        "installed"
+    );
+    set_enabled(&db, &credentials, &registry, &home, &claude_package.id, "claude_code", Scope::Global, None, false).unwrap();
+    set_enabled(&db, &credentials, &registry, &home, &claude_package.id, "claude_code", Scope::Global, None, true).unwrap();
+}
+
 
 #[test]
 fn streamed_inventory_matches_package_digest_and_list_metadata() {

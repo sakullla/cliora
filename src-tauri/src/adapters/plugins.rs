@@ -205,6 +205,30 @@ pub trait PluginAdapter: Sync {
     fn cleanup_local_mutation(&self, _home: &Path, _request: &PluginRequest) -> Result<(), String> {
         Ok(())
     }
+    /// Detail rows for a bundled hooks document. The default keeps the
+    /// generic filename-based walker (the Claude-style `{"hooks": {...}}`
+    /// wrapper); adapters whose native hooks schema differs own their parser
+    /// here and return one row per native hook. `None` keeps the fallback.
+    fn hooks_items(
+        &self,
+        _document: &Value,
+        _path: &str,
+    ) -> Option<Vec<crate::resources::plugin_contents::PluginItem>> {
+        None
+    }
+    /// Resource kinds this adapter allows editing in place through the shared
+    /// plugin-file write path (planned as a text patch and applied by the
+    /// shared transaction service). The default declares none: plugin
+    /// packages stay read-only unless an adapter owns the file contract.
+    fn editable_resource_kinds(&self) -> &'static [&'static str] {
+        &[]
+    }
+    /// Validate the proposed replacement text of an editable bundled resource
+    /// before any write is planned. Only adapters that declare editable kinds
+    /// are asked.
+    fn validate_resource_text(&self, _kind: &str, _text: &str) -> Result<(), String> {
+        Ok(())
+    }
 }
 /// Apply one lifecycle change to a top-level declaration array. Shared by the
 /// default `config_changes` and by adapters whose field follows the install

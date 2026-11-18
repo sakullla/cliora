@@ -1,0 +1,7 @@
+{
+  "fixture-plugin-hook": {
+    "PostToolUse": [
+      { "matcher": "run_command", "hooks": [ { "type": "command", "command": "./fixture-hook.sh", "timeout": 10 } ] }
+    ]
+  }
+}

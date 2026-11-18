@@ -11,9 +11,10 @@ import type { LaunchMode, LaunchSettings, Project } from '../../types/launch';
 import { preferredLaunchMode, worktreeIntentForNewWorkbench } from '../../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../../types/library';
 import type { AdapterDescriptor, Scope } from '../../types/native';
-import type { RulePlacement, RuleSyncResult } from '../../types/resources';
+import type { PluginTarget, RulePlacement, RuleSyncResult } from '../../types/resources';
 import { LibraryResources } from './LibraryResources';
 import { LibraryMcp } from './LibraryMcp';
+import { NativeRuleEditor } from './NativeRuleEditor';
 import { FilterSelect } from '../../components/FilterSelect';
 import { SearchField } from '../../components/SearchField';
 import { GuideDialog } from '../../components/GuideDialog';
@@ -164,6 +165,12 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   const [launchText, setLaunchText] = useState('');
   const [launchError, setLaunchError] = useState('');
   const [launchBusy, setLaunchBusy] = useState(false);
+  // Agent roster for the launch dialog: only shown when the selected CLI
+  // publishes agentLaunchAvailable. `null` while loading; a failed scan keeps
+  // the picker on the default (no selection) instead of blocking the launch.
+  const [launchAgents, setLaunchAgents] = useState<{ name: string; description: string }[] | null>(null);
+  const [launchAgent, setLaunchAgent] = useState('');
+  const agentRosterGeneration = useRef(0);
   // Host switching changes the execution target. Keep the same library/tool
   // choices as the local view; availability is resolved only when launching.
   const scopedTools = managedTools;
@@ -175,6 +182,41 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     const off = onLaunchSettingsChange(reload);
     return () => { live = false; off(); };
   }, [active, native]);
+  // The agent roster follows the dialog's tool and working directory: a
+  // project/custom directory merges the workspace scan with the global one
+  // (the native roster holds both plus plugin agents), home lists global
+  // only. Only main agents (launchable) join the picker. Remote hosts have
+  // no roster read yet, so the picker stays local-only.
+  useEffect(() => {
+    const id = ++agentRosterGeneration.current;
+    setLaunchAgent('');
+    setLaunchAgents(null);
+    const descriptor = scopedTools.find((item) => item.id === launchTool);
+    if (!launchItem || remoteTargetId !== 'local' || !descriptor?.agentLaunchAvailable || descriptor.launchForm === 'desktop' || !nativeAvailable) return;
+    const directory = launchPlace.startsWith('custom:') ? launchPlace.slice('custom:'.length) : launchPlace.startsWith('project:') ? projects.find((project) => project.id === launchPlace.slice('project:'.length))?.path ?? null : null;
+    const targets: PluginTarget[] = directory
+      ? [{ toolId: launchTool, scope: 'project', projectPath: directory, contextId: null }, { toolId: launchTool, scope: 'global', projectPath: null, contextId: null }]
+      : [{ toolId: launchTool, scope: 'global', projectPath: null, contextId: null }];
+    void Promise.all(targets.map((target) => native.scanNativeAgents(target)))
+      .then((snapshots) => {
+        if (agentRosterGeneration.current !== id) return;
+        const seen = new Set<string>();
+        const roster: { name: string; description: string }[] = [];
+        for (const snapshot of snapshots) {
+          for (const entry of snapshot.entries) {
+            if (entry.builtin || !entry.enabled || entry.launchable !== true || seen.has(entry.name)) continue;
+            seen.add(entry.name);
+            roster.push({ name: entry.name, description: entry.description });
+          }
+        }
+        setLaunchAgents(roster);
+      })
+      .catch(() => {
+        if (agentRosterGeneration.current !== id) return;
+        setLaunchAgents([]);
+      });
+    // scopedTools comes from the parent and projects re-resolve on change.
+  }, [launchItem, launchTool, launchPlace, projects, native, scopedTools, remoteTargetId]);
   useEffect(() => {
     if (!copiedId) return;
     const timer = window.setTimeout(() => setCopiedId(null), 1800);
@@ -526,7 +568,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     const directory = !desktop && launchPlace.startsWith('custom:') ? launchPlace.slice('custom:'.length) : null;
     const settings = await native.getLaunchSettings().catch(() => launchSettings);
     const mode: LaunchMode = launchMode === 'yolo' && selectedDescriptor?.yoloAvailable ? 'yolo' : 'normal';
-    const request = { toolId: launchTool, projectId, sessionId: null, mode, directory, initialPrompt: launchText, worktreeIntent: worktreeIntentForNewWorkbench(settings, { desktop }) };
+    const request = { toolId: launchTool, projectId, sessionId: null, mode, directory, initialPrompt: launchText, worktreeIntent: worktreeIntentForNewWorkbench(settings, { desktop }), agent: selectedDescriptor?.agentLaunchAvailable && launchAgent ? launchAgent : null };
     try {
       const result = await native.launchCli(request);
       const opened = workbenchSessionId(result);
@@ -710,6 +752,10 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     {section === 'prompt' && <div id="library-prompt-panel" role="tabpanel" aria-labelledby="library-prompt-tab" className={styles.tabPanel} ><PromptLibrary context={{ targetId: remoteTargetId === 'local' ? null : remoteTargetId }} active={active && section === 'prompt'} createSignal={createSignal} discardSignal={promptDiscard} spotlight={spotlight?.kind === 'prompt' ? spotlight : null} onDirtyChange={setPromptDirty} onCountChange={count => childCount('prompt', count)} onRetryCounts={() => setCountStamp(value => value + 1)} onLaunch={openLaunch} /></div>}
     {section === 'rule' && <div id={`library-${section}-panel`} role="tabpanel" aria-labelledby={`library-${section}-tab`} className={styles.tabPanel}>
     {section === 'rule' && bindingFeedback()}
+    {/* 修改当前 CLI 规则 reaches the native per-file rule editors. The entry
+        follows the descriptors (only shown when some managed CLI publishes
+        rule support) and stays local: per-file editing has no remote surface. */}
+    {section === 'rule' && remoteTargetId === 'local' && scopedTools.some((tool) => tool.management?.rules && (tool.management.rules.global || tool.management.rules.project)) && <NativeRuleEditor tools={scopedTools} projects={projects} />}
     <div className={styles.filters}>
       <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.page.searchPlaceholder')} />
       <div className={styles.filterPicks}>
@@ -826,6 +872,10 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
               { value: 'normal', label: t('settings.terminal.modeNormal') },
               { value: 'yolo', label: t('settings.terminal.modeYolo'), disabled: !selectedDescriptor?.yoloAvailable },
             ]} /></div>}
+            {!desktop && remoteTargetId === 'local' && !!selectedDescriptor?.agentLaunchAvailable && <label>{t('library.page.launchAgentLabel')}<FilterSelect label={t('library.page.launchAgentLabel')} value={launchAgent} searchable searchLabel={t('library.page.searchAgent')} options={[
+              { value: '', label: t('library.page.launchAgentNone') },
+              ...(launchAgents ?? []).map((entry) => ({ value: entry.name, label: entry.name, detail: entry.description || undefined })),
+            ]} onChange={(next) => setLaunchAgent(next)} /></label>}
           </div>
           <label className={styles.body}>{t('library.page.firstMessage')}<textarea aria-label={t('library.page.launchPromptAria')} rows={8} value={launchText} onChange={(event) => setLaunchText(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing && !launchBusy && launchTool && launchText.trim()) { event.preventDefault(); void startSession(); } }} /></label>
           <div className="dialog-footer"><span className="dialog-footer-gap" /><Button onClick={() => setLaunchItem(null)} disabled={launchBusy}>{t('common.dialog.cancel')}</Button><Button variant="primary" data-dialog-save loading={launchBusy} disabled={launchBusy || !launchTool || !launchText.trim()} icon={<Icon name="play" size={14} />} onClick={() => void startSession()}>{submitLabel}</Button></div>
