@@ -7,7 +7,7 @@ test.beforeEach(async ({ page }) => {
     const tools = [{ id: 'codex', name: 'Codex' }];
     const facets = { state: 'available', reason: '' };
     const session = { id: 'remote-native:history-host:codex:fixture', toolId: 'codex', nativeId: 'fixture', title: '远程会话示例', cwd: '/fixture', model: null, projectId: null, startedAt: 1, updatedAt: 2, favorite: false, partial: false, stale: false, messageCount: 1, usageCount: 0 };
-    const state = { hold: true, fail: false, version: 1, offset: 0, calls: [] as { name: string; refresh?: boolean }[], releases: [] as (() => void)[] };
+    const state = { availableSources: undefined as string[] | undefined, hold: true, fail: false, version: 1, offset: 0, calls: [] as { name: string; refresh?: boolean }[], releases: [] as (() => void)[] };
     const now = Date.now;
     Date.now = () => now() + state.offset;
     Object.assign(window, {
@@ -23,7 +23,7 @@ test.beforeEach(async ({ page }) => {
           if (command === 'list_remote_native_history_snapshot') {
             if (state.hold) await new Promise<void>(resolve => state.releases.push(resolve));
             if (state.fail) throw { message: 'fixture connection failed' };
-            return { sessions: [session], sourceFailures: [] };
+            return { sessions: state.availableSources && !state.availableSources.includes('codex') ? [] : [session], sourceFailures: [], availableSources: state.availableSources };
           }
           if (command === 'get_remote_native_history') return { session, messages: [{ id: 'message', role: 'user', text: `远程正文版本 ${state.version}`, timestamp: 2 }], usage: [], children: [], resumeReason: null };
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [], cliMode: 'normal', projectMode: 'normal' };
@@ -37,7 +37,7 @@ test.beforeEach(async ({ page }) => {
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录', exact: true }).click();
 });
 
-type Probe = { hold: boolean; fail: boolean; version: number; offset: number; calls: { name: string; refresh?: boolean }[]; releases: (() => void)[] };
+type Probe = { availableSources?: string[]; hold: boolean; fail: boolean; version: number; offset: number; calls: { name: string; refresh?: boolean }[]; releases: (() => void)[] };
 declare global { interface Window { __remoteRecords: Probe } }
 
 test('remote loading can be cancelled and retried without showing zero sessions or local usage', async ({ page }, testInfo) => {
@@ -103,4 +103,16 @@ test('a failed remote refresh retains its warning through filtering and can reco
   await page.getByRole('button', { name: '重新读取列表', exact: true }).click();
   await expect(page.getByText('远程正文版本 2')).toBeVisible();
   await expect(page.getByText('fixture connection failed', { exact: false })).toHaveCount(0);
+});
+
+
+test('remote capability gaps are explained instead of claiming that native history is empty', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__remoteRecords.availableSources = [];
+    window.__remoteRecords.hold = false;
+    window.__remoteRecords.releases.splice(0).forEach(release => release());
+  });
+  await expect(page.getByText('Codex：此工具尚未支持读取远程原生会话。', { exact: true }).first()).toBeVisible();
+  await page.getByText('来自当前主机的原生会话', { exact: true }).click();
+  await expect(page.getByText('优先读取各工具的近期记录；超长记录会标记为部分内容，完整记录仍保留在远端。', { exact: true })).toBeVisible();
 });

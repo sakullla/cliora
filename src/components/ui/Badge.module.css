@@ -2,14 +2,15 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  min-height: var(--space-5);
+  min-height: 22px;
   max-width: 100%;
   padding: 0 var(--space-2);
   border: 1px solid transparent;
   border-radius: var(--radius-pill);
   font-size: var(--fs-caption);
   font-weight: var(--fw-medium);
-  line-height: 1.4;
+  line-height: 1.35;
+  letter-spacing: .01em;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }

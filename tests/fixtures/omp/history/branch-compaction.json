@@ -1,0 +1,31 @@
+{
+  "capability": "history",
+  "name": "user title, active branch, compaction, interruption and model_usage stay distinct",
+  "case": {
+    "action": "session",
+    "fixture": "omp-v3-branch-compaction.jsonl",
+    "expect": {
+      "title": "OMP fixture branch session",
+      "nativeId": "0190f4a2-0000-7000-8000-000000000002",
+      "cwd": "/fixture/project",
+      "partial": false,
+      "messages": [
+        "First question",
+        "First answer",
+        "Active branch question",
+        "Active branch answer",
+        "Compacted fixture summary.",
+        "Explored the abandoned branch.",
+        "After compaction",
+        "After compaction answer",
+        "Interrupted partial answer"
+      ],
+      "usageCount": 6,
+      "input": 700,
+      "output": 135,
+      "cacheRead": 50,
+      "cacheWrite": 10,
+      "models": ["fixture/fixture-model", "fixture/title-model"]
+    }
+  }
+}

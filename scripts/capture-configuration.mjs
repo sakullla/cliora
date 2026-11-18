@@ -16,11 +16,15 @@ async function openCli(page, name) {
   }
   await region.getByRole('heading', { level: 2, name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(，切换 CLI)?$`) }).waitFor();
 }
-const toolNames = { pi: 'Pi', open_code: 'OpenCode', kimi_code: 'Kimi Code', codex: 'Codex', claude_code: 'Claude Code', qoder_cn: 'Qoder CN', antigravity: 'Antigravity' };
+const toolNames = { pi: 'Pi', open_code: 'OpenCode', kimi_code: 'Kimi Code', codex: 'Codex', claude_code: 'Claude Code', qoder_cn: 'Qoder CN', antigravity: 'Antigravity', omp: 'oh-my-pi (OMP)' };
 const toolSlugs = { pi: 'pi', open_code: 'opencode', kimi_code: 'kimi', codex: 'codex', claude_code: 'claude' };
 const variants = Object.keys(toolSlugs).flatMap(tool => [
   { name: `${toolSlugs[tool]}-default`, tool, title: `${toolNames[tool]} · 简洁编辑首屏`, state: '连接摘要、按需展开的模型与单独保存' },
   { name: `${toolSlugs[tool]}-parameters`, tool, title: `${toolNames[tool]} · 原生模型参数`, state: '上下文、输出、推理与输入能力', details: true },
+]);
+const quickAdvanced = ['omp', 'codex', 'claude_code'].flatMap(tool => [
+  { name: `${tool === 'claude_code' ? 'claude' : tool}-quick`, tool, title: `${toolNames[tool]} · 快速配置`, state: '自动名称、推荐凭据与模型，保存不自动应用', action: 'quick' },
+  { name: `${tool === 'claude_code' ? 'claude' : tool}-advanced`, tool, title: `${toolNames[tool]} · 高级配置`, state: '模型、设置、原文、继承、诊断与恢复', action: 'advanced' },
 ]);
 const extra = [
   ['qoder-settings', 'qoder_cn', 'Qoder CN · 常用设置', '模型、权限、语言、两类原生记忆开关', 'qoder-settings'],
@@ -48,7 +52,7 @@ const extra = [
   ['account-impact', 'codex', '账号关联', '关联配置、使用范围和额度引用', 'impact'],
   ['account-create', 'codex', '添加独立账号', '账号名称与登录方式', 'account-create'],
 ].map(([name, tool, title, state, action]) => ({ name, tool, title, state, action }));
-export const configurationScenarios = [...variants, ...extra];
+export const configurationScenarios = [...variants, ...quickAdvanced, ...extra];
 
 async function fixtureInstaller() {
   const text = fs.readFileSync(new URL('../tests/ui/configuration-workspace-fixture.ts', import.meta.url), 'utf8');
@@ -80,7 +84,7 @@ async function installPresentation(page, theme, names, rawTemplate) {
       if (['create_account', 'start_account_login', 'check_account', 'cancel_account_login'].includes(command)) return account(value);
       if (command === 'begin_configuration_draft') {
         if (rawTemplate) value.profile.files = { settings: rawTemplate };
-        if (value.subject === 'profile' && !value.profile.id && value.view.models) { value.view.models = []; value.view.defaultModel = null; value.profile.files.settings = JSON.stringify(value.view); }
+        if (value.subject === 'profile' && !value.profile.id && value.view.models && value.profile.tool !== 'omp') { value.view.models = []; value.view.defaultModel = null; value.profile.files.settings = JSON.stringify(value.view); }
         if (value.profile.tool === 'kimi_code') value.sourceCapabilities = value.sourceCapabilities.map(cap => cap.source === 'account' ? { ...cap, available: false, reason: 'Kimi 使用原生配置或 API 密钥' } : cap);
         if (value.profile.tool === 'open_code' && value.descriptor) {
           value.descriptor.operations.push('small_default'); value.view.smallModel = 'two';
@@ -127,9 +131,12 @@ export async function captureConfiguration({ browser, themes, widths, selected, 
       } else if (action !== 'overview') {
         if (['common', 'common-results'].includes(action)) await page.getByRole('button', { name: '通用配置', exact: true }).click();
         else if (action === 'new') await page.getByRole('button', { name: '新建配置', exact: true }).click();
+        else if (action === 'quick') await page.getByRole('button', { name: '新建配置', exact: true }).click();
         else if (action === 'comparison') await page.getByRole('button', { name: '正在使用的文件', exact: true }).click();
         else await page.locator('[data-profile-id="existing"]').getByRole('button', { name: '修改', exact: true }).click();
         await expect(dialog).toBeVisible();
+        if (action === 'quick') await expect(dialog.getByRole('button', { name: '快速配置', exact: true })).toHaveAttribute('aria-pressed', 'true');
+        if (action === 'advanced') { const advanced = dialog.getByRole('button', { name: '高级配置', exact: true }); if (await advanced.getAttribute('aria-pressed') !== 'true') await advanced.click(); }
         if (scene.details) {
           if (['pi', 'open_code', 'kimi_code'].includes(scene.tool)) { await dialog.getByRole('button', { name: /^one(?: ·|$)/ }).click(); await expect(dialog.getByLabel('模型 one', { exact: true })).toBeVisible(); }
           else await dialog.getByRole('button', { name: '常用设置', exact: true }).click();

@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { setupConfigurationWorkspace } from './configuration-workspace-fixture';
 
 // R1: with reduced motion requested, dialogs and page switches no longer animate (02 ADR-7).
 // The suite default is reducedMotion 'reduce', so each test sets the preference explicitly.
@@ -96,4 +97,20 @@ test('reduced motion stops dialog, page and control motion', async ({ page }) =>
   const primary = page.locator('[data-variant="primary"]').first();
   await expect(primary).toBeVisible();
   expect((await motion(primary)).transition).toBeLessThanOrEqual(0.01);
+});
+
+test('reduced motion stops configuration dialog and level-switch motion', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await setupConfigurationWorkspace(page, 'codex');
+  await page.getByRole('button', { name: '新建配置', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  const opened = await motion(dialog);
+  expect(opened.animation, JSON.stringify(opened)).toBeLessThanOrEqual(0.01);
+  expect(opened.transition, JSON.stringify(opened)).toBeLessThanOrEqual(0.01);
+  await dialog.getByRole('button', { name: '高级配置', exact: true }).click();
+  const settings = dialog.getByRole('button', { name: '常用设置', exact: true });
+  await expect(settings).toBeVisible();
+  expect((await motion(settings)).transition).toBeLessThanOrEqual(0.01);
+  expect((await motion(dialog.getByRole('button', { name: '快速配置', exact: true }))).transition).toBeLessThanOrEqual(0.01);
 });

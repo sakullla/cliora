@@ -1,3 +1,5 @@
+import { installPromptFixtureBridge, installRichPromptFixtures } from './capture-prompt-fixtures.mjs';
+import { installWorkspaceFixtures } from './capture-workspace-fixtures.mjs';
 import { settleCapture, previousCaptureCleanup } from './capture-ready.mjs';
 /** Synthetic, populated native-IPC fixtures for visual inspection; never platform acceptance evidence. */
 import fs from 'node:fs';
@@ -15,9 +17,11 @@ const themes=themeOption==='all'?['light','dark']:[themeOption];
 const sizeOption=option('--size','1360');
 // --home adds the 1280 width where the reported two-column project grid squeezed card titles.
 const homeCapture=process.argv.includes('--home');
-const allowedWidths=homeCapture?[1360,1280,900,640]:[1360,900,640];
-const widths=sizeOption==='all'?allowedWidths:[...new Set(sizeOption.split(',').map(Number))];
-if(!widths.length||widths.some(width=>!allowedWidths.includes(width)))throw new Error('Invalid --size; use '+allowedWidths.join(','));
+const compat640=process.env.CLIORA_CAPTURE_640==='1'||process.argv.includes('--compat-640');
+const allowedWidths=homeCapture?[1360,1280,900,720,640]:[1360,900,720,640];
+const defaultWidths=(homeCapture?[1360,1280,900,720]:[1360,900,720]).concat(compat640?[640]:[]);
+const widths=sizeOption==='all'?defaultWidths:[...new Set(sizeOption.split(',').map(Number))];
+if(!widths.length||widths.some(width=>!allowedWidths.includes(width)))throw new Error('Invalid --size; use all|1360,900,720' + (homeCapture?',1280':'') + '; 640 requires an explicit width or CLIORA_CAPTURE_640=1');
 // --measure: count fully visible entries in main for each page scenario at 1360x1000 light (02 ADR-0).
 const measure=process.argv.includes('--measure');
 const measureViewport={width:1360,height:1000};
@@ -35,11 +39,11 @@ if(process.argv.includes('--list')){console.log([...selectedPages,...selectedSce
 const pagesOnly=process.argv.includes('--only')&&selectedPages.length>0&&selectedScenarios.length===0;
 const root=fileURLToPath(new URL('../',import.meta.url)).replace(/\\/g,'/').replace(/\/$/,'');
 const workflowsOnly=process.argv.includes('--features')||process.argv.includes('--workflows');
-const scopedCapture=process.argv.some(arg=>['--full','--only','--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules','--remote-hosts','--write-recovery','--home'].includes(arg));
+const scopedCapture=process.argv.some(arg=>['--full','--only','--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules','--remote-hosts','--write-recovery','--home','--projects','--prompts'].includes(arg));
 const quickCapture=process.argv.includes('--quick')||!scopedCapture;
-const fullCapture=!quickCapture&&!pagesOnly&&!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules','--remote-hosts','--write-recovery','--home'].includes(arg));
-const captureMode=homeCapture?'home':process.argv.includes('--write-recovery')?'write-recovery':process.argv.includes('--remote-hosts')?'remote-hosts':workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':process.argv.includes('--skills')?'skills':process.argv.includes('--mcp')?'mcp':process.argv.includes('--rules')?'rules':'full';
-const manifestName=`capture-ui${['features','sessions','records','connections','skills','mcp','rules','remote-hosts','write-recovery','home'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
+const fullCapture=!quickCapture&&!pagesOnly&&!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills','--mcp','--rules','--remote-hosts','--write-recovery','--home','--projects','--prompts'].includes(arg));
+const captureMode=process.argv.includes('--prompts')?'prompts':process.argv.includes('--projects')?'projects':homeCapture?'home':process.argv.includes('--write-recovery')?'write-recovery':process.argv.includes('--remote-hosts')?'remote-hosts':workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':process.argv.includes('--skills')?'skills':process.argv.includes('--mcp')?'mcp':process.argv.includes('--rules')?'rules':'full';
+const manifestName=`capture-ui${['features','sessions','records','connections','skills','mcp','rules','remote-hosts','write-recovery','home','projects','prompts'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
 const acceptanceNote='Playwright 与合成 IPC 截图仅用于浏览器界面检查，不是 WebView2、真实桌面主题/焦点/键盘或原生 CLI/文件写入验收；未执行的平台行为均为未验证。';
 const acceptance={kind:'playwright-synthetic-ipc',nativePlatform:'unverified',webview2:'unverified',desktopThemeFocusKeyboard:'unverified',nativeCliAndFileWrites:'unverified',note:acceptanceNote};
 const out=process.env.CLIORA_CAPTURE_OUT ?? root+'/docs/verification/ui'; fs.mkdirSync(out,{recursive:true});
@@ -227,7 +231,7 @@ async function captureImage(page,name,theme,width,metadata={}){
  await settleCapture(page);
  const file=`${name}-${theme}-${width}.png`;
  const path=`${out}/${file}`;
- await page.screenshot({path});
+ await page.screenshot({path,animations:'disabled'});
  captures.push({name,theme,width,height:page.viewportSize().height,path,file,category:'general_ui',state:name,...metadata});
  const over=await page.evaluate(findOverflow);
  if(over.length)failures.push({name,theme,width,over});
@@ -469,7 +473,7 @@ body{margin:0;background:#101114;color:#f5f2ec;font:15px system-ui}header{positi
 const ids=['scenario','theme','width','query'];const controls=ids.map(id=>document.getElementById(id));const cards=[...document.querySelectorAll('figure')];function filter(){let count=0;const query=controls[3].value.trim().toLowerCase();for(const card of cards){card.hidden=controls.slice(0,3).some((control,index)=>control.value&&card.dataset[ids[index]]!==control.value)||!card.dataset.keywords.includes(query);if(!card.hidden)count++;}document.getElementById('count').textContent='显示 '+count+' / '+cards.length+' 张';document.getElementById('empty').hidden=count!==0;}controls.forEach(control=>control.addEventListener('input',filter));document.getElementById('filters').addEventListener('submit',event=>event.preventDefault());document.getElementById('filters').addEventListener('reset',()=>setTimeout(filter,0));filter();
 </script></body></html>`);
  const rows=[...new Map(captures.map(item=>[item.name,label(item)]))].map(([name,title])=>`| ${title} | ${captures.filter(item=>item.name===name).map(item=>`[${item.theme} ${item.width}](${item.file})`).join(' · ')} |`);
- fs.writeFileSync(`${out}/README.md`,`# UI 捕获\n\n[浏览图片画廊](index.html) · [机器可读清单](${manifestName})\n\n按场景、主题、宽度或关键词浏览功能界面，支持重置、匹配数量和原图查看。\n\n执行：\n\n\`\`\`sh\nCLIORA_PREVIEW_URL=http://127.0.0.1:14736 ${['node','scripts/capture-ui.mjs',...process.argv.slice(2)].join(' ')}\n\`\`\`\n\n\`--rules\` 捕获远程规则绑定读取、失败、陈旧、编辑草稿与恢复；\`--features\` 捕获配置与账号功能；\`--theme light|dark|all\`、\`--size 1360,900,640\`、\`--only 'kimi-*'\` 可缩小范围，\`--list\` 列出场景。CLIORA_CAPTURE_OUT 可指定输出目录。预览服务器需运行当前 frontend build。\n\n本次生成 ${captures.length} 张图片，${failures.length} 项检查失败。${acceptanceNote}真实登录与计费也未验证。\n\n| 功能场景 | 图片 |\n| --- | --- |\n${rows.join('\n')}\n`);
+ fs.writeFileSync(`${out}/README.md`,`# UI 捕获\n\n[浏览图片画廊](index.html) · [机器可读清单](${manifestName})\n\n按场景、主题、宽度或关键词浏览功能界面，支持重置、匹配数量和原图查看。\n\n执行：\n\n\`\`\`sh\nCLIORA_PREVIEW_URL=http://127.0.0.1:14736 ${['node','scripts/capture-ui.mjs',...process.argv.slice(2)].join(' ')}\n\`\`\`\n\n\`--rules\` 捕获远程规则绑定读取、失败、陈旧、编辑草稿与恢复；\`--features\` 捕获配置与账号功能；\`--theme light|dark|all\`、\`--size all|1360,900,720\`（640 需显式指定或 CLIORA_CAPTURE_640=1）、\`--only 'kimi-*'\` 可缩小范围，\`--list\` 列出场景。CLIORA_CAPTURE_OUT 可指定输出目录。预览服务器需运行当前 frontend build。\n\n本次生成 ${captures.length} 张图片，${failures.length} 项检查失败。${acceptanceNote}真实登录与计费也未验证。\n\n| 功能场景 | 图片 |\n| --- | --- |\n${rows.join('\n')}\n`);
  fs.writeFileSync(`${out}/${manifestName}`,JSON.stringify({capturedAt:new Date().toISOString(),synthetic:true,acceptance,invocation:['node','scripts/capture-ui.mjs',...process.argv.slice(2)].join(' '),previewUrl:process.env.CLIORA_PREVIEW_URL??'http://127.0.0.1:14736',mode:captureMode,matrix:{themes,widths},selectedScenarios:pagesOnly?selectedPages:workflowsOnly||fullCapture?selectedScenarios:[],missing,success:failures.length===0&&missing.length===0,imageCount:captures.length,...(measure?{firstScreen:{viewport:measureViewport,theme:'light',selector:'[data-tool-row], [data-project-id], [data-profile-id], article, li, [role="row"], [role="listitem"]',counts:firstScreen}}:{}),captures:captures.map(({path,...item})=>item),failures},null,2)+'\n');
 }
 
@@ -741,7 +745,7 @@ async function captureHomeScreens(page,capture){
 
 if(!workflowsOnly){
 for(const width of widths)for(const theme of themes){
- const page=await browser.newPage({viewport:{width,height:1000},locale:process.env.CLIORA_CAPTURE_LOCALE??'zh-CN'});page.on('pageerror',e=>failures.push({type:'pageerror',theme,width,message:e.message}));await page.addInitScript(mock,homeCapture?{theme,home:true}:process.argv.includes('--write-recovery')?{theme,remoteHosts:true,writeRecovery:true}:process.argv.includes('--remote-hosts')?{theme,remoteHosts:true}:process.argv.includes('--rules')?{theme,rules:true}:theme);await installCaptureConfigurationProtocol(page);
+ const page=await browser.newPage({viewport:{width,height:1000},locale:process.env.CLIORA_CAPTURE_LOCALE??'zh-CN'});page.on('pageerror',e=>failures.push({type:'pageerror',theme,width,message:e.message}));await page.addInitScript(mock,homeCapture?{theme,home:true}:process.argv.includes('--write-recovery')?{theme,remoteHosts:true,writeRecovery:true}:process.argv.includes('--remote-hosts')?{theme,remoteHosts:true}:process.argv.includes('--rules')?{theme,rules:true}:theme);await installCaptureConfigurationProtocol(page);await page.addInitScript(installPromptFixtureBridge);if(process.argv.includes('--projects')||process.argv.includes('--prompts'))await page.addInitScript(installWorkspaceFixtures);if(process.argv.includes('--prompts'))await page.addInitScript(installRichPromptFixtures);
  const nav=page.getByRole('navigation',{name:'页面'});
  let lastCapture='(before home)';
  async function capture(name){await captureImage(page,name,theme,width);lastCapture=name;}
@@ -749,6 +753,46 @@ for(const width of widths)for(const theme of themes){
  // Navigation is inside the try so a boot timeout under load is recorded instead of crashing the run.
  try{
  await page.goto(process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736');await page.getByText('正在读取本机设置').waitFor({state:'hidden'});await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
+ if(process.argv.includes('--prompts')){
+  await nav.getByRole('button',{name:'资料库',exact:true}).click();
+  const panel=page.locator('[data-prompt-library]');
+  await panel.locator('[data-library-id]').first().waitFor();await capture('prompts-library-many');
+  const search=panel.getByRole('textbox',{name:'搜索资料'});
+  await search.fill('全文后段命中-119');await panel.getByRole('button',{name:'模板 119',exact:true}).waitFor();await capture('prompts-fulltext-search');
+  await search.fill('');await panel.getByRole('button',{name:'项目筛选',exact:true}).click();
+  await page.getByRole('option',{name:/^电商平台 项目专用/}).click();await panel.getByRole('button',{name:'项目 A 发布',exact:true}).waitFor();await capture('prompts-project-scope');
+  await panel.getByRole('button',{name:'项目 A 发布',exact:true}).click();
+  await page.getByRole('dialog',{name:'编辑提示词'}).getByRole('textbox',{name:'资料正文',exact:true}).waitFor();await capture('prompts-edit');
+  await page.getByRole('dialog',{name:'编辑提示词'}).getByRole('button',{name:'关闭',exact:true}).click();
+  await panel.getByRole('button',{name:'批量导入',exact:true}).click();
+  const input=page.getByRole('dialog',{name:'导入提示词'});await input.getByLabel('JSON 内容').fill(JSON.stringify([{title:'通用审查',body:'先检查边界，再检查错误恢复。'},{title:'通用审查',body:'确认变更范围。\n检查回滚步骤。',tags:['release']}],null,2));
+  await input.getByRole('button',{name:'预览导入'}).click();const imported=page.getByRole('dialog',{name:'确认导入内容'});await imported.getByText('发现同名或相同正文',{exact:false}).first().waitFor();await imported.getByText('本批次同名或相同正文',{exact:false}).first().waitFor();await capture('prompts-import-preview');
+  await imported.getByRole('button',{name:'关闭',exact:true}).click();
+  await nav.getByRole('button',{name:'工作台',exact:true}).click();await page.getByRole('button',{name:'新建会话',exact:true}).first().click();
+  const session=page.getByRole('dialog',{name:'新建工作台会话'});await session.getByLabel('初始提示词（可选）').fill('已有初始草稿');
+  await session.getByRole('button',{name:'查找提示词',exact:true}).click();const picker=page.getByRole('dialog',{name:'查找提示词'});await picker.getByRole('textbox',{name:'搜索提示词标题或完整正文'}).fill('全文后段命中-119');
+  await picker.getByRole('button',{name:'模板 119',exact:true}).click();await picker.locator('pre').waitFor();await capture('prompts-workbench-picker');
+  await picker.getByRole('button',{name:'插入草稿',exact:true}).click();await session.getByLabel('初始提示词（可选）').waitFor();await capture('prompts-inserted-draft');
+  await page.close();continue;
+ }
+ if(process.argv.includes('--projects')){
+  const project=page.locator('[data-business-workspaces]').first();
+  await project.locator('[data-repository-id="repo-47"]').waitFor({state:'attached'});
+  await capture('projects-many');
+  await project.getByRole('button',{name:/^需处理/}).click();await project.locator('[data-repository-id="repo-46"]').waitFor();await capture('projects-attention');
+  await project.getByRole('button',{name:/^需处理/}).click();
+  await project.getByRole('textbox',{name:'搜索仓库名称或路径'}).fill('team-1/api');
+  await project.locator('[data-repository-id]').first().waitFor();await capture('projects-same-name-search');
+  await project.getByRole('textbox',{name:'搜索仓库名称或路径'}).fill('');
+  await project.getByRole('button',{name:'添加仓库',exact:true}).click();
+  await page.getByRole('dialog',{name:'选择要添加的仓库'}).getByText('Permission denied').waitFor();await capture('projects-batch-preview');
+  await page.getByRole('dialog',{name:'选择要添加的仓库'}).getByRole('button',{name:'关闭',exact:true}).click();
+  await project.getByRole('button',{name:'项目操作',exact:true}).click();await page.getByRole('menuitem',{name:'打开项目清单',exact:true}).click();
+  await page.getByRole('dialog',{name:'关联项目清单'}).getByText('shared-api',{exact:true}).waitFor();await capture('projects-manifest-preview');
+  await page.getByRole('dialog',{name:'关联项目清单'}).getByRole('button',{name:'关联项目',exact:true}).click();
+  await project.getByText('已关联项目清单',{exact:false}).waitFor();await capture('projects-linked');
+  await page.close();continue;
+ }
  if(homeCapture){await page.setViewportSize({width,height:1400});await captureHomeScreens(page,capture);await page.close();continue;}
  if(process.argv.includes('--write-recovery')){
   await page.getByText('存在未确认的远程写入，请先核查回执，保留草稿并勿直接重试。',{exact:true}).waitFor();

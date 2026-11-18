@@ -78,6 +78,14 @@ pub struct NativeSkillEntry {
     pub plugin_enabled: Option<bool>,
     /// Specification issue codes; empty when SKILL.md is absent or unreadable.
     pub issues: Vec<String>,
+    /// A read-only observation can still be switched through the CLI's own
+    /// native override (for example OMP `disabledExtensions`).
+    #[serde(default)]
+    pub switchable: bool,
+    /// Effective native override for a switchable observation; absent when the
+    /// CLI has no override or the entry is writable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1070,10 +1078,18 @@ fn safe_name(value: &str) -> bool {
     skill_manifest::valid_name(value)
 }
 fn digest(files: &BTreeMap<String, String>) -> Result<String, String> {
-    Ok(format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec(files).map_err(|error| error.to_string())?)
-    ))
+    // Hash serialized bytes directly; don't allocate a second complete base64 package.
+    let mut hash = Sha256::new();
+    serde_json::to_writer(HashWriter(&mut hash), files).map_err(|error| error.to_string())?;
+    Ok(format!("{:x}", hash.finalize()))
+}
+struct HashWriter<'a>(&'a mut Sha256);
+impl std::io::Write for HashWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
 }
 fn collect(
     root: &Path,
@@ -1148,6 +1164,51 @@ fn snapshot(path: &Path) -> Result<SkillSnapshot, String> {
     let manifest = manifest_info(&files, &name)?;
     let checksum = digest(&files)?;
     Ok((name, manifest, files, checksum))
+}
+
+/// Read-only inventory: retain paths and stream each attachment into the same
+/// canonical digest used by packages. No base64 attachment map or JSON copy.
+#[cfg(test)]
+fn inventory_digest(path: &Path) -> Result<String, String> {
+    fn paths(root: &Path, dir: &Path, files: &mut BTreeMap<String, PathBuf>, bytes: &mut u64) -> Result<(), String> {
+        for entry in fs::read_dir(dir).map_err(|error| error.to_string())? {
+            let path = entry.map_err(|error| error.to_string())?.path();
+            let meta = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+            if meta.file_type().is_symlink() { return Err("Skills 包不能包含符号链接".into()); }
+            if meta.is_dir() { paths(root, &path, files, bytes)?; continue; }
+            if !meta.is_file() { return Err("Skills 包只能包含普通文件".into()); }
+            if files.len() >= MAX_FILES { return Err("Skills 包文件数量超出上限".into()); }
+            *bytes += meta.len();
+            if *bytes > MAX_BYTES as u64 { return Err("Skills 包超过 12 MiB".into()); }
+            let name = path.strip_prefix(root).map_err(|_| "Skills 文件不在来源目录中")?
+                .components().map(|part| part.as_os_str().to_str().ok_or("Skills 文件名无法识别"))
+                .collect::<Result<Vec<_>, _>>()?.join("/");
+            files.insert(name, path);
+        }
+        Ok(())
+    }
+    let root = resolved_skill_dir(path)?;
+    let mut files = BTreeMap::new();
+    paths(&root, &root, &mut files, &mut 0)?;
+    let mut hash = Sha256::new();
+    hash.update(b"{");
+    let mut bytes = 0;
+    for (index, (name, path)) in files.into_iter().enumerate() {
+        if index > 0 { hash.update(b","); }
+        serde_json::to_writer(HashWriter(&mut hash), &name).map_err(|error| error.to_string())?;
+        hash.update(b":\"");
+        // Base64 has no JSON escape characters. Streaming also bounds memory for large binaries.
+        let mut input = fs::File::open(path).map_err(|error| error.to_string())?.take((MAX_BYTES + 1 - bytes) as u64);
+        {
+            let mut encoded = base64::write::EncoderWriter::new(HashWriter(&mut hash), &STANDARD);
+            bytes += std::io::copy(&mut input, &mut encoded).map_err(|error| error.to_string())? as usize;
+            encoded.finish().map_err(|error| error.to_string())?;
+        }
+        if bytes > MAX_BYTES { return Err("Skills 包超过 12 MiB".into()); }
+        hash.update(b"\"");
+    }
+    hash.update(b"}");
+    Ok(format!("{:x}", hash.finalize()))
 }
 
 fn local_candidate(source: &str) -> Result<Candidate, String> {
@@ -1480,16 +1541,22 @@ pub fn set_in_library(db: &Database, id: &str, in_library: bool) -> Result<(), S
 pub fn list(db: &Database) -> Result<Vec<SkillPackage>, String> {
     let _ = recover_report(db)?;
     db.with_connection(|conn| {
-        let mut statement = conn.prepare("SELECT id, name, description, source, digest, files_json, updated_at, in_library FROM skill_packages ORDER BY name COLLATE NOCASE")
+        // Extract list metadata in SQLite. Attachments never cross into Rust just to count files.
+        let mut statement = conn.prepare("SELECT id, name, description, source, digest,
+            CASE WHEN json_valid(files_json) THEN json_extract(files_json, '$.\"SKILL.md\"') END,
+            updated_at, in_library,
+            CASE WHEN json_valid(files_json) THEN (SELECT count(*) FROM json_each(files_json)) ELSE 0 END
+            FROM skill_packages ORDER BY name COLLATE NOCASE")
             .map_err(|error| error.to_string())?;
         let rows = statement.query_map([], |row| {
-            let json: String = row.get(5)?;
-            let files = serde_json::from_str::<BTreeMap<String, String>>(&json).ok();
-            let file_count = files.as_ref().map_or(0, BTreeMap::len);
+            let encoded: Option<String> = row.get(5)?;
+            let file_count = row.get::<_, i64>(8)?.max(0) as usize;
             let name: String = row.get(1)?;
             // Display comes from the stored SKILL.md, so a description saved by
             // an older reader is corrected without a migration.
-            let manifest = files.as_ref().and_then(|files| manifest_info(files, &name).ok());
+            let manifest = encoded.as_ref().and_then(|encoded| STANDARD.decode(encoded).ok())
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .map(|text| skill_manifest::analyze(&text, &name));
             let stored: String = row.get(2)?;
             let (description, compatibility, issues) = match manifest {
                 Some(manifest) => { let issues = manifest.issue_codes(); (manifest.description, manifest.compatibility, issues) }
@@ -1601,9 +1668,20 @@ pub fn scan_native(
     } else {
         None
     };
+    let external_switch = external_switch_state(adapter, scope, home, project.as_deref());
     let mut entries = Vec::new();
     if root.exists() {
-        scan_skill_children(db, tool, &scope_key, root, None, require_manifest, &mut entries)?;
+        scan_skill_children(
+            db,
+            tool,
+            &scope_key,
+            root,
+            None,
+            require_manifest,
+            None,
+            adapter,
+            &mut entries,
+        )?;
     }
     for observation in adapter.skill_observations(scope, home, project.as_deref()) {
         if observation.root.exists() {
@@ -1614,6 +1692,8 @@ pub fn scan_native(
                 &observation.root,
                 Some(observation.detail),
                 require_manifest,
+                external_switch.as_ref(),
+                adapter,
                 &mut entries,
             )?;
         }
@@ -1635,6 +1715,8 @@ pub fn scan_native(
             &declaration.root,
             Some(&declaration.label),
             require_manifest,
+            None,
+            adapter,
         )? {
             entries.push(item);
         }
@@ -1654,6 +1736,8 @@ pub fn scan_native(
             plugin_name: Some(skill.plugin_name),
             plugin_enabled: skill.plugin_enabled,
             issues: skill.issues,
+            switchable: false,
+            enabled: None,
         });
     }
     // Same-name skills across discovery sources (adapter opt-in): mark every
@@ -1886,6 +1970,28 @@ fn has_skill_manifest(path: &Path) -> bool {
     fs::symlink_metadata(&file).is_ok_and(|meta| meta.is_file() && !meta.file_type().is_symlink())
 }
 
+/// Parsed CLI-owned switch document for read-only Skills observations.
+struct ExternalSwitchState {
+    current: serde_json::Value,
+}
+
+fn external_switch_state(
+    adapter: &dyn crate::adapters::CliAdapter,
+    scope: Scope,
+    home: &Path,
+    project: Option<&Path>,
+) -> Option<ExternalSwitchState> {
+    let location = adapter.skill_switch_location(scope, home, project, "")?;
+    let text = transaction::read_native(&location.path).ok()?;
+    let root = crate::native::format::parse(location.kind, &text).ok()?;
+    let current = root
+        .pointer(&switch_pointer(&location.field))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    Some(ExternalSwitchState { current })
+}
+
+#[allow(clippy::too_many_arguments)]
 fn scan_skill_children(
     db: &Database,
     tool: &str,
@@ -1893,6 +1999,8 @@ fn scan_skill_children(
     root: &Path,
     read_only_detail: Option<&str>,
     require_manifest: bool,
+    external_switch: Option<&ExternalSwitchState>,
+    adapter: &dyn crate::adapters::CliAdapter,
     entries: &mut Vec<NativeSkillEntry>,
 ) -> Result<(), String> {
     for entry in fs::read_dir(root).map_err(|error| error.to_string())? {
@@ -1911,6 +2019,8 @@ fn scan_skill_children(
             &entry.path(),
             read_only_detail,
             require_manifest,
+            external_switch,
+            adapter,
         )? {
             entries.push(item);
         }
@@ -1922,6 +2032,7 @@ fn scan_skill_children(
 /// read-only roots (observations and declared sources) and prefixes the
 /// displayed detail. `Ok(None)` means the directory is not a skill here,
 /// for example no SKILL.md where the adapter requires one.
+#[allow(clippy::too_many_arguments)]
 fn scan_one_skill_dir(
     db: &Database,
     tool: &str,
@@ -1929,6 +2040,8 @@ fn scan_one_skill_dir(
     path: &Path,
     note: Option<&str>,
     require_manifest: bool,
+    external_switch: Option<&ExternalSwitchState>,
+    adapter: &dyn crate::adapters::CliAdapter,
 ) -> Result<Option<NativeSkillEntry>, String> {
     if require_manifest && !has_skill_manifest(path) {
         return Ok(None);
@@ -1939,6 +2052,13 @@ fn scan_one_skill_dir(
         .ok_or("Skills 目录名无效")?
         .to_owned();
     let read_only = note.is_some();
+    let switchable = read_only && external_switch.is_some();
+    let enabled = switchable.then(|| {
+        adapter.skill_switch_enabled(
+            &external_switch.expect("switchable implies a state").current,
+            path,
+        )
+    });
     let package_id: Option<String> = if read_only {
         None
     } else {
@@ -1987,6 +2107,8 @@ fn scan_one_skill_dir(
         plugin_name: None,
         plugin_enabled: None,
         issues,
+        switchable,
+        enabled,
     }))
 }
 
@@ -2241,6 +2363,67 @@ pub fn set_enabled(db: &Database, credentials: &dyn crate::credentials::Credenti
         let result=operate(db,registry,home,package_id,tool,scope,project_path,true,None,false,true);
         if result.status=="failed" {Err(result.detail)} else {Ok(())}
     }
+}
+/// Switch a read-only Skill observation through the CLI's own native override.
+/// The observation directory is only validated as the source; it is never the
+/// write target.
+#[allow(clippy::too_many_arguments)]
+pub fn set_observed_enabled(
+    db: &Database,
+    credentials: &dyn crate::credentials::CredentialStore,
+    registry: &Registry,
+    home: &Path,
+    tool: &str,
+    scope: Scope,
+    project_path: Option<&str>,
+    name: &str,
+    path: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    let _context = crate::accounts::selection::enter_bound(db, home, tool, scope, project_path.map(Path::new))?;
+    let adapter = registry.get(tool).ok_or("未注册的 CLI")?;
+    let project = if scope == Scope::Project {
+        Some(projects::checked_directory(project_path.ok_or("请选择项目目录")?)?)
+    } else {
+        None
+    };
+    let requested = PathBuf::from(path);
+    let belongs = adapter
+        .skill_observations(scope, home, project.as_deref())
+        .iter()
+        .any(|observation| observation.root.join(name) == requested);
+    if !belongs || requested.file_name().and_then(|value| value.to_str()) != Some(name) {
+        return Err("只能启停当前工具只读来源中的 Skill".into());
+    }
+    let location = adapter
+        .skill_switch_location(scope, home, project.as_deref(), name)
+        .ok_or_else(|| format!("{} 没有可用的 Skill 启停覆盖", adapter.name()))?;
+    let baseline = crate::native::transaction::read_native(&location.path)?;
+    let root = crate::native::format::parse(location.kind, &baseline)?;
+    let pointer = switch_pointer(&location.field);
+    let current = root.pointer(&pointer).cloned().unwrap_or(serde_json::Value::Null);
+    let desired = adapter.skill_switch_value_at(&location, &current, enabled, &requested);
+    let contents = crate::native::format::set_path(
+        location.kind,
+        &baseline,
+        &location.field,
+        Some(&desired),
+    )?;
+    if contents == baseline {
+        return Ok(());
+    }
+    crate::native::transaction::apply_text(
+        db,
+        credentials,
+        &[crate::native::transaction::TextPatch {
+            path: location.path,
+            baseline,
+            contents,
+            sensitive: true,
+        }],
+        |_| Ok(()),
+    )?;
+    Ok(())
 }
 fn enable_archived(db: &Database, registry: &Registry, home: &Path, package_id: &str, tool: &str, scope: Scope, project_path: Option<&str>) -> Result<(),String> {
     let _context = crate::accounts::selection::enter_bound(db,home,tool,scope,project_path.map(Path::new))?;
@@ -2514,6 +2697,62 @@ fn operate(
         Err(error) => result.detail = error,
     }
     result
+}
+
+#[cfg(test)]
+mod observed_switch_tests {
+    use super::*;
+
+    struct WorkingStore;
+    impl CredentialStore for WorkingStore {
+        fn put(&self, _id: &str, _secret: &str) -> Result<(), String> { Ok(()) }
+        fn get(&self, _id: &str) -> Result<String, String> { Ok("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into()) }
+        fn delete(&self, _id: &str) -> Result<(), String> { Ok(()) }
+    }
+
+    #[test]
+    fn read_only_skill_toggle_writes_only_the_cli_override() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+        let registry = Registry::builtins();
+        let home = temp.path().join("home");
+        let skill = home.join(".claude/skills/foreign-skill");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(skill.join("SKILL.md"), "---\ndescription: Foreign\n---\n").unwrap();
+        let config = home.join(".omp/agent/config.yml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(&config, "disabledExtensions:\n  - skill:keep\n  - skill:foreign-skill\n").unwrap();
+
+        let entries = scan_native(&db, &registry, &home, "omp", Scope::Global, None).unwrap();
+        let foreign = entries.iter().find(|entry| entry.name == "foreign-skill").unwrap();
+        assert_eq!(foreign.state, "read_only");
+        assert!(foreign.switchable);
+        assert_eq!(foreign.enabled, Some(false));
+
+        let source = fs::read_to_string(skill.join("SKILL.md")).unwrap();
+        set_observed_enabled(
+            &db,
+            &WorkingStore,
+            &registry,
+            &home,
+            "omp",
+            Scope::Global,
+            None,
+            "foreign-skill",
+            foreign.path.as_str(),
+            true,
+        )
+        .unwrap();
+        let config_text = fs::read_to_string(&config).unwrap();
+        assert!(config_text.contains("skill:keep"));
+        assert!(!config_text.contains("skill:foreign-skill"));
+        assert_eq!(fs::read_to_string(skill.join("SKILL.md")).unwrap(), source);
+        let entries = scan_native(&db, &registry, &home, "omp", Scope::Global, None).unwrap();
+        assert_eq!(
+            entries.iter().find(|entry| entry.name == "foreign-skill").unwrap().enabled,
+            Some(true)
+        );
+    }
 }
 
 #[cfg(test)]

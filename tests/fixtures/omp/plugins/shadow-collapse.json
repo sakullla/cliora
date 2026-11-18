@@ -1,0 +1,52 @@
+{
+  "name": "OMP project marketplace shadow keeps the project copy writable",
+  "capability": "plugins",
+  "case": {
+    "action": "supplement",
+    "project": true,
+    "lock": {
+      "plugins": {
+        "t5-market-plugin": {
+          "version": "2.0.0",
+          "enabledFeatures": null,
+          "enabled": true
+        }
+      },
+      "settings": {}
+    },
+    "entries": [
+      {
+        "id": "t5-market-plugin@t5-market",
+        "name": "t5-market-plugin@t5-market",
+        "source": "t5-market-plugin@t5-market",
+        "version": "2.0.0",
+        "scope": "project",
+        "enabled": true,
+        "state": "installed_load_unknown",
+        "policy": "原生 marketplace 安装",
+        "readOnly": false
+      },
+      {
+        "id": "t5-market-plugin@t5-market",
+        "name": "t5-market-plugin@t5-market",
+        "source": "t5-market-plugin@t5-market",
+        "version": "2.0.0",
+        "scope": "user",
+        "enabled": true,
+        "state": "installed_load_unknown",
+        "policy": "原生 marketplace 安装 · 用户作用域安装，项目页只读",
+        "readOnly": true
+      }
+    ],
+    "doctor": false,
+    "expectEntries": [
+      {
+        "id": "t5-market-plugin@t5-market",
+        "scope": "project",
+        "readOnly": false,
+        "state": "installed_load_unknown",
+        "policyContains": ["同 ID 用户副本被项目副本遮蔽", "全局作用域"]
+      }
+    ]
+  }
+}

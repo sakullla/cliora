@@ -1,0 +1,13 @@
+{
+  "capability": "resources",
+  "name": "OMP skill enable and disable keep unrelated disabledExtensions entries",
+  "case": {
+    "kind": "skills",
+    "action": "switch",
+    "cases": [
+      { "skill": "pdf", "enabled": false, "current": ["skill:keep"], "expect": ["skill:keep", "skill:pdf"] },
+      { "skill": "pdf", "enabled": true, "current": ["skill:keep", "skill:pdf"], "expect": ["skill:keep"] },
+      { "skill": "only", "enabled": false, "current": [], "expect": ["skill:only"] }
+    ]
+  }
+}

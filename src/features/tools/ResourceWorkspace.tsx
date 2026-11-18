@@ -77,7 +77,10 @@ function loadKind(entry: NativeSkillEntry, enabledByPackage: Record<string, bool
     if (entry.pluginEnabled === false) return 'not_loaded';
     return 'none';
   }
-  if (origin !== 'writable') return 'none';
+  if (origin !== 'writable') {
+    if (entry.switchable && entry.enabled === false) return 'not_loaded';
+    return 'none';
+  }
   if (!entry.packageId) return 'will_load';
   return enabledByPackage[entry.packageId] === false ? 'not_loaded' : 'will_load';
 }
@@ -101,6 +104,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
   const [adding, setAdding] = useState(false);
   const [syncLibrary, setSyncLibrary] = useState(false);
   const [external, setExternal] = useState<NativeSkillEntry | null>(null);
+  const [externalEnabled, setExternalEnabled] = useState(true);
   const [skillDoc, setSkillDoc] = useState<{ path: string; baseline: string; draft: string } | null>(null);
   const [skillLoading, setSkillLoading] = useState(false);
   const [mode, setMode] = useState<DocumentMode>('read');
@@ -142,6 +146,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     skillRequest.current += 1;
     setAdding(false);
     setExternal(null);
+    setExternalEnabled(true);
     setSkillDoc(null);
     setSkillLoading(false);
     setArchiveSelection(null);
@@ -319,6 +324,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     setAdding(false);
     setSyncLibrary(false);
     setExternal(null);
+    setExternalEnabled(true);
     setArchiveSelection(null);
     setPendingImport(null);
     setSkillDoc(null);
@@ -347,6 +353,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     setAdding(false);
     setError('');
     setExternal(entry.packageId ? null : entry);
+    setExternalEnabled(entry.enabled ?? true);
     setSelectedId(entry.packageId);
     setSkillDoc(null);
     setSkillLoading(true);
@@ -523,6 +530,23 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
     } catch (value) { setError(errorText(value)); }
     finally { setBusy(false); }
   }
+  async function toggleObserved(next: boolean) {
+    remoteReads.beginWriteAction();
+    if (!external) return;
+    setBusy(true); setError('');
+    try {
+      await native.setObservedSkillEnabled(external.name, external.path, toolId, scope, project, next, contextId);
+      const found = await loadNativeSkills();
+      const updated = found.find(item => item.path === external.path);
+      if (updated) {
+        setExternal(updated);
+        setExternalEnabled(updated.enabled ?? next);
+      } else {
+        setExternalEnabled(next);
+      }
+    } catch (value) { setError(errorText(value)); }
+    finally { setBusy(false); }
+  }
   async function checkRecovery() {
     try { setRecoveryIssues(await native.listSkillRecoveryIssues()); setError(''); }
     catch (value) { setError(errorText(value)); }
@@ -540,6 +564,8 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
   const origin = subject ? skillOrigin(subject) : selected ? 'writable' as const : null;
   const needsProject = scope === 'project' && !project;
   const canEditSkill = (!remoteTargetId || remoteWritable) && origin === 'writable' && subject?.state !== 'unreadable';
+  // A read-only observation can still be switched through the CLI's own override.
+  const canSwitchObserved = !remoteTargetId && !!subject?.switchable && subject.state !== 'unreadable';
   const documentOpen = adding || !!subject || !!selected || !!skillDoc || skillLoading || !!archiveSelection || !!pendingImport || !!pendingTarget;
   useEffect(() => {
     if (documentOpen) return;
@@ -730,6 +756,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, remoteT
       tools={<>
         {skillDoc && <ModeSwitch mode={mode} editable={canEditSkill && !openedFile} onChange={setMode} />}
         {selected && canEditSkill && <Toggle checked={skillEnabled} label={t('tools.skills.enableAria')} text={skillEnabled ? t('tools.skills.enabledNote') : t('tools.skills.disabledNote')} disabled={busy || (!installed && !entries.some(item => item.name === selected?.name) && !skillEnabled)} onChange={value => void toggleSkill(value)} />}
+        {!selected && canSwitchObserved && <Toggle checked={externalEnabled} label={t('tools.skills.enableAria')} text={externalEnabled ? t('tools.skills.enabledNote') : t('tools.skills.disabledNote')} disabled={busy} onChange={value => void toggleObserved(value)} />}
         {(skillPath || selected) && <IconButton size="sm" className={doc.iconButton} aria-expanded={infoOpen} aria-label={t('tools.skills.pathToggle')} title={t('tools.skills.pathToggle')} onClick={() => setInfoOpen(value => !value)} icon={<Icon name="info" size={15} />} />}
       </>}
       meta={metaNote || packageMeta ? <>{metaNote && <span>{metaNote}</span>}{packageMeta && <span>{packageMeta}</span>}</> : undefined}

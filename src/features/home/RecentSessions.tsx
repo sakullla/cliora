@@ -14,7 +14,13 @@ import styles from './RecentSessions.module.css';
 const LIMIT = 6;
 
 /** Indexed local conversations. Reads never trigger a scan, and an empty/failed read is explicit. */
-export function RecentSessions({ tools, active, onResume, onOpenRecords }: { tools: AdapterDescriptor[]; active: boolean; onResume: (session: HistorySession) => Promise<'workbench' | 'terminal' | 'failed'>; onOpenRecords: () => void }) {
+export function RecentSessions({ tools, active, onResume, onOpenSession, onOpenRecords }: {
+  tools: AdapterDescriptor[];
+  active: boolean;
+  onResume: (session: HistorySession) => Promise<'workbench' | 'terminal' | 'failed'>;
+  onOpenSession?: (session: HistorySession) => void;
+  onOpenRecords: () => void;
+}) {
   const { t, i18n } = useTranslation();
   const toasts = useToasts();
   const [sessions, setSessions] = useState<HistorySession[]>([]);
@@ -76,7 +82,7 @@ export function RecentSessions({ tools, active, onResume, onOpenRecords }: { too
           const title = session.title.trim() || t('home.recent.untitled');
           const tool = managed.get(session.toolId);
           const time = when(session.updatedAt);
-          return <li key={session.id} className={styles.card}>
+          const summary = <>
             <span className={styles.icon} aria-hidden="true"><ToolIcon toolId={session.toolId} size={20} /></span>
             <span className={styles.copy}>
               <strong title={title}>{title}</strong>
@@ -86,6 +92,9 @@ export function RecentSessions({ tools, active, onResume, onOpenRecords }: { too
                 {session.cwd && <span className={styles.path} title={session.cwd}>{shortPath(session.cwd)}</span>}
               </span>
             </span>
+          </>;
+          return <li key={session.id} className={styles.card}>
+            {onOpenSession ? <button type="button" className={styles.open} aria-label={t('home.recent.openAria', { title })} title={t('home.recent.openAria', { title })} onClick={() => onOpenSession(session)}>{summary}</button> : <span className={styles.lead}>{summary}</span>}
             <Button size="sm" className={styles.resume} icon={<Icon name="play" size={13} />} loading={busy === session.id} disabled={!!busy && busy !== session.id} aria-label={t('home.recent.resumeAria', { title })} title={t('home.recent.resumeAria', { title })} onClick={() => void resume(session)}>{t('home.recent.resume')}</Button>
           </li>;
         })}

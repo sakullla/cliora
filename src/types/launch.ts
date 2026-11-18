@@ -115,7 +115,7 @@ export type Project = {
 };
 
 export type RemoteLaunchIntent = { kind: 'new' } | { kind: 'reattach'; remoteSessionId: string };
-export type LaunchRequest = { toolId: string; projectId: string | null; sessionId: string | null; mode: LaunchMode; directory?: string | null; initialPrompt?: string | null; resumeLatest?: boolean; remoteIntent?: RemoteLaunchIntent; worktreeIntent?: WorktreeLaunchIntent; taskText?: string | null; worktree?: WorktreeLaunchOptions; /** Native agent roster selection for a new session; only CLIs that publish `agentLaunchAvailable` honor it. */ agent?: string | null; /** Session-only parameter values validated against the adapter's published options for the resolved installation; absent adds no arguments. */ sessionOptions?: Record<string, string> | null };
+export type LaunchRequest = { workspaceId?: string; repositoryId?: string; toolId: string; projectId: string | null; sessionId: string | null; mode: LaunchMode; directory?: string | null; initialPrompt?: string | null; resumeLatest?: boolean; remoteIntent?: RemoteLaunchIntent; worktreeIntent?: WorktreeLaunchIntent; taskText?: string | null; worktree?: WorktreeLaunchOptions; /** Native agent roster selection for a new session; only CLIs that publish `agentLaunchAvailable` honor it. */ agent?: string | null; /** Session-only parameter values validated against the adapter's published options for the resolved installation; absent adds no arguments. */ sessionOptions?: Record<string, string> | null };
 export type LaunchResult = { toolId: string; projectId: string | null; mode: LaunchMode; terminal: TerminalId; status: 'terminal_requested' | 'desktop_requested' | 'session_started'; sessionId?: string | null; remoteSessionId?: string | null; warnings?: string[] };
 /** Recent session output: a mode prelude plus the retained bytes, ending at stream offset `endOffset`. */
 export type WorkbenchReplay = { dataBase64: string; endOffset: number; cols: number; rows: number };
@@ -170,6 +170,11 @@ export type TwiglaneReviewOutcome = 'reviewed' | 'committed' | 'merged';
 /** Twiglane's claim about the worktree when it returned; always re-checked against real Git. */
 export type TwiglaneWorktreeState = 'clean' | 'dirty' | 'unknown';
 export type TwiglaneReviewState = {
+  resultRevision: number;
+  protocolVersion: 2 | 3;
+  workspaceId: string | null;
+  repositoryId: string | null;
+  workspaceName: string | null;
   reviewId: string;
   sessionId: string;
   worktreePath: string;

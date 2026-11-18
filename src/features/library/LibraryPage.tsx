@@ -1,3 +1,4 @@
+import { PromptLibrary } from '../prompts/PromptLibrary';
 import { useRemoteReads, RemoteReadStatus } from '../../lib/remoteReads';
 import { StatusBanner } from '../../components/StatusBanner';
 import { CodeEditor } from '../../components/CodeEditor';
@@ -222,7 +223,9 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     return () => window.clearTimeout(timer);
   }, [copiedId, toasts.notice]);
   remoteReads.bindWriteDraft(draft ? `${draft.id ?? 'new'}:${draft.expectedVersion ?? ''}` : null);
-  const dirty = !!draft && (JSON.stringify(draft) !== savedText || !!tagText.trim());
+  const [promptDirty, setPromptDirty] = useState(false);
+  const [promptDiscard, setPromptDiscard] = useState(0);
+  const dirty = promptDirty || (!!draft && (JSON.stringify(draft) !== savedText || !!tagText.trim()));
   const latest = useRef(''); latest.current = JSON.stringify([kind, draft, active, busy]);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -290,13 +293,13 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     if (remoteTargetId !== 'local') {
       // MCP and Skill counts arrive from their own sections; a failed read is unknown, never zero.
       void settle([
-        ['prompt', hostNative.listRemoteLibraryItems(remoteTargetId, 'prompt', '').then((rows) => rows.length)],
+        ['prompt', native.queryPrompts({ targetId: remoteTargetId }, { includeOtherScopes: true, limit: 1 }).then(page => page.total)],
         ['rule', hostNative.listRemoteLibraryItems(remoteTargetId, 'rule', '').then((rows) => rows.length)],
       ]);
       return () => { live = false; };
     }
     void settle([
-      ['prompt', native.listLibraryItems('prompt', null, '').then((rows) => rows.length)],
+      ['prompt', native.queryPrompts({ targetId: null }, { includeOtherScopes: true, limit: 1 }).then(page => page.total)],
       ['rule', native.listLibraryItems('rule', null, '').then((rows) => rows.length)],
       ['mcp', native.listMcpDefinitions().then((rows) => rows.filter((item) => item.inLibrary !== false).length)],
       ['skill', native.listSkillPackages().then((rows) => rows.filter((item) => item.inLibrary !== false).length)],
@@ -305,7 +308,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   }, [active, countStamp, remoteTargetId, hostNative]);
   useEffect(() => {
     // The editor/launch draft owns its own copy; the hidden list need not retain every body.
-    if (!active || (section !== 'prompt' && section !== 'rule')) { setItems([]); setListLoaded(false); setListError(''); return; }
+    if (!active || section !== 'rule') { setItems([]); setListLoaded(false); setListError(''); return; }
     if (!nativeAvailable) return;
     let live = true;
     const controller = new AbortController();
@@ -332,6 +335,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   useEffect(() => {
     if (!active || !spotlight || revealedSpotlight.current === spotlight.token) return;
     if (section !== spotlight.kind) { void openSection(spotlight.kind); return; }
+    if (spotlight.kind === 'prompt') return;
     if (search || projectFilter !== '*' || categoryFilter !== '*') { setSearch(''); setProjectFilter('*'); setCategoryFilter('*'); return; }
     const item = items.find((entry) => entry.id === spotlight.id);
     if (!item) return;
@@ -382,6 +386,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   }
   async function openSection(next: LibrarySection) {
     if (next === section || !await canReplace()) return;
+    setPromptDiscard(value => value + 1); setPromptDirty(false);
     setSection(next); setDraft(null); setSavedText(''); toasts.setNotice(null); toasts.setError(null); clearDialogResult();
     if (next === 'prompt' || next === 'rule') { setKind(next); setCategoryFilter('*'); }
   }
@@ -708,12 +713,12 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     ['skill', 'package', 'Skill'],
   ];
   const activeSection = sectionTabs.find(([id]) => id === section)!;
-  const listSection = section === 'prompt' || section === 'rule';
+  const listSection = section === 'rule';
   // A failed refresh of rows already on screen: the rows stay, marked stale, with a retry here.
   const listStale = listSection && listLoaded && !!listError;
   const filtering = !!search.trim() || projectFilter !== '*' || categoryFilter !== '*';
   function retryList() { setListError(''); setListAttempt((value) => value + 1); if (countsFailed.length) setCountStamp((value) => value + 1); }
-  function childCount(id: 'mcp' | 'skill', count: number) {
+  function childCount(id: 'prompt' | 'mcp' | 'skill', count: number) {
     setCounts((prev) => prev[id] === count ? prev : { ...prev, [id]: count });
     setCountsFailed((prev) => prev.includes(id) ? prev.filter((entry) => entry !== id) : prev);
   }
@@ -732,7 +737,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     return null;
   }
   return <section className={styles.page} aria-label={t('library.page.label')} data-host-target={remoteTargetId}>{!listStale && <RemoteReadStatus state={remoteReads} />}<ToastScope toasts={toasts}>
-    <Toolbar className={styles.libraryBar} role="group" primary={section === 'skill' && remoteTargetId !== 'local' && !scopedTools.some(tool => tool.remoteResources ? !!tool.remoteResources.skillRoot : tool.management?.skills === true) ? undefined : <Button variant="primary" icon={<Icon name="plus" size={14} />} onClick={() => { if (section === 'prompt' || section === 'rule') start(kind); else setCreateSignal((value) => value + 1); }}>{section === 'mcp' ? t('library.resources.newMcp') : section === 'skill' ? t('tools.skills.add') : t('library.page.new', { kind: kindName(kind) })}</Button>}>
+    <Toolbar className={styles.libraryBar} role="group" primary={section === 'skill' && remoteTargetId !== 'local' && !scopedTools.some(tool => tool.remoteResources ? !!tool.remoteResources.skillRoot : tool.management?.skills === true) ? undefined : <Button variant="primary" icon={<Icon name="plus" size={14} />} onClick={() => { if (section === 'rule') start(kind); else setCreateSignal((value) => value + 1); }}>{section === 'mcp' ? t('library.resources.newMcp') : section === 'skill' ? t('tools.skills.add') : t('library.page.new', { kind: kindName(kind) })}</Button>}>
       <div className="tabs" role="tablist" aria-label={t('library.page.typesAria')} onKeyDown={navigateChoices}>
         {sectionTabs.map(([id, icon, label]) => <button key={id} type="button" role="tab" id={`library-${id}-tab`} aria-controls={`library-${id}-panel`} className={section === id ? 'active' : undefined} aria-selected={section === id} tabIndex={section === id ? 0 : -1} onClick={() => void openSection(id)}>
           <span className={styles.tabIcon} aria-hidden="true"><Icon name={icon} size={15} /></span>
@@ -744,7 +749,8 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     <div className={styles.sectionContext} data-library-context><span className={styles.sectionContextIcon} aria-hidden="true"><Icon name={activeSection[1]} size={16} /></span><span className={styles.sectionContextCopy}><strong>{activeSection[2]}</strong><small>{t(`library.page.sectionHint.${section}`)}</small></span></div>
     {section === 'mcp' && <div id="library-mcp-panel" role="tabpanel" aria-labelledby="library-mcp-tab" className={styles.tabPanel}><LibraryMcp active={active} tools={scopedTools} projects={projects} remoteTargetId={remoteTargetId === 'local' ? null : remoteTargetId} spotlight={section === 'mcp' ? mcpSpotlight : null} onOpenConnections={mcpSpotlight?.source === 'connections' ? onOpenConnections : undefined} createSignal={createSignal} onCountChange={(count) => childCount('mcp', count)} /></div>}
     {section === 'skill' && <div id="library-skill-panel" role="tabpanel" aria-labelledby="library-skill-tab" className={styles.tabPanel}><LibraryResources active={active} tools={scopedTools} projects={projects} remoteTargetId={remoteTargetId === 'local' ? null : remoteTargetId} createSignal={createSignal} onCountChange={(count) => childCount('skill', count)} /></div>}
-    {(section === 'prompt' || section === 'rule') && <div id={`library-${section}-panel`} role="tabpanel" aria-labelledby={`library-${section}-tab`} className={styles.tabPanel}>
+    {section === 'prompt' && <div id="library-prompt-panel" role="tabpanel" aria-labelledby="library-prompt-tab" className={styles.tabPanel} ><PromptLibrary context={{ targetId: remoteTargetId === 'local' ? null : remoteTargetId }} active={active && section === 'prompt'} createSignal={createSignal} discardSignal={promptDiscard} spotlight={spotlight?.kind === 'prompt' ? spotlight : null} onDirtyChange={setPromptDirty} onCountChange={count => childCount('prompt', count)} onRetryCounts={() => setCountStamp(value => value + 1)} onLaunch={openLaunch} /></div>}
+    {section === 'rule' && <div id={`library-${section}-panel`} role="tabpanel" aria-labelledby={`library-${section}-tab`} className={styles.tabPanel}>
     {section === 'rule' && bindingFeedback()}
     {/* 修改当前 CLI 规则 reaches the native per-file rule editors. The entry
         follows the descriptors (only shown when some managed CLI publishes
@@ -769,6 +775,11 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
       {listLoaded && <div className={styles.resultBar}>
         {/* Stale rows belong to the last successful query, which may not be the current search: no hit count for them. */}
         {!listStale && <Badge tone={shown.length < listTotal ? 'accent' : 'neutral'}>{t('library.page.countFiltered', { filtered: shown.length, total: listTotal })}</Badge>}
+        {!listStale && categoryFilter === '*' && categories.length > 1 && categories.slice(0, 5).map((tag) => <button type="button" key={tag} className={styles.quickTag} aria-label={t('library.page.filterByTag', { tag })} title={t('library.page.filterByTag', { tag })} onClick={() => setCategoryFilter(tag)}>#{tag}</button>)}
+        {search.trim() && <button type="button" className={styles.filterChip} title={t('library.page.removeFilter')} onClick={() => setSearch('')}><span>{t('library.page.activeSearchChip', { query: search.trim() })}</span><Icon name="close" size={12} /></button>}
+        {projectFilter !== '*' && <button type="button" className={styles.filterChip} title={t('library.page.removeFilter')} onClick={() => setProjectFilter('*')}><span>{t('library.page.activeProjectChip', { name: projectFilter === 'global' ? t('library.page.globalItems') : projects.find((project) => project.id === projectFilter)?.name ?? projectFilter })}</span><Icon name="close" size={12} /></button>}
+        {categoryFilter !== '*' && <button type="button" className={styles.filterChip} title={t('library.page.removeFilter')} onClick={() => setCategoryFilter('*')}><span>{t('library.page.activeTagChip', { tag: categoryFilter })}</span><Icon name="close" size={12} /></button>}
+        {filtering && shown.length > 0 && <Button variant="ghost" size="sm" className={styles.clearFiltersInline} onClick={clearFilters}>{t('library.page.clearFilters')}</Button>}
         <span className={styles.resultNote}>{t(remoteTargetId === 'local' ? 'library.page.sourceLocal' : 'library.page.sourceRemote')}</span>
       </div>}
       <div className={styles.list} aria-label={t('library.page.listAria', { kind: kindName(kind) })}>
@@ -786,7 +797,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
           </div>
           <p className={styles.cardBody}>{item.body ? item.body.length > 200 ? `${item.body.slice(0, 200)}…` : item.body : t('library.page.emptyBody')}</p>
           {(tagsOf(item.category).length > 0 || item.projectId || item.updatedAt) && <div className={styles.cardMeta}>
-            {tagsOf(item.category).map((tag) => <Badge className={styles.metaBadge} tone="accent" key={tag}>{tag}</Badge>)}
+            {tagsOf(item.category).map((tag) => <Badge key={tag} className={styles.metaBadge} tone="accent">{tag}</Badge>)}
             {item.projectId && <Badge className={styles.metaBadge}>{projects.find((project) => project.id === item.projectId)?.name ?? t('library.page.originalProject')}</Badge>}
             {!!item.updatedAt && <span className={styles.cardTime} title={fullTime(item.updatedAt)}><Icon name="clock" size={12} />{shortTime(item.updatedAt)}</span>}
           </div>}
@@ -837,6 +848,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
         <div className="dialog-footer"><span className={styles.saveState} data-dirty={dirty || undefined}>{busy ? t('library.page.processing') : dirty ? t('library.page.dirtyState') : t('tools.config.statusSaved')}</span><span className="dialog-footer-gap" /><Button onClick={() => void copy(draft.body, 'dialog')} disabled={!draft.body}>{t('library.page.copy')}</Button>{draft.id && <Button variant="ghost" className={styles.danger} onClick={() => void remove()} disabled={busy}>{t('tools.agents.delete')}</Button>}<Button variant="primary" data-dialog-save title={saveShortcutHint()} disabled={busy || !draft.title.trim() || (draft.kind === 'rule' && !bindingsKnown)} onClick={() => void save()}>{t('home.launcher.save')}</Button></div>
       </div>}
     </GuideDialog>
+    </div>}
     <GuideDialog open={!!launchItem} title={t('library.page.launchTitle')} hint={t('library.page.launchHint')} onClose={() => { if (!launchBusy) setLaunchItem(null); }}>
       {launchItem && (() => {
         const selectedDescriptor = scopedTools.find((item) => item.id === launchTool);
@@ -870,6 +882,5 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
         </div>;
       })()}
     </GuideDialog>
-    </div>}
   </ToastScope></section>;
 }

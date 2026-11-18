@@ -1,3 +1,5 @@
+import type { PromptContext, PromptQuery, PromptPage, PromptDocument, PromptDraft, PromptBatch, PromptBatchResult, PromptImportInput, PromptImportPreview } from '../types/prompts';
+import type { BusinessWorkspace, WorkspaceScan, WorkspaceMemberResult, WorkspaceManifestPreview, WorkspaceSessionContext } from '../types/workspaces';
 import { getWriteFaults, getWriteReceipts, rememberWriteFault, rememberWriteReceipt, requestWriteRecovery, unresolvedWrite } from '../features/remote/writeReceipts';
 import { RemoteOperations, type RemoteOperationOptions } from './remoteOperations';
 import type { RemoteApiError } from '../types/native';
@@ -11,7 +13,7 @@ import type { Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, MemoryAggregate, MemoryReadRequest, MemoryReadResult, MemoryDelete, MemoryDocument, MemoryEnable, MemoryList, MemorySave, MemoryTarget, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, SavedWorkbenchSession, TerminalId, TrayStatus, TwiglaneLinkOutcome, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchGitContext, WorkbenchWorktree, WorkbenchReplay, WorkbenchSession, WorkbenchTerminalSize, RemoteSessionIndexEntry, WorktreeBase, WorktreeBasePreview, WorktreeCleanupReport, WorktreeLedgerEntry, WorktreeMenuStatus, WorktreePrepareCommand } from '../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
-import type { McpDefinition, McpDraft, McpDraftPreview, McpDraftTargetRequest, McpCommitResult, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry, NativeRuleFile, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue, SkillManifest, SkillFileListing, SkillFilePreview } from '../types/resources';
+import type { McpDefinition, McpDraft, McpDraftPreview, McpDraftTargetRequest, McpCommitResult, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpStore, NativeRuleFile, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue, SkillManifest, SkillFileListing, SkillFilePreview } from '../types/resources';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, RemoteHistorySnapshot, ScanStatus, UsageReport } from '../types/history';
 import { markOnboardingLaunched } from './onboarding';
 import type { ConflictPreview, PortableImportReport, PortableItem, PortablePreview, SyncStatus, WebdavSetup } from '../types/portable';
@@ -84,8 +86,8 @@ function writeWorkbenchSession(sessionId: string, dataBase64: string): Promise<v
 
 const remoteOperations = new RemoteOperations(command);
 const draftBaselines = new Map<string, Record<string, string>>();
-const transactionalWrites = new Set(['save_remote_library_item', 'delete_remote_library_item', 'sync_remote_rule_clients', 'save_remote_tool_store', 'delete_remote_tool_profile', 'save_remote_resource_store', 'import_remote_skill_directory', 'save_configuration_draft']);
-const versionedReads = new Set(['get_remote_tool_store', 'get_remote_resource_store', 'list_remote_resource_stores', 'list_remote_library_items', 'list_remote_rule_placements', 'begin_configuration_draft']);
+const transactionalWrites = new Set(['save_prompt', 'apply_prompt_batch', 'delete_prompt', 'save_remote_library_item', 'delete_remote_library_item', 'sync_remote_rule_clients', 'save_remote_tool_store', 'delete_remote_tool_profile', 'save_remote_resource_store', 'import_remote_skill_directory', 'save_configuration_draft']);
+const versionedReads = new Set(['query_prompts', 'get_prompt', 'preview_prompt_import', 'get_remote_tool_store', 'get_remote_resource_store', 'list_remote_resource_stores', 'list_remote_library_items', 'list_remote_rule_placements', 'begin_configuration_draft']);
 
 const remoteIdentityListeners = new Set<() => void>();
 export const subscribeRemoteIdentity = (listener: () => void) => { remoteIdentityListeners.add(listener); return () => { remoteIdentityListeners.delete(listener); }; };
@@ -112,7 +114,7 @@ function rememberRemoteTarget(target: RemoteTarget, authenticationMayHaveChanged
   for (const listener of remoteIdentityListeners) listener();
   return target;
 }
-const cachedRemoteReads = new Set(['list_remote_rule_placements', 'list_remote_library_items', 'list_remote_directories', 'probe_remote_cli', 'probe_remote_clis', 'get_remote_tool_store', 'get_remote_resource_store', 'list_remote_resource_stores', 'list_remote_native_history', 'list_remote_native_history_snapshot', 'get_remote_native_history']);
+const cachedRemoteReads = new Set(['query_prompts', 'list_remote_rule_placements', 'list_remote_library_items', 'list_remote_directories', 'probe_remote_cli', 'probe_remote_clis', 'get_remote_tool_store', 'get_remote_resource_store', 'list_remote_resource_stores', 'list_remote_native_history', 'list_remote_native_history_snapshot', 'get_remote_native_history']);
 const remoteRevisions = new Map<string, number>();
 function remoteCommand<T>(name: string, args: Record<string, unknown>, kind: 'read' | 'write', options?: RemoteOperationOptions): Promise<T> {
   const target = args.target as RemoteTarget | undefined;
@@ -200,7 +202,63 @@ async function usageCommand<T>(name: string, args?: Record<string, unknown>): Pr
 }
 
 /** Feature modules add named wrappers here; components never invoke arbitrary commands. */
+const promptBaselines = new Map<string, Record<string, string>>();
+const promptPaths = ['$HOME/.cliora/library.json', '$HOME/.cliora/prompts-v1.json'];
+function promptCommand<T>(name: string, context: PromptContext, args: Record<string, unknown>, kind: 'read' | 'write', options?: RemoteOperationOptions): Promise<T> {
+  const targetId = context.targetId && context.targetId !== 'local' ? context.targetId : null;
+  if (!targetId) return command<T>(name, { ...args, targetId: null });
+  const identity = getRemoteIdentity(targetId);
+  const sourceKey = `${identity}:source`;
+  const draft = args.draft as PromptDraft | undefined;
+  const batch = args.batch as PromptBatch | undefined;
+  const id = draft?.id ?? args.id;
+  const version = draft?.expectedVersion ?? args.expectedVersion;
+  const documentKey = typeof id === 'string' && typeof version === 'number' ? `${identity}:document:${id}:${version}` : '';
+  const writeKey = batch ? `${identity}:batch:${batch.operationId}` : documentKey || sourceKey;
+  const expectedFiles = kind === 'write' ? options?.expectedFiles ?? promptBaselines.get(writeKey) ?? promptBaselines.get(sourceKey) : undefined;
+  if (kind === 'write' && (!expectedFiles || promptPaths.some(path => !(path in expectedFiles)))) {
+    return Promise.reject({ message: i18n.t('prompts.baselineMissing'), action: i18n.t('prompts.retry') });
+  }
+  if (kind === 'write' && batch && expectedFiles && !promptBaselines.has(writeKey)) promptBaselines.set(writeKey, { ...expectedFiles });
+  let observed: Record<string, string> = {};
+  return remoteCommand<T>(name, { ...args, targetId }, kind, { ...options, ...(expectedFiles ? { expectedFiles } : {}), onVersions: versions => { observed = { ...versions }; options?.onVersions?.(versions); } }).then(value => {
+    if (getRemoteIdentity(targetId) !== identity || promptPaths.some(path => !(path in observed))) return value;
+    const result = value as { id?: string; version?: number; operationId?: string; writeApplied?: boolean } | null;
+    // A read/confirmed write may inform future actions. An unsuccessful or receipt-only
+    // batch must not silently rebase an existing preview onto unrelated remote changes.
+    if (kind === 'read' || name !== 'apply_prompt_batch' || result?.writeApplied) {
+      promptBaselines.set(sourceKey, observed);
+      if (result?.id && typeof result.version === 'number') promptBaselines.set(`${identity}:document:${result.id}:${result.version}`, observed);
+      if (result?.operationId) promptBaselines.set(`${identity}:batch:${result.operationId}`, observed);
+    }
+    return value;
+  });
+}
+
 export const native = {
+  queryPrompts: (context: PromptContext, query: PromptQuery, options?: RemoteOperationOptions) => promptCommand<PromptPage>('query_prompts', context, { query: { ...query, workspaceId: context.workspaceId ?? query.workspaceId ?? null, repositoryId: context.repositoryId ?? query.repositoryId ?? null } }, 'read', options),
+  getPrompt: (context: PromptContext, id: string, expectedVersion: number | null = null, options?: RemoteOperationOptions) => promptCommand<PromptDocument>('get_prompt', context, { id, expectedVersion }, 'read', options),
+  savePrompt: (context: PromptContext, draft: PromptDraft, options?: RemoteOperationOptions) => promptCommand<PromptDocument>('save_prompt', context, { draft }, 'write', options),
+  applyPromptBatch: (context: PromptContext, batch: PromptBatch, options?: RemoteOperationOptions) => promptCommand<PromptBatchResult>('apply_prompt_batch', context, { batch }, 'write', options),
+  previewPromptImport: (context: PromptContext, input: PromptImportInput, options?: RemoteOperationOptions) => promptCommand<PromptImportPreview>('preview_prompt_import', context, { input }, 'read', options),
+  deletePrompt: (context: PromptContext, id: string, expectedVersion: number, options?: RemoteOperationOptions) => promptCommand<void>('delete_prompt', context, { id, expectedVersion }, 'write', options),
+  recordPromptUsage: (context: PromptContext, id: string, favorite: boolean | null, used: boolean) => command<void>('record_prompt_usage', { targetId: context.targetId && context.targetId !== 'local' ? context.targetId : null, id, favorite, used }),
+  previewWorkspaceLink: (url: string) => command<WorkspaceManifestPreview>('preview_workspace_link', { url }),
+  listBusinessWorkspaces: () => command<BusinessWorkspace[]>('list_business_workspaces'),
+  createBusinessWorkspace: (name: string) => command<BusinessWorkspace>('create_business_workspace', { name }),
+  renameBusinessWorkspace: (workspaceId: string, name: string, expectedVersion: number) => command<BusinessWorkspace>('rename_business_workspace', { workspaceId, name, expectedVersion }),
+  deleteBusinessWorkspace: (workspaceId: string) => command<void>('delete_business_workspace', { workspaceId }),
+  scanWorkspaceRepositories: (paths: string[], operationId: string, recursive: boolean) => command<WorkspaceScan>('scan_workspace_repositories', { paths, operationId, recursive }),
+  cancelWorkspaceScan: (operationId: string) => command<void>('cancel_workspace_scan', { operationId }),
+  addWorkspaceRepositories: (workspaceId: string, paths: string[], expectedVersion: number) => command<WorkspaceMemberResult[]>('add_workspace_repositories', { workspaceId, paths, expectedVersion }),
+  removeWorkspaceRepository: (workspaceId: string, repositoryId: string, expectedVersion: number) => command<BusinessWorkspace>('remove_workspace_repository', { workspaceId, repositoryId, expectedVersion }),
+  favoriteWorkspaceRepository: (workspaceId: string, repositoryId: string, favorite: boolean) => command<BusinessWorkspace>('favorite_workspace_repository', { workspaceId, repositoryId, favorite }),
+  relinkWorkspaceRepository: (workspaceId: string, repositoryId: string, path: string, expectedVersion: number) => command<BusinessWorkspace>('relink_workspace_repository', { workspaceId, repositoryId, path, expectedVersion }),
+  previewWorkspaceManifest: (path: string) => command<WorkspaceManifestPreview>('preview_workspace_manifest', { path }),
+  attachWorkspaceManifest: (path: string, expectedDigest: string, replace: boolean) => command<BusinessWorkspace>('attach_workspace_manifest', { path, expectedDigest, replace }),
+  exportWorkspaceManifest: (workspaceId: string, path: string, expectedVersion: number) => command<BusinessWorkspace>('export_workspace_manifest', { workspaceId, path, expectedVersion }),
+  refreshWorkspaceManifest: (workspaceId: string) => command<BusinessWorkspace>('refresh_workspace_manifest', { workspaceId }),
+  listWorkspaceSessionContexts: () => command<WorkspaceSessionContext[]>('list_workspace_session_contexts'),
   openExternalUrl: (url: string) => command<void>('open_external_url', { url }),
   openWorkbenchPath: (sessionId: string, path: string) => command<void>('open_workbench_path', { sessionId, path }),
   scanNativeAgents: (target: PluginTarget) => command<AgentSnapshot>('scan_native_agents', { target }),
@@ -280,7 +338,8 @@ export const native = {
   saveMcpDefinition: (draft: McpDraft) => command<McpDefinition>('save_mcp_definition', { draft }),
   deleteMcpDefinition: (id: string, expectedVersion: number) => command<void>('delete_mcp_definition', { id, expectedVersion }),
   removeNativeMcp: (target: McpTargetRequest, name: string) => command<void>('remove_native_mcp', { target, name }),
-  listNativeMcp: (target: McpTargetRequest) => command<NativeMcpEntry[]>('list_native_mcp', { target }),
+  setExternalMcpEnabled: (target: McpTargetRequest, name: string, enabled: boolean) => command<void>('set_external_mcp_enabled', { target, name, enabled }),
+  listNativeMcp: (target: McpTargetRequest) => command<NativeMcpStore>('list_native_mcp', { target }),
   getManagedMcpEnabled: (definitionId: string, target: McpTargetRequest) => command<boolean | null>('get_managed_mcp_enabled', {definitionId,target}),
   previewMcpTargets: (definitionId: string, targets: McpTargetRequest[]) => command<McpTargetResult[]>('preview_mcp_targets', { definitionId, targets }),
   previewMcpDraft: (draft: McpDraft, targets: McpDraftTargetRequest[]) => command<McpDraftPreview>('preview_mcp_draft', { draft, targets }),
@@ -377,7 +436,8 @@ export const native = {
       const projects = await command<RemoteProject[]>('list_remote_projects', { targetId: null });
       const targetId = projects.find(item => `remote:${item.id}` === request.projectId)?.targetId ?? '';
       result = await remoteCommand<LaunchResult>('launch_cli', { request, targetId }, 'write', options);
-    } else result = await command<LaunchResult>('launch_cli', { request });
+    } else if (request.workspaceId && request.repositoryId) result = await command<LaunchResult>('launch_workspace_cli', { workspaceId: request.workspaceId, repositoryId: request.repositoryId, request });
+    else result = await command<LaunchResult>('launch_cli', { request });
     markOnboardingLaunched();
     return result;
   },
@@ -481,6 +541,7 @@ export const native = {
   recoverNativeTransactions: () => command<string[]>('recover_native_transactions'),
   getSkillEnabled: (packageId: string, toolId: string, scope: Scope, projectPath: string | null) => command<boolean>('get_skill_enabled', { packageId, toolId, scope, projectPath }),
   setSkillEnabled: (packageId: string, toolId: string, scope: Scope, projectPath: string | null, enabled: boolean, expectedContextId: string | null = null) => command<void>('set_skill_enabled', { expectedContextId, packageId, toolId, scope, projectPath, enabled }),
+  setObservedSkillEnabled: (name: string, path: string, toolId: string, scope: Scope, projectPath: string | null, enabled: boolean, expectedContextId: string | null = null) => command<void>('set_observed_skill_enabled', { expectedContextId, name, path, toolId, scope, projectPath, enabled }),
   getNativeRuleEnabled: (target: RuleTarget) => command<boolean>('get_native_rule_enabled', { target }),
   setNativeRuleEnabled: (target: RuleTarget, enabled: boolean) => command<void>('set_native_rule_enabled', { target, enabled }),
   readNativeRule: (target: RuleTarget) => command<{ contextId: string | null; path: string; text: string; fingerprint: string }>('read_native_rule', { target }),

@@ -1,9 +1,10 @@
-import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChildSession, HistoryDetail, HistoryMessage } from '../../types/history';
 import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
 import { writeClipboard } from '../../lib/clipboard';
+import MessageMarkdown from './MessageMarkdown';
 import { ChildCluster } from './SessionAssociation';
 import { timelineRows } from './sessionTimeline';
 import { useDisclosure } from './useDisclosure';
@@ -13,13 +14,8 @@ import styles from './SessionReader.module.css';
 
 const readerLocale = () => i18n.language === 'en' ? 'en-US' : 'zh-CN';
 
-const MessageMarkdown = lazy(() => import('./MessageMarkdown'));
 const CLAMP_LENGTH = 1800;
 const noChildren: readonly ChildSession[] = [];
-
-function MarkdownPending() {
-  return <div className={styles.markdownPending} aria-hidden="true"><span /><span /><span /></div>;
-}
 
 function Highlight({ text, query }: { text: string; query: string }) {
   if (!query) return <>{text}</>;
@@ -66,7 +62,7 @@ const Message = memo(function Message({ item, toolId, toolName, raw, query, curr
       </header>
       <div className={`${styles.prose} ${clamped ? styles.clamped : ''}`}>
         {raw || user || query || !renderMarkdown ? <p className={styles.raw}><Highlight text={text} query={query} /></p>
-          : <Suspense fallback={<MarkdownPending />}><MessageMarkdown text={text} /></Suspense>}
+          : <MessageMarkdown text={text} />}
       </div>
       {(context || item.text.length > CLAMP_LENGTH) && !query && !raw && <button type="button" className={styles.expand} aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? context ? t('records.reader.collapseContext') : t('records.reader.collapseLong') : t('records.reader.expandFull', { count: item.text.length.toLocaleString() })}</button>}
     </div>
@@ -105,12 +101,14 @@ export const SessionReader = memo(function SessionReader({ detail, toolName, chi
     findInput.current?.focus();
   }, [findOpen]);
   const root = useRef<HTMLDivElement>(null);
+  const steppedPrompt = useRef<{ index: number; scrollTop: number } | null>(null);
   const [rendered, setRendered] = useState(() => new Set(detail.messages.slice(0, 8).map((item) => item.id)));
   const search = query.trim();
-  useEffect(() => {
-    void import('./MessageMarkdown').catch(() => {});
-  }, []);
   const visible = useMemo(() => detail.messages.filter((item) => !onlyQuestions || item.role === 'user'), [detail.messages, onlyQuestions]);
+  const userPromptIds = useMemo(
+    () => visible.filter((item) => item.role === 'user' && item.kind !== 'project_context' && item.kind !== 'environment_context').map((item) => item.id),
+    [visible],
+  );
   const rows = useMemo(() => timelineRows(visible, onlyQuestions ? [] : children), [visible, children, onlyQuestions]);
   const displayBlocks = useMemo(() => {
     const blocks: Array<
@@ -164,6 +162,7 @@ export const SessionReader = memo(function SessionReader({ detail, toolName, chi
   function jumpFirst() {
     const first = visible[0];
     if (!first) return;
+    steppedPrompt.current = null;
     const scroller = root.current?.parentElement;
     if (scroller) scroller.scrollTo({ top: 0, behavior: 'instant' });
     else root.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(first.id)}"]`)?.scrollIntoView({ block: 'start', behavior: 'instant' });
@@ -171,11 +170,46 @@ export const SessionReader = memo(function SessionReader({ detail, toolName, chi
   function jumpLatest() {
     const latest = visible[visible.length - 1];
     if (!latest) return;
+    steppedPrompt.current = null;
     setRendered((old) => new Set([...old, latest.id]));
     requestAnimationFrame(() => {
       root.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(latest.id)}"]`)
         ?.scrollIntoView({ block: 'end', behavior: 'instant' });
     });
+  }
+  function stepQuestion(direction: -1 | 1) {
+    if (userPromptIds.length < 2 || !root.current) return;
+    const scroller = root.current.parentElement;
+    const elements = userPromptIds
+      .map((id) => ({ id, node: root.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(id)}"]`) ?? null }))
+      .filter((entry): entry is { id: string; node: HTMLElement } => !!entry.node);
+    if (elements.length < 2) return;
+    const scrollMarginTop = Number.parseFloat(getComputedStyle(elements[0].node).scrollMarginTop) || 145;
+    const anchorY = (scroller?.getBoundingClientRect().top ?? 0) + scrollMarginTop;
+    const lastStep = steppedPrompt.current;
+    let targetIndex: number;
+    if (lastStep && lastStep.index < elements.length && Math.abs((scroller?.scrollTop ?? 0) - lastStep.scrollTop) <= 4) {
+      targetIndex = (lastStep.index + direction + elements.length) % elements.length;
+    } else if (direction === 1) {
+      if ((scroller?.scrollTop ?? 0) <= 4 && elements[0].node.getBoundingClientRect().top >= (scroller?.getBoundingClientRect().top ?? 0)) {
+        targetIndex = 1;
+      } else {
+        const found = elements.findIndex((entry) => entry.node.getBoundingClientRect().top > anchorY + 16);
+        targetIndex = found >= 0 ? found : 0;
+      }
+    } else {
+      let found = -1;
+      for (let i = elements.length - 1; i >= 0; i--) {
+        if (elements[i].node.getBoundingClientRect().top < anchorY - 16) { found = i; break; }
+      }
+      targetIndex = found >= 0 ? found : elements.length - 1;
+    }
+    const target = elements[targetIndex];
+    const messageIndex = detail.messages.findIndex((item) => item.id === target.id);
+    const nextReply = messageIndex >= 0 ? detail.messages[messageIndex + 1] : undefined;
+    if (nextReply?.role === 'assistant') setRendered((old) => old.has(nextReply.id) ? old : new Set([...old, nextReply.id]));
+    target.node.scrollIntoView({ block: 'start', behavior: 'instant' });
+    steppedPrompt.current = { index: targetIndex, scrollTop: scroller?.scrollTop ?? 0 };
   }
   useEffect(() => {
     // The restored match and scroll place belong to the page; only a changed find or filter
@@ -197,6 +231,10 @@ export const SessionReader = memo(function SessionReader({ detail, toolName, chi
         <label><input type="checkbox" checked={onlyQuestions} onChange={(event) => setOnlyQuestions(event.target.checked)} />{t('records.reader.onlyQuestions')}</label>
         <label><input type="checkbox" checked={raw} onChange={(event) => setRaw(event.target.checked)} />{t('records.reader.showRaw')}</label>
         </div></details>
+        {!onlyQuestions && userPromptIds.length > 1 && <span className={styles.promptStepper}>
+          <button type="button" title={t('records.reader.prevQuestionTitle')} onClick={() => stepQuestion(-1)}>{t('records.reader.prevQuestion')}</button>
+          <button type="button" title={t('records.reader.nextQuestionTitle')} onClick={() => stepQuestion(1)}>{t('records.reader.nextQuestion')}</button>
+        </span>}
         {visible.length > 4 && <button type="button" title={t('records.reader.firstTitle')} onClick={jumpFirst}><Icon name="arrowUp" size={14} />{t('records.reader.first')}</button>}
         <button type="button" title={t('records.reader.latestTitle')} onClick={jumpLatest}><Icon name="arrowDown" size={14} />{t('records.reader.latest')}</button>
       </div>

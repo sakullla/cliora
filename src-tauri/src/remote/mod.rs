@@ -4,6 +4,8 @@
 //! embedding an SSH implementation. The adapter layer can build on these
 //! target/project records without creating per-CLI SSH branches.
 
+pub mod prompts;
+
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -483,10 +485,35 @@ fn mcp_seed_path(tool_id: &str) -> Option<String> {
 /// Native config decides which MCP servers are effective. Library metadata in
 /// the Cliora store is kept only for names the CLI file still contains.
 fn reconcile_mcp_store(tool_id: &str, stored: &serde_json::Value, config_text: &str) -> serde_json::Value {
-    if mcp_seed_path(tool_id).is_none() {
+    let Some(seed) = mcp_seed_path(tool_id) else {
         return empty_resource_store("mcp");
-    }
-    let native = mcp_store_from_config_text(tool_id, config_text).unwrap_or_else(|| empty_resource_store("mcp"));
+    };
+    let native = match mcp_store_from_config_text(tool_id, config_text) {
+        Ok(native) => native,
+        Err(error) => {
+            // A parse failure is an observable recovery issue, not an empty
+            // store: cached entries/definitions stay visible while the native
+            // file is corrected, and other tools in the same bundle are kept.
+            let entries = stored
+                .get("entries")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([]));
+            let definitions = stored
+                .get("definitions")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([]));
+            return serde_json::json!({
+                "entries": entries,
+                "definitions": definitions,
+                "stale": true,
+                "issues": [{
+                    "kind": "mcp_parse",
+                    "path": seed,
+                    "message": error,
+                }],
+            });
+        }
+    };
     let native_entries = native.get("entries").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
     let names: HashSet<String> = native_entries.iter().filter_map(|entry| entry.get("name").and_then(serde_json::Value::as_str).map(str::to_owned)).collect();
     let definitions: Vec<serde_json::Value> = stored
@@ -506,11 +533,14 @@ fn reconcile_mcp_store(tool_id: &str, stored: &serde_json::Value, config_text: &
         if let Some(object) = entry.as_object_mut() { object.insert("inLibrary".into(), serde_json::json!(in_library)); }
         entry
     }).collect();
-    serde_json::json!({ "entries": entries, "definitions": definitions })
+    serde_json::json!({ "entries": entries, "definitions": definitions, "issues": [] })
 }
 
-fn mcp_store_from_config_text(tool_id: &str, config_text: &str) -> Option<serde_json::Value> {
-    crate::adapters::Registry::builtins().get(tool_id)?.parse_remote_mcp(config_text).ok()
+fn mcp_store_from_config_text(tool_id: &str, config_text: &str) -> Result<serde_json::Value, String> {
+    let adapter = crate::adapters::Registry::builtins()
+        .get(tool_id)
+        .ok_or_else(|| "适配器未注册".to_owned())?;
+    adapter.parse_remote_mcp(config_text)
 }
 
 fn bundle_groups(tool_ids: &[String], kind: &str) -> Vec<Vec<String>> {
@@ -1384,7 +1414,8 @@ pub fn connection_args(target: &RemoteTarget) -> Vec<String> {
     // Unix. Windows has no equivalent socket, so each command is its own
     // connection; `run_ssh` keeps that burst inside sshd's unauthenticated
     // connection limit and retries a handshake the server closes.
-    if let Some(path) = control_path(target) {
+    let socket = control_path(target);
+    if let Some(path) = &socket {
         args.extend([
             "-o".into(),
             "ControlMaster=auto".into(),
@@ -1393,6 +1424,10 @@ pub fn connection_args(target: &RemoteTarget) -> Vec<String> {
             "-o".into(),
             format!("ControlPath={path}"),
         ]);
+    }
+    #[cfg(not(windows))]
+    if socket.is_none() {
+        args.extend(["-o".into(), "ControlMaster=no".into(), "-o".into(), "ControlPath=none".into()]);
     }
     args.push(format!("{}@{}", target.user, target.host));
     args
@@ -1404,20 +1439,37 @@ pub fn connection_args(target: &RemoteTarget) -> Vec<String> {
 #[cfg(windows)]
 fn control_path(_target: &RemoteTarget) -> Option<String> { None }
 
+// OpenSSH also binds a temporary socket with a 17-byte suffix before rename.
+// Leave room for that suffix and the NUL on macOS's 104-byte sockaddr_un path.
+#[cfg(not(windows))]
+fn control_socket_path(root: &Path, target: &RemoteTarget) -> Option<String> {
+    let identity = serde_json::to_vec(&(
+        &target.user, &target.host, target.port, &target.auth_method,
+        &target.ssh_config, &target.identity_file,
+    )).ok()?;
+    let digest = format!("{:x}", Sha256::digest(identity));
+    // 128 bits keeps the filename short without sharing different credentials.
+    let path = root.join(format!("ctl-{}", &digest[..32]));
+    let path = path.to_str()?;
+    if path.len() > 80 { return None; }
+    // A percent sign in a user's home is literal, not an OpenSSH % token.
+    Some(path.replace('%', "%%"))
+}
+
 #[cfg(not(windows))]
 fn control_path(target: &RemoteTarget) -> Option<String> {
-    let root = dirs::cache_dir().or_else(|| Some(std::env::temp_dir()))?.join("cliora").join("ssh");
-    if std::fs::create_dir_all(&root).is_err() {
-        return None;
-    }
+    let root = dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("cliora").join("ssh");
+    // Check before touching the filesystem; an unusually long home can still use ordinary SSH.
+    let path = control_socket_path(&root, target)?;
+    std::fs::create_dir_all(&root).ok()?;
+    let metadata = std::fs::symlink_metadata(&root).ok()?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() { return None; }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700));
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).ok()?;
     }
-    let identity = format!("{}@{}:{}|{}|{}", target.user, target.host, target.port, target.ssh_config.as_deref().unwrap_or_default(), target.identity_file.as_deref().unwrap_or_default());
-    let digest = Sha256::digest(identity.as_bytes());
-    Some(root.join(format!("ctl-{:x}", digest)).to_string_lossy().into_owned())
+    Some(path)
 }
 
 fn classify_ssh_failure(stderr: &str, exit_code: Option<i32>) -> &'static str {
@@ -2096,6 +2148,17 @@ pub(crate) fn run_session_control(binary: &Path, args: &[String], environment: &
     })
 }
 
+/// The child was spawned with process_group(0), so this id names our own group.
+/// Use the OS primitive instead of spawning `kill` for every completed SSH read.
+#[cfg(unix)]
+fn kill_owned_process_group(child_id: u32) {
+    let Ok(group) = i32::try_from(child_id) else { return; };
+    if group <= 1 { return; }
+    unsafe extern "C" { fn kill(pid: i32, signal: i32) -> i32; }
+    // SIGKILL is 9 on supported Unix targets. A group already gone is normal.
+    unsafe { kill(-group, 9); }
+}
+
 fn wait_for_output_with_stdin(command: &mut Command, deadline: Duration, stdin_payload: Option<Vec<u8>>) -> Result<std::process::Output, RemoteError> {
     let context = operations::current().unwrap_or_else(|| operations::Context::local(operations::Kind::Write, deadline));
     context.check()?;
@@ -2164,7 +2227,7 @@ fn wait_for_output_with_stdin(command: &mut Command, deadline: Duration, stdin_p
             #[cfg(windows)]
             let cleaned = process_job.take().is_none_or(|job| job.terminate_and_wait());
             #[cfg(unix)]
-            { let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())]).status(); }
+            kill_owned_process_group(child.id());
             let _ = child.kill(); let _ = child.wait();
             if let Some(task) = stdin_task.take() { let _ = task.join(); }
             let _ = stdout_task.join(); let _ = stderr_task.join();
@@ -2179,7 +2242,7 @@ fn wait_for_output_with_stdin(command: &mut Command, deadline: Duration, stdin_p
                 #[cfg(windows)]
                 let cleaned = process_job.take().is_none_or(|job| job.terminate_and_wait());
                 #[cfg(unix)]
-                { let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())]).status(); }
+                kill_owned_process_group(child.id());
                 let _ = child.kill(); let _ = child.wait();
                 if let Some(task) = stdin_task.take() { let _ = task.join(); }
                 let _ = stdout_task.join(); let _ = stderr_task.join();
@@ -2194,7 +2257,7 @@ fn wait_for_output_with_stdin(command: &mut Command, deadline: Duration, stdin_p
     #[cfg(windows)]
     let cleaned = process_job.take().is_none_or(|job| job.terminate_and_wait());
     #[cfg(unix)]
-    { let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())]).status(); }
+    kill_owned_process_group(child.id());
     if let Some(task) = stdin_task.take() { let _ = task.join(); }
     let output = std::process::Output {
         status,
@@ -2434,6 +2497,9 @@ pub fn ensure_enabled(db: &Database) -> Result<(), RemoteError> {
 }
 
 #[cfg(test)]
+mod fixture_tools;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use base64::Engine;
@@ -2451,9 +2517,25 @@ mod tests {
         } else { let mut command = Command::new("sh"); command.arg("-s"); command };
         hide_console_window(&mut command);
         let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("local POSIX transport");
-        child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
-        child.wait_with_output().unwrap()
+        let sent=child.stdin.take().unwrap().write_all(script.as_bytes());
+        let mut output=child.wait_with_output().unwrap();
+        if let Err(error)=sent {
+            assert_eq!(error.kind(),std::io::ErrorKind::BrokenPipe,"fixture stdin failed: {error}; exit {:?}; {}",output.status.code(),String::from_utf8_lossy(&output.stderr));
+            output.stderr.extend_from_slice(b"\nfixture stdin closed early; child exit and output preserved\n");
+            assert!(!output.status.success(),"fixture stdin incomplete despite exit 0; stdout: {}; stderr: {}",String::from_utf8_lossy(&output.stdout),String::from_utf8_lossy(&output.stderr));
+        }
+        output
     }
+    #[test]
+    fn local_transport_early_stdin_exit_retains_failure_and_rejects_partial_success() {
+        let padding="# fixture padding\n".repeat(100_000);
+        let failed=posix_output(&format!("exit 70\n{padding}"));
+        assert_eq!(failed.status.code(),Some(70));
+        assert!(String::from_utf8_lossy(&failed.stderr).contains("child exit and output preserved"));
+        let partial=std::panic::catch_unwind(||posix_output(&format!("exit 0\n{padding}")));
+        assert!(partial.is_err(),"incomplete successful-exit scripts must not become successful fixture operations");
+    }
+
     pub(super) fn local_transport(target: &RemoteTarget, command: &str, stdin: Option<&[u8]>) -> Option<std::process::Output> {
         let home = local_homes().lock().unwrap().get(&operations::target_identity(target)).cloned();
         home.map(|home| {
@@ -2461,7 +2543,7 @@ mod tests {
                 assert_eq!(command, "sh -s");
                 String::from_utf8(bytes.to_vec()).unwrap()
             } else { command.to_owned() };
-            posix_output(&format!("export HOME={}\n{script}", shell_quote(&home)))
+            posix_output(&format!("export HOME={}\nexport PATH=\"$HOME/.local/bin:$HOME/bin:$PATH\"\n{script}", shell_quote(&home)))
         })
     }
     pub(super) fn with_local_transport(target: &RemoteTarget, run: impl FnOnce(&str)) {
@@ -2479,6 +2561,8 @@ mod tests {
         let identity = operations::target_identity(target);
         let _cleanup = Cleanup(home.clone(), identity.clone());
         assert!(local_homes().lock().unwrap().insert(identity, home.clone()).is_none());
+        let setup=posix_output(&format!("export HOME={}\n{}",shell_quote(&home),super::fixture_tools::bootstrap()));
+        assert!(setup.status.success(),"fixture tool setup: {:?}: {}",setup.status.code(),String::from_utf8_lossy(&setup.stderr));
         run(&home);
     }
     pub(super) fn write_with_versions(target: &RemoteTarget, versions: transactions::Versions, run: impl FnOnce()) {
@@ -2867,6 +2951,27 @@ mod tests {
     }
 
     #[test]
+    fn malformed_native_mcp_is_an_issue_and_keeps_cached_entries() {
+        let saved = r#"{"entries":[{"name":"saved-server","transport":"stdio","command":"npx","inLibrary":true}],"definitions":[{"name":"saved-server","inLibrary":true}]}"#;
+        let stdout = format!(
+            "__CLIORA_TOOL__\ncodex\n__CLIORA_STORE__\n{}\n__CLIORA_CONFIG__\n{}\n__CLIORA_TOOL__\ngrok\n__CLIORA_STORE__\n\n__CLIORA_CONFIG__\n{}\n",
+            b64(saved),
+            b64("{ this is not json"),
+            b64("[mcp_servers.valid]\ncommand = \"node\"\n"),
+        );
+        let parsed = parse_resource_bundle("mcp", &["codex".into(), "grok".into()], &stdout);
+        let store = &parsed["stores"]["codex"];
+        assert_eq!(store["entries"][0]["name"], "saved-server");
+        assert_eq!(store["definitions"][0]["name"], "saved-server");
+        assert_eq!(store["stale"], true);
+        assert_eq!(store["issues"][0]["kind"], "mcp_parse");
+        assert!(!store["issues"][0]["message"].as_str().unwrap().is_empty());
+        // The other tool's valid store is unaffected.
+        assert_eq!(parsed["stores"]["grok"]["entries"][0]["name"], "valid");
+        assert_eq!(parsed["stores"]["grok"]["issues"], serde_json::json!([]));
+    }
+
+    #[test]
     fn a_library_mcp_copy_does_not_count_when_the_cli_config_lacks_it() {
         let saved = r#"{"entries":[{"name":"chrome-devtools-mcp","transport":"stdio","command":"npx","args":["-y","chrome-devtools-mcp@latest","--isolated"],"inLibrary":true},{"name":"node_repl","transport":"stdio","command":"stale","inLibrary":true}],"definitions":[{"name":"chrome-devtools-mcp","inLibrary":true},{"name":"node_repl","inLibrary":true}]}"#;
         let toml = "model = \"gpt-6-astra\"\nexperimental_bearer_token = \"synthetic-remote-key\"\n\n[mcp_servers.node_repl]\ncommand = \"node\"\nargs = [\"repl.js\"]\n\n[mcp_servers.node_repl.env]\nTOKEN = \"synthetic-remote-key\"\n";
@@ -3178,6 +3283,39 @@ mod tests {
 
     fn has_option(args: &[String], option: &str) -> bool {
         args.windows(2).any(|pair| pair[0] == "-o" && pair[1] == option)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn control_socket_paths_fit_macos_including_openssh_temporary_suffix() {
+        use std::os::unix::net::UnixListener;
+        let target = gate_target("socket-fixture.invalid");
+        let reported_root = Path::new("/Users/testuser/Library/Caches/cliora/ssh");
+        let path = control_socket_path(reported_root, &target).unwrap();
+        assert!(path.len() + 17 < 104);
+        let root = tempfile::Builder::new().prefix("cliora-ssh-test-").tempdir_in("/tmp").unwrap();
+        let path = control_socket_path(root.path(), &target).unwrap();
+        let temporary = format!("{path}.abcdefghijklmnop");
+        let listener = UnixListener::bind(&temporary).unwrap();
+        drop(listener);
+        std::fs::rename(&temporary, &path).unwrap();
+        assert_eq!(control_socket_path(root.path(), &target).unwrap(), path);
+        assert!(control_socket_path(Path::new(&format!("/{}", "x".repeat(100))), &target).is_none());
+        assert!(control_socket_path(Path::new(&format!("/{}", "界".repeat(20))), &target).is_none());
+        let escaped = control_socket_path(Path::new("/tmp/100%user"), &target).unwrap();
+        assert!(escaped.contains("100%%user"));
+        for change in ["password", "port", "key", "config", "user", "host"] {
+            let mut other = target.clone();
+            match change {
+                "password" => other.auth_method = "password".into(),
+                "port" => other.port += 1,
+                "key" => other.identity_file = Some("/keys/other".into()),
+                "config" => other.ssh_config = Some("/config/other".into()),
+                "user" => other.user = "other".into(),
+                _ => other.host = "other.invalid".into(),
+            }
+            assert_ne!(control_socket_path(root.path(), &other).unwrap(), path);
+        }
     }
 
     #[test]

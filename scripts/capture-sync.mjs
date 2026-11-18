@@ -11,8 +11,11 @@ const sizeOption = option('--size', '1360');
 const languageOption = option('--language', 'zh');
 const languages = languageOption === 'all' ? ['zh', 'en'] : [languageOption];
 // The General tab is captured too when asked, so the settings grouping has browser evidence.
+const only = option('--only', '').split(',').filter(Boolean);
 const withGeneral = process.argv.includes('--general');
-const widths = sizeOption === 'all' ? [1360, 900, 640] : sizeOption.split(',').map(Number);
+const compat640 = process.env.CLIORA_CAPTURE_640 === '1' || process.argv.includes('--compat-640');
+const defaultWidths = compat640 ? [1360, 900, 720, 640] : [1360, 900, 720];
+const widths = sizeOption === 'all' ? defaultWidths : sizeOption.split(',').map(Number);
 const root = fileURLToPath(new URL('../', import.meta.url)).replace(/\\/g, '/').replace(/\/$/, '');
 const out = process.env.CLIORA_CAPTURE_OUT ?? `${root}/docs/verification/ui-sync`;
 const previewUrl = process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736';
@@ -47,18 +50,25 @@ const scenarios = {
   },
   failing: { configured: true, lastSuccess: now - 86400 * 3, lastError: 'WebDAV 无法连接：connection refused (sync.example.com:443)' },
   paused: { configured: true, enabled: false, lastSuccess: now - 86400 },
+  'local-only': { configured: true, lastSuccess: null, receipt: { at: now, compared: 12, uploaded: 0, downloaded: 0, transfers: [] }, localOnly: [
+    { key: 'workspace:business-a', kind: 'workspace', label: '北辰业务平台', reason: '业务项目名单和工作位置保留在本机；使用加密迁移包迁移，或在另一产品打开同一份项目清单。' },
+    { key: 'repository:service-a', kind: 'repository', label: 'service-a', reason: '来源主机的位置提示不发布到 WebDAV，接收端需明确关联本机目录。' },
+    { key: 'library:project-review', kind: 'library', label: '北辰项目审查提示词', reason: '项目范围与独立标签完整保留，不上传为通用提示词，也不发布伪删除。' },
+  ] },
 };
 
 function installMock(seed) {
-  const control = { configured: false, enabled: true, lastSuccess: null, lastError: null, pending: 0, receipt: null, projects: [], blockers: [], conflicts: [], ...seed };
-  const status = () => ({ configured: control.configured, enabled: control.enabled, endpoint: control.configured ? 'https://dav.jianguoyun.com/dav/cliora/' : null, lastSuccess: control.lastSuccess, lastError: control.lastError, retryAfter: null, uploaded: 0, downloaded: 0, pendingChanges: control.pending, conflicts: control.conflicts, blockers: control.blockers, transfers: [], compared: 0, receipt: control.receipt });
+  const control = { configured: false, enabled: true, lastSuccess: null, lastError: null, pending: 0, receipt: null, projects: [], blockers: [], conflicts: [], localOnly: [], ...seed };
+  const status = () => ({ configured: control.configured, enabled: control.enabled, endpoint: control.configured ? 'https://dav.jianguoyun.com/dav/cliora/' : null, lastSuccess: control.lastSuccess, lastError: control.lastError, retryAfter: null, uploaded: 0, downloaded: 0, pendingChanges: control.pending, conflicts: control.conflicts, blockers: control.blockers, localOnly: control.localOnly, transfers: [], compared: 0, receipt: control.receipt });
   const items = [
     { key: 'preferences:1', kind: 'preferences', label: '外观与管理偏好', status: 'available', pendingFields: [] },
     { key: 'profile:1', kind: 'profile', label: 'Codex · 日常开发', status: 'available', pendingFields: [] },
     { key: 'profile:2', kind: 'profile', label: 'Claude · 评审', status: 'available', pendingFields: [] },
     { key: 'library:1', kind: 'library', label: '代码审查', status: 'available', pendingFields: [] },
     { key: 'account:1', kind: 'account', label: '工作账号', status: 'available', pendingFields: [] },
-    { key: 'project:1', kind: 'project', label: '栖点', status: 'available', pendingFields: [] },
+    { key: 'project:1', kind: 'project', label: '栖点原目录', status: 'available', pendingFields: [] },
+    { key: 'workspace:business-a', kind: 'workspace', label: '北辰业务平台', status: 'available', pendingFields: [] },
+    { key: 'repository:service-a', kind: 'repository', label: 'service-a', status: 'available', pendingFields: [] },
   ];
   localStorage.setItem('cliora:language', control.language ?? 'zh');
   Object.assign(window, {
@@ -122,7 +132,7 @@ try {
 if (!previewReady) throw new Error(`预览服务未就绪：${previewUrl}`);
 browser = await chromium.launch();
 for (const theme of themes) for (const width of widths) for (const language of languages) {
-  for (const [name, seed] of Object.entries(scenarios)) {
+  for (const [name, seed] of Object.entries(scenarios).filter(([name]) => !only.length || only.includes(name))) {
     let page = null;
     try {
       page = await browser.newPage({ viewport: { width, height: 1100 }, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme });
@@ -130,9 +140,21 @@ for (const theme of themes) for (const width of widths) for (const language of l
       await page.addInitScript(installMock, { ...seed, theme, language, sampleTransfers: transfers });
       const shot = async (label) => {
         await settleCapture(page);
+        // A ready dialog can still be midway through its finite opacity animation.
+        // Wait for actual paint readiness; leave infinite progress spinners alone.
+        await page.evaluate(async () => {
+          const finite = document.getAnimations().filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity);
+          await Promise.all(finite.map((animation) => animation.finished.catch(() => {})));
+          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        });
+        await page.waitForFunction(() => [...document.querySelectorAll('dialog[open], [role="dialog"]')].filter((node) => node.getClientRects().length > 0).every((node) => getComputedStyle(node).opacity === '1'));
+        const paint = await page.evaluate(() => ({
+          theme: document.documentElement.dataset.theme,
+          dialogs: [...document.querySelectorAll('dialog[open], [role="dialog"]')].filter((node) => node.getClientRects().length > 0).map((node) => ({ opacity: getComputedStyle(node).opacity, backdropOpacity: node.tagName === 'DIALOG' ? getComputedStyle(node, '::backdrop').opacity : null })),
+        }));
         const file = `${language}-${theme}-${width}-${label}.png`;
         await page.screenshot({ path: `${out}/${file}`, fullPage: true });
-        shots.push({ name: label, scenario: name, theme, width, language, file });
+        shots.push({ name: label, scenario: name, theme, width, language, file, paint });
         const over = await page.evaluate(findOverflow);
         if (over.length) failures.push({ type: 'overflow', name: label, theme, width, language, over });
         console.log(`${out}/${file}`);
@@ -164,6 +186,11 @@ for (const theme of themes) for (const width of widths) for (const language of l
             await choose.first().click(); await page.getByRole('dialog').last().waitFor(); await shot('conflict-center');
             await page.keyboard.press('Escape'); await page.getByRole('dialog', { name: language === 'en' ? 'Resolve conflicts' : '处理冲突' }).waitFor({ state: 'hidden' });
           }
+        }
+        if (name === 'local-only') {
+          await page.getByRole('button', { name: language === 'en' ? 'Sync now' : '立即同步', exact: true }).first().click();
+          await page.getByRole('dialog', { name: language === 'en' ? 'Sync result' : '同步结果', exact: true }).waitFor();
+          await shot('local-only-result');
         }
         if (name === 'healthy') {
           await page.evaluate(() => { window.__sync.hang = true; });
@@ -225,9 +252,9 @@ for (const theme of themes) for (const width of widths) for (const language of l
 const escape = (value) => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const invocation = ['node', 'scripts/capture-sync.mjs', ...process.argv.slice(2)].join(' ');
 fs.writeFileSync(`${out}/index.html`, `<!doctype html><meta charset="utf-8"><title>Sync captures</title><style>body{font:14px system-ui;background:#222;color:#eee}figure{display:inline-block;margin:12px;vertical-align:top}img{max-width:640px;border:1px solid #555}</style><p>${failures.length ? '捕获有失败，请查看清单' : '捕获完成'} · ${shots.length} 张 · <a href="capture-sync-manifest.json" style="color:#b8d2ff">捕获清单</a></p><p>${escape(acceptanceNote)}</p>${shots.map((item) => `<figure><img src="${escape(item.file)}"><figcaption>${escape(item.file)}</figcaption></figure>`).join('')}`);
-fs.writeFileSync(`${out}/capture-sync-manifest.json`, JSON.stringify({ capturedAt: new Date().toISOString(), synthetic: true, acceptance, invocation, previewUrl, matrix: { themes, widths, languages }, scenarios: [...Object.keys(scenarios), ...(withGeneral ? ['general'] : [])], success: failures.length === 0, imageCount: shots.length, captures: shots, failures }, null, 2) + '\n');
+fs.writeFileSync(`${out}/capture-sync-manifest.json`, JSON.stringify({ capturedAt: new Date().toISOString(), synthetic: true, acceptance, invocation, previewUrl, matrix: { themes, widths, languages }, scenarios: [...Object.keys(scenarios).filter((name) => !only.length || only.includes(name)), ...(withGeneral ? ['general'] : [])], success: failures.length === 0, imageCount: shots.length, captures: shots, failures }, null, 2) + '\n');
 const rows = [...new Set(shots.map((item) => item.name))].map((label) => `| ${label} | ${shots.filter((item) => item.name === label).map((item) => `[${item.language} ${item.theme} ${item.width}](${item.file})`).join(' · ')} |`);
-fs.writeFileSync(`${out}/README.md`, `# 迁移与同步捕获\n\n[浏览图片画廊](index.html) · [机器可读清单](capture-sync-manifest.json)\n\n捕获 WebDAV 未连接、正常、需处理、失败与暂停状态，连接、导出、恢复对话框，冲突展开，以及同步进行中与结果。\n\n执行：\n\n\`\`\`sh\nCLIORA_PREVIEW_URL=http://127.0.0.1:14736 ${invocation}\n\`\`\`\n\n\`--theme all|light|dark\`、\`--size 1360,900,640\` 与 \`--language all|zh|en\` 可缩小范围；\`CLIORA_CAPTURE_OUT\` 指定输出目录。预览服务器需运行当前 frontend build。\n\n本次生成 ${shots.length} 张图片，${failures.length} 项检查失败（页面错误、横向溢出或场景步骤失败）。${acceptanceNote}\n\n| 场景 | 图片 |\n| --- | --- |\n${rows.join('\n')}\n`);
+fs.writeFileSync(`${out}/README.md`, `# 迁移与同步捕获\n\n[浏览图片画廊](index.html) · [机器可读清单](capture-sync-manifest.json)\n\n捕获 WebDAV 未连接、正常、需处理、失败、暂停与项目/范围提示词本地保留状态，连接、导出、恢复对话框，冲突展开，以及同步进行中与结果。\n\n执行：\n\n\`\`\`sh\nCLIORA_PREVIEW_URL=http://127.0.0.1:14736 ${invocation}\n\`\`\`\n\n\`--theme all|light|dark\`、\`--size 1360,900,720\` 与 \`--language all|zh|en\` 可缩小范围；640 需显式指定或设置 CLIORA_CAPTURE_640=1；\`CLIORA_CAPTURE_OUT\` 指定输出目录。预览服务器需运行当前 frontend build。\n\n本次生成 ${shots.length} 张图片，${failures.length} 项检查失败（页面错误、横向溢出或场景步骤失败）。${acceptanceNote}\n\n| 场景 | 图片 |\n| --- | --- |\n${rows.join('\n')}\n`);
 console.log(JSON.stringify({ out, count: shots.length, failures }, null, 2));
 if (failures.length) process.exitCode = 1;
 

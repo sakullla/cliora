@@ -252,6 +252,8 @@ fn five_cli_histories_resume_in_the_original_macos_directory() {
         CREATE TABLE part (id TEXT, message_id TEXT, session_id TEXT, data TEXT, time_created INTEGER);").unwrap();
     native_db.execute("INSERT INTO session VALUES ('ses_macos', 'macOS fixture', ?1, 1790668800000, 1790668860000, '1.18.33', NULL)", [project.to_str().unwrap()]).unwrap();
     let db = Database::open(&temp.path().join("app.db")).unwrap();
+    // This test verifies Terminal.app scripts; the product's default Workbench is a separate path.
+    launch::set_terminal(&db, TerminalId::MacTerminal).unwrap();
     let registry = registry();
     let report = history::refresh(&db, &registry, &home).unwrap();
     assert!(

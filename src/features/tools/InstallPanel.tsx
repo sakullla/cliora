@@ -12,6 +12,7 @@ import styles from './ToolWorkspace.module.css';
 
 function sourceLabel(source: string) {
   if (source === 'npm_shim') return 'npm';
+  if (source === 'bun') return i18n.t('tools.install.sourceBun');
   if (source === 'native' || source === 'claude_native') return i18n.t('tools.install.sourceNative');
   return i18n.t('tools.install.sourceOther');
 }
@@ -22,6 +23,10 @@ function fileName(path: string) {
 
 function isNative(source: string) {
   return source === 'native' || source === 'claude_native';
+}
+
+function isBunCommand(command: string | null | undefined) {
+  return Boolean(command?.startsWith('bun '));
 }
 
 function versionParts(value: string) {
@@ -96,7 +101,13 @@ export function InstallPanel({ toolName, heading, probe, customPath, busy, loadi
   const alternates = available.filter(item => item.path !== selected?.path);
   const hasNpm = available.some(item => item.source === 'npm_shim');
   const hasNative = available.some(item => isNative(item.source));
-  const multiple = Boolean(probe.nativeInstallCommand && probe.npmInstallCommand);
+  const nativeChannel = Boolean(probe.nativeInstallCommand);
+  const npmChannel = Boolean(probe.npmInstallCommand);
+  // A native entry is distinct when the adapter's default install command is a
+  // different channel (for example Bun). Where the default already is native,
+  // the npm entry is the second choice, exactly as before.
+  const nativeDistinct = nativeChannel && probe.installCommand !== probe.nativeInstallCommand;
+  const multiple = Boolean(nativeChannel && npmChannel) || nativeDistinct;
   const preferNative = probe.installCommand === probe.nativeInstallCommand;
   const problems = probe.dependencies.filter(item => item.status !== 'found');
   const selectedVersion = selected?.version?.trim() ?? '';
@@ -116,7 +127,8 @@ export function InstallPanel({ toolName, heading, probe, customPath, busy, loadi
   const currentVersion = selected?.version?.trim() ?? '';
   const behind = Boolean(selected && currentVersion && latest.state === 'ready' && compareVersions(currentVersion, latest.version) < 0);
   const current = !selected || latest.state !== 'ready' || !currentVersion ? false : compareVersions(currentVersion, latest.version) >= 0;
-  const updateLabel = multiple ? (selected && isNative(selected.source) ? t('tools.install.updateNative') : t('tools.install.updateNpm')) : t('tools.install.update');
+  const bunUpdate = selected?.source === 'bun' || isBunCommand(probe.upgradeCommand);
+  const updateLabel = bunUpdate ? t('tools.install.updateBun') : multiple ? (selected && isNative(selected.source) ? t('tools.install.updateNative') : t('tools.install.updateNpm')) : t('tools.install.update');
   // 未安装时默认展开检测面板；仅取初始值，用户折叠或安装成功后不再强制。
   const [startOpen] = useState(!selected && !collapsed);
   const panel = useRef<HTMLDetailsElement>(null);
@@ -178,10 +190,12 @@ export function InstallPanel({ toolName, heading, probe, customPath, busy, loadi
         <div className={styles.installActions}>
           {!selected && multiple && <>
             <Button variant={preferNative ? 'primary' : 'secondary'} disabled={busy} onClick={() => onMaintain('install_native', 'native', undefined, target)}>{t('tools.install.installNative')}</Button>
-            <Button variant={!preferNative ? 'primary' : 'secondary'} disabled={busy} onClick={() => onMaintain('install', 'npm_shim', undefined, target)}>{t('tools.install.installNpm')}</Button>
+            {npmChannel
+              ? <Button variant={!preferNative ? 'primary' : 'secondary'} disabled={busy} onClick={() => onMaintain('install', 'npm_shim', undefined, target)}>{t('tools.install.installNpm')}</Button>
+              : <Button variant={!preferNative ? 'primary' : 'secondary'} disabled={busy} onClick={() => onMaintain('install', undefined, undefined, target)}>{isBunCommand(probe.installCommand) ? t('tools.install.installBun') : t('tools.install.install')}</Button>}
           </>}
           {selected && multiple && !hasNative && <Button disabled={busy} onClick={() => onMaintain('install_native', 'native', undefined, target)}>{t('tools.install.installNative')}</Button>}
-          {!selected && !multiple && probe.installCommand && <Button variant="primary" disabled={busy} onClick={() => onMaintain('install', undefined, undefined, target)}>{t('tools.install.install')}</Button>}
+          {!selected && !multiple && probe.installCommand && <Button variant="primary" disabled={busy} onClick={() => onMaintain('install', undefined, undefined, target)}>{isBunCommand(probe.installCommand) ? t('tools.install.installBun') : t('tools.install.install')}</Button>}
           {canUpdate && <Button variant="primary" disabled={busy || loading} onClick={() => onMaintain('upgrade', selected!.source, selected!.version ?? undefined, target)}>{updateLabel}</Button>}
           {selected && probe.majorUpgrade?.command && <Button disabled={busy || loading} onClick={() => onMaintain('upgrade_major', selected.source, selected.version ?? undefined)}>{probe.majorUpgrade.label}</Button>}
           {probe.installUrl && <ExternalLink href={probe.installUrl}>{t('tools.install.officialGuide')}</ExternalLink>}

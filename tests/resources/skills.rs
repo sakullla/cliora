@@ -45,7 +45,7 @@ fn native_inventory_reads_documents_without_packaging_attachments() {
     assert!(preview_local(&db, path.to_str().unwrap()).is_err(), "imports still validate the complete package");
 
     let mut observed = Vec::new();
-    scan_skill_children(&db, "claude_code", "global", path.parent().unwrap(), Some("Bundled"), false, &mut observed).unwrap();
+    scan_skill_children(&db, "claude_code", "global", path.parent().unwrap(), Some("Bundled"), false, None, registry.get("claude_code").unwrap(), &mut observed).unwrap();
     assert_eq!(observed[0].state, "read_only");
     assert_eq!(observed[0].detail, "Bundled · Local document");
     assert!(observed[0].digest.is_none());
@@ -1748,4 +1748,52 @@ fn antigravity_enable_refuses_contract_breaking_packages_while_others_stay_enabl
     );
     set_enabled(&db, &credentials, &registry, &home, &claude_package.id, "claude_code", Scope::Global, None, false).unwrap();
     set_enabled(&db, &credentials, &registry, &home, &claude_package.id, "claude_code", Scope::Global, None, true).unwrap();
+}
+
+
+#[test]
+fn streamed_inventory_matches_package_digest_and_list_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("streamed-skill");
+    fs::create_dir_all(root.join("a")).unwrap();
+    fs::write(root.join("SKILL.md"), "---\ndescription: Streamed package\ncompatibility: Any CLI\n---\n# Body\n").unwrap();
+    // Ordering, JSON escaping, empty files and all base64 padding lengths.
+    for (name, bytes) in [("a.txt", vec![0]), ("a/child", vec![0, 255]), ("empty", vec![]), (if cfg!(windows) { "quoted-file" } else { "quoted\"file" }, vec![1, 2, 3]), ("large.bin", vec![42; 1024 * 1024])] {
+        fs::write(root.join(name), bytes).unwrap();
+    }
+    let (_, _, files, expected) = snapshot(&root).unwrap();
+    assert_eq!(expected, format!("{:x}", Sha256::digest(serde_json::to_vec(&files).unwrap())));
+    assert_eq!(inventory_digest(&root).unwrap(), expected);
+    let db = Database::open(&temp.path().join("app.db")).unwrap();
+    let imported = import_local(&db, root.to_str().unwrap(), None, None).unwrap();
+    let listed = list(&db).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].file_count, files.len());
+    assert_eq!(listed[0].description, imported.description);
+    assert_eq!(listed[0].compatibility, imported.compatibility);
+    assert_eq!(listed[0].issues, imported.issues);
+    fs::write(root.join("large.bin"), [1, 2, 3]).unwrap();
+    assert_ne!(inventory_digest(&root).unwrap(), expected);
+    fs::File::create(root.join("oversized")).unwrap().set_len(MAX_BYTES as u64 + 1).unwrap();
+    assert!(inventory_digest(&root).is_err());
+}
+
+#[test]
+#[ignore = "synthetic before/after performance measurement"]
+fn skill_inventory_memory_benchmark() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bench-skill");
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join("SKILL.md"), "---\ndescription: Benchmark\n---\n").unwrap();
+    for index in 0..96 { fs::write(root.join(format!("attachment-{index:03}.bin")), vec![42; 96 * 1024]).unwrap(); }
+    let baseline = std::env::var_os("CLIORA_BENCH_BASELINE").is_some();
+    let started = std::time::Instant::now();
+    for _ in 0..10 {
+        if baseline {
+            let mut files = BTreeMap::new();
+            collect(&root, &root, &mut files, &mut 0).unwrap();
+            std::hint::black_box(Sha256::digest(serde_json::to_vec(&files).unwrap()));
+        } else { std::hint::black_box(inventory_digest(&root).unwrap()); }
+    }
+    eprintln!("baseline={baseline} files=97 attachment_bytes=9437184 iterations=10 elapsed_ms={:.2}", started.elapsed().as_secs_f64() * 1000.0);
 }

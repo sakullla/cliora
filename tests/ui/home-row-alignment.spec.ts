@@ -80,14 +80,15 @@ test('project cards keep one launch action and home never scrolls sideways', asy
   const heights = await cards.evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().height)));
   expect(new Set(heights).size).toBe(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
-  // Every card stacks the same parts at any width: identity first, then one action row whose
-  // launch button ends the row, so cards in a column line their launch buttons up.
+  // A wide card puts launch beside the identity, a narrow one below it; either way launch never
+  // covers the identity and ends the card, so cards in a column line their launch buttons up.
   const layout = async () => cards.evaluateAll((nodes) => nodes.map((node) => {
     const card = node.getBoundingClientRect();
     const title = node.querySelector('strong')!;
     const identity = title.closest('div')!.parentElement!.getBoundingClientRect();
     const launch = node.querySelector('[data-split-variant]')!.getBoundingClientRect();
-    return { below: launch.top >= identity.bottom - 1, endGap: Math.round(card.right - launch.right), nameShown: title.clientWidth >= title.scrollWidth - 1 };
+    const clear = launch.top >= identity.bottom - 1 || launch.left >= identity.right - 1;
+    return { below: clear, endGap: Math.round(card.right - launch.right), nameShown: title.clientWidth >= title.scrollWidth - 1 };
   }));
   for (const width of [1360, 900]) {
     await page.setViewportSize({ width, height: 900 });

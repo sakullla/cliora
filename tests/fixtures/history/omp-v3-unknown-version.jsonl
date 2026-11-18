@@ -1,0 +1,2 @@
+{"type":"session","version":4,"id":"0190f4a2-0000-7000-8000-000000000004","timestamp":"2026-11-15T02:00:00Z","cwd":"/fixture/project"}
+{"type":"message","id":"a1","parentId":null,"timestamp":"2026-11-15T02:01:00Z","message":{"role":"user","content":[{"type":"text","text":"Future session"}]}}

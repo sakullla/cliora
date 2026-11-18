@@ -23,7 +23,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 31 {
+        if version > 33 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -634,6 +634,72 @@ impl Database {
             )?;
             tx.commit()?;
         }
+        if version < 32 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE workspace_projects (
+                   id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1,
+                   manifest_path TEXT, manifest_revision INTEGER, manifest_digest TEXT,
+                   manifest_json TEXT, last_error TEXT
+                 );
+                 CREATE TABLE workspace_repositories (
+                   id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL
+                 );
+                 CREATE TABLE workspace_members (
+                   workspace_id TEXT NOT NULL REFERENCES workspace_projects(id) ON DELETE CASCADE,
+                   repository_id TEXT NOT NULL REFERENCES workspace_repositories(id),
+                   favorite INTEGER NOT NULL DEFAULT 0,
+                   PRIMARY KEY(workspace_id, repository_id)
+                 );
+                 CREATE TABLE workspace_locations (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   repository_id TEXT NOT NULL REFERENCES workspace_repositories(id),
+                   host_id TEXT NOT NULL, path TEXT, native_project_id TEXT, target_id TEXT,
+                   kind TEXT NOT NULL DEFAULT 'legacy',
+                   UNIQUE(host_id, path)
+                 );
+                 CREATE TABLE workspace_member_locations (
+                   workspace_id TEXT NOT NULL REFERENCES workspace_projects(id) ON DELETE CASCADE,
+                   repository_id TEXT NOT NULL REFERENCES workspace_repositories(id),
+                   location_id TEXT NOT NULL REFERENCES workspace_locations(id),
+                   PRIMARY KEY(workspace_id, repository_id, location_id)
+                 );
+                 CREATE TABLE workspace_legacy_map (
+                   project_id TEXT PRIMARY KEY NOT NULL, workspace_id TEXT NOT NULL,
+                   repository_id TEXT NOT NULL
+                 );
+                 CREATE TABLE workspace_sessions (
+                   session_id TEXT PRIMARY KEY NOT NULL, workspace_id TEXT NOT NULL,
+                   repository_id TEXT NOT NULL, host_id TEXT NOT NULL, directory TEXT NOT NULL
+                 );
+                 PRAGMA user_version = 32;",
+            )?;
+            tx.commit()?;
+        }
+        if version < 33 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE prompt_metadata (
+                   library_id TEXT PRIMARY KEY NOT NULL REFERENCES library_items(id) ON DELETE CASCADE,
+                   scope_json TEXT NOT NULL CHECK(json_valid(scope_json)),
+                   tags_json TEXT CHECK(tags_json IS NULL OR json_valid(tags_json))
+                 );
+                 INSERT INTO prompt_metadata(library_id,scope_json,tags_json)
+                   SELECT id,CASE WHEN project_id IS NULL THEN json_object('kind','global')
+                     ELSE json_object('kind','unresolved','legacyProjectId',project_id) END,NULL
+                   FROM library_items WHERE kind='prompt';
+                 CREATE TABLE prompt_usage (
+                   host_id TEXT NOT NULL, prompt_id TEXT NOT NULL, favorite INTEGER NOT NULL DEFAULT 0,
+                   last_used INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(host_id,prompt_id)
+                 );
+                 CREATE TABLE prompt_batch_items (
+                   operation_id TEXT NOT NULL, item_id TEXT NOT NULL, input_digest TEXT NOT NULL,
+                   result_json TEXT NOT NULL, PRIMARY KEY(operation_id,item_id)
+                 );
+                 PRAGMA user_version=33;",
+            )?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection: Mutex::new(connection),
             read_path: (path != Path::new(":memory:") && !path.as_os_str().is_empty())
@@ -710,6 +776,25 @@ impl Database {
         tx.commit().map_err(|_| "无法完成本机设置保存")?;
         Ok(preferences)
     }
+}
+
+/// Latest-schema fixtures that reconstruct an older database must remove later
+/// organization tables too. This helper is test-only; production migrations keep
+/// strict CREATE TABLE checks and never repair a contradictory user_version.
+#[cfg(test)]
+pub(crate) fn remove_later_fixture_tables(conn: &Connection, target_version: u32) -> rusqlite::Result<()> {
+    if target_version < 33 {
+        for table in ["prompt_batch_items", "prompt_usage", "prompt_metadata"] {
+            conn.execute_batch(&format!("DROP TABLE IF EXISTS {table};"))?;
+        }
+    }
+    if target_version < 32 {
+        // Children before parents while foreign-key enforcement remains enabled.
+        for table in ["workspace_sessions", "workspace_legacy_map", "workspace_member_locations", "workspace_members", "workspace_locations", "workspace_projects", "workspace_repositories"] {
+            conn.execute_batch(&format!("DROP TABLE IF EXISTS {table};"))?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -899,7 +984,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 31);
+            assert_eq!(version, 33);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;

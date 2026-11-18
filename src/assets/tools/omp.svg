@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Cliora placeholder mark for oh-my-pi (OMP). No official OMP brand asset was
+     available offline; this neutral monogram tile is replaced when an official
+     vector source is verified. See docs/architecture/omp-adapter.md. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 30" role="img">
+  <rect x="1" y="1" width="28" height="28" rx="7" fill="#1F2328"/>
+  <text x="15" y="19" text-anchor="middle" fill="#F2F5F9"
+        font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="10"
+        font-weight="700" letter-spacing="0.4">OMP</text>
+</svg>

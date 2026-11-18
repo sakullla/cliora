@@ -1,9 +1,9 @@
 import type { Scope } from './native';
 
 export type PluginTarget = { toolId: string; scope: Scope; projectPath: string | null; contextId: string | null };
-export type PluginAction = 'install' | 'update' | 'enable' | 'disable' | 'uninstall';
+export type PluginAction = 'install' | 'update' | 'enable' | 'disable' | 'uninstall' | 'doctor';
 export type PluginEntry = { id: string; name: string; source: string; version: string | null; scope: string; enabled: boolean | null; state: string; policy: string; readOnly: boolean; root: string | null; resources: { kind: string; path: string; ownerId: string }[] };
-export type PluginSnapshot = { target: PluginTarget; capability: { version: string; sources: string; actions: PluginAction[]; project: boolean; detail: string }; entries: PluginEntry[]; baseline: string; detail: string };
+export type PluginSnapshot = { target: PluginTarget; capability: { version: string; sources: string; actions: PluginAction[]; project: boolean; detail: string }; entries: PluginEntry[]; baseline: string; detail: string; doctor?: string | null };
 export type PluginRequest = { target: PluginTarget; action: PluginAction; source: string; baseline: string; trusted: boolean };
 export type PluginResult = { status: string; detail: string; transactionId: string | null; snapshot: PluginSnapshot | null };
 /** What a plugin bundles, named per item. `kind` follows the resource kind (agents, skills, commands, hooks, mcp, …). */
@@ -37,7 +37,23 @@ export type McpDraftTargetRequest = McpTargetRequest & { operation?: McpTargetOp
 export type McpTargetResult = { contextId?: string | null; toolId: string; scope: Scope; projectPath: string | null; path: string | null; operation: McpTargetOperation; status: 'ready' | 'conflict' | 'unsupported' | 'written' | 'removed' | 'failed'; detail: string; baselineHash: string | null; previewToken: string | null; existing: unknown | null; proposed: unknown | null };
 export type McpDraftPreview = { draft: McpDraft; definition: McpDefinition; targets: McpTargetResult[] };
 export type McpCommitResult = { definition: McpDefinition; targets: McpTargetResult[] };
-export type NativeMcpEntry = Omit<McpDefinition, 'id' | 'version'> & { enabled: boolean; protectedValues: boolean };
+export type NativeMcpEntry = Omit<McpDefinition, 'id' | 'version'> & {
+  enabled: boolean;
+  protectedValues: boolean;
+  /** Read-only source label when another tool or plugin owns the definition. */
+  source?: string | null;
+  /** True for externally discovered entries; Cliora never writes their file. */
+  readOnly?: boolean;
+  /** Native file/package that owns a read-only entry. */
+  detail?: string | null;
+  /** Per-entry parse or schema problem; the rest of the list stays usable. */
+  issue?: string | null;
+  /** The CLI has its own enable/disable override for this read-only entry. */
+  switchable?: boolean;
+};
+/** One unreadable or malformed foreign MCP source. */
+export type NativeMcpIssue = { kind: string; source: string; path: string; message: string };
+export type NativeMcpStore = { entries: NativeMcpEntry[]; issues: NativeMcpIssue[] };
 
 export type RuleTarget = { contextId?: string | null; toolId: string; scope: Scope; projectPath: string | null; baselineHash?: string | null };
 export type NativeRuleFile = { id: string; path: string; name: string; kind: 'mdc' | 'inert' | 'agents' | 'gemini' | string; enabled: boolean; writable: boolean; removable: boolean; toggleable: boolean; detail: string; text: string; fingerprint: string };
@@ -62,7 +78,7 @@ export type SkillTargetResult = { toolId: string; scope: Scope; projectPath: str
 export type SkillRecoveryIssue = { contextId?: string | null; operationId: string; toolId: string; scope: Scope; projectPath: string | null; targetPath: string; backupPath: string; detail: string };
 // digest is null for document-only inventory (unmanaged/read-only directories),
 // as well as failed package reads. Use state to determine readability.
-export type NativeSkillEntry = { name: string; path: string; digest: string | null; state: 'managed' | 'external' | 'unreadable' | 'read_only'; detail: string; packageId: string | null; source?: 'writable' | 'read_only' | 'plugin'; pluginName?: string | null; pluginEnabled?: boolean | null; issues?: SkillIssueCode[] };
+export type NativeSkillEntry = { name: string; path: string; digest: string | null; state: 'managed' | 'external' | 'unreadable' | 'read_only'; detail: string; packageId: string | null; source?: 'writable' | 'read_only' | 'plugin'; pluginName?: string | null; pluginEnabled?: boolean | null; issues?: SkillIssueCode[]; switchable?: boolean; enabled?: boolean };
 export type NativeSkillDocument = { name: string; path: string; content: string };
 /** Attachment beside SKILL.md; `path` is relative to the skill directory with `/` separators. */
 export type SkillFileEntry = { path: string; size: number | null; readable: boolean; detail: string };

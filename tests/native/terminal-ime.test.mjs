@@ -434,13 +434,15 @@ test('native IME attach refuses any CDP port that is not the test instance', asy
 
 test('native IME build config isolates identifier and output without touching the shared dist', async () => {
   const { testBuildConfig, IDENTIFIER } = await import('../../scripts/verify-ime.mjs');
-  const config = testBuildConfig('C:\\repo\\.vite\\ime-native', 'C:\\repo');
+  const path = await import('node:path');
+  const repoRoot = path.join(path.parse(process.cwd()).root, 'cliora-ime-config-fixture');
+  const config = testBuildConfig(path.join(repoRoot, '.vite', 'ime-native'), repoRoot);
   assert.equal(config.identifier, IDENTIFIER);
   assert.notEqual(config.identifier, 'com.cliora.desktop');
   assert.equal(config.build.frontendDist, '../.vite/ime-native/dist');
   assert.match(config.build.beforeBuildCommand.script, /--outDir \.vite\/ime-native\/dist /);
   assert.doesNotMatch(config.build.beforeBuildCommand.script, /"/);
-  assert.throws(() => testBuildConfig('C:\\repo\\my dir', 'C:\\repo'), /spaces/);
+  assert.throws(() => testBuildConfig(path.join(repoRoot, 'my dir'), repoRoot), /spaces/);
 });
 
 test('native IME trace records the orders only a real IME can produce', async () => {

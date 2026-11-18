@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::history::usage::{self, TokenCounts};
 use crate::history::{
-    check_cancelled, discover_jsonl_controlled_in, raw_string_after, read_jsonl_filtered,
+    check_cancelled, discover_jsonl_controlled_in, raw_string_after, read_jsonl_fields,
     source_fingerprint_controlled, text_content, timestamp, valid_native_id, AgentKind,
     ChildSession, HistoryMessage, HistoryMessageKind, HistorySource, MessageTimeSource,
     ParsedSession, UsageAttribution, UsageEvent,
@@ -18,6 +18,8 @@ use crate::history::{
 /// session for usage. The sibling `<session-id>/tool-results` directories
 /// never hold session logs, and the top-level `history.jsonl` is a prompt
 /// history, not a session transcript, so only uuid-named files are accepted.
+const HISTORY_FIELDS: &[&str] = &["timestamp", "providerData", "id", "type", "role", "sessionId", "cwd", "content", "aiTitle"];
+
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
     sources_controlled(home, &|| false)
 }
@@ -27,7 +29,8 @@ pub fn sources_controlled(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Vec<HistorySource>, String> {
     let root = crate::accounts::selection::history_root("codebuddy", || {
-        super::config_root(home).join("projects")
+        if dirs::home_dir().as_deref() == Some(home) { super::config_root(home).join("projects") }
+        else { home.join(".codebuddy/projects") }
     });
     let mut sources = discover_jsonl_controlled_in(
         &root,
@@ -353,7 +356,7 @@ pub fn parse_controlled(
     let mut model: Option<String> = None;
     let mut records = HashSet::<String>::new();
     let mut calls = HashMap::<String, usize>::new();
-    let partial = read_jsonl_filtered(source, cancelled, skip_row, |line, row| {
+    let partial = read_jsonl_fields(source, cancelled, skip_row, Some(HISTORY_FIELDS), |line, row| {
         let time = row.get("timestamp").and_then(timestamp);
         let provider = row.get("providerData");
         // Per-call usage is counted from every row carrying providerData.usage,
@@ -474,7 +477,7 @@ pub fn parse_controlled(
         let mut native_key = None;
         let mut native_name = None;
         let parent_id = session.native_id.clone();
-        let read = read_jsonl_filtered(&wire_source, cancelled, skip_row, |line, row| {
+        let read = read_jsonl_fields(&wire_source, cancelled, skip_row, Some(HISTORY_FIELDS), |line, row| {
             let provider = row.get("providerData");
             if native_key.is_none() {
                 native_key = distinct_session_id(&row, parent_id.as_deref());

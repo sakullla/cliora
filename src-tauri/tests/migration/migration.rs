@@ -497,10 +497,8 @@ fn import_rechecks_digest_inside_the_write_transaction() {
         .iter_mut()
         .find(|entity| entity.key() == "library:one")
         .unwrap();
-    let PortablePayload::Library(item) = &mut entity.payload else {
-        panic!("library expected")
-    };
-    item.body = "remote".into();
+    let PortablePayload::Prompt(prompt) = &mut entity.payload else { panic!("versioned prompt expected") };
+    prompt.item.body = "remote".into();
     incoming.entities.push(PortableEntity {
         id: "secret-profile".into(),
         payload: PortablePayload::Profile(Box::new(PortableProfile {
@@ -1446,6 +1444,186 @@ fn schema3_snapshot_restores_login_material_paths_and_reports_each_cli_failure()
             .map(|item| item.key.clone())
             .collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn omp_agent_database_is_held_as_a_blocker_and_never_exported_whole() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = database(&temp.path().join("source"));
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let agent_root = temp.path().join("omp-agent");
+    fs::create_dir_all(&agent_root).unwrap();
+    let agent_db = agent_root.join("agent.db");
+    let marker = "unrelated-omp-session-and-usage-state";
+    fs::write(&agent_db, format!("SQLite format 3\0{marker}")).unwrap();
+    let account = crate::accounts::AuthAccount {
+        id: "omp-acct".into(),
+        tool_id: "omp".into(),
+        provider: "openai-codex".into(),
+        label: "OMP account".into(),
+        version: 1,
+        state: crate::accounts::AccountState::SignedIn,
+        identity: Some(crate::accounts::AccountIdentity {
+            subject: "acct".into(),
+            email: Some("ops@example.test".into()),
+            plan: None,
+            source: "test".into(),
+        }),
+        context: Some(crate::accounts::NativeContext {
+            id: "omp-ctx".into(),
+            tool_id: "omp".into(),
+            root: agent_root.clone(),
+            config_root: agent_root.clone(),
+            auth_files: vec![agent_db.clone()],
+            history_roots: vec![agent_root.join("sessions")],
+            resource_root: agent_root,
+            environment: BTreeMap::new(),
+            remove_environment: Vec::new(),
+            cli_args: Vec::new(),
+        }),
+        retired_contexts: Vec::new(),
+        pending_login: None,
+        checked_at: None,
+        detail: None,
+    };
+    source
+        .with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO auth_accounts (id,tool,version,data) VALUES (?1,?2,1,?3)",
+                rusqlite::params![
+                    account.id,
+                    account.tool_id,
+                    serde_json::to_string(&account).unwrap()
+                ],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    let bundle = temp.path().join("omp.cliora");
+    export_bundle(
+        &source,
+        &credentials,
+        &registry,
+        "correct-password",
+        None,
+        &bundle,
+    )
+    .unwrap();
+    let snapshot = unlock_bundle(&bundle, "correct-password").unwrap();
+    let rendered = serde_json::to_string(&snapshot).unwrap();
+    assert!(!rendered.contains(marker));
+    assert!(!snapshot
+        .entities
+        .iter()
+        .any(|entity| entity.key() == "account:omp-acct"));
+    refresh_auth_read_blockers(&source).unwrap();
+    let blockers = load_blockers(&source).unwrap();
+    let blocker = blockers
+        .iter()
+        .find(|item| item.key == "account:omp-acct")
+        .unwrap_or_else(|| panic!("{blockers:?}"));
+    assert!(blocker.detail.contains("混存数据库"));
+    assert!(blocker.detail.contains("不能当作已导出"));
+    assert!(!blocker.detail.contains(marker));
+}
+
+#[test]
+fn imported_omp_account_cannot_write_a_whole_agent_database() {
+    let _roots = RestoreRootsGuard;
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(&temp.path().join("fresh"));
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let home = temp.path().join("home");
+    let base = temp.path().join("base");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&base).unwrap();
+    set_restore_roots_for_test(Some((home, base.clone())));
+    let marker = "whole-agent-db-marker";
+    let account = crate::accounts::AuthAccount {
+        id: "omp-acct".into(),
+        tool_id: "omp".into(),
+        provider: "openai-codex".into(),
+        label: "OMP account".into(),
+        version: 3,
+        state: crate::accounts::AccountState::SignedIn,
+        identity: None,
+        context: Some(crate::accounts::NativeContext {
+            id: "omp-ctx".into(),
+            tool_id: "omp".into(),
+            root: PathBuf::from("/source/omp-agent"),
+            config_root: PathBuf::from("/source/omp-agent"),
+            auth_files: vec![PathBuf::from("/source/omp-agent/agent.db")],
+            history_roots: Vec::new(),
+            resource_root: PathBuf::from("/source/omp-agent"),
+            environment: BTreeMap::new(),
+            remove_environment: Vec::new(),
+            cli_args: Vec::new(),
+        }),
+        retired_contexts: Vec::new(),
+        pending_login: None,
+        checked_at: None,
+        detail: None,
+    };
+    let snapshot = PortableSnapshot {
+        schema_version: SNAPSHOT_VERSION,
+        entities: vec![PortableEntity {
+            id: account.id.clone(),
+            payload: PortablePayload::Account(Box::new(PortableAccount {
+                account,
+                auth_files: vec![PortableAuthFile {
+                    context_id: "omp-ctx".into(),
+                    name: "agent.db".into(),
+                    relative: String::new(),
+                    contents: STANDARD.encode(marker),
+                }],
+            })),
+        }],
+    };
+    let draft = preview_import(&db, &store, &registry, snapshot).unwrap();
+    apply_import(
+        &db,
+        &store,
+        &registry,
+        &draft,
+        &BTreeSet::from(["account:omp-acct".into()]),
+    )
+    .unwrap();
+    assert!(!base
+        .join("accounts")
+        .join("omp-ctx")
+        .join("agent.db")
+        .exists());
+    assert!(!walk_contains(&base, marker));
+    let blockers = load_blockers(&db).unwrap();
+    assert!(
+        blockers.iter().any(|item| {
+            item.key == "account:omp-acct"
+                && item.action == "relogin"
+                && item.detail.contains("混存数据库")
+                && !item.detail.contains(marker)
+        }),
+        "{blockers:?}"
+    );
+    db.with_connection(|conn| {
+        let saved: String = conn
+            .query_row(
+                "SELECT data FROM auth_accounts WHERE id='omp-acct'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let account: crate::accounts::AuthAccount = serde_json::from_str(&saved).unwrap();
+        assert_eq!(account.state, crate::accounts::AccountState::Error);
+        assert!(account
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("混存数据库") && !detail.contains(marker)));
+        Ok(())
+    })
+    .unwrap();
 }
 
 fn walk_contains(root: &Path, needle: &str) -> bool {
@@ -4013,4 +4191,241 @@ fn relogin_recheck_clears_the_blocker_only_after_sign_in_is_accepted() {
         .unwrap()
         .iter()
         .all(|item| item.key != "account:acct-m"));
+}
+
+#[test]
+fn multi_repository_bundle_carries_organization_and_prompt_scope() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO workspace_projects(id,name,revision) VALUES ('workspace-a','Business A',3)", []).unwrap();
+        conn.execute("INSERT INTO workspace_repositories(id,name) VALUES ('repository-a','service')", []).unwrap();
+        conn.execute("INSERT INTO workspace_members(workspace_id,repository_id,favorite) VALUES ('workspace-a','repository-a',1)", []).unwrap();
+        conn.execute("INSERT INTO library_items(id,kind,title,body,category,project_id,version,updated_at) VALUES ('scoped','prompt','Only A','full scoped body','legacy-tag',NULL,1,1)", []).unwrap();
+        crate::prompts::restore_metadata(conn, "scoped", &crate::prompts::PromptMetadata {
+            scope: crate::prompts::PromptScope::Workspace { workspace_id: "workspace-a".into() }, tags: vec!["tag-a".into(), "tag-b".into()],
+        })?;
+        Ok(())
+    }).unwrap();
+    let snapshot = collect_snapshot(&db, &store, &registry).unwrap();
+    assert!(snapshot.entities.iter().any(|entity| entity.kind() == "workspace"));
+    assert!(snapshot.entities.iter().any(|entity| entity.kind() == "repository"));
+    let prompt = snapshot.entities.iter().find(|entity| entity.key() == "library:scoped").unwrap();
+    let value = serde_json::to_value(prompt).unwrap();
+    assert_eq!(value["payload"]["value"]["metadata"]["scope"]["workspaceId"], "workspace-a");
+    assert_eq!(value["payload"]["value"]["metadata"]["tags"], serde_json::json!(["tag-a", "tag-b"]));
+}
+
+fn multi_repository_fixture(db:&Database,path:&Path) {
+    db.with_connection(|conn|{
+        conn.execute("INSERT INTO projects(id,name,path,preferred_tool,last_opened) VALUES('old-directory','Legacy',?1,NULL,0)",[path.to_string_lossy().as_ref()]).unwrap();
+        conn.execute("INSERT INTO workspace_projects(id,name,revision) VALUES('business-a','Same business name',7),('business-b','Same business name',2)",[]).unwrap();
+        conn.execute("INSERT INTO workspace_repositories(id,name) VALUES('repo-a','service'),('orphan-repo','retained repository')",[]).unwrap();
+        conn.execute("INSERT INTO workspace_members(workspace_id,repository_id,favorite) VALUES('business-a','repo-a',1),('business-b','repo-a',0)",[]).unwrap();
+        conn.execute("INSERT INTO workspace_locations(id,repository_id,host_id,path,native_project_id,target_id,kind) VALUES('checkout-a','repo-a','22222222-2222-4222-8222-222222222222',?1,'old-directory',NULL,'repository')",[path.to_string_lossy().as_ref()]).unwrap();
+        conn.execute("INSERT INTO workspace_member_locations(workspace_id,repository_id,location_id) VALUES('business-a','repo-a','checkout-a'),('business-b','repo-a','checkout-a')",[]).unwrap();
+        conn.execute("INSERT INTO workspace_legacy_map(project_id,workspace_id,repository_id) VALUES('old-directory','business-a','repo-a')",[]).unwrap();
+        for(id,scope)in [("scoped-a",crate::prompts::PromptScope::Workspace{workspace_id:"business-a".into()}),("repository-prompt",crate::prompts::PromptScope::Repository{repository_id:"orphan-repo".into()}),("orphan-prompt",crate::prompts::PromptScope::Workspace{workspace_id:"absent-business".into()})]{
+            conn.execute("INSERT INTO library_items(id,kind,title,body,category,project_id,version,updated_at) VALUES(?1,'prompt','Same title','long body kept in full','legacy-tags',NULL,1,1)",[id]).unwrap();
+            crate::prompts::restore_metadata(conn,id,&crate::prompts::PromptMetadata{scope,tags:vec!["tag-one".into(),"tag-two".into()]})?;
+        }
+        Ok(())
+    }).unwrap();
+}
+
+#[test]
+fn multi_repository_bundle_roundtrip_restores_dependencies_and_retains_orphans() {
+    let temp=tempfile::tempdir().unwrap(); let source=database(&temp.path().join("source")); let target=database(&temp.path().join("target"));
+    let store=MemoryCredentials::default(); let registry=Registry::builtins();
+    let location=temp.path().join("missing-checkout"); multi_repository_fixture(&source,&location);
+    let bundle=temp.path().join("organization.cliora");
+    export_bundle(&source,&store,&registry,"synthetic-password",None,&bundle).unwrap();
+    let snapshot=unlock_bundle(&bundle,"synthetic-password").unwrap(); assert_eq!(snapshot.schema_version,5);
+    let raw=serde_json::to_string(&snapshot).unwrap();
+    assert!(!raw.contains("prompt_usage")); assert!(!raw.contains("batch_receipt")); assert!(!raw.contains("manifestPath"));
+    let draft=preview_import(&target,&store,&registry,snapshot.clone()).unwrap();
+    assert!(draft.items.iter().find(|item|item.key=="library:orphan-prompt").unwrap().pending_fields.iter().any(|field|field.contains("不会变成通用")));
+    restore_preview(&target,&store,&registry,&draft).unwrap();
+    let metadata=crate::prompts::export_metadata(&target).unwrap();
+    assert_eq!(metadata["scoped-a"].scope,crate::prompts::PromptScope::Workspace{workspace_id:"business-a".into()});
+    assert_eq!(metadata["orphan-prompt"].scope,crate::prompts::PromptScope::Workspace{workspace_id:"absent-business".into()});
+    assert_eq!(metadata["repository-prompt"].tags,vec!["tag-one","tag-two"]);
+    target.with_connection(|conn|{
+        assert_eq!(conn.query_row("SELECT count(*) FROM workspace_projects",[],|r|r.get::<_,i64>(0)).unwrap(),2);
+        assert_eq!(conn.query_row("SELECT count(*) FROM workspace_repositories",[],|r|r.get::<_,i64>(0)).unwrap(),2);
+        assert_eq!(conn.query_row("SELECT count(*) FROM workspace_member_locations",[],|r|r.get::<_,i64>(0)).unwrap(),2);
+        assert_eq!(conn.query_row("SELECT workspace_id FROM workspace_legacy_map WHERE project_id='old-directory'",[],|r|r.get::<_,String>(0)).unwrap(),"business-a");
+        assert!(conn.query_row("SELECT manifest_path FROM workspace_projects WHERE id='business-a'",[],|r|r.get::<_,Option<String>>(0)).unwrap().is_none());
+        assert_eq!(conn.query_row("SELECT kind FROM workspace_locations WHERE id='checkout-a'",[],|r|r.get::<_,String>(0)).unwrap(),"hint");
+        assert!(!conn.prepare("PRAGMA foreign_key_check").unwrap().exists([]).unwrap()); Ok(())
+    }).unwrap();
+    let again=preview_import(&target,&store,&registry,snapshot).unwrap();
+    assert!(again.items.iter().all(|item|item.status=="same"));
+    assert_eq!(restore_preview(&target,&store,&registry,&again).unwrap(),0);
+}
+
+#[test]
+fn multi_repository_organization_only_import_does_not_apply_native_or_consume_pending_queue() {
+    let _roots=RestoreRootsGuard; let temp=tempfile::tempdir().unwrap(); let home=temp.path().join("home"); fs::create_dir_all(home.join(".codex")).unwrap();
+    fs::write(home.join(".codex/config.toml"),"# receiver native config\n").unwrap(); set_restore_roots_for_test(Some((home.clone(),temp.path().to_path_buf())));
+    let source=database(&temp.path().join("source")); let target=database(&temp.path().join("target")); let store=MemoryCredentials::default(); let registry=Registry::builtins().with_fixture_installation("codex","0.160.0");
+    multi_repository_fixture(&source,&temp.path().join("missing"));
+    target.with_connection(|conn|resources::queue(conn,&resources::PortableDeployment{resource_kind:"skill".into(),resource_id:"still-pending".into(),tool:"codex".into(),scope_key:"global".into(),enabled:true},false)).unwrap();
+    let before=target.with_connection(|conn|conn.query_row("SELECT value FROM app_settings WHERE key='sync_resource_targets_v1'",[],|row|row.get::<_,String>(0)).map_err(|e|e.to_string())).unwrap();
+    let file=temp.path().join("organization-only.cliora");
+    export_bundle(&source,&store,&registry,"synthetic-password",Some(&BTreeSet::from(["workspace:business-a".into()])),&file).unwrap();
+    let snapshot=unlock_bundle(&file,"synthetic-password").unwrap();
+    assert!(snapshot.entities.iter().any(|entity|entity.kind()=="repository"));
+    assert!(snapshot.entities.iter().all(|entity|!matches!(entity.kind(),"project"|"profile"|"binding")));
+    let draft=preview_import(&target,&store,&registry,snapshot).unwrap(); restore_preview(&target,&store,&registry,&draft).unwrap();
+    assert_eq!(fs::read_to_string(home.join(".codex/config.toml")).unwrap(),"# receiver native config\n");
+    assert!(load_blockers(&target).unwrap().is_empty());
+    let after=target.with_connection(|conn|conn.query_row("SELECT value FROM app_settings WHERE key='sync_resource_targets_v1'",[],|row|row.get::<_,String>(0)).map_err(|e|e.to_string())).unwrap(); assert_eq!(before,after);
+}
+
+#[test]
+fn multi_repository_old_schema_one_through_four_keep_missing_prompt_scope() {
+    let temp=tempfile::tempdir().unwrap(); let store=MemoryCredentials::default(); let registry=Registry::builtins();
+    for version in 1..=4 {
+        let target=database(&temp.path().join(version.to_string()));
+        let item=LibraryItem{id:"legacy-prompt".into(),kind:crate::library::LibraryKind::Prompt,title:"Old".into(),body:"old body".into(),category:"tag-a,tag-b".into(),project_id:Some("missing-legacy-id".into()),version:1,updated_at:1};
+        let snapshot=PortableSnapshot{schema_version:version,entities:vec![PortableEntity{id:item.id.clone(),payload:PortablePayload::Library(item)}]};
+        let path=temp.path().join(format!("v{version}.cliora")); fs::write(&path,crypto::seal("synthetic-password","offline",&serde_json::to_vec(&snapshot).unwrap()).unwrap()).unwrap();
+        let parsed=unlock_bundle(&path,"synthetic-password").unwrap(); let draft=preview_import(&target,&store,&registry,parsed).unwrap(); restore_preview(&target,&store,&registry,&draft).unwrap();
+        let metadata=crate::prompts::export_metadata(&target).unwrap();
+        assert_eq!(metadata["legacy-prompt"].scope,crate::prompts::PromptScope::Unresolved{legacy_project_id:"missing-legacy-id".into()});
+        assert_eq!(metadata["legacy-prompt"].tags,vec!["tag-a","tag-b"]);
+        assert_eq!(crate::library::get(&target,"legacy-prompt").unwrap().body,"old body");
+        let again=preview_import(&target,&store,&registry,unlock_bundle(&path,"synthetic-password").unwrap()).unwrap();
+        assert_eq!(again.items[0].status,"same");
+    }
+}
+
+#[test]
+fn multi_repository_snapshot_versions_and_unknown_fields_reject_before_restore() {
+    let old=serde_json::json!({"schemaVersion":4,"entities":[{"id":"x","payload":{"kind":"library","value":{"id":"x","kind":"prompt","title":"X","body":"body","category":"","projectId":null,"version":1,"updatedAt":1,"scope":{"kind":"workspace","workspaceId":"must-not-drop"}}}}]});
+    assert!(serde_json::from_value::<PortableSnapshot>(old).is_err());
+    let future=PortableSnapshot{schema_version:6,entities:vec![]}; assert!(validate_snapshot(&future).is_err());
+    let value=PortableEntity{id:"scope".into(),payload:PortablePayload::Prompt(PortablePrompt{item:LibraryItem{id:"scope".into(),kind:crate::library::LibraryKind::Prompt,title:"X".into(),body:"body".into(),category:"".into(),project_id:None,version:1,updated_at:1},metadata:crate::prompts::PromptMetadata{scope:crate::prompts::PromptScope::Global,tags:vec![]}})};
+    assert!(validate_snapshot(&PortableSnapshot{schema_version:4,entities:vec![value]}).is_err());
+}
+
+fn cross_platform_hint_paths() -> serde_json::Value {
+    serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/workspaces/path-cases-v1.json"))).unwrap()
+}
+
+fn cross_platform_hint_workspace(paths: &[String]) -> organization::PortableWorkspace {
+    organization::PortableWorkspace {
+        id: "33333333-3333-4333-8333-333333333333".into(),
+        name: "Cross-platform hints".into(),
+        revision: 3,
+        members: vec![organization::PortableMember {
+            repository_id: "44444444-4444-4444-8444-444444444444".into(),
+            favorite: true,
+            locations: paths.iter().enumerate().map(|(index, path)| organization::PortableLocation {
+                id: format!("foreign-hint-{index}"),
+                host_id: "22222222-2222-4222-8222-222222222222".into(),
+                path: Some(path.clone()), native_project_id: None, target_id: None,
+            }).collect(),
+        }],
+        legacy_mappings: vec![],
+    }
+}
+
+#[test]
+fn cross_platform_hint_validation_matches_shared_path_fixture() {
+    let fixture = cross_platform_hint_paths();
+    let mut mismatches = Vec::new();
+    for (group, expected) in [("valid", true), ("invalid", false)] {
+        for path in fixture[group].as_array().unwrap() {
+            let path = path.as_str().unwrap();
+            let workspace = cross_platform_hint_workspace(&[path.into()]);
+            if organization::validate_workspace(&workspace) != expected {
+                mismatches.push(format!("{group}: {path:?}"));
+            }
+        }
+    }
+    assert!(mismatches.is_empty(), "portable organization disagrees with the shared location contract: {mismatches:?}");
+    for path in ["~/not-a-raw-location", "cliora-home:/not-a-raw-location", "/work/with\ncontrol"] {
+        assert!(!organization::validate_workspace(&cross_platform_hint_workspace(&[path.into()])));
+    }
+}
+
+#[test]
+fn cross_platform_hint_t1_manifest_exports_real_encrypted_bundle() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(&temp.path().join("source"));
+    let registry = Registry::builtins();
+    let store = MemoryCredentials::default();
+    let fixture = cross_platform_hint_paths();
+    let paths: Vec<String> = fixture["valid"].as_array().unwrap().iter().map(|path| path.as_str().unwrap().into()).collect();
+    let workspace = cross_platform_hint_workspace(&paths);
+    let manifest = crate::workspaces::Manifest {
+        schema_version: 1, workspace_id: workspace.id.clone(), name: workspace.name.clone(), revision: workspace.revision,
+        repositories: vec![crate::workspaces::ManifestRepository {
+            id: workspace.members[0].repository_id.clone(), name: "Foreign repository".into(),
+            locations: paths.iter().map(|path| crate::workspaces::ManifestLocation { host_id: "22222222-2222-4222-8222-222222222222".into(), path: path.clone() }).collect(),
+        }],
+    };
+    let source = temp.path().join("project.dev-workspace.json");
+    fs::write(&source, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let preview = crate::workspaces::preview_manifest(&db, source.to_str().unwrap()).unwrap();
+    let attached = crate::workspaces::attach_manifest(&db, "11111111-1111-4111-8111-111111111111", source.to_str().unwrap(), &preview.digest, false).unwrap();
+    assert!(attached.repositories[0].locations.iter().all(|location| !location.available));
+    let destination = temp.path().join("foreign-hints.cliora");
+    export_bundle(&db, &store, &registry, "synthetic-password", None, &destination).unwrap();
+    let decoded = unlock_bundle(&destination, "synthetic-password").unwrap();
+    let saved = decoded.entities.iter().find_map(|entity| match &entity.payload { PortablePayload::Workspace(value) => Some(value), _ => None }).unwrap();
+    let exported: BTreeSet<_> = saved.members[0].locations.iter().map(|location| location.path.clone().unwrap()).collect();
+    assert_eq!(exported, paths.into_iter().collect::<BTreeSet<_>>());
+    assert_eq!(fs::read(&source).unwrap(), serde_json::to_vec(&manifest).unwrap());
+}
+
+#[test]
+fn cross_platform_hint_encrypted_receive_and_reexport_preserve_foreign_paths_without_binding() {
+    let _roots = RestoreRootsGuard;
+    let temp = tempfile::tempdir().unwrap();
+    let sender_home = temp.path().join("sender-home");
+    let receiver_home = temp.path().join("receiver-home");
+    fs::create_dir_all(&sender_home).unwrap(); fs::create_dir_all(&receiver_home).unwrap();
+    set_restore_roots_for_test(Some((receiver_home.clone(), temp.path().to_path_buf())));
+    fs::create_dir_all(receiver_home.join(".codex")).unwrap();
+    fs::write(receiver_home.join(".codex/config.toml"), "# unchanged receiver configuration\n").unwrap();
+    let fixture = cross_platform_hint_paths();
+    let mut paths: Vec<String> = fixture["valid"].as_array().unwrap().iter().map(|path| path.as_str().unwrap().into()).collect();
+    paths.push(sender_home.join("repository").to_string_lossy().into_owned());
+    let workspace = cross_platform_hint_workspace(&paths);
+    let repository_id = workspace.members[0].repository_id.clone();
+    let snapshot = PortableSnapshot { schema_version: 5, entities: vec![
+        PortableEntity { id: repository_id.clone(), payload: PortablePayload::Repository(organization::PortableRepository { id: repository_id.clone(), name: "Foreign repository".into() }) },
+        PortableEntity { id: workspace.id.clone(), payload: PortablePayload::Workspace(workspace.clone()) },
+    ] };
+    // Seal raw schema5 data to exercise the receiver independently of export validation.
+    let incoming = temp.path().join("from-another-platform.cliora");
+    fs::write(&incoming, crypto::seal("synthetic-password", "offline", &serde_json::to_vec(&snapshot).unwrap()).unwrap()).unwrap();
+    let received = unlock_bundle(&incoming, "synthetic-password").unwrap();
+    let db = database(&temp.path().join("receiver"));
+    let registry = Registry::builtins(); let store = MemoryCredentials::default();
+    let preview = preview_import(&db, &store, &registry, received).unwrap();
+    restore_preview(&db, &store, &registry, &preview).unwrap();
+    let displayed = crate::workspaces::get(&db, "11111111-1111-4111-8111-111111111111", &workspace.id).unwrap();
+    assert!(displayed.repositories[0].locations.iter().all(|location| !location.available && location.worktrees.is_empty() && location.project_id.is_none() && location.reason.as_deref().is_some_and(|reason| reason.contains("其他主机"))));
+    assert!(crate::workspaces::prepare_launch(&db, "11111111-1111-4111-8111-111111111111", &workspace.id, &repository_id, None).is_err());
+    db.with_connection(|conn| {
+        assert_eq!(conn.query_row("SELECT count(*) FROM projects", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        assert_eq!(conn.query_row("SELECT count(*) FROM applied_bindings", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        assert!(!conn.prepare("PRAGMA foreign_key_check").unwrap().exists([]).unwrap());
+        Ok(())
+    }).unwrap();
+    assert_eq!(fs::read_to_string(receiver_home.join(".codex/config.toml")).unwrap(), "# unchanged receiver configuration\n");
+    let outgoing = temp.path().join("reexport.cliora");
+    export_bundle(&db, &store, &registry, "synthetic-password", None, &outgoing).unwrap();
+    let roundtrip = unlock_bundle(&outgoing, "synthetic-password").unwrap();
+    let saved = roundtrip.entities.iter().find_map(|entity| match &entity.payload { PortablePayload::Workspace(value) => Some(value), _ => None }).unwrap();
+    let actual: BTreeSet<_> = saved.members[0].locations.iter().map(|location| location.path.clone().unwrap()).collect();
+    assert_eq!(actual, paths.into_iter().collect::<BTreeSet<_>>());
+    assert!(saved.members[0].locations.iter().all(|location| location.host_id == "22222222-2222-4222-8222-222222222222"));
+    assert!(!serde_json::to_string(saved).unwrap().contains("cliora-home:/"));
 }

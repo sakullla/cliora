@@ -12,6 +12,7 @@ type SyncSeed = {
   projects?: unknown[];
   conflicts?: unknown[];
   blockers?: unknown[];
+  localOnly?: { key: string; label: string; kind: string; reason: string }[];
   accounts?: unknown[];
   badPassword?: boolean;
   corrupt?: boolean;
@@ -33,6 +34,7 @@ async function install(page: Page, seed: SyncSeed = {}) {
       projects: [] as unknown[],
       conflicts: [] as { key: string }[],
       blockers: [] as unknown[],
+      localOnly: [] as { key: string; label: string; kind: string; reason: string }[],
       accounts: [] as { id: string; toolId: string; version: number }[],
       badPassword: false,
       corrupt: false,
@@ -75,6 +77,7 @@ async function install(page: Page, seed: SyncSeed = {}) {
       pendingChanges: control.pending,
       conflicts: control.conflicts,
       blockers: control.blockers,
+      localOnly: control.localOnly,
       transfers: [],
       compared: 0,
       receipt: control.storedReceipt,
@@ -110,8 +113,8 @@ async function install(page: Page, seed: SyncSeed = {}) {
           const transfers = produced?.transfers ?? [];
           const receipt = produced?.receipt ?? { at: 1700000000, compared, uploaded, downloaded, transfers };
           control.storedReceipt = receipt;
-          control.lastSuccess = 1700000000;
-          return { ...status(), uploaded, downloaded, compared, transfers, receipt, lastSuccess: 1700000000, pendingChanges: 0 };
+          if (!control.localOnly.length && !control.conflicts.length && !control.blockers.length) control.lastSuccess = 1700000000;
+          return { ...status(), uploaded, downloaded, compared, transfers, receipt, lastSuccess: control.lastSuccess, pendingChanges: 0 };
         }
         if (command === 'retry_restore_blocker') {
           control.lastRetry = args.key;
@@ -661,4 +664,36 @@ test('a paused connection states its next step and keeps diagnostics folded', as
   await expect(diagnostics.getByText('服务器', { exact: true })).toBeVisible();
   await expect(diagnostics.getByText('sync.example.com', { exact: true })).toBeVisible();
   await expect(diagnostics.getByText('待上传', { exact: true })).toBeVisible();
+});
+
+
+test('unsupported project organization and scoped prompts remain local and the result never claims complete sync', async ({ page }) => {
+  await install(page, { configured: true, lastSuccess: null, items: [
+    { ...portableItem('workspace:a', '业务 A'), kind: 'workspace' },
+    { ...portableItem('repository:r', 'service'), kind: 'repository' },
+    { ...portableItem('project:old', '原目录'), kind: 'project' },
+  ], localOnly: [
+    { key: 'workspace:a', kind: 'workspace', label: '业务 A', reason: '使用同一份项目清单或加密迁移包保留项目归属。' },
+    { key: 'repository:r', kind: 'repository', label: 'service', reason: '本机路径不通过 WebDAV 发布。' },
+    { key: 'library:p', kind: 'library', label: '仅 A 的提示词', reason: '项目范围不会变成通用内容，也不会发布云端删除。' },
+  ] });
+  await openMigration(page);
+  const webdav=page.getByRole('region', { name: 'WebDAV 同步' });
+  const retained=webdav.locator('[data-local-only]');
+  await expect(retained.getByText('本地保留，当前 WebDAV 不支持')).toBeVisible();
+  await expect(retained.getByText('仅 A 的提示词', { exact: true })).toBeVisible();
+  await expect(retained.getByText('业务项目', { exact: true })).toBeVisible();
+  await expect(retained.getByText('仓库信息', { exact: true })).toBeVisible();
+  await expect(webdav.getByText('需要处理', { exact: true })).toHaveCount(0);
+  await webdav.getByRole('button', { name: '立即同步', exact: true }).click();
+  const result=page.getByRole('dialog', { name: '同步结果', exact: true });
+  await expect(result.getByText('已处理可同步部分，仍有 3 项本地保留')).toBeVisible();
+  await expect(result.getByText('已经和云端一致', { exact: true })).toHaveCount(0);
+  await expect(result.getByText(/不能视为全部同步完成/)).toBeVisible();
+  await result.getByRole('button', { name: '知道了', exact: true }).click();
+  await page.getByRole('button', { name: '导出加密配置包', exact: true }).click();
+  const exporting=page.getByRole('region', { name: '导出加密配置包', exact: true });
+  await expect(exporting.getByText('业务项目', { exact: false }).first()).toBeVisible();
+  await expect(exporting.getByText('仓库信息', { exact: false }).first()).toBeVisible();
+  await expect(exporting.getByText('目录配置', { exact: false }).first()).toBeVisible();
 });

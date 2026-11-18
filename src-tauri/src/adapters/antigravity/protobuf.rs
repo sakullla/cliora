@@ -33,6 +33,7 @@ impl<'a> Field<'a> {
             _ => Err(Mismatch),
         }
     }
+    /// Repeated varints may be unpacked (legacy) or packed (current CLI).
     /// Documented submessage/string fields must arrive length-delimited. The
     /// returned slice borrows the underlying buffer, not the field handle.
     pub(crate) fn as_bytes(&self) -> Result<&'a [u8], Mismatch> {

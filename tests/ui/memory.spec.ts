@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { openCli } from './cli-switcher';
 
 type MemoryTargetArgs = { toolId?: string; scope?: string; projectPath?: string | null; contextId?: string | null; storeDirectory?: string };
-type MemoryCall = { command: string; args: { toolId?: string; target?: MemoryTargetArgs; request?: { target?: MemoryTargetArgs; id?: string | null; text?: string; baseline?: string; confirmExternal?: boolean; enabled?: boolean }; id?: string; requests?: { target: MemoryTargetArgs; id: string }[] } };
+type MemoryCall = { command: string; args: { toolId?: string; target?: MemoryTargetArgs; request?: { target?: MemoryTargetArgs; id?: string | null; text?: string; baseline?: string; confirmExternal?: boolean; enabled?: boolean }; id?: string; requests?: { target: MemoryTargetArgs; id: string }[]; groupId?: string; enabled?: boolean } };
 
 const readOnlyLimitation = '只读存储，不能新建、编辑、删除或启停';
 
@@ -20,14 +20,17 @@ async function setMode(page: Page, mode: string) {
   await page.evaluate(value => { (window as unknown as { __memory: { mode: string } }).__memory.mode = value; }, mode);
 }
 
-async function install(page: Page, options: { catalog?: 'none' | 'session' | 'memory'; suggestion?: string | null; mode?: string; copies?: number } = {}) {
+async function install(page: Page, options: { catalog?: 'none' | 'session' | 'memory'; suggestion?: string | null; mode?: string; copies?: number; backend?: 'local' | 'off' | 'hindsight' | 'mnemopi' | 'sharpshooter' | 'future-backend'; zetaFailure?: string } = {}) {
   const catalog = options.catalog ?? 'memory';
   const suggestion = options.suggestion === undefined ? 'C:/A' : options.suggestion;
   const copies = options.copies ?? 0;
+  const backend = options.backend ?? null;
+  const zetaFailure = options.zetaFailure ?? null;
   const storePaths = { alphaGlobal: alphaGlobalStore, alphaA: alphaAStore, alphaB: alphaBStore, beta: betaStore, epsilon: epsilonStores };
-  await page.addInitScript(({ catalog: kind, suggestion: suggested, mode, stores, copies }) => {
+  await page.addInitScript(({ catalog: kind, suggestion: suggested, mode, stores, copies, backend: initialBackend, zetaFailure: zetaFailureReason }) => {
     const state = {
       mode,
+      backend: initialBackend as string | null,
       reads: 0,
       deleted: [] as string[],
       texts: {
@@ -40,7 +43,7 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
     };
     (window as unknown as { __memory: typeof state }).__memory = state;
     // The suggestion is the stored workspace context of the project-only CLI (delta).
-    if (suggested) localStorage.setItem('cliora:workspace-context', JSON.stringify({ delta: { scope: 'project', projectPath: suggested, resource: 'config' } }));
+    if (suggested) localStorage.setItem('cliora:workspace-context', JSON.stringify({ delta: { scope: 'project', projectPath: suggested, resource: 'config' }, ...(initialBackend || zetaFailureReason ? { zeta: { scope: 'project', projectPath: suggested, resource: 'config' } } : {}) }));
     else localStorage.removeItem('cliora:workspace-context');
     const full = ['list', 'open', 'create', 'edit', 'delete', 'master_switch', 'item_enable'];
     const base = (id: string, name: string, memory?: unknown) => ({
@@ -59,6 +62,7 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
           base('gamma', 'Gamma'),
           base('delta', 'Delta', { scope: { global: false, project: true }, targets: ['project'], operations: full }),
           base('epsilon', 'Epsilon', { scope: { global: false, project: true }, targets: ['project'], operations: ['list', 'open', 'create', 'edit', 'delete', 'master_switch'] }),
+          ...(initialBackend || zetaFailureReason ? [base('zeta', 'Zeta', { scope: { global: false, project: true }, targets: ['project'], operations: ['list', 'open', 'create', 'edit', 'master_switch'], limitation: 'OMP 记忆按项目存放；只有 memory.backend=local 时提供本机 Markdown 管理。' })] : []),
         ];
     const ids = registered.map(item => item.id);
     const workspace = () => ({
@@ -85,6 +89,34 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
         const entries = [entry('one-note', stores.epsilon[0], 'C:\\Work\\one', one), entry('two-note', stores.epsilon[1], 'C:\\Work\\two', two)];
         const three = { toolId: 'epsilon', scope: 'project', projectPath: null, storeDirectory: 'C:/home/.epsilon/projects/three/memory' };
         return { toolId, failedSources: [], entries, stores: summarize(entries, [['C:\\Work\\one', stores.epsilon[0], one], ['C:\\Work\\two', stores.epsilon[1], two], ['C:\\Work\\three', 'C:/home/.epsilon/projects/three/memory', three]]), switchShared: true };
+      }
+      if (toolId === 'zeta') {
+        const backend = state.backend ?? 'hindsight';
+        const bankNote = '；本机仍有 1 个项目的 local Markdown 记忆文件，当前后端不读取，Cliora 不删除或重建';
+        const storage = backend === 'local'
+          ? '本机 Markdown（MEMORY.md、memory_summary.md、learned.md）'
+          : backend === 'off'
+            ? '原生默认 off；本机 Markdown 文件保留但 OMP 不读取'
+            : backend === 'mnemopi'
+              ? '本机 Mnemopi SQLite 数据库；不读取本机 Markdown 记忆文件'
+              : backend === 'sharpshooter'
+                ? '按项目的 Sharpshooter 决策文件与队列；不读取 MEMORY.md 记忆族'
+                : backend === 'future-backend'
+                  ? '未核实后端；OMP 18.20.2 忽略该值并使用默认 off'
+                  : '远程 Hindsight bank（另含 hindsight-outbox 投递队列）；本机 Markdown 文件不参与';
+        const localDetail = `当前后端：local（${storage}）；OMP 直接读取 MEMORY.md、memory_summary.md 与 learned.md，Cliora 对这些文件的编辑会写回原文件；只管理这三个文件，不编辑生成的 skills/，也不提供删除或单条启停；本机有 1 个项目的 local Markdown 记忆文件`;
+        const detail = backend === 'future-backend'
+          ? `memory.backend 为未核实值 future-backend；OMP 18.20.2 会忽略并使用默认 off，Cliora 保留原值不改写；选择“开”会被拒绝，请先在 OMP 原生配置中修复${bankNote}`
+          : backend === 'local'
+            ? localDetail
+            : backend === 'off'
+              ? `当前后端：off（${storage}）；Cliora 不把磁盘上的旧 Markdown 文件当作当前记忆${bankNote}`
+              : `当前后端：${backend}（${storage}）；该数据由 OMP 原生后端管理，Cliora 不展示为本地 Markdown；记忆界面的开关只写 local/off，选择“开”会替换当前值${bankNote}`;
+        if (zetaFailureReason) return { toolId, failedSources: [{ label: 'OMP 记忆根目录无法枚举', reason: zetaFailureReason }], entries: [], stores: [], switchShared: true, switchGroups: [{ id: 'memory.backend', scope: 'project', enabled: true, detail: localDetail }] };
+        if (backend !== 'local') return { toolId, failedSources: [], entries: [], stores: [], switchShared: true, switchGroups: [{ id: 'memory.backend', scope: 'project', enabled: false, detail }] };
+        const target = { toolId: 'zeta', scope: 'project', projectPath: 'C:/A', storeDirectory: 'C:/home/.omp/agent/memories/--c--a--' };
+        const entries = ['learned', 'memory_summary'].map(id => entry(id, 'C:/home/.omp/agent/memories/--c--a--', '--c--a--', target));
+        return { toolId, failedSources: [], entries, stores: summarize(entries, [['--c--a--', 'C:/home/.omp/agent/memories/--c--a--', target]]).map(store => ({ ...store, inUse: true, detail: '' })), switchShared: true, switchGroups: [{ id: 'memory.backend', scope: 'project', enabled: true, detail }] };
       }
       if (toolId !== 'alpha') return { toolId, failedSources: [], entries: [], stores: [], switchShared: false };
       const globalTarget = { toolId: 'alpha', scope: 'global', projectPath: null, storeDirectory: stores.alphaGlobal };
@@ -134,12 +166,19 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
             return null;
           }
           if (command === 'set_memory_enabled') return null;
+          if (command === 'set_memory_switch_group') {
+            if (args.groupId === 'memory.backend') {
+              if ((state.backend ?? 'hindsight') === 'future-backend' && args.enabled) throw new Error('memory.backend 为未核实值 future-backend；Cliora 不会覆盖未知值，请先在 OMP 原生配置中修复');
+              state.backend = args.enabled ? 'local' : 'off';
+            }
+            return null;
+          }
           if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return () => {};
           return null;
         },
       },
     });
-  }, { catalog, suggestion, mode: options.mode ?? 'normal', stores: storePaths, copies });
+  }, { catalog, suggestion, mode: options.mode ?? 'normal', stores: storePaths, copies, backend, zetaFailure });
 }
 
 
@@ -808,6 +847,84 @@ test('scope switches remain reachable with no stores and preserve native-default
 });
 
 
+test('OMP reports a non-local memory backend without offering Markdown entries', async ({ page }) => {
+  await install(page, { backend: 'hindsight' });
+  await openMemory(page, 'Zeta');
+  // The native backend value and its boundary are visible, and the generic
+  // empty state is not dressed up as an editable Markdown family.
+  await expect(page.getByText(/当前后端：hindsight/)).toBeVisible();
+  await expect(page.getByText(/hindsight-outbox/)).toBeVisible();
+  await expect(page.getByRole('button', { name: '新建记忆' })).toHaveCount(0);
+  await expect(entryButton(page, 'memory_summary')).toHaveCount(0);
+  // Selecting the managed local backend shows the real native files.
+  await page.getByRole('combobox', { name: '所有项目记忆' }).selectOption('on');
+  await expect(entryButton(page, 'memory_summary')).toBeVisible();
+  await expect(page.getByText(/当前后端：local/)).toBeVisible();
+  // The local family reports its readable/writable state, not the remote
+  // backends' "not local Markdown / not read / will be replaced" clauses.
+  await expect(page.getByText(/OMP 直接读取 MEMORY\.md/)).toBeVisible();
+  await expect(page.getByText(/编辑会写回原文件/)).toBeVisible();
+  await expect(page.getByText(/本机有 1 个项目的 local Markdown 记忆文件/)).toBeVisible();
+  for (const forbidden of ['不展示为本地 Markdown', '当前后端不读取', '会替换当前值']) {
+    await expect(page.getByText(forbidden, { exact: false })).toHaveCount(0);
+  }
+  await expect(page.getByRole('button', { name: '新建记忆' })).toBeEnabled();
+  const calls = await memoryCalls(page);
+  expect(calls.some(call => call.command === 'set_memory_switch_group' && call.args.groupId === 'memory.backend' && call.args.enabled === true)).toBe(true);
+  // Turning the managed backend off hides the Markdown write entry again but
+  // keeps the state visible.
+  await page.getByRole('combobox', { name: '所有项目记忆' }).selectOption('off');
+  await expect(page.getByText(/当前后端：off/)).toBeVisible();
+  await expect(page.getByRole('button', { name: '新建记忆' })).toHaveCount(0);
+});
+
+
+for (const [backend, expected] of [
+  ['hindsight', /当前后端：hindsight/],
+  ['mnemopi', /当前后端：mnemopi/],
+  ['sharpshooter', /当前后端：sharpshooter/],
+  ['future-backend', /未核实值 future-backend/],
+  ['off', /当前后端：off/],
+] as const) test(`OMP ${backend} reports its native backend instead of an empty memory family`, async ({ page }) => {
+  await install(page, { backend });
+  await openMemory(page, 'Zeta');
+  await expect(page.getByText(expected)).toBeVisible();
+  // The generic "no memory yet" copy would be false for a remote/SQLite/decision
+  // backend and for off while local files still exist on disk.
+  await expect(page.getByText('还没有记忆')).toHaveCount(0);
+  await expect(page.getByText(/本机还没有已落盘的记忆条目/)).toHaveCount(0);
+  await expect(page.getByText(/本机仍有 1 个项目的 local Markdown 记忆文件/)).toBeVisible();
+  await expect(page.getByRole('button', { name: '新建记忆' })).toHaveCount(0);
+  if (backend === 'off') {
+    await expect(page.getByText(/不把磁盘上的旧 Markdown 文件当作当前记忆/)).toBeVisible();
+  } else if (backend === 'future-backend') {
+    await expect(page.getByText(/保留原值不改写/)).toBeVisible();
+  } else {
+    await expect(page.getByText(/不展示为本地 Markdown/)).toBeVisible();
+  }
+});
+
+
+test('OMP unknown backend refuses an enable write and keeps its raw value', async ({ page }) => {
+  await install(page, { backend: 'future-backend' });
+  await openMemory(page, 'Zeta');
+  await page.getByRole('combobox', { name: '所有项目记忆' }).selectOption('on');
+  await expect(page.getByText(/不会覆盖未知值/)).toBeVisible();
+  await expect(page.getByText(/未核实值 future-backend/).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: '新建记忆' })).toHaveCount(0);
+});
+
+
+test('OMP unreadable memories root shows a recoverable error instead of an empty family', async ({ page }) => {
+  await install(page, { zetaFailure: '无法枚举 OMP local 记忆目录（C:/home/.omp/agent/memories）：拒绝访问' });
+  await openMemory(page, 'Zeta');
+  await expect(page.getByText(/OMP 记忆根目录无法枚举/)).toBeVisible();
+  await expect(page.getByText(/部分来源暂时无法读取/)).toBeVisible();
+  await expect(page.getByText('还没有记忆')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '刷新记忆' })).toBeEnabled();
+});
+
+
 test('refresh replaces a pending generation without starting extra concurrent batches', async ({ page }) => {
   await installBatchProbe(page, 100);
   await page.addInitScript(() => { (window as unknown as { __batch: BatchProbe }).__batch.hold = true; });
@@ -1064,6 +1181,26 @@ test('a long memory keeps the body in view while the list and toolbar stay put',
   await expect(page.getByRole('button', { name: '返回列表' })).toBeVisible();
   await expect(page.getByRole('searchbox', { name: '搜索记忆' })).toBeHidden();
   await expect(article.getByRole('heading', { name: 'Long note' })).toBeVisible();
+  // The narrow container styles and useFillHeight's ResizeObserver/RAF do not
+  // finish together. Scroll once only after the reader's allocated space settles;
+  // waiting for the marker itself would hide an actual clipping regression.
+  await bodyRegion.evaluate(async node => {
+    const region = node as HTMLElement;
+    const article = region.closest('article')!;
+    const content = region.closest('.content')!;
+    const deadline = performance.now() + 5000;
+    let previous = '';
+    let stable = 0;
+    for (let frame = 0; frame < 120 && performance.now() < deadline; frame += 1) {
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      const boxes = [region, article, content].map(element => element.getBoundingClientRect());
+      const geometry = JSON.stringify([boxes.map(box => [box.x, box.y, box.width, box.height]), region.clientHeight, region.scrollHeight]);
+      stable = boxes.every(box => box.width > 0 && box.height > 0) && geometry === previous ? stable + 1 : 0;
+      if (stable >= 3) return;
+      previous = geometry;
+    }
+    throw new Error('Memory reader geometry did not settle after resizing');
+  });
   expect(await shownInBody('已保存的正文')).toBeLessThanOrEqual(0);
   await bodyRegion.evaluate(node => { node.scrollTop = node.scrollHeight; });
   expect(await shownInBody('已保存的正文')).toBeGreaterThan(12);

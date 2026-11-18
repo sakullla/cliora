@@ -342,6 +342,42 @@ pub struct SkillDeclaration {
     pub label: String,
 }
 
+/// A read-only MCP server discovered from another tool or plugin package.
+/// `source` is the display label, `path` the native file that owns it.
+#[derive(Clone, Debug)]
+pub struct McpObservation {
+    pub name: String,
+    pub entry: Value,
+    pub source: &'static str,
+    pub path: PathBuf,
+    pub enabled: bool,
+    pub detail: &'static str,
+}
+
+/// One foreign MCP source file that could not be read or parsed. Valid entries
+/// from other files stay visible next to this error.
+#[derive(Clone, Debug)]
+pub struct McpObservationIssue {
+    pub source: &'static str,
+    pub path: PathBuf,
+    pub message: String,
+}
+
+/// Foreign servers plus the per-source read errors of one discovery pass.
+#[derive(Clone, Debug, Default)]
+pub struct McpObservations {
+    pub servers: Vec<McpObservation>,
+    pub issues: Vec<McpObservationIssue>,
+}
+
+/// A CLI-owned file where an imported server is enabled or disabled. The
+/// source file is never the target.
+#[derive(Clone, Debug)]
+pub struct McpExternalSwitch {
+    pub path: PathBuf,
+    pub kind: FileKind,
+}
+
 /// Adapter-owned remote resource mappings. Absence is an unsupported capability;
 /// shared transports never substitute another CLI's native directory.
 #[derive(Clone, Copy, Debug, Default, Serialize)]
@@ -409,7 +445,8 @@ pub struct RemoteNativeDocument {
 }
 
 /// Which copy of a remote history tree is kept when the archive is bounded.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RemoteHistoryOrder {
     /// Newest path first. Use this when the file name already contains the date.
     PathDesc,
@@ -419,10 +456,12 @@ pub enum RemoteHistoryOrder {
 
 /// Files under the remote login home that this CLI's history parser can read.
 /// The shared archiver copies this declaration and does not match on a CLI id.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct RemoteHistoryLayout {
     /// Directory under the login home, for example `.claude/projects`.
     pub relative: &'static str,
+    /// Older roots with the same layout; exported paths are mirrored to `relative`.
+    pub fallbacks: &'static [&'static str],
     /// Basename globs copied in full, such as an index or a state database.
     pub pinned: &'static [&'static str],
     /// Basename globs of session transcripts. The archive keeps a bounded set.
@@ -431,6 +470,32 @@ pub struct RemoteHistoryLayout {
     /// Files there that match `sessions` are copied with that transcript.
     pub companion: Option<&'static str>,
     pub order: RemoteHistoryOrder,
+    /// Optional bounded SQLite projection. SQL and relationships belong to the adapter.
+    pub sqlite: Option<RemoteHistorySqlite>,
+    /// Bounded projections for optional pinned SQLite catalogs in a file layout.
+    pub catalogs: &'static [RemoteHistoryTable],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct RemoteHistorySqlite {
+    pub index: &'static str,
+    pub tables: &'static [RemoteHistoryTable],
+    /// Relative file templates for the selected native ids; only `{id}` is substituted.
+    pub files: &'static [&'static str],
+    /// Only these tables are copied from per-session databases named in `files`.
+    pub file_tables: &'static [&'static str],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct RemoteHistoryTable {
+    pub name: &'static str,
+    /// Index selection query with `:limit`; for linked tables, an optional row predicate.
+    pub query: &'static str,
+    pub required_columns: &'static [&'static str],
+    /// Index id column (collected for linked tables/files).
+    pub id: Option<&'static str>,
+    /// Copy rows whose value is one of the selected index ids.
+    pub link: Option<&'static str>,
 }
 
 /// How a registered CLI is started: an interactive terminal session or the
@@ -566,12 +631,12 @@ fn npm_registry_url(package: &str) -> Option<String> {
 
 /// Shared npm install policy: optional dependencies, lifecycle scripts and
 /// bounded network retries, with the top-level package always script-allowed.
-fn npm_install_command_for(package: &str, script_dependencies: &[&str]) -> Option<String> {
+pub(crate) fn npm_install_command_for(package: &str, script_dependencies: &[&str]) -> Option<String> {
     let scripts = std::iter::once(package).chain(script_dependencies.iter().copied()).collect::<Vec<_>>().join(",");
     (!package.is_empty()).then(|| format!("npm install -g {package}@latest --include=optional --ignore-scripts=false --foreground-scripts --allow-scripts={scripts} --no-audit --no-fund --fetch-retries=3 --fetch-timeout=60000 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=10000"))
 }
 
-fn npm_uninstall_command_for(package: &str) -> Option<String> {
+pub(crate) fn npm_uninstall_command_for(package: &str) -> Option<String> {
     (!package.is_empty()).then(|| format!("npm uninstall -g {package}"))
 }
 
@@ -1430,6 +1495,44 @@ pub trait CliAdapter: Sync {
         Ok(root.and_then(|root| location.child.map_or(Some(root), |child| root.get(child)))
             .and_then(Value::as_object).cloned().unwrap_or_default())
     }
+    /// Read-only servers this CLI also discovers from other tools or packages.
+    /// The shared MCP view appends them with their source and never writes the
+    /// source file. Adapters that do not translate foreign configs return empty.
+    /// An unreadable or malformed foreign file is reported in `issues`; it does
+    /// not turn the whole discovery into an empty list.
+    fn mcp_observations(
+        &self,
+        _scope: Scope,
+        _home: &Path,
+        _project: Option<&Path>,
+    ) -> Result<McpObservations, String> {
+        Ok(McpObservations::default())
+    }
+    /// CLI-owned override file for an imported server. `None` means this CLI
+    /// has no verified external enable/disable path.
+    fn mcp_external_switch(
+        &self,
+        _scope: Scope,
+        _home: &Path,
+        _project: Option<&Path>,
+    ) -> Option<McpExternalSwitch> {
+        None
+    }
+    /// Field changes for one imported server in the parsed override document.
+    /// The adapter owns the native list shape; shared services own the write.
+    fn mcp_external_changes(
+        &self,
+        _parsed: &Value,
+        _name: &str,
+        _enabled: bool,
+        _source_enabled: bool,
+    ) -> Option<Vec<crate::native::transaction::FieldChange>> {
+        None
+    }
+    /// Whether this CLI currently loads project-scoped MCP sources.
+    fn mcp_project_scope_effective(&self, _home: &Path) -> Result<bool, String> {
+        Ok(true)
+    }
     /// Normalize an entry for display, including its native enabled/disabled state.
     fn mcp_entry_view(&self, entry: &Value) -> Value { entry.clone() }
     fn mcp_change(&self, _parsed: &Value, location: &McpLocation, name: &str, value: Option<Value>) -> Result<crate::native::transaction::FieldChange, String> {
@@ -1656,6 +1759,23 @@ pub trait CliAdapter: Sync {
     fn recognizes_native_install_path(&self, _path: &Path) -> bool {
         false
     }
+    /// Adapter-owned installation source label for a probed path. Shared source
+    /// detection applies it after the native/npm checks and before falling back
+    /// to `unknown`, so an adapter can name a verified channel (for example a
+    /// Bun global install) without shared services branching on CLI ids.
+    fn installation_source(&self, _path: &Path) -> Option<&'static str> {
+        None
+    }
+    /// Runtime dependencies required by an identified installation source.
+    /// Empty keeps the historical shared Node/npm dependency panel.
+    fn runtime_dependencies(
+        &self,
+        _source: &str,
+        _installed: bool,
+        _home: &Path,
+    ) -> Vec<adapter::Dependency> {
+        Vec::new()
+    }
     fn native_binary_directories(&self, _home: &Path) -> Vec<PathBuf> {
         Vec::new()
     }
@@ -1712,6 +1832,29 @@ pub trait CliAdapter: Sync {
             Some(_) => self.npm_uninstall_command(),
             None => None,
         }
+    }
+    /// Source-aware install command. The default preserves the historical
+    /// single-channel behavior; an adapter with more channels overrides this so
+    /// shared maintenance never has to know CLI-specific source names.
+    fn source_install_command(&self, source: Option<&str>) -> Option<String> {
+        match source {
+            None => self.install_command(),
+            Some("npm_shim") => self.npm_install_command(),
+            Some("native") => self.native_install_command(),
+            Some(_) => None,
+        }
+    }
+    /// Source-aware upgrade command. The default keeps the identified install
+    /// line policy.
+    fn source_upgrade_command(&self, source: &str, version: Option<&str>) -> Option<String> {
+        self.upgrade_command_for_version(source, version)
+    }
+    /// Source-aware uninstall command. The default keeps the legacy npm-only
+    /// uninstall surface.
+    fn source_uninstall_command(&self, source: &str, version: Option<&str>) -> Option<String> {
+        (source == "npm_shim")
+            .then(|| self.npm_uninstall_command_for_version(version))
+            .flatten()
     }
     /// Explicit cross-major upgrade declared by the adapter for the identified
     /// install. `None` hides the action; a declared action without a command

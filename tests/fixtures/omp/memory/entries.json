@@ -1,0 +1,18 @@
+{
+  "capability": "memory",
+  "name": "OMP local memory lists only the native MEMORY.md, memory_summary.md and learned.md files",
+  "case": {
+    "action": "entries",
+    "files": [
+      "MEMORY.md",
+      "memory_summary.md",
+      "learned.md",
+      "notes.md",
+      "skills/generated/SKILL.md",
+      "sub/other.md"
+    ],
+    "expect": {
+      "ids": ["MEMORY", "learned", "memory_summary"]
+    }
+  }
+}

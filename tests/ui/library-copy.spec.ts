@@ -1,4 +1,7 @@
+import { installPromptFixtureBridge } from '../../scripts/capture-prompt-fixtures.mjs';
 import { expect, test } from '@playwright/test';
+
+test.beforeEach(async ({ page }) => { await page.addInitScript(installPromptFixtureBridge); });
 
 // The desktop webviews can refuse navigator.clipboard (WebKit does in the macOS app); copying the full
 // text still succeeds through the copy command inside the click.
@@ -81,7 +84,7 @@ test('copying a prompt card copies the whole body and reports a refused copy as 
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
   const card = page.getByRole('article').filter({ hasText: '多行提示词' });
-  await expect(card.locator('p')).toContainText('…');
+  await expect(card.locator('[data-prompt-preview]')).toContainText('…');
   await card.getByRole('button', { name: '复制全文', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('复制失败');
   await expect(page.getByText('完整正文已复制，可以粘贴使用。')).toHaveCount(0);

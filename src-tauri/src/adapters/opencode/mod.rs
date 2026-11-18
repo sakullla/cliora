@@ -1049,6 +1049,22 @@ impl CliAdapter for OpenCode {
     ) -> Result<crate::history::ParsedSession, String> {
         history::parse_controlled(source, cancelled)
     }
+    fn remote_history_layout(&self) -> Option<super::RemoteHistoryLayout> {
+        Some(super::RemoteHistoryLayout {
+            relative: ".local/share/opencode", fallbacks: &[], pinned: &[], sessions: &["opencode.db"], companion: None,
+            order: super::RemoteHistoryOrder::MtimeDesc, catalogs: &[],
+            sqlite: Some(super::RemoteHistorySqlite {
+                index: "opencode.db", files: &[], file_tables: &[],
+                tables: &[
+                    super::RemoteHistoryTable { name: "session_v2", query: "SELECT id,title,directory,time_created,time_updated,version,model FROM session_v2 ORDER BY time_updated DESC LIMIT :limit", required_columns: &["id", "time_updated"], id: Some("id"), link: None },
+                    super::RemoteHistoryTable { name: "session", query: "SELECT id,title,directory,time_created,time_updated,version,model FROM session ORDER BY time_updated DESC LIMIT :limit", required_columns: &["id", "time_updated"], id: Some("id"), link: None },
+                    super::RemoteHistoryTable { name: "session_message", query: "type IN ('user','assistant')", required_columns: &["session_id", "type"], id: None, link: Some("session_id") },
+                    super::RemoteHistoryTable { name: "message", query: "", required_columns: &["session_id"], id: None, link: Some("session_id") },
+                    super::RemoteHistoryTable { name: "part", query: "CASE WHEN json_valid(data) THEN json_extract(data, '$.type') = 'text' ELSE 1 END", required_columns: &["session_id", "data"], id: None, link: Some("session_id") },
+                ],
+            }),
+        })
+    }
     fn history_supported(&self) -> bool {
         true
     }

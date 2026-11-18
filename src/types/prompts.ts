@@ -1,0 +1,16 @@
+export type PromptScope = { kind: 'global' } | { kind: 'workspace'; workspaceId: string } | { kind: 'repository'; repositoryId: string } | { kind: 'unresolved'; legacyProjectId: string };
+export type PromptContext = { targetId: string | null; workspaceId?: string | null; repositoryId?: string | null };
+export type PromptDraft = { id: string | null; title: string; body: string; scope: PromptScope; tags: string[]; expectedVersion: number | null };
+export type PromptDocument = { id: string; title: string; body: string; scope: PromptScope; tags: string[]; version: number; updatedAt: number; legacyProjectId: string | null };
+export type PromptSummary = Omit<PromptDocument, 'body' | 'legacyProjectId'> & { preview: string; favorite: boolean; lastUsed: number };
+export type PromptQuery = { workspaceId?: string | null; repositoryId?: string | null; search?: string; tags?: string[]; scopeFilter?: PromptScope | null; includeOtherScopes?: boolean; favoritesOnly?: boolean; recentOnly?: boolean; offset?: number; limit?: number };
+export type PromptPage = { items: PromptSummary[]; total: number; nextOffset: number | null; tags: string[] };
+export type PromptBatchItem = { itemId: string; action: 'create' | 'replace' | 'reclassify' | 'skip'; draft: PromptDraft };
+export type PromptBatch = { operationId: string; items: PromptBatchItem[] };
+export type PromptBatchResultItem = { itemId: string; status: 'saved' | 'skipped' | 'conflict' | 'failed'; id: string | null; version: number | null; error: string | null };
+export type PromptBatchResult = { operationId: string; items: PromptBatchResultItem[]; writeApplied: boolean };
+export type PromptImportMatch = { id: string; title: string; scope: PromptScope; version: number; sameBody: boolean };
+export type PromptImportBatchMatch = { itemId: string; title: string; sameBody: boolean };
+export type PromptImportRow = { item: PromptBatchItem; matches: PromptImportMatch[]; batchMatches: PromptImportBatchMatch[]; error: string | null };
+export type PromptImportPreview = { operationId: string; rows: PromptImportRow[] };
+export type PromptImportInput = { jsonText: string; files: string[]; scope: PromptScope; tags: string[] };

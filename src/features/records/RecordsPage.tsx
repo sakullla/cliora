@@ -99,7 +99,7 @@ function rangeCaption(from: string, to: string) {
   if (from) return i18n.t('records.page.captionFrom', { date: dayLabel(from) });
   return i18n.t('records.page.captionTo', { date: dayLabel(to) });
 }
-export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent = null, onOpenProjects, onWorkbenchSession, onWorkbenchFailure }: { active: boolean; remoteTargetId?: string; tools: AdapterDescriptor[]; tabIntent?: { tab: 'sessions' | 'usage'; token: number } | null; onOpenProjects: () => void; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
+export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent = null, onOpenProjects, onWorkbenchSession, onWorkbenchFailure }: { active: boolean; remoteTargetId?: string; tools: AdapterDescriptor[]; tabIntent?: { tab: 'sessions' | 'usage'; sessionId?: string; token: number } | null; onOpenProjects: () => void; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t } = useTranslation();
   const remoteReads = useRemoteReads(remoteTargetId, '', active);
   const native = remoteReads.native;
@@ -109,8 +109,12 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent
     if (!active || !tabIntent || handledTabIntent.current === tabIntent.token) return;
     handledTabIntent.current = tabIntent.token;
     if (tabIntent.tab === 'usage' && remoteTargetId !== 'local') return;
+    if (tabIntent.sessionId) {
+      openSession(tabIntent.sessionId);
+      return;
+    }
     setTab(tabIntent.tab);
-  }, [active, tabIntent?.tab, tabIntent?.token, remoteTargetId]);
+  }, [active, tabIntent?.tab, tabIntent?.sessionId, tabIntent?.token, remoteTargetId]);
   // Find, reading options and place per conversation. The page owns them so a hidden page
   // can release the transcript and still return the reader to where it was.
   const readingContexts = useRef(new ReadingContexts());
@@ -277,7 +281,12 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent
         loadedFilter.current = JSON.stringify(current);
         setSessions(items); setSourceFailures(snapshot.sourceFailures); remotePartial.current = snapshot.sourceFailures.length > 0;
         setModelCatalog([...new Set(snapshot.sessions.flatMap((item) => item.model ? [item.model] : []))].sort());
-        setSelectedId((old) => old && items.some((item) => item.id === old) ? old : items[0]?.id ?? null);
+        const pending = pendingSession.current;
+        pendingSession.current = null;
+        setSelectedId((old) => pending && items.some((item) => item.id === pending) ? pending : old && items.some((item) => item.id === old) ? old : items[0]?.id ?? null);
+        if (pending && items.some((item) => item.id === pending)) {
+          requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(`[data-session-id="${CSS.escape(pending)}"]`)?.scrollIntoView({ block: 'nearest' }));
+        }
       };
       // Filtering an existing snapshot must not cancel an in-flight refresh.
       if (!refresh && !revalidate && remoteSnapshot.current) {
@@ -312,7 +321,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent
     const sequence = ++request.current;
     const key = JSON.stringify(current); setFilterLoading(true); setListError(false);
     try {
-      const items = await native.listHistorySessions(current);
+      const items = (await native.listHistorySessions(current)) ?? [];
       if (unfilteredQuery(current)) {
         setUnfilteredTotal(items.length);
         // A complete read is the record of which sessions still exist; forget the reading
@@ -326,6 +335,9 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent
       const pending = pendingSession.current;
       pendingSession.current = null;
       setSelectedId((old) => pending && items.some((item) => item.id === pending) ? pending : old && items.some((item) => item.id === old) ? old : items[0]?.id ?? null);
+      if (pending && items.some((item) => item.id === pending)) {
+        requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(`[data-session-id="${CSS.escape(pending)}"]`)?.scrollIntoView({ block: 'nearest' }));
+      }
       return true;
     } catch (value) {
       if (sequence === request.current && key === JSON.stringify(filterRef.current)) { setListError(true); showReadError(value); }
@@ -340,8 +352,8 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent
     if (remoteTargetId !== 'local') { setProjects([]); setPrices([]); setScans([]); setScanMetadataReady(true); return; }
     void Promise.all([native.listProjects(), native.listHistoryPrices(), native.listHistoryScans()])
       .then(([knownProjects, knownPrices, knownScans]) => {
-        const savedScans = knownScans ?? [];
-        setProjects(knownProjects); setPrices(knownPrices); setScans(savedScans);
+        const savedScans = Array.isArray(knownScans) ? knownScans : [];
+        setProjects(Array.isArray(knownProjects) ? knownProjects : []); setPrices(Array.isArray(knownPrices) ? knownPrices : []); setScans(savedScans);
         const latest = savedScans.reduce((max, scan) => Math.max(max, scan.scannedAt), 0);
         if (latest) { lastScan.current = latest; setLastScanAt(latest); }
       })
@@ -483,7 +495,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent
       setBackgroundScanning(true);
       void native.refreshHistory().then((reports) => {
         if (sequence !== scanRequest.current) return;
-        setScans(reports); lastScan.current = Date.now(); setLastScanAt(lastScan.current); setScanVersion((value) => value + 1);
+        setScans(Array.isArray(reports) ? reports : []); lastScan.current = Date.now(); setLastScanAt(lastScan.current); setScanVersion((value) => value + 1);
         // The scan writes the index in batches. Read the completed snapshot so
         // newly discovered sessions appear without waiting for the next visit.
         void load(filterRef.current);
@@ -700,14 +712,19 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent
 
   const notify: UsageNotify = { status: (text, protect) => showNotice(text, protect), alert: showError, readAlert: showReadError, clear: () => { toasts.clear(); } };
   function openSession(id: string) {
-    pendingSession.current = search.trim() || favoriteOnly || toolId || model || projectId || rangeKey !== 'all' ? id : null;
+    const hasFilters = !!(search.trim() || favoriteOnly || toolId || model || projectId || rangeKey !== 'all');
+    pendingSession.current = hasFilters || !sessions.some((item) => item.id === id) ? id : null;
     clearAllFilters();
+    setChildPath([]);
     setTab('sessions');
     selectSession(id);
     requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(`[data-session-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest' }));
   }
 
-  const unindexedTools = tools.filter((tool) => tool.history.state === 'unsupported');
+  const availableRemoteSources = remoteTargetId !== 'local' ? remoteSnapshot.current?.availableSources : undefined;
+  const unindexedTools = tools.flatMap(tool => availableRemoteSources && !availableRemoteSources.includes(tool.id)
+    ? [{ ...tool, history: { state: 'unsupported' as const, reason: t('records.page.remoteHistoryUnavailable') } }]
+    : tool.history.state === 'unsupported' ? [tool] : []);
   const selectedUnindexed = unindexedTools.find((tool) => tool.id === toolId) ?? null;
   const indexGap = !listError && !filterLoading && !!selectedUnindexed;
   if (!nativeAvailable) return <EmptyState icon="records" title={t('records.page.nativeTitle')} detail={t('records.page.nativeDetail')} />;
@@ -747,11 +764,11 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent
         ...items.map((item) => <button type="button" key={item.id} data-session-id={item.id} aria-current={selectedId === item.id ? 'true' : undefined} className={selectedId === item.id ? styles.selected : ''} onClick={() => selectSession(item.id)} onKeyDown={(event) => { if (event.key === 'ArrowDown') { event.preventDefault(); moveSession(item, 1); } else if (event.key === 'ArrowUp') { event.preventDefault(); moveSession(item, -1); } else if (event.key === 'Home') { event.preventDefault(); focusSession(orderedSessions[0]); } else if (event.key === 'End') { event.preventDefault(); focusSession(orderedSessions[orderedSessions.length - 1]); } }}>
           <span className={styles.rowTop}><ToolIcon toolId={item.toolId} size={16} /><span>{toolName(item.toolId)}</span>{item.favorite && <span className={styles.favoriteMark} aria-label={t('records.page.favorited')}>★</span>}<time title={day(item.updatedAt)}>{rowTime(item.updatedAt)}</time></span>
           <strong className={styles.rowTitle} title={item.title}>{item.title || t('records.page.untitled')}</strong>
-          <span className={styles.rowContext}><Icon name="folder" size={12} /><span title={item.cwd ?? undefined}>{projects.find((project) => project.id === item.projectId)?.name ?? item.cwd?.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? t('records.page.noProject')}</span><span>{t('records.reader.messageCount', { count: item.messageCount.toLocaleString() })}</span></span>
+          <span className={styles.rowContext}><Icon name="folder" size={12} /><span title={item.cwd ?? undefined}>{projects.find((project) => project.id === item.projectId)?.name ?? item.cwd?.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? t('records.page.noProject')}</span><span>{t('records.reader.messageCount', { count: (item.messageCount ?? 0).toLocaleString() })}</span></span>
           {(item.partial || item.stale) && <small className={styles.sessionMeta}>{item.partial && <Badge tone="warning">{t('records.page.partial')}</Badge>}{item.stale && <Badge>{t('records.page.stale')}</Badge>}</small>}
         </button>),
       ])}{visibleSessionCount < sessions.length && <div ref={observeSentinel} className={styles.listSentinel} role="status">{t('records.page.loadingMore')}</div>}</> : <div className={styles.empty} role={listError ? 'alert' : 'status'}><span className="empty-symbol"><Icon name={listError ? 'alert' : 'search'} size={20} /></span><h3>{listError ? t('records.page.listFailed') : filterLoading && (!remoteSnapshot.current || remoteTargetId === 'local') ? t('records.page.loading') : remoteCancelled ? t('records.page.remoteCancelledTitle') : indexGap ? t('records.page.indexTitle') : activeFilters.length ? t('records.page.noMatch') : t('records.page.emptyTitle')}</h3><p>{listError ? t('records.page.listFailedHint') : filterLoading && (!remoteSnapshot.current || remoteTargetId === 'local') ? t(remoteTargetId === 'local' ? 'records.page.loadingHint' : 'records.page.remoteInitialHint') : remoteCancelled ? t('records.page.remoteCancelled') : indexGap ? selectedUnindexed?.history.reason : activeFilters.length ? t('records.page.noMatchHint') : t('records.page.emptyHint')}</p>{!listError && !filterLoading && !toolId && unindexedTools.map((tool) => <p key={tool.id}>{t('records.page.historyUnavailable', { tool: tool.name, reason: tool.history.reason })}</p>)}{listError ? <Button size="sm" onClick={() => void (remoteTargetId === 'local' ? load(filter) : refresh())}>{t('records.page.retryList')}</Button> : activeFilters.length > 0 && <Button variant="ghost" size="sm" onClick={clearAllFilters}>{t('records.page.clearAll')}</Button>}</div>}</div>
-        <details className={styles.coverage}><summary>{remoteTargetId !== 'local' ? t('records.page.remoteCoverage') : scanning || backgroundScanning ? t('records.page.syncing') : lastScanAt ? t('records.page.syncedAt', { time: timeOfDay(new Date(lastScanAt)) }) : t('records.page.localOnly')}{remoteTargetId === 'local' && scans.some((item) => item.failedCount || item.incomplete) ? t('records.page.partialSuffix') : ''}</summary>{scans.length || unindexedTools.length ? <>{scans.map((item) => <span key={item.toolId}>{t('records.page.scanEntry', { tool: toolName(item.toolId), count: item.sourceCount })}{item.failedCount ? t('records.page.scanFailed', { count: item.failedCount }) : ''}{item.incomplete ? t('records.page.scanIncomplete') : ''}</span>)}{unindexedTools.map((tool) => <span key={tool.id}>{t('records.page.historyUnavailable', { tool: tool.name, reason: tool.history.reason })}</span>)}</> : <span>{t('records.page.scanEmpty')}</span>}</details>
+        <details className={styles.coverage}><summary>{remoteTargetId !== 'local' ? t('records.page.remoteCoverage') : scanning || backgroundScanning ? t('records.page.syncing') : lastScanAt ? t('records.page.syncedAt', { time: timeOfDay(new Date(lastScanAt)) }) : t('records.page.localOnly')}{remoteTargetId === 'local' && scans.some((item) => item.failedCount || item.incomplete) ? t('records.page.partialSuffix') : ''}</summary>{remoteTargetId !== 'local' && <span>{t('records.page.remoteHistoryBounds')}</span>}{scans.length || unindexedTools.length ? <>{scans.map((item) => <span key={item.toolId}>{t('records.page.scanEntry', { tool: toolName(item.toolId), count: item.sourceCount })}{item.failedCount ? t('records.page.scanFailed', { count: item.failedCount }) : ''}{item.incomplete ? t('records.page.scanIncomplete') : ''}</span>)}{scans.flatMap((item) => item.detail && (item.failedCount || item.incomplete) ? item.detail.split('\n').filter(Boolean).map((line, index) => <span key={`${item.toolId}-failure-${index}`} className={styles.scanFailure}>{toolName(item.toolId)}：{line}</span>) : [])}{unindexedTools.map((tool) => <span key={tool.id}>{t('records.page.historyUnavailable', { tool: tool.name, reason: tool.history.reason })}</span>)}</> : <span>{t('records.page.scanEmpty')}</span>}</details>
       </aside>
       <div className={styles.detail} ref={detailRef} onScroll={rememberPosition}>
         <button type="button" className={styles.backToList} onClick={() => { setMobileDetail(false); if (selectedId) requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(`[data-session-id="${CSS.escape(selectedId)}"]`)?.focus()); }}>{t('records.page.backToList')}</button>

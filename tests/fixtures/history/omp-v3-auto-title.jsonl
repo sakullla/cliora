@@ -1,0 +1,4 @@
+{"type":"title","v":1,"title":"Auto fixture title","source":"auto","updatedAt":"2026-11-15T20:33:36.388Z","pad":"                                                                                                                                            "}
+{"type":"session","version":3,"id":"0190f4a2-0000-7000-8000-000000000006","timestamp":"2026-11-15T04:00:00Z","cwd":"/fixture/project"}
+{"type":"message","id":"a1","parentId":null,"timestamp":"2026-11-15T04:00:01Z","message":{"role":"user","content":[{"type":"text","text":"Auto titled prompt"}]}}
+{"type":"message","id":"a2","parentId":"a1","timestamp":"2026-11-15T04:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"Auto titled answer"}],"provider":"fixture","model":"fixture-model","usage":{"input":10,"output":5,"cacheRead":0,"cacheWrite":0,"cost":{"input":0.00001,"output":0.00001,"cacheRead":0,"cacheWrite":0,"total":0.00002}},"stopReason":"stop","timestamp":1794715202000}}

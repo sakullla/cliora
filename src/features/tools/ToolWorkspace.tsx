@@ -4,7 +4,8 @@ import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { nativeAvailable } from '../../lib/native';
-import { configurationAppliedFileState, configurationApplicationState, configurationLiveState, configurationRowState, type ConfigurationLiveState, type ConfigurationNativeFileState } from '../../lib/configurationDraft';
+import { BoundedCache } from '../../lib/boundedCache';
+import { configurationApplicationState, configurationLiveState, configurationRowState, type ConfigurationLiveState, type ConfigurationNativeFileState } from '../../lib/configurationDraft';
 import { confirmAction } from '../../lib/confirm';
 import { useFillHeight } from '../../lib/fillHeight';
 import { searchShortcutHint } from '../../lib/shortcut';
@@ -60,11 +61,9 @@ const resourceViews: ResourceView[] = ['config', 'accounts', 'mcp', 'skills', 'a
 const contextStoreKey = 'cliora:workspace-context';
 // Presentation-only snapshots. Always re-read bindings and native files;
 // editor opens and mutations still obtain their own current baselines.
-const workspaceSnapshots = new Map<string, RegisteredToolWorkspace>();
+const workspaceSnapshots = new BoundedCache<string, RegisteredToolWorkspace>(8, 60_000);
 function rememberWorkspace(key: string, value: RegisteredToolWorkspace) {
-  workspaceSnapshots.delete(key);
   workspaceSnapshots.set(key, value);
-  if (workspaceSnapshots.size > 24) workspaceSnapshots.delete(workspaceSnapshots.keys().next().value!);
 }
 type StoredContext = { resource?: ResourceView; scope?: Scope; projectPath?: string };
 function readStoredContexts(): Record<string, StoredContext> {
@@ -106,6 +105,20 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   const [resourceFocus, setResourceFocus] = useState<{ resource: ResourceView; key: string; token: number } | null>(null);
   const focusToken = useRef(0);
   const configBoard = useRef<HTMLDivElement>(null);
+  // The list keeps its scroll offset when a configuration dialog closes.
+  const listScroll = useRef(0);
+  const frameWasOpen = useRef(false);
+  const rememberListScroll = () => { listScroll.current = document.getElementById('main')?.scrollTop ?? 0; };
+  const restoreListScroll = () => {
+    const top = listScroll.current;
+    requestAnimationFrame(() => { const main = document.getElementById('main'); if (main) main.scrollTop = top; });
+  };
+  useEffect(() => {
+    if (frame) { frameWasOpen.current = true; return; }
+    if (!frameWasOpen.current) return;
+    frameWasOpen.current = false;
+    restoreListScroll();
+  }, [frame]);
   const mcpDirty = useCallback((value: boolean) => setResourceDirty(previous => previous.mcp === value ? previous : { ...previous, mcp: value }), []);
   const skillsDirty = useCallback((value: boolean) => setResourceDirty(previous => previous.skills === value ? previous : { ...previous, skills: value }), []);
   const agentsDirty = useCallback((value: boolean) => setResourceDirty(previous => previous.agents === value ? previous : { ...previous, agents: value }), []);
@@ -223,21 +236,6 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     if (!nativeAvailable || !nextTool) { setLoading(false); setWorkspace(null); return null; }
     const request = ++loadSequence.current; setLoading(true); setError('');
     const key = JSON.stringify([nextTool, nextScope, nextProject]);
-    // Only a read-only comparison of the applied content against the current native files can
-    // distinguish an unchanged file from an external edit; the binding record never carries it.
-    // Rows and the strip stay on the binding's own statement when there is nothing to compare.
-    const appliedFile = async (value: RegisteredToolWorkspace): Promise<ConfigurationNativeFileState> => {
-      const profile = value.binding ? value.profiles.find(item => item.id === value.binding!.profileId) : null;
-      if (!profile || !configurationApplicationState(profile, value.binding, value.common).applied) return 'unchecked';
-      const files = value.probe.nativeFiles;
-      // Nothing to read at all: the binding's own statement is the only fact there is.
-      if (!files.length) return 'unchecked';
-      // Every file is sensitive, so nothing can be compared; the state stays unconfirmed rather
-      // than falling back to "in effect".
-      if (!files.some(file => !file.sensitive)) return 'unknown';
-      try { return configurationAppliedFileState((await native.compareRegisteredApplication(profile.id, nextScope, nextProject))?.files ?? []); }
-      catch { return 'unknown'; }
-    };
     let completed = false;
     // Resource pages need the binding, not CLI version processes. A full
     // workspace result remains authoritative if it finishes first.
@@ -254,8 +252,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     try {
       const value = await native.getRegisteredToolWorkspace(nextTool, nextScope, nextProject, false, fresh);
       if (!alive.current || request !== loadSequence.current) return null;
-      const file = await appliedFile(value);
-      if (!alive.current || request !== loadSequence.current) return null;
+      const file = value.appliedFileState ?? 'unchecked';
       rememberWorkspace(key, value);
       setWorkspace(value); setNativeFile({ key, state: file }); setScopedContext({ key, value: { effectiveContextId: value.effectiveContextId, nativeContextError: value.nativeContextError ?? null } }); setCustomPath(value.customPath ?? ''); return value;
     } catch (failure) { if (alive.current && request === loadSequence.current) setError(errorText(failure)); return null; }
@@ -285,7 +282,13 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     epoch.current++;
     if (active) void reload(toolId, scope, projectPath);
   }, [toolId, scope, projectPath, remoteTargetId, remoteReads.identity]);
-  useEffect(() => { if (active && !workspace) void reload(toolId, scope, projectPath); }, [active]);
+  const wasActive = useRef(active);
+  useEffect(() => {
+    const resumed = active && !wasActive.current;
+    wasActive.current = active;
+    // The context effect owns the initial load; only resume an empty hidden page here.
+    if (resumed && !workspace) void reload(toolId, scope, projectPath);
+  }, [active]);
   useEffect(() => {
     if (!nativeAvailable || !active) return;
     if (isRemote) {
@@ -324,6 +327,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   async function closeFrame() { if (await mayLeave()) { discard(); } }
   async function openFrame(subject: ConfigurationSubject, profile: RegisteredProfile | null = null, confirmed = false, title?: string) {
     if (!confirmed && !await mayLeave()) return;
+    rememberListScroll();
     discard(); setError(''); setNotice('');
     setFrame({ key: crypto.randomUUID(), subject, profile, title: title ?? (subject === 'current' ? t('tools.workspace.frameCurrent') : subject === 'common' ? t('tools.workspace.frameCommon') : profile?.id ? t('tools.workspace.frameProfile', { name: profile.name }) : t('tools.workspace.frameNew')) });
   }
@@ -364,8 +368,8 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     }
   }
   async function createProfile() {
-    let name = t('tools.workspace.newProfile'); let suffix = 1;
-    while (workspace?.profiles.some(profile => profile.name === name)) name = t('tools.workspace.newProfileN', { suffix: ++suffix });
+    let name = t('tools.workspace.newProfileTool', { tool: descriptor?.name ?? toolId }); let suffix = 1;
+    while (workspace?.profiles.some(profile => profile.name === name)) name = t('tools.workspace.newProfileToolN', { tool: descriptor?.name ?? toolId, suffix: ++suffix });
     await openFrame('profile', { id: '', tool: toolId, name, version: 0, inheritCommon: false, files: {}, suppressed: {}, connection: null, nativeCredentials: {} });
   }
   async function switchScope(next: Scope, path = '') { if (next === scope && (next === 'global' || path === projectPath)) return; if (!await mayLeave()) return; discard(); setScope(next); setProjectPath(path); }
@@ -602,8 +606,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
       {toolHeading}
       {workspace && <div className={styles.chromeInstall}><InstallPanel toolName={descriptor.name} heading={false} collapsed={resource !== 'config'} probe={workspace.probe} customPath={customPath} busy={busy} loading={loading} onCustomPath={setCustomPath} onSavePath={() => void savePath()} onMaintain={(action, source, lineVersion, target) => void maintain(action, source, false, lineVersion, target)} onUsePath={path => void usePath(path)} /></div>}
     </div>
-    <div className={styles.contextTrail} data-tools-context aria-label={t('tools.workspace.contextAria', { context: contextLabel })}><Icon name={isRemote ? 'server' : 'monitor'} size={13} /><span>{t(isRemote ? 'tools.workspace.contextRemote' : 'tools.workspace.contextLocal')}</span><span aria-hidden="true">/</span><strong>{contextLabel}</strong></div>
-    <div className={styles.taskBar} data-tools-taskbar><div className={styles.views} role="tablist" aria-label={t('tools.workspace.tasksAria')} onKeyDown={navigateChoices}>{resourceViews.filter((id) => supported[id]).map((id) => { const label = t(`tools.workspace.view.${id}`); const shortcutIndex = resourceViews.findIndex((view) => view === id) + 1; return <button role="tab" key={id} id={`tools-${id}-tab`} aria-controls={`tools-${id}-panel`} aria-selected={resource === id} aria-keyshortcuts={`Alt+${shortcutIndex}`} tabIndex={resource === id ? 0 : -1} title={t('tools.workspace.viewTitle', { label, index: shortcutIndex })} className={resource === id ? styles.selected : ''} onClick={() => void switchResource(id)}>{label}</button>; })}</div><div className={styles.scopeBar} data-tools-scope hidden={resource === 'memory'}><FilterSelect className={styles.projectSelect} label={t('tools.workspace.scopeLabel')} value={scope === 'global' ? '__global__' : projectPath} forceSearch searchLabel={t('home.launcher.searchLabel')} options={[{ value: '__global__', label: t('tools.workspace.scopeGlobal') }, ...projects.map(project => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, disabled: !project.available || !project.path })), ...(projectPath && !projects.some(project => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).at(-1) ?? projectPath }] : [])]} onChange={value => void switchScope(value === '__global__' ? 'global' : 'project', value === '__global__' ? '' : value)} onPickFolder={() => void pickProject()} pickFolderLabel={t('common.filterSelect.pickFolder')} /></div></div>
+    <div className={styles.taskBar} data-tools-taskbar><div className={styles.views} role="tablist" aria-label={t('tools.workspace.tasksAria')} onKeyDown={navigateChoices}>{resourceViews.filter((id) => supported[id]).map((id) => { const label = t(`tools.workspace.view.${id}`); const shortcutIndex = resourceViews.findIndex((view) => view === id) + 1; return <button role="tab" key={id} id={`tools-${id}-tab`} aria-controls={`tools-${id}-panel`} aria-selected={resource === id} aria-keyshortcuts={`Alt+${shortcutIndex}`} tabIndex={resource === id ? 0 : -1} title={t('tools.workspace.viewTitle', { label, index: shortcutIndex })} className={resource === id ? styles.selected : ''} onClick={() => void switchResource(id)}>{label}</button>; })}</div><div className={styles.contextTrail} data-tools-context aria-label={t('tools.workspace.contextAria', { context: contextLabel })}><Icon name={isRemote ? 'server' : 'monitor'} size={13} /><span>{t(isRemote ? 'tools.workspace.contextRemote' : 'tools.workspace.contextLocal')}</span><span aria-hidden="true">/</span><strong>{contextLabel}</strong></div><div className={styles.scopeBar} data-tools-scope hidden={resource === 'memory'}><FilterSelect className={styles.projectSelect} label={t('tools.workspace.scopeLabel')} value={scope === 'global' ? '__global__' : projectPath} forceSearch searchLabel={t('home.launcher.searchLabel')} options={[{ value: '__global__', label: t('tools.workspace.scopeGlobal') }, ...projects.map(project => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, disabled: !project.available || !project.path })), ...(projectPath && !projects.some(project => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).at(-1) ?? projectPath }] : [])]} onChange={value => void switchScope(value === '__global__' ? 'global' : 'project', value === '__global__' ? '' : value)} onPickFolder={() => void pickProject()} pickFolderLabel={t('common.filterSelect.pickFolder')} /></div></div>
     </div>
     <div id="tools-config-panel" role="tabpanel" aria-labelledby="tools-config-tab" hidden={resource !== 'config'}>
       {workspace?.nativeContextError && <div className={styles.feedback}><StatusBanner tone="error">{workspace.nativeContextError}</StatusBanner></div>}
@@ -632,7 +635,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
         <div role="list" aria-label={t('tools.workspace.itemsAria')} className={`${styles.profileCards}${workspace.profiles.length > 6 ? ` ${styles.profileScroll}` : ''}`}>{profileGroups.map(group => <div key={group.id} className={styles.profileGroup} data-group={group.id}>{profileGroups.length > 1 && <div className={styles.groupLabel}><strong>{group.label}</strong><Badge>{query ? `${group.visible.length}/${group.profiles.length}` : group.profiles.length}</Badge></div>}{group.visible.map(row)}</div>)}</div>
         </div>
       </div>}
-      <GuideDialog wide suspended={!active} open={!!frame} title={frame?.title ?? t('tools.workspace.frameFallback')} hint={t(frame?.subject === 'current' ? 'tools.workspace.frameCurrentHint' : 'tools.workspace.frameHint', { tool: descriptor.name, scope: scope === 'global' ? t('tools.apply.global') : projectPath })} onClose={() => void closeFrame()} onBack={() => void closeFrame()}>{frame && !workspace && <p role="status">{t('tools.workspace.frameLoading')}</p>}{frame && workspace && <Suspense fallback={<PageSkeleton />}><ConfigurationWorkspaceEditor key={frame.key} toolId={toolId} subject={frame.subject} profile={frame.profile} scope={scope} projectPath={projectPath} remoteTargetId={isRemote ? remoteTargetId : null} workspace={workspace} accounts={accounts} onClose={() => void closeFrame()} onDirtyChange={value => { if (value) epoch.current++; setDirty(value); }} onDraftChange={changed} onStored={stored} onDone={(result, used) => { setFrame(null); setDirty(false); setNotice(result.application ? t('tools.workspace.doneUpdated') : used ? t('tools.workspace.doneSavedUsed') : t('tools.workspace.doneSaved')); void reload(toolId, scope, projectPath, true); }} /></Suspense>}</GuideDialog>
+      <GuideDialog wide suspended={!active} open={!!frame} title={frame?.title ?? t('tools.workspace.frameFallback')} hint={t(frame?.subject === 'current' ? 'tools.workspace.frameCurrentHint' : 'tools.workspace.frameHint', { tool: descriptor.name, scope: scope === 'global' ? t('tools.apply.global') : projectPath })} onClose={() => void closeFrame()} onBack={() => void closeFrame()}>{frame && !workspace && <p role="status">{t('tools.workspace.frameLoading')}</p>}{frame && workspace && <Suspense fallback={<PageSkeleton />}><ConfigurationWorkspaceEditor key={frame.key} toolId={toolId} subject={frame.subject} profile={frame.profile} scope={scope} projectPath={projectPath} remoteTargetId={isRemote ? remoteTargetId : null} workspace={workspace} accounts={accounts} onClose={() => void closeFrame()} onDirtyChange={value => { if (value) epoch.current++; setDirty(value); }} onDraftChange={changed} onStored={stored} onDone={(result, used) => { setFrame(null); setDirty(false); setNotice(result.application ? t('tools.workspace.doneUpdated') : used ? t('tools.workspace.doneSavedUsed') : t('tools.workspace.doneSaved')); void reload(toolId, scope, projectPath, true).then(() => restoreListScroll()); }} /></Suspense>}</GuideDialog>
       <GuideDialog wide open={!!comparison} title={t('home.conflict.title')} onClose={closeComparison}>{comparison && <div>{comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('tools.workspace.compareBanner') : undefined} actions={false} currentContent={file.current} nextContent={file.proposedText} format={file.format} onUseNext={() => void compareUse()} onKeepCurrent={closeComparison} />)}{compareError && <div className={styles.feedback}><StatusBanner tone="error">{t('tools.workspace.compareFailed', { error: compareError })}</StatusBanner></div>}<div className="dialog-footer"><Button onClick={closeComparison}>{t('common.conflict.keepCurrent')}</Button><span className="dialog-footer-gap" /><Button variant="primary" disabled={busy} onClick={() => void compareUse()}>{busy ? t('tools.workspace.applying') : t('common.conflict.useNext')}</Button></div></div>}</GuideDialog>
     </div>
     <Suspense fallback={<PageSkeleton />}>

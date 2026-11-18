@@ -73,10 +73,9 @@ pub struct SavedWorkspace {
 pub fn saved_workspace(registry: &Registry, db: &Database, tool: &str, key: &str) -> Result<SavedWorkspace, String> {
     let profiles = profile::list_registered_profiles(db, tool)?;
     let common = profile::get_registered_common(db, tool)?;
-    let binding = super::apply::get_registered_binding(db, tool, key)?.map(|mut binding| {
-        binding.managed.clear();
-        binding
-    });
+    // Keep committed fields inside the backend until the advisory check is complete.
+    // The command removes them before serializing the workspace to the WebView.
+    let binding = super::apply::get_registered_binding(db, tool, key)?;
     let profile_model_summaries = profiles.iter().map(|profile| {
         (profile.id.clone(), configuration::model_summary(registry, profile, common.as_ref()).ok().flatten())
     }).collect();

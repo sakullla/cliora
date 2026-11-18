@@ -797,7 +797,13 @@ pub fn preview_backup(db: &Database, credentials: &dyn CredentialStore, target: 
     let data: String = db.with_connection(|conn| conn.query_row("SELECT data FROM native_transactions WHERE id=?1 AND status='committed'", [id], |row| row.get(0)).map_err(|_| "找不到可恢复的修改记录".into()))?;
     let journal: Journal = serde_json::from_str(&data).map_err(|_| "原生修改记录损坏")?;
     if journal.id != id || journal.key_id != format!("native-backup-{id}") { return Err("原生修改记录标识不一致".into()); }
-    let file = journal.files.iter().find(|item| item.path == target && item.existed).ok_or("此记录没有当前文件的备份")?;
+    let file = journal.files.iter().find(|item| item.path == target).ok_or("此记录没有当前文件的备份")?;
+    // A transaction may have created the target (for example a native config
+    // that did not exist before a toggle). Its inverse is deleting the file,
+    // and there is no encrypted preimage to decrypt.
+    if !file.existed {
+        return Ok(BackupPreview {transaction_id:id.into(),current:read_native(target)?,original:String::new(), affected_paths: if journal.coupled { journal.files.iter().map(|f| f.path.display().to_string()).collect() } else { vec![target.display().to_string()] }});
+    }
     let encoded = credentials.get(&journal.key_id)?;
     let key: [u8;32] = STANDARD.decode(encoded).map_err(|_| "备份密钥无效")?.try_into().map_err(|_| "备份密钥长度无效")?;
     let bytes = decrypt(&key, file.backup.as_deref().ok_or("此记录没有文件备份")?, file.nonce.as_deref().ok_or("备份标识缺失")?)?;
@@ -828,7 +834,7 @@ where F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String> {
     if journal.id != id || journal.key_id != format!("native-backup-{id}") { return Err("原生修改记录标识不一致".into()); }
     let encoded = credentials.get(&journal.key_id)?;
     let key: [u8;32] = STANDARD.decode(encoded).map_err(|_| "备份密钥无效")?.try_into().map_err(|_| "备份密钥长度无效")?;
-    if journal.coupled || require_postimage {
+    if journal.coupled || require_postimage || journal.files.iter().any(|file| file.path == target && !file.existed) {
         let integrity = integrity_key(db, credentials)?;
         let mut changes = Vec::new();
         for file in &journal.files {
@@ -1350,6 +1356,41 @@ mod tests {
         apply(&db, &store, std::slice::from_ref(&patch), |_| Ok(())).unwrap();
         let value = crate::native::format::parse(FileKind::Yaml, &fs::read_to_string(&patch.path).unwrap()).unwrap();
         assert_eq!(value[0]["id"], "updated");
+    }
+
+    #[test]
+    fn preview_and_restore_undo_a_file_created_by_the_transaction() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let store = MemoryStore::default();
+        let path = temp.path().join("config.yml");
+        let outcome = apply_files(
+            &db,
+            &store,
+            &[FileMutation {
+                path: path.clone(),
+                baseline: None,
+                contents: Some("task:\n  disabledAgents:\n    - reviewer\n".into()),
+            }],
+            |_| Ok(()),
+        )
+        .unwrap();
+        let preview = preview_backup(&db, &store, &path, &outcome.transaction_id).unwrap();
+        assert_eq!(preview.original, "");
+        assert_eq!(
+            preview.current,
+            "task:\n  disabledAgents:\n    - reviewer\n"
+        );
+        restore_backup_if_unchanged(
+            &db,
+            &store,
+            &path,
+            &outcome.transaction_id,
+            &preview.current,
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert!(!path.exists(), "恢复创建前状态应删除新文件");
     }
 
     #[test]

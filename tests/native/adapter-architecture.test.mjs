@@ -37,4 +37,8 @@ test('adapter implementations have only the frontend and backend package roots',
   for (const cli of ['zcode', 'qoder_cn', 'kimi_code', 'deepseek', 'codebuddy']) {
     await access(`src-tauri/src/adapters/${cli}/mod.rs`);
   }
+  // oh-my-pi (OMP) is an independent default-off CLI with both a backend
+  // package and a frontend presentation package.
+  await access('src-tauri/src/adapters/omp/mod.rs');
+  await access('src/adapters/omp/index.ts');
 });

@@ -1,4 +1,7 @@
+import { installPromptFixtureBridge } from '../../scripts/capture-prompt-fixtures.mjs';
 import { expect, test, type Page } from '@playwright/test';
+
+test.beforeEach(async ({ page }) => { await page.addInitScript(() => { (window as any).__promptLegacyWorkspaces = true; }); await page.addInitScript(installPromptFixtureBridge); });
 
 test('library category is edited and filtered as tags', async ({ page }) => {
   await page.addInitScript(() => {
@@ -143,6 +146,8 @@ test('library search debounces native queries, clears instantly and counts hits'
 });
 
 test('library keeps four tabs, one primary action, and every prompt card in the first screen', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', error => pageErrors.push(error.message));
   await page.addInitScript(() => {
     const body = '检查代码变更是否正确、安全、易于维护。先说明影响用户的行为，再给出具体文件和可执行的建议。优先指出会导致故障的问题。';
     const library = [
@@ -160,7 +165,7 @@ test('library keeps four tabs, one primary action, and every prompt card in the 
           if (command === 'list_projects') return [{ id: 'cliora', name: 'cliora', path: '/tmp/cliora', available: true, preferredTool: 'codex', modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} }];
           if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
           if (command === 'get_tray_status') return { available: false, error: null };
-          if (command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_rule_placements') return [];
+          if (command === 'list_mcp_definitions' || command === 'list_mcp_placements' || command === 'list_skill_packages' || command === 'list_rule_placements') return [];
           if (command === 'list_library_items') return library.filter((item) => item.kind === args.kind);
           return null;
         },
@@ -200,6 +205,7 @@ test('library keeps four tabs, one primary action, and every prompt card in the 
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   await expect(page.getByRole('button', { name: '新建 MCP', exact: true })).toHaveAttribute('data-variant', 'primary');
   await expect(toolbar.locator('[data-variant="primary"]')).toHaveCount(1);
+  expect(pageErrors).toEqual([]);
 });
 
 
@@ -516,7 +522,7 @@ test('library keyword matches titles and bodies and combines with the project an
   await expect(card('发布检查')).toHaveCount(0);
   // Project on top of both: no row carries the keyword, the tag and this project.
   await library.getByRole('button', { name: '项目筛选' }).click();
-  await page.getByRole('option', { name: /cliora/ }).click();
+  await page.getByRole('option', { name: /^cliora 项目专用$/ }).click();
   await expect(library.getByText('命中 0 / 共 3')).toBeVisible();
   await expect(library.getByText(/筛选结果为空/)).toBeVisible();
   // One clear returns the whole list with every condition gone.
@@ -537,6 +543,12 @@ test('library keyword matches titles and bodies and combines with the project an
   await library.getByRole('button', { name: '清除筛选' }).click();
   await expect(library.getByText('命中 3 / 共 3')).toBeVisible();
   await expect(card('发布检查')).toBeVisible();
+  // Quick tag chips in the result bar filter in one click and expose a removable active filter chip.
+  await library.getByRole('button', { name: '按标签「测试」筛选' }).click();
+  await expect(library.getByText('命中 2 / 共 3')).toBeVisible();
+  await expect(library.getByRole('button', { name: '标签：测试' })).toBeVisible();
+  await library.getByRole('button', { name: '标签：测试' }).click();
+  await expect(library.getByText('命中 3 / 共 3')).toBeVisible();
 });
 
 test('library filters and the search clear work from the keyboard alone', async ({ page }) => {

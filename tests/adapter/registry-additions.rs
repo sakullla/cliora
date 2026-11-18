@@ -1818,3 +1818,234 @@ fn builtin_memory_declarations_follow_the_three_state_publication_contract() {
         "位置尚未核实"
     );
 }
+
+/// oh-my-pi (OMP) is an independent fork, not a Pi alias. It registers with a
+/// non-enumerated stable id (default off), exposes only the lifecycle evidence
+/// delivered first, and keeps every undelivered capability explicitly absent
+/// with a recorded reason. Pi's own registration and resume flag stay intact.
+#[test]
+fn omp_registers_default_off_with_verified_lifecycle_only() {
+    let registry = Registry::builtins();
+    let omp = registry.get("omp").expect("OMP 应注册进内置注册表");
+    assert!(registry.get("oh-my-pi").is_none(), "不得出现重复产品别名");
+    assert!(CliId::from_stable_id("omp").is_none(), "omp 不得进入枚举");
+    assert_eq!(omp.command(), "omp");
+    assert_eq!(omp.npm_package(), "@oh-my-pi/pi-coding-agent");
+    assert_ne!(omp.command(), "pi");
+    assert_ne!(omp.npm_package(), "pi");
+    let defaults = Preferences::default();
+    assert_eq!(defaults.managed_tools, CliId::ALL.to_vec());
+    assert!(!defaults.managed_tool_ids().iter().any(|id| id == "omp"));
+
+    // Non-enumerated ids flow through the existing unknown-managed channel.
+    let registered = |id: &str| registry.get(id).is_some();
+    let mut preferences = Preferences::default();
+    let mut ids = legacy_ids();
+    ids.push("omp".into());
+    preferences
+        .set_registered_managed(&ids, registered)
+        .unwrap();
+    assert_eq!(preferences.managed_tools, CliId::ALL.to_vec());
+    assert_eq!(preferences.unknown_managed_tools(), &["omp".to_string()]);
+
+    // OMP's own resume contract: --resume/--continue, never Pi's --session.
+    assert_eq!(
+        omp.launch_args(Some("ses_01H"), crate::adapters::LaunchMode::Normal)
+            .unwrap(),
+        ["--resume", "ses_01H"]
+    );
+    assert_eq!(
+        omp.resume_latest_args(crate::adapters::LaunchMode::Normal)
+            .unwrap(),
+        ["--continue"]
+    );
+    assert!(omp
+        .launch_args(None, crate::adapters::LaunchMode::Yolo)
+        .is_err());
+    assert!(!omp.explicitly_incompatible_launch_version("19.0.0"));
+    assert!(!omp.explicitly_incompatible_launch_version("20.3.1"));
+    assert!(!omp.explicitly_incompatible_launch_version("18.20.2"));
+    assert!(omp.explicitly_incompatible_launch_version("20"));
+    assert!(omp.history_resume_version_supported("18.21.0"));
+    assert!(omp.history_resume_version_supported("20.1.0"));
+    assert!(!omp.history_resume_version_supported("not-a-version"));
+
+    // Capabilities are published only by their owning module. Assert the
+    // composition, not a point-in-time delivered/absent snapshot, so a later
+    // capability task never has to edit this shared registry proof.
+    let descriptor = omp.descriptor();
+    assert_eq!(descriptor.configuration.is_some(), omp.configuration().is_some());
+    assert_eq!(
+        descriptor.management.accounts,
+        crate::adapters::omp::accounts::management_visible(omp.accounts())
+    );
+    assert_eq!(descriptor.management.mcp, omp.supports_mcp());
+    assert_eq!(descriptor.management.skills, omp.supports_skills());
+    assert_eq!(
+        descriptor.management.agents,
+        crate::adapters::omp::agents::management_visible(omp.agents())
+    );
+    assert_eq!(
+        descriptor.management.plugins,
+        crate::adapters::omp::plugins::management_visible(omp.plugins())
+    );
+    assert_eq!(
+        descriptor.management.project_plugins,
+        crate::adapters::omp::plugins::project_visible(omp.plugins())
+    );
+    assert_eq!(
+        descriptor.management.memory.is_some(),
+        omp.published_memory().is_some()
+    );
+    assert_eq!(
+        descriptor.management.memory_reason,
+        crate::adapters::omp::memory::management_reason()
+    );
+    let rules = omp.rule_support();
+    assert_eq!(descriptor.management.rules.global, rules.global);
+    assert_eq!(descriptor.management.rules.project, rules.project);
+    assert_eq!(
+        descriptor.login.is_some(),
+        crate::adapters::omp::accounts::login_capability().is_some()
+    );
+    assert_eq!(
+        descriptor.native_config.state,
+        crate::adapters::omp::configuration::facet().state
+    );
+    assert_eq!(
+        descriptor.resources.state,
+        crate::adapters::omp::resources_facet().state
+    );
+    assert_eq!(
+        descriptor.history.state,
+        crate::adapters::omp::history::facet().state
+    );
+    assert!(omp.official_usage().is_none());
+    assert_eq!(
+        omp.native_files(crate::native::adapter::Scope::Global, Path::new("/home/example"), None, true)
+            .is_empty(),
+        crate::adapters::omp::configuration::native_files(
+            crate::native::adapter::Scope::Global,
+            Path::new("/home/example"),
+            None,
+            true
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        omp.native_files(
+            crate::native::adapter::Scope::Project,
+            Path::new("/home/example"),
+            Some(Path::new("/work/p")),
+            true
+        )
+        .is_empty(),
+        crate::adapters::omp::configuration::native_files(
+            crate::native::adapter::Scope::Project,
+            Path::new("/home/example"),
+            Some(Path::new("/work/p")),
+            true
+        )
+        .is_empty()
+    );
+    let policy = omp.connection_policy(crate::native::adapter::Scope::Global);
+    assert_eq!(
+        policy.api_key.state,
+        crate::adapters::omp::configuration::connection_policy(crate::native::adapter::Scope::Global)
+            .api_key
+            .state
+    );
+    assert_eq!(
+        policy.provider_address.state,
+        crate::adapters::omp::configuration::connection_policy(crate::native::adapter::Scope::Global)
+            .provider_address
+            .state
+    );
+
+    // The verified maintenance surface is adapter-owned: Bun install/update/
+    // remove and `omp update`; the precompiled downloader stays undeclared.
+    assert_eq!(
+        omp.install_command().as_deref(),
+        Some("bun add -g @oh-my-pi/pi-coding-agent")
+    );
+    assert_eq!(
+        omp.source_install_command(Some("native")).is_some(),
+        cfg!(windows)
+    );
+    assert_eq!(
+        omp.native_install_command().is_some(),
+        cfg!(windows),
+        "官方预编译安装入口按平台核实"
+    );
+    assert!(omp.npm_install_command().is_none());
+    assert_eq!(
+        omp.source_upgrade_command("bun", Some("18.20.2")).as_deref(),
+        Some("bun update -g @oh-my-pi/pi-coding-agent")
+    );
+    assert_eq!(
+        omp.source_upgrade_command("native", Some("18.20.2")).as_deref(),
+        Some("omp update")
+    );
+    assert_eq!(
+        omp.source_uninstall_command("bun", Some("18.20.2")).as_deref(),
+        Some("bun remove -g @oh-my-pi/pi-coding-agent")
+    );
+    assert!(omp.source_upgrade_command("unknown", Some("18.20.2")).is_none());
+    assert!(omp.npm_packages().is_empty(), "未核实 npm 通道，不得参与来源识别");
+    assert!(omp.install_guidance().0.contains("can1357/oh-my-pi"));
+    // Bun's documented global bin directory is a discovery location; no OMP
+    // home directory is guessed before the config task verifies it.
+    assert!(omp
+        .native_binary_directories(Path::new("/home/example"))
+        .contains(&Path::new("/home/example/.bun/bin").to_path_buf()));
+    // Bun is the only adapter-named source; standalone stays the shared native
+    // channel and an unrelated binary is never mislabelled.
+    assert_eq!(
+        omp.installation_source(Path::new("/home/example/.bun/bin/omp")),
+        Some("bun")
+    );
+    assert_eq!(omp.installation_source(Path::new("/usr/local/bin/omp")), None);
+    assert_eq!(omp.installation_source(Path::new("/usr/local/bin/pi")), None);
+    // Missing Bun is reported instead of Node/npm, with the official help link.
+    let dependencies = omp.runtime_dependencies(
+        "bun",
+        false,
+        Path::new("/home/example/unrelated-home-without-bun"),
+    );
+    assert!(!dependencies.is_empty(), "Bun 来源必须报告运行时依赖");
+    assert!(dependencies.iter().all(|item| item.name == "Bun"));
+    assert!(dependencies
+        .iter()
+        .all(|item| item.help_url.contains("bun.sh")));
+
+    // Remote resources stay adapter-owned and read-only where OMP only reads.
+    let remote = omp.remote_resource_layout();
+    assert_eq!(
+        remote.mcp.map(|layout| layout.relative),
+        Some(".omp/agent/mcp.json")
+    );
+    assert_eq!(remote.skill_root, Some(".omp/agent/skills"));
+    assert_eq!(remote.agent_root, Some(".omp/agent/agents"));
+    assert_eq!(remote.agent_extension, Some("md"));
+    let published = crate::adapters::PublishedDescriptor::from_adapter(omp);
+    assert!(published
+        .remote_skill_directories
+        .iter()
+        .any(|root| root.relative == ".omp/agent/skills" && !root.read_only));
+    assert!(published
+        .remote_skill_directories
+        .iter()
+        .any(|root| root.relative == ".omp/agent/managed-skills" && root.read_only));
+
+    // Pi is untouched by the new registration.
+    let pi = registry.get("pi").expect("Pi 仍应注册");
+    assert_eq!(pi.command(), "pi");
+    assert_eq!(pi.npm_package(), "@earendil-works/pi-coding-agent");
+    assert_eq!(
+        pi.launch_args(Some("session-1"), crate::adapters::LaunchMode::Normal)
+            .unwrap(),
+        ["--session", "session-1"]
+    );
+    assert!(pi.accounts().is_some());
+    assert!(pi.descriptor().configuration.is_some());
+}

@@ -4,6 +4,7 @@ export default {
     viewAll: '全部记录',
     resume: '继续',
     resumeAria: '继续会话「{{title}}」',
+    openAria: '在记录中查看「{{title}}」',
     untitled: '未命名会话',
     justNow: '刚刚',
     terminalRequested: '已请求外部终端恢复会话。',

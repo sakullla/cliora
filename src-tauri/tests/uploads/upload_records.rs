@@ -67,6 +67,7 @@ fn upload_records_migration_v30_recreates_the_table_and_preserves_neighbors() {
         let database = Database::open(&path).unwrap();
         database.with_connection(|connection| {
             // A pre-v30 database has no upload table yet.
+            crate::database::remove_later_fixture_tables(connection, 29).map_err(|error| error.to_string())?;
             connection.execute_batch("DROP TABLE remote_session_uploads; PRAGMA user_version = 29;").unwrap();
             connection.execute("INSERT INTO app_settings(key,value) VALUES ('uploads-fixture','keep')", []).unwrap();
             Ok(())
@@ -76,7 +77,7 @@ fn upload_records_migration_v30_recreates_the_table_and_preserves_neighbors() {
     let database = Database::open(&path).unwrap();
     database.with_connection(|connection| {
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0)).unwrap();
-        assert_eq!(version, 31);
+        assert_eq!(version, 33);
         let value: String = connection
             .query_row("SELECT value FROM app_settings WHERE key='uploads-fixture'", [], |row| row.get(0))
             .unwrap();

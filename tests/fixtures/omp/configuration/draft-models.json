@@ -1,0 +1,17 @@
+{
+  "capability": "configuration",
+  "name": "models.yml accepts environment references and auth none but rejects plaintext keys",
+  "case": {
+    "kind": "draft",
+    "role": "models",
+    "valid": [
+      "providers:\n  alpha:\n    api: openai-responses\n    baseUrl: https://alpha.example.test/v1\n    apiKey: ${ALPHA_API_KEY}\n",
+      "providers:\n  beta:\n    api: anthropic-messages\n    baseUrl: https://beta.example.test\n    auth: none\n"
+    ],
+    "invalid": [
+      "providers:\n  alpha:\n    apiKey: sk-live-private\n",
+      "providers:\n  alpha:\n    models:\n      - id: one\n      - id: one\n",
+      "modelRoles:\n  default: alpha/one\n"
+    ]
+  }
+}

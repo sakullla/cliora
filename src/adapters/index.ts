@@ -17,6 +17,7 @@ import { antigravityUiAdapter } from './antigravity';
 import { kiroUiAdapter } from './kiro';
 import { cursorUiAdapter } from './cursor';
 import { minimaxCodeUiAdapter } from './minimax_code';
+import { ompUiAdapter } from './omp';
 import type { ToolUiAdapter } from './contract';
 
 const specialized = new Map<string, ToolUiAdapter>([
@@ -38,6 +39,7 @@ const specialized = new Map<string, ToolUiAdapter>([
   [kiroUiAdapter.id, kiroUiAdapter],
   [cursorUiAdapter.id, cursorUiAdapter],
   [minimaxCodeUiAdapter.id, minimaxCodeUiAdapter],
+  [ompUiAdapter.id, ompUiAdapter],
 ]);
 
 export function uiAdapterFor(id: string): ToolUiAdapter {

@@ -1,0 +1,3 @@
+{"type":"session","id":"0190f4a2-0000-7000-8000-000000000005","timestamp":"2026-11-15T03:00:00Z","cwd":"/fixture/project"}
+{"type":"message","timestamp":"2026-11-15T03:01:00Z","message":{"role":"user","content":"Legacy question"}}
+{"type":"message","timestamp":"2026-11-15T03:02:00Z","message":{"role":"assistant","content":"Legacy answer","provider":"fixture","model":"fixture-model","usage":{"input":7,"output":3,"cacheRead":0,"cacheWrite":0,"totalTokens":10,"cost":{"input":0.000007,"output":0.000003,"cacheRead":0,"cacheWrite":0,"total":0.00001}},"stopReason":"stop"}}

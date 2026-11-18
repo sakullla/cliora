@@ -1,5 +1,6 @@
 //! Definition contracts, distinct from running agent sessions and AGENTS.md.
 use crate::native::adapter::Scope;
+use crate::native::format::FileKind;
 use serde::Serialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -16,6 +17,16 @@ pub struct AgentCapability {
 pub struct BuiltinAgent {
     pub name: &'static str,
     pub description: &'static str,
+}
+
+/// Native config that disables definitions by name instead of archiving files.
+/// OMP uses `task.disabledAgents`; adapters without this store keep the
+/// historical archive behavior.
+#[derive(Clone, Debug)]
+pub struct AgentToggleLocation {
+    pub path: PathBuf,
+    pub kind: FileKind,
+    pub field: Vec<String>,
 }
 pub fn capability(tool: &str) -> Result<AgentCapability, String> {
     Ok(get(tool)?.capability())
@@ -241,6 +252,59 @@ pub trait AgentAdapter: Sync {
     }
     fn disabled_detail(&self) -> &'static str {
         "原生定义已停用。"
+    }
+    /// Native config that disables definitions by name. `None` keeps file
+    /// archiving. When present, the shared service writes this field instead of
+    /// moving the definition file.
+    fn toggle_location(
+        &self,
+        _scope: Scope,
+        _home: &Path,
+        _project: Option<&Path>,
+        _name: &str,
+    ) -> Option<AgentToggleLocation> {
+        None
+    }
+    /// Starting value for a native toggle when the target file itself has no
+    /// explicit field. Layered CLIs can use the effective lower-layer list so a
+    /// higher-scope write preserves every currently disabled name.
+    fn toggle_seed(
+        &self,
+        _scope: Scope,
+        _home: &Path,
+        _project: Option<&Path>,
+        _name: &str,
+    ) -> Value {
+        Value::Null
+    }
+    /// Names disabled by the native config, including other scopes the CLI
+    /// merges. A read failure is reported as an empty list by the caller so one
+    /// unreadable config does not hide every definition.
+    fn disabled_names(
+        &self,
+        _scope: Scope,
+        _home: &Path,
+        _project: Option<&Path>,
+    ) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
+    /// Next value for `toggle_location`'s field. `None` removes the field.
+    fn toggle_value(&self, current: &Value, name: &str, enabled: bool) -> Option<Value> {
+        let mut values: Vec<String> = current
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        values.retain(|value| value != name);
+        if !enabled {
+            values.push(name.to_owned());
+        }
+        (!values.is_empty()).then(|| serde_json::json!(values))
     }
     fn native_disabled(&self, _format: &str, _content: &str) -> bool {
         false

@@ -12,7 +12,6 @@ use crate::{
 };
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
 use serde_json::Value;
 use std::{
     fs,
@@ -79,6 +78,15 @@ pub(crate) fn project(target: &PluginTarget) -> Result<Option<PathBuf>, String> 
         return Err("项目目录不可用".into());
     }
     Ok(Some(path))
+}
+fn pointer_of(path: &[String]) -> String {
+    format!(
+        "/{}",
+        path.iter()
+            .map(|part| part.replace('~', "~0").replace('/', "~1"))
+            .collect::<Vec<_>>()
+            .join("/")
+    )
 }
 fn safe_path(path: &Path) -> Result<(), String> {
     if !path.is_absolute()
@@ -248,6 +256,12 @@ fn snapshot_inner(
     let extension = adapter.extension();
     let mut entries = Vec::new();
     let mut basis = serde_json::to_string(target).map_err(|_| "目标无效")?;
+    // A native name-based disable store (for example OMP `task.disabledAgents`)
+    // is read before duplicate detection so the list matches what the CLI loads.
+    // An unreadable config keeps every definition visible instead of hiding it.
+    let disabled_names = adapter
+        .disabled_names(target.scope, home, project(target)?.as_deref())
+        .unwrap_or_default();
     if adapter.scans_definition_directories() {
         for name in adapter.definition_dirs() {
             for (dir, enabled) in [
@@ -313,6 +327,10 @@ fn snapshot_inner(
         .map(|e| e.name.clone())
         .collect();
     for e in &mut entries {
+        if e.enabled && disabled_names.iter().any(|name| name == &e.name) {
+            e.enabled = false;
+            e.detail.push_str(" · 已由原生停用配置（disabledAgents）停用");
+        }
         if e.enabled && names.iter().filter(|n| **n == e.name).count() > 1 {
             e.read_only = true;
             e.detail
@@ -321,12 +339,13 @@ fn snapshot_inner(
     }
     for builtin in adapter.builtin_definitions() {
         let overridden = entries.iter().any(|entry| entry.name == builtin.name && entry.enabled);
+        let disabled = disabled_names.iter().any(|name| name == builtin.name);
         entries.push(AgentEntry {
             id: format!("builtin://{}/{}", target.tool_id, builtin.name),
             name: builtin.name.into(), description: builtin.description.into(),
             path: String::new(), format: "markdown".into(), content: String::new(),
-            enabled: !overridden, read_only: true, builtin: true, owner: "CLI 内置".into(),
-            detail: format!("参考核验版本 {} 的内置目录；模型继承当前会话。完整提示词与加载状态由原生 CLI 管理。{}", capability.version, if overridden { "当前作用域存在同名定义，可能覆盖此内置项。" } else { "" }),
+            enabled: !overridden && !disabled, read_only: true, builtin: true, owner: "CLI 内置".into(),
+            detail: format!("参考核验版本 {} 的内置目录；模型继承当前会话。完整提示词与加载状态由原生 CLI 管理。{}{}", capability.version, if overridden { "当前作用域存在同名定义，可能覆盖此内置项。" } else { "" }, if disabled { "原生停用配置已停用此内置项。" } else { "" }),
             launchable: None,
         });
     }
@@ -466,8 +485,14 @@ fn plugin_owned(
     if !adapter.owns_agent_definitions() {
         return Ok(Vec::new());
     }
-    // Do not lose package ownership when native discovery fails.
-    Ok(plugins::scan_resources(db, home, target)?.entries)
+    // Do not lose package ownership when native discovery fails. A machine with
+    // no local CLI install has no plugin inventory to merge; that must not block
+    // Agent scans or enable/disable, matching the Skills scan.
+    match plugins::scan_resources(db, home, target) {
+        Ok(snapshot) => Ok(snapshot.entries),
+        Err(error) if error == "未找到 CLI 安装" => Ok(Vec::new()),
+        Err(error) => Err(error),
+    }
 }
 /// Installed line for adapters whose agent fields follow the native major
 /// version. Other adapters keep their static shapes without a probe. The
@@ -599,6 +624,7 @@ fn operate_inner(
     let mut changes = Vec::new();
     let outcome;
     let restore_path;
+    let mut toggle_restore: Option<PathBuf> = None;
     if request.action == "restore" {
         let path = PathBuf::from(request.id.as_deref().ok_or("缺少恢复路径")?);
         let allowed = |p: &Path| {
@@ -725,6 +751,47 @@ fn operate_inner(
                     }),
                     "enable" | "disable" => {
                         let enabled = request.action == "enable";
+                        if entry.enabled == enabled {
+                            return Err("状态未改变".into());
+                        }
+                        if let Some(location) = adapter.toggle_location(
+                            target.scope,
+                            home,
+                            project(target)?.as_deref(),
+                            &entry.name,
+                        ) {
+                            // Native config owns this switch; the definition file
+                            // is not renamed or edited. Missing config parses as
+                            // empty and is created by the same transaction.
+                            let baseline = location
+                                .path
+                                .exists()
+                                .then(|| transaction::read_native(&location.path))
+                                .transpose()?;
+                            let text = baseline.clone().unwrap_or_default();
+                            let parsed = format::parse(location.kind, &text)?;
+                            let pointer = pointer_of(&location.field);
+                            let seed = adapter.toggle_seed(
+                                target.scope,
+                                home,
+                                project(target)?.as_deref(),
+                                &entry.name,
+                            );
+                            let current = if seed.is_null() {
+                                parsed.pointer(&pointer).cloned().unwrap_or(Value::Null)
+                            } else {
+                                seed
+                            };
+                            let next = adapter.toggle_value(&current, &entry.name, enabled);
+                            let contents =
+                                format::set_path(location.kind, &text, &location.field, next.as_ref())?;
+                            toggle_restore = Some(location.path.clone());
+                            changes.push(FileMutation {
+                                path: location.path,
+                                baseline,
+                                contents: Some(contents),
+                            });
+                        } else {
                         if enabled {
                             let (name, _) = contract::validate(
                                 &target.tool_id,
@@ -733,9 +800,6 @@ fn operate_inner(
                                 &entry.name,
                             )?;
                             require_directory_name(adapter, &path, &name)?;
-                        }
-                        if entry.enabled == enabled {
-                            return Err("状态未改变".into());
                         }
                         if enabled
                             && adapter.native_disabled_for_version(
@@ -804,12 +868,13 @@ fn operate_inner(
                                 ),
                             });
                         }
+                        }
                     }
                     _ => return Err("未知 agent 操作".into()),
                 }
             }
         }
-        restore_path = path.display().to_string();
+        restore_path = toggle_restore.unwrap_or(path).display().to_string();
         outcome = transaction::apply_files(db, credentials, &changes, |_| Ok(()))?;
     }
     let snapshot = snapshot_inner(home, target, plugins, version).map_err(|error| {
@@ -818,7 +883,7 @@ fn operate_inner(
             outcome.transaction_id
         )
     })?;
-    Ok(AgentResult {transaction_id:outcome.transaction_id,changed_paths:outcome.changed_files,restore_path,snapshot,detail:"已修改原生定义。请按能力说明重新加载；现有会话状态未验证。删除和启停可恢复整个操作，任一文件外改将阻止恢复。".into()})
+    Ok(AgentResult {transaction_id:outcome.transaction_id,changed_paths:outcome.changed_files,restore_path,snapshot,detail:"已修改原生定义。请按能力说明重新加载；现有会话状态未验证。创建、修改、删除和启停都记录在同一原生事务中，可预览并恢复；任一文件外改会阻止恢复。".into()})
 }
 
 #[cfg(test)]

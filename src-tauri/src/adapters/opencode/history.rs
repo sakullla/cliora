@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::Value;
@@ -10,9 +11,9 @@ use crate::history::{
 };
 
 fn database(home: &Path) -> PathBuf {
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".local/share"));
+    let base = if dirs::home_dir().as_deref() == Some(home) {
+        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share"))
+    } else { home.join(".local/share") };
     crate::accounts::selection::history_root("open_code", || base.join("opencode"))
         .join("opencode.db")
 }
@@ -81,10 +82,18 @@ pub fn sources_controlled(
 ) -> Result<Vec<HistorySource>, String> {
     check_cancelled(cancelled)?;
     let path = database(home);
-    if !path.exists() {
-        return Ok(Vec::new());
+    match std::fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("OpenCode 历史库不可读取：{error}")),
+        Ok(metadata) if !metadata.is_file() || metadata.file_type().is_symlink() => return Err("OpenCode 历史库必须是普通文件".into()),
+        Ok(_) => {}
     }
-    let db = open(&path)?;
+    static INDEX: OnceLock<crate::history::source_cache::RevisionCache<Vec<HistorySource>>> = OnceLock::new();
+    INDEX.get_or_init(crate::history::source_cache::RevisionCache::new).read(&path, cancelled, || indexed_sources(&path, cancelled))
+}
+
+fn indexed_sources(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySource>, String> {
+    let db = open(path)?;
     let (v1, v2) = storage_tables(&db)?;
     // Both generations may coexist while a 1.x database is being migrated;
     // each index row stays its own source and the parse branch is chosen per id.
@@ -108,7 +117,7 @@ pub fn sources_controlled(
             continue;
         }
         let fingerprint = updated.filter(|time| *time > 0)
-            .map(|time| format!("opencode-session-v3|{generation}|{time}"))
+            .map(|time| format!("opencode-session-v4|{generation}|{time}"))
             .unwrap_or_else(|| "0".into());
         if let Some(&index) = seen.get(&id) {
             let source: &mut HistorySource = &mut result[index];
@@ -119,7 +128,7 @@ pub fn sources_controlled(
         }
         seen.insert(id.clone(), result.len());
         result.push(HistorySource { native_title: None,
-            path: path.clone(),
+            path: path.to_owned(),
             native_id: Some(id),
             fingerprint,
             fingerprint_error: None,
@@ -308,7 +317,7 @@ fn parse_v2(
     // `user`/`assistant`/`idle`/... (verified on a real 2.0.29 database);
     // non-conversation rows are skipped without failing the session.
     let mut statement = db
-        .prepare("SELECT id, type, data, time_created FROM session_message WHERE session_id = ?1 ORDER BY seq, id")
+        .prepare("SELECT id, type, data, time_created FROM session_message WHERE session_id = ?1 AND type IN ('user','assistant') ORDER BY seq, id")
         .map_err(|error| format!("OpenCode 会话格式未知：{error}"))?;
     let rows = statement
         .query_map([id], |row| {
@@ -443,7 +452,7 @@ fn parse_v1(
             }
         }
     }
-    let mut statement = db.prepare("SELECT id, message_id, data, time_created FROM part WHERE session_id = ?1 ORDER BY time_created, id LIMIT 4001")
+    let mut statement = db.prepare("SELECT id, message_id, data, time_created FROM part WHERE session_id = ?1 AND CASE WHEN json_valid(data) THEN json_extract(data, '$.type') = 'text' ELSE 1 END ORDER BY time_created, id LIMIT 4001")
         .map_err(|error| error.to_string())?;
     let rows = statement
         .query_map([id], |row| {

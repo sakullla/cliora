@@ -64,7 +64,25 @@ test('read-only Skill source starts a new selection where the press lands, even 
   await expect(line).toHaveText('自然语言命中以下意图时直接进入本 skill：');
   const selected = () => page.evaluate(() => String(getSelection()));
   async function drag(fromX: number, toX: number) {
-    const box = (await line.boundingBox())!;
+    // CodeMirror remeasures after fonts load; don't drag from a rectangle captured during that shift.
+    const box = await line.evaluate(async (element) => {
+      await document.fonts.ready;
+      let previous: { x: number; y: number; width: number; height: number } | null = null;
+      let stableFrames = 0;
+      for (let frame = 0; frame < 120; frame++) {
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        if (!element.isConnected) throw new Error('Skill source line was replaced before selection');
+        const { x, y, width, height } = element.getBoundingClientRect();
+        const current = { x, y, width, height };
+        const stable = previous && width > 0 && height > 0
+          && Math.abs(x - previous.x) < 0.1 && Math.abs(y - previous.y) < 0.1
+          && Math.abs(width - previous.width) < 0.1 && Math.abs(height - previous.height) < 0.1;
+        stableFrames = stable ? stableFrames + 1 : 0;
+        if (stableFrames >= 6) return current;
+        previous = current;
+      }
+      throw new Error('Skill source line geometry did not settle before selection');
+    });
     await page.mouse.move(box.x + fromX, box.y + box.height / 2);
     await page.mouse.down();
     for (let step = 1; step <= 12; step++) await page.mouse.move(box.x + fromX + (toX - fromX) * step / 12, box.y + box.height / 2);

@@ -94,6 +94,8 @@ pub mod native;
 pub mod portable;
 mod process_environment;
 pub mod projects;
+pub mod prompts;
+pub mod workspaces;
 pub mod remote;
 pub mod resources;
 pub mod session_host;
@@ -258,6 +260,13 @@ pub fn run() {
             commands::copy_history_resume_command,
             commands::resume_history_session,
             commands::export_history_session,
+            commands::query_prompts,
+            commands::get_prompt,
+            commands::save_prompt,
+            commands::apply_prompt_batch,
+            commands::preview_prompt_import,
+            commands::delete_prompt,
+            commands::record_prompt_usage,
             commands::list_library_items,
             commands::save_library_item,
             commands::delete_library_item,
@@ -271,6 +280,7 @@ pub fn run() {
             commands::delete_mcp_definition,
             commands::export_mcp_definition,
             commands::remove_native_mcp,
+            commands::set_external_mcp_enabled,
             commands::list_native_mcp,
             commands::list_mcp_placements,
             commands::scan_native_agents,
@@ -326,6 +336,23 @@ pub fn run() {
             commands::list_cli_adapters,
             commands::open_external_url,
             commands::open_workbench_path,
+            commands::list_business_workspaces,
+            commands::create_business_workspace,
+            commands::rename_business_workspace,
+            commands::delete_business_workspace,
+            commands::scan_workspace_repositories,
+            commands::cancel_workspace_scan,
+            commands::add_workspace_repositories,
+            commands::remove_workspace_repository,
+            commands::favorite_workspace_repository,
+            commands::relink_workspace_repository,
+            commands::preview_workspace_manifest,
+            commands::preview_workspace_link,
+            commands::attach_workspace_manifest,
+            commands::export_workspace_manifest,
+            commands::refresh_workspace_manifest,
+            commands::list_workspace_session_contexts,
+            commands::launch_workspace_cli,
             commands::list_projects,
             commands::add_project,
             commands::relink_project,
@@ -468,6 +495,7 @@ pub fn run() {
             commands::set_native_rule_file_enabled,
             commands::get_skill_enabled,
             commands::set_skill_enabled,
+            commands::set_observed_skill_enabled,
             commands::get_native_rule_enabled,
             commands::set_native_rule_enabled,
             commands::save_native_rule,

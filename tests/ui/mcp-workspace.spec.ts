@@ -4,17 +4,19 @@ import { openCli } from './cli-switcher';
 type Call = { command: string; args: any };
 
 /** One managed CLI (Codex) with the MCP tab open. Native writes are supported and every IPC is recorded. */
-async function install(page: Page, options: { failList?: boolean } = {}) {
-  await page.addInitScript((settings: { failList: boolean }) => {
+async function install(page: Page, options: { failList?: boolean; external?: boolean; sourceIssue?: boolean } = {}) {
+  await page.addInitScript((settings: { failList: boolean; external: boolean; sourceIssue: boolean }) => {
     const state = {
       entries: [
         { name: 'server-one', transport: 'stdio', command: 'npx', args: ['-y', 'server-one'], cwd: '', url: '', env: {}, headers: {}, inLibrary: true, enabled: true, protectedValues: false },
         { name: 'remote-service', transport: 'http', command: '', args: [], cwd: '', url: 'https://example.test/mcp', env: {}, headers: {}, inLibrary: false, enabled: false, protectedValues: false },
         { name: 'vault', transport: 'stdio', command: 'uvx', args: ['vault'], cwd: '', url: '', env: { API_TOKEN: 'secret-token' }, headers: {}, inLibrary: false, enabled: true, protectedValues: true },
+        ...(settings.external ? [{ name: 'github', transport: 'http', command: '', args: [], cwd: '', url: 'https://api.githubcopilot.com/mcp/', env: {}, headers: {}, inLibrary: false, enabled: false, protectedValues: false, source: 'Claude Code', readOnly: true, switchable: true, detail: '只读来源 · /home/me/.claude/mcp.json', issue: null }] : []),
       ],
       definitions: [{ id: 'mcp-1', name: 'server-one', transport: 'stdio', command: 'npx', args: ['-y', 'server-one'], cwd: '', url: '', env: {}, headers: {}, inLibrary: true, version: 3 }],
       calls: [] as Call[],
       failList: settings.failList,
+      sourceIssue: settings.sourceIssue,
       conflict: false,
     };
     Object.assign(window, { isTauri: true, __mcp: state, __TAURI_INTERNALS__: { invoke: async (command: string, args: any = {}) => {
@@ -31,7 +33,9 @@ async function install(page: Page, options: { failList?: boolean } = {}) {
       if (command === 'get_managed_mcp_enabled') return null;
       if (command === 'list_native_mcp') {
         if (state.failList) throw new Error('codex 配置文件无法读取');
-        return state.entries;
+        return state.sourceIssue
+          ? { entries: state.entries, issues: [{ kind: 'mcp_source', source: 'Claude Code', path: '/home/me/.claude.json', message: 'Claude Code · /home/me/.claude.json：JSON 无法解析' }] }
+          : { entries: state.entries, issues: [] };
       }
       // The preview never decides the write; it only reports what the target currently holds.
       if (command === 'preview_mcp_draft') {
@@ -50,13 +54,17 @@ async function install(page: Page, options: { failList?: boolean } = {}) {
         return { definition, targets: args.targets.map((target: any) => ({ ...target, operation: 'write', status: 'written', detail: '已写入', path: '/fixture/codex.toml', baselineHash: 'hash-new', previewToken: 'token-1' })) };
       }
       if (command === 'remove_native_mcp') return null;
+      if (command === 'set_external_mcp_enabled') {
+        state.entries = state.entries.map((entry: any) => entry.name === args.name ? { ...entry, enabled: args.enabled } : entry);
+        return null;
+      }
       if (command === 'delete_mcp_definition') return null;
       if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
       if (command === 'get_tray_status') return { available: false, error: null };
       if (command.startsWith('plugin:event|')) return 1;
       throw new Error(`Unexpected IPC: ${command}`);
     } } });
-  }, { failList: options.failList === true });
+  }, { failList: options.failList === true, external: options.external === true, sourceIssue: options.sourceIssue === true });
   await page.goto('/');
   await openCli(page, 'Codex');
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
@@ -336,4 +344,48 @@ test('the keyboard selects a row, edits and saves, and closing returns focus to 
   await detail.getByRole('button', { name: '关闭详情' }).click();
   await expect(detail).toHaveCount(0);
   await expect(row(page, 'remote-service')).toBeFocused();
+});
+
+test('a malformed foreign MCP source keeps valid rows and shows a recovery issue', async ({ page }) => {
+  await install(page, { sourceIssue: true });
+  await expect(list(page).getByRole('listitem')).toHaveCount(3);
+  await expect(page.getByText('JSON 无法解析')).toBeVisible();
+  await page.getByRole('button', { name: '重新扫描' }).first().click();
+  await expect.poll(async () => (await calls(page)).filter(call => call.command === 'list_native_mcp').length).toBeGreaterThan(1);
+});
+
+test('an externally discovered MCP is read-only and names its source', async ({ page }) => {
+  await install(page, { external: true });
+  const foreign = list(page).getByRole('listitem').filter({ hasText: 'github' });
+  await expect(foreign).toContainText('Claude Code');
+  await expect(foreign).toContainText('已停用');
+  await row(page, 'github').click();
+  const detail = card(page, 'github');
+  await expect(detail).toContainText('/home/me/.claude/mcp.json');
+  await expect(detail.getByRole('button', { name: '编辑', exact: true })).toHaveCount(0);
+  await expect(detail.getByRole('button', { name: '从 CLI 移除' })).toHaveCount(0);
+  await expect(detail.getByRole('region', { name: 'MCP 详情' })).toBeVisible();
+  // The CLI-owned override is the only writable action; the source label stays.
+  const toggle = detail.getByRole('switch', { name: '启用' });
+  await expect(toggle).not.toBeChecked();
+  await toggle.click();
+  const write = await lastCall(page, 'set_external_mcp_enabled');
+  expect(write.args).toEqual(expect.objectContaining({ name: 'github', enabled: true, target: expect.objectContaining({ toolId: 'codex', scope: 'global' }) }));
+  await expect(detail.getByRole('switch', { name: '启用' })).toBeChecked();
+
+});
+
+
+test('MCP listing is read once and draft switches do not rescan native files', async ({ page }) => {
+  await install(page);
+  await expect(list(page).getByRole('listitem')).toHaveCount(3);
+  await row(page, 'remote-service').click();
+  await expect(card(page, 'remote-service')).toBeVisible();
+  await card(page, 'remote-service').getByRole('button', { name: '编辑', exact: true }).click();
+  const toggle = card(page, 'remote-service').getByRole('checkbox', { name: '启用', exact: true });
+  await toggle.check();
+  await toggle.uncheck();
+  await search(page).fill('remote');
+  await expect(list(page).getByRole('listitem')).toHaveCount(1);
+  expect((await calls(page)).filter(call => call.command === 'list_native_mcp')).toHaveLength(1);
 });

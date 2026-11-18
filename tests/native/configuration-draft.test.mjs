@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createConfigurationSession, configurationAction, configurationApplicationState, configurationAppliedFileState, configurationLiveState, configurationConnectionIdentity, rememberConfigurationApiBuffer, configurationRequestMatches } from '../../src/lib/configurationDraft.ts';
+import { createConfigurationSession, configurationAction, configurationApplicationState, configurationLiveState, configurationConnectionIdentity, rememberConfigurationApiBuffer, configurationRequestMatches } from '../../src/lib/configurationDraft.ts';
 const initial = { sessionId: 'one', revision: 0, issues: [], profile: { files: {} } };
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 
@@ -190,100 +190,4 @@ test('the live strip states only what the binding supports: applied, invalid, un
   // A project without its own binding is never reported as reading any configuration.
   assert.deepEqual(configurationLiveState(null, profiles, common, 'project', false), { tone: 'neutral', state: 'project_unbound', profile: null });
   assert.deepEqual(configurationLiveState(null, profiles, common, 'global', false), { tone: 'neutral', state: 'unapplied', profile: null });
-});
-
-const tomlFile = (current, proposedText) => [{ format: 'toml', current, proposedText }];
-const yamlFile = (current, proposedText) => [{ format: 'yaml', current, proposedText }];
-const codexDocument = `model = "one"
-model_provider = "gateway"
-
-[model_providers.gateway]
-base_url = "https://gateway.example.test/v1"
-wire_api = "responses"
-`;
-
-test('unmanaged TOML content is not an external change while a managed value still decides it', () => {
-  // The MCP page and the CLI itself write the same file; those keys are not this profile's content.
-  const native = `model = "one" # 本机手感
-model_provider = "gateway"
-
-[model_providers.gateway]
-base_url = "https://gateway.example.test/v1"
-wire_api = "responses"
-
-[mcp_servers.docs]
-command = "npx"
-args = [
-  "-y",
-  "some-server",
-]
-
-[projects."/tmp/demo"]
-trust_level = "trusted"
-`;
-  assert.equal(configurationAppliedFileState(tomlFile(native, codexDocument)), 'unchanged');
-  assert.equal(configurationAppliedFileState(tomlFile(native.replace('wire_api = "responses"', 'wire_api = "chat"'), codexDocument)), 'changed');
-  assert.equal(configurationAppliedFileState(tomlFile(native.replace('model_provider = "gateway"\n', ''), codexDocument)), 'changed');
-  // The same key under another table cannot stand in for the managed one.
-  assert.equal(configurationAppliedFileState(tomlFile('[other]\nbase_url = "https://gateway.example.test/v1"\n', '[model_providers.gateway]\nbase_url = "https://gateway.example.test/v1"\n')), 'changed');
-  // Spacing, comments and a trailing comma in a multi-line array are presentation, not content.
-  assert.equal(configurationAppliedFileState(tomlFile('args = [\n  "-y",\n  "server",\n]\n', 'args = ["-y", "server"]\n')), 'unchanged');
-  // A `#` inside a value is content, not a comment.
-  assert.equal(configurationAppliedFileState(tomlFile('token = "a#b"\n', 'token = "a"\n')), 'changed');
-});
-
-test('unmanaged YAML content is not an external change while a managed value still decides it', () => {
-  const document = `provider: gateway
-model: one
-limits:
-  context: 8192
-models:
-  - name: one
-    contextWindow: 8192
-  - name: two
-    contextWindow: 4096
-`;
-  const native = `# written by the CLI itself
-provider: gateway
-model: one
-theme: dark
-limits:
-  context: 8192
-extra:
-  nested: true
-models:
-  - name: one
-    contextWindow: 8192
-  - name: two
-    contextWindow: 4096
-`;
-  assert.equal(configurationAppliedFileState(yamlFile(native, document)), 'unchanged');
-  assert.equal(configurationAppliedFileState(yamlFile(native.replace('context: 8192', 'context: 4096'), document)), 'changed');
-  assert.equal(configurationAppliedFileState(yamlFile(native.replace('name: two', 'name: three'), document)), 'changed');
-  // A managed list item count is content: dropping one is a change.
-  assert.equal(configurationAppliedFileState(yamlFile(native.replace('  - name: two\n    contextWindow: 4096\n', ''), document)), 'changed');
-  assert.equal(configurationAppliedFileState(yamlFile('other:\n  model: one\n', document)), 'changed');
-  // A `#` is a comment only at the start of a line or after a space.
-  assert.equal(configurationAppliedFileState(yamlFile(native.replace('theme: dark', 'theme: "a # b"'), document)), 'unchanged');
-  assert.equal(configurationAppliedFileState(yamlFile(native.replace('theme: dark', 'theme: dark # 本机手感'), document)), 'unchanged');
-});
-
-test('a comparison that could not run says unknown and never changed or unchanged', () => {
-  assert.equal(configurationAppliedFileState([]), 'unknown');
-  // A document that does not parse may be an edit, but nothing here confirms one.
-  assert.equal(configurationAppliedFileState(tomlFile('model = "one"\nargs = [\n  "-y"\n', 'model = "one"\n')), 'unknown');
-  assert.equal(configurationAppliedFileState(tomlFile('model = "unclosed\n', 'model = "one"\n')), 'unknown');
-  assert.equal(configurationAppliedFileState(tomlFile('model = "one"\nnonsense\n', 'model = "one"\n')), 'unknown');
-  assert.equal(configurationAppliedFileState(yamlFile('theme: |\n  dark\n', 'theme: dark\n')), 'unknown');
-  assert.equal(configurationAppliedFileState(yamlFile('\ttheme: dark\n', 'theme: dark\n')), 'unknown');
-  // A flow collection closed from outside its own indentation is not read back either.
-  assert.equal(configurationAppliedFileState(yamlFile('input: [text,\nimage]\n', 'input: [text, image]\n')), 'unknown');
-  assert.equal(configurationAppliedFileState([{ format: 'ini', current: 'model=one', proposedText: 'model=two' }]), 'unknown');
-  assert.equal(configurationAppliedFileState([{ format: 'json', current: '{"model":', proposedText: '{"model":"one"}' }]), 'unknown');
-  // One partition that does not read keeps the whole answer unconfirmed unless another really changed.
-  assert.equal(configurationAppliedFileState([...tomlFile('args = [\n', 'args = []\n'), { format: 'json', current: '{"model":"one"}', proposedText: '{"model":"one"}' }]), 'unknown');
-  assert.equal(configurationAppliedFileState([...tomlFile('args = [\n', 'args = []\n'), { format: 'json', current: '{"model":"edited"}', proposedText: '{"model":"one"}' }]), 'changed');
-  // JSON keeps its subset comparison: native-only keys are not this profile's content.
-  assert.equal(configurationAppliedFileState([{ format: 'json', current: '{"model":"one","nativeOnly":true}', proposedText: '{"model":"one"}' }]), 'unchanged');
-  assert.equal(configurationAppliedFileState([{ format: 'json', current: '{"model":"edited"}', proposedText: '{"model":"one"}' }]), 'changed');
 });

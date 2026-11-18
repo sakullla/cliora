@@ -1,0 +1,10 @@
+{
+  "capability": "configuration",
+  "name": "a profile name that can escape the profile root is rejected",
+  "case": {
+    "kind": "paths",
+    "profile": "../escape",
+    "configDir": "custom-config",
+    "expectedError": "invalid profile name"
+  }
+}

@@ -1,5 +1,8 @@
+import { installPromptFixtureBridge } from '../../scripts/capture-prompt-fixtures.mjs';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { cliSwitcher } from './cli-switcher';
+
+test.beforeEach(async ({ page }) => { await page.addInitScript(installPromptFixtureBridge); });
 
 const tools = [
   ['codex', 'Codex', true],

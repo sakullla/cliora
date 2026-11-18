@@ -1,4 +1,7 @@
+import { installPromptFixtureBridge } from '../../scripts/capture-prompt-fixtures.mjs';
 import { expect, test, type Page } from '@playwright/test';
+
+test.beforeEach(async ({ page }) => { await page.addInitScript(installPromptFixtureBridge); });
 
 const host = {
   id: 'host-1',
@@ -155,6 +158,8 @@ test('moving onto manage hosts does not shift the host menu', async ({ page }) =
   const menu = page.locator('.host-switcher-menu');
   const manage = menu.getByRole('menuitem', { name: '管理远程主机…' });
   await expect(manage).toBeVisible();
+  // Measure hover after the menu's entrance animation, not during its initial translation.
+  await menu.evaluate(node => Promise.all(node.getAnimations().map(animation => animation.finished.catch(() => {}))));
   const before = await menu.boundingBox();
   await manage.hover();
   const tops = await page.evaluate(async () => {
@@ -694,3 +699,103 @@ for (const width of [900, 640]) {
     });
   }
 }
+
+async function installHostSelections(page: Page, delayedProjects = false) {
+  await installHostDesktop(page);
+  await page.addInitScript(({ host, delayedProjects }) => {
+    const w = window as any;
+    const invoke = w.__TAURI_INTERNALS__.invoke;
+    const targets = [host, { ...host, id: 'host-2', name: '第二台主机', host: 'second.invalid' }, { ...host, id: 'host-empty', name: '空主机', host: 'empty.invalid' }];
+    const projects = targets.map(target => ({ id: target.id + '-project', targetId: target.id, name: target.name, path: '/srv/project', preferredTool: 'codex', updatedAt: 1 }));
+    const sessions = ['local', 'host-1', 'host-2'].flatMap(targetId => [1, 2].map(index => ({
+      id: `${targetId}-${index}`, toolId: 'codex', projectId: targetId === 'local' ? null : `remote:${targetId}-project`,
+      directory: `/fixture/${targetId}/${index}`, mode: 'normal', running: true, exitCode: null, startedAt: index,
+    })));
+    let release = () => {};
+    const ready = new Promise<void>(resolve => { release = resolve; });
+    w.__releaseHostProjects = release;
+    w.__hostSelectionSessions = sessions;
+    w.__hostSelectionCalls = [];
+    w.__TAURI_INTERNALS__.invoke = async (command: string, args: any = {}) => {
+      w.__hostSelectionCalls.push({ command, args });
+      if (command === 'list_remote_targets') return structuredClone(targets);
+      if (command === 'list_remote_projects') { if (delayedProjects) await ready; return structuredClone(projects); }
+      if (command === 'list_workbench_sessions') return structuredClone(sessions);
+      if (command === 'replay_workbench_session') return btoa(`output-${args.sessionId}\r\n`);
+      if (command === 'restore_workbench_sessions') return { restored: {}, failures: [] };
+      if (command === 'workbench_git_context') return null;
+      return invoke(command, args);
+    };
+  }, { host, delayedProjects });
+}
+
+async function selectHost(page: Page, name: string) {
+  await page.locator('.sidebar-host').getByRole('button').click();
+  await page.getByRole('menuitemradio', { name: new RegExp(name) }).click();
+}
+const sessionTab = (page: Page, id: string) => page.locator(`[role="tab"][data-session-id="${id}"]`);
+const openSelectionWorkbench = async (page: Page) => {
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+};
+
+test('host switching restores each host last session without relaunching or replaying its terminal', async ({ page }) => {
+  await installHostSelections(page);
+  await openSelectionWorkbench(page);
+  await sessionTab(page, 'local-2').click();
+  await selectHost(page, '测试远程主机');
+  await sessionTab(page, 'host-1-2').click();
+  await selectHost(page, '第二台主机');
+  await sessionTab(page, 'host-2-2').click();
+  const replays = await page.evaluate(() => (window as any).__hostSelectionCalls.filter((call: any) => call.command === 'replay_workbench_session').length);
+  for (let round = 0; round < 3; round++) {
+    for (const [hostName, id] of [['本机', 'local-2'], ['测试远程主机', 'host-1-2'], ['第二台主机', 'host-2-2']]) {
+      await selectHost(page, hostName);
+      await expect(sessionTab(page, id)).toHaveAttribute('aria-selected', 'true');
+      await expect(page.locator('[data-pane-session="' + id + '"]')).toBeVisible();
+    }
+  }
+  const calls = await page.evaluate(() => (window as any).__hostSelectionCalls);
+  expect(calls.filter((call: any) => call.command === 'replay_workbench_session')).toHaveLength(replays);
+  expect(calls.filter((call: any) => ['launch_cli', 'reattach_workbench_session', 'close_workbench_session'].includes(call.command))).toEqual([]);
+  expect(await page.evaluate(() => localStorage.getItem('cliora:workbench-selected'))).toBe('local-2');
+});
+
+test('host selection survives reload and late project discovery without a local session replacing it', async ({ page }) => {
+  await installHostSelections(page, true);
+  await page.addInitScript(() => {
+    localStorage.setItem('cliora:remote-target', 'host-1');
+    localStorage.setItem('cliora:workbench-selected:host-1', 'host-1-2');
+    localStorage.setItem('cliora:workbench-selected:local', 'local-2');
+  });
+  await openSelectionWorkbench(page);
+  await expect(sessionTab(page, 'local-1')).toHaveCount(0);
+  await page.evaluate(() => (window as any).__releaseHostProjects());
+  await expect(sessionTab(page, 'host-1-2')).toHaveAttribute('aria-selected', 'true');
+  await selectHost(page, '本机');
+  await expect(sessionTab(page, 'local-2')).toHaveAttribute('aria-selected', 'true');
+  await selectHost(page, '测试远程主机');
+  await expect(sessionTab(page, 'host-1-2')).toHaveAttribute('aria-selected', 'true');
+});
+
+test('an empty host and a removed remembered session keep fallback inside the selected host', async ({ page }) => {
+  await installHostSelections(page);
+  await openSelectionWorkbench(page);
+  await sessionTab(page, 'local-2').click();
+  await selectHost(page, '测试远程主机');
+  await sessionTab(page, 'host-1-2').click();
+  await selectHost(page, '空主机');
+  await expect(page.locator('[role="tab"][data-session-id]')).toHaveCount(0);
+  await selectHost(page, '本机');
+  await expect(sessionTab(page, 'local-2')).toHaveAttribute('aria-selected', 'true');
+  await page.evaluate(() => {
+    const sessions = (window as any).__hostSelectionSessions;
+    sessions.splice(sessions.findIndex((session: any) => session.id === 'host-1-2'), 1);
+  });
+  // Returning to the page refreshes the authoritative list, as a remote close would.
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页', exact: true }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await selectHost(page, '测试远程主机');
+  await expect(sessionTab(page, 'host-1-1')).toHaveAttribute('aria-selected', 'true');
+  await expect(sessionTab(page, 'host-1-2')).toHaveCount(0);
+});

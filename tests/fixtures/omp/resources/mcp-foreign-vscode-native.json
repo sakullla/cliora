@@ -1,0 +1,19 @@
+{
+  "capability": "resources",
+  "name": "Native VS Code project MCP reads the top-level servers shape",
+  "case": {
+    "kind": "mcp",
+    "action": "foreign",
+    "base": "vscode-native",
+    "files": [
+      {
+        "scope": "project",
+        "path": ".vscode/mcp.json",
+        "content": "{\"servers\":{\"vscode-native\":{\"command\":\"npx\"}}}"
+      }
+    ],
+    "expect": [
+      { "name": "vscode-native", "source": "VS Code", "enabled": true }
+    ]
+  }
+}

@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
-async function setup(page: Page, supported = true, currentVersion = '3000.11.2', latestVersion = '3000.11.3', majorUpgrade: { label: string; command: string | null; guidance: string | null } | null = null) {
-  await page.addInitScript(({ supported, currentVersion, latestVersion, majorUpgrade }) => {
+async function setup(page: Page, supported = true, currentVersion = '3000.11.2', latestVersion = '3000.11.3', majorUpgrade: { label: string; command: string | null; guidance: string | null } | null = null, bunScenario: 'installed' | 'missing' | null = null) {
+  await page.addInitScript(({ supported, currentVersion, latestVersion, majorUpgrade, bunScenario }) => {
     let attempts = 0;
     let versionChecks = 0;
     let rejectInstall: ((error: unknown) => void) | undefined;
@@ -16,7 +16,18 @@ async function setup(page: Page, supported = true, currentVersion = '3000.11.2',
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['devin'], theme: 'light' }, tools: [{ id: 'devin', name: 'Devin' }] };
         if (command === 'list_cli_adapters') return { registered: [{ id: 'devin', name: 'Devin', management: { accounts: false, mcp: false, skills: false, agents: false, plugins: false } }], managedIds: ['devin'], preservedUnknown: [] };
         if (command === 'get_registered_tool_workspace') return {
-          probe: { tool: 'devin', latestVersionSupported: supported, selectedPath: '/fixture/devin', installations: [{ path: '/fixture/devin', version: currentVersion, status: 'available', source: 'native' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: 'https://devin.ai', upgradeHint: '', installCommand: null, upgradeCommand: 'fixture-update', majorUpgrade }, profiles: [], binding: null, common: null, snapshots: [], recoveryNeeded: [], customPath: null,
+          probe: bunScenario ? {
+            tool: 'devin', latestVersionSupported: true,
+            selectedPath: bunScenario === 'installed' ? '/fixture/bun/omp.exe' : null,
+            installations: bunScenario === 'installed' ? [{ path: '/fixture/bun/omp.exe', version: currentVersion, status: 'available', source: 'bun' }] : [],
+            nativeFiles: [], nativeWrites: { state: bunScenario === 'installed' ? 'supported' : 'unknown', reason: bunScenario === 'installed' ? '' : '未发现可确认身份的 CLI' }, interfaceFormats: [], providerPresets: [],
+            dependencies: [{ name: 'Bun', status: bunScenario === 'installed' ? 'found' : 'missing', detail: 'OMP 由 Bun 运行；需要 Bun 1.4.4 或更新版本', helpUrl: 'https://bun.sh/docs/installation' }],
+            installUrl: 'https://github.com/can1357/oh-my-pi',
+            upgradeHint: '',
+            installCommand: bunScenario === 'missing' ? 'bun add -g @oh-my-pi/pi-coding-agent' : null,
+            upgradeCommand: bunScenario === 'installed' ? 'bun update -g @oh-my-pi/pi-coding-agent' : null,
+            nativeInstallCommand: 'irm https://omp.sh/install.ps1 | iex', npmInstallCommand: null, majorUpgrade: null,
+          } : { tool: 'devin', latestVersionSupported: supported, selectedPath: '/fixture/devin', installations: [{ path: '/fixture/devin', version: currentVersion, status: 'available', source: 'native' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: 'https://devin.ai', upgradeHint: '', installCommand: null, upgradeCommand: 'fixture-update', majorUpgrade }, profiles: [], binding: null, common: null, snapshots: [], recoveryNeeded: [], customPath: null,
         };
         if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
         if (command === 'get_tray_status') return { available: false, error: null };
@@ -38,10 +49,11 @@ async function setup(page: Page, supported = true, currentVersion = '3000.11.2',
         return null;
       } },
     });
-  }, { supported, currentVersion, latestVersion, majorUpgrade });
+  }, { supported, currentVersion, latestVersion, majorUpgrade, bunScenario });
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
-  await page.getByText('安装与更新', { exact: true }).click();
+  // A missing installation opens the panel by itself; clicking would close it.
+  if (bunScenario !== 'missing') await page.getByText('安装与更新', { exact: true }).click();
 }
 
 test('version lookup retries and background installation can cancel then retry', async ({ page }, testInfo) => {
@@ -133,4 +145,20 @@ test('unsupported major upgrade path shows official guidance without an action',
   await expect(page.getByRole('button', { name: '升级到 OpenCode 2' })).toHaveCount(0);
   await expect(page.getByText('此安装低于 1.19.0，没有官方 upgrade --major；请按官方迁移指引手动升级到 OpenCode 2。')).toBeVisible();
   await expect(page.getByRole('link', { name: '官方安装说明 ↗' })).toBeVisible();
+});
+
+test('a Bun source is named as Bun and its update action keeps that channel', async ({ page }) => {
+  await setup(page, true, '18.20.2', '18.20.3', null, 'installed');
+  await expect(page.getByText('Bun', { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: '更新 Bun' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '更新', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: '安装 ↗' })).toHaveCount(0);
+});
+
+test('an uninstalled Bun CLI shows a Bun install entry and the runtime requirement', async ({ page }) => {
+  await setup(page, true, '18.20.2', '18.20.3', null, 'missing');
+  await expect(page.getByRole('button', { name: '用 Bun 安装' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '安装原生' })).toBeVisible();
+  await expect(page.getByText('Bun 缺失')).toBeVisible();
+  await expect(page.getByRole('link', { name: '安装 ↗' })).toBeVisible();
 });

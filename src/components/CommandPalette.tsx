@@ -9,6 +9,7 @@ export type CommandItem = {
   id: string;
   group: string;
   label: string;
+  subtitle?: string;
   hint?: string;
   keywords?: string;
   icon?: IconName;
@@ -24,6 +25,7 @@ export type CommandItem = {
 
 function matchScore(item: CommandItem, needle: string): number {
   const label = item.label.trim().toLowerCase();
+  const subtitle = (item.subtitle ?? '').trim().toLowerCase();
   const group = item.group.trim().toLowerCase();
   const hint = (item.hint ?? '').trim().toLowerCase();
   const keywords = (item.keywords ?? '').trim().toLowerCase();
@@ -32,12 +34,12 @@ function matchScore(item: CommandItem, needle: string): number {
 
   if (label === needle) return 100 + boost;
   if (label.startsWith(needle)) return 85 + boost;
-  if (keywords === needle || (toolId && toolId === needle)) return 75 + boost;
+  if (keywords === needle || subtitle === needle || (toolId && toolId === needle)) return 75 + boost;
   if (label.includes(needle)) return 65 + boost;
-  if (keywords.startsWith(needle)) return 55 + boost;
-  if (keywords.includes(needle) || (toolId && toolId.includes(needle))) return 45 + boost;
+  if (keywords.startsWith(needle) || subtitle.startsWith(needle)) return 55 + boost;
+  if (keywords.includes(needle) || subtitle.includes(needle) || (toolId && toolId.includes(needle))) return 45 + boost;
   if (group.includes(needle) || hint.includes(needle)) return 30 + boost;
-  const haystack = `${label} ${group} ${hint} ${keywords} ${toolId}`;
+  const haystack = `${label} ${subtitle} ${group} ${hint} ${keywords} ${toolId}`;
   if (haystack.includes(needle)) return 15 + boost;
   const tokens = needle.split(/\s+/).filter(Boolean);
   if (tokens.length > 1 && tokens.every((token) => haystack.includes(token))) {
@@ -183,6 +185,7 @@ export function CommandPalette({ open, commands, sourceFailed = false, onRetrySo
             <button type="button" id={`command-option-${itemIndex}`} role="option" aria-selected={itemIndex === index} className="command-option" onMouseMove={() => setActive(itemIndex)} onClick={() => choose(item)}>
               <span className="command-glyph" aria-hidden="true">{item.toolId ? <ToolIcon toolId={item.toolId} size={18} /> : item.icon ? <Icon name={item.icon} size={16} /> : null}</span>
               <span className="command-label">{highlightRuns(item.label, query).map((run, runIndex) => run.hit ? <mark key={runIndex}>{run.text}</mark> : run.text)}</span>
+              {item.subtitle && <span className="command-subtitle">{highlightRuns(item.subtitle, query).map((run, runIndex) => run.hit ? <mark key={runIndex}>{run.text}</mark> : run.text)}</span>}
               {item.hint && <small>{item.hint}</small>}
             </button>
             {item.onSecondary && item.secondaryLabel && <button type="button" className="command-secondary" aria-label={`${item.label} · ${item.secondaryLabel}`} title={`${item.secondaryLabel} (Alt+Enter)`} onMouseEnter={() => setActive(itemIndex)} onClick={() => chooseSecondary(item)}>{item.secondaryLabel}</button>}

@@ -1,11 +1,14 @@
-.workspace { display: grid; align-content: start; gap: var(--space-2_5); min-width: 0; container: launcher / inline-size; }
+.workspace { display: grid; align-content: start; gap: var(--space-3); min-width: 0; container: launcher / inline-size; }
 
-/* Advanced resume by id stays folded behind one disclosure. */
-.quick { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
-.quick > summary { display: flex; align-items: center; gap: var(--space-2); min-height: var(--row-h); padding: 0 var(--space-3); font-size: var(--fs-body); font-weight: var(--fw-semibold); transition: background-color var(--fast) var(--ease); }
-.quick > summary small { min-width: 0; margin-left: auto; overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); text-overflow: ellipsis; white-space: nowrap; }
-.quick > summary:hover { background: var(--surface-2); }
-.quick[open] > summary { border-bottom: 1px solid var(--line); background: var(--surface-2); }
+/* Advanced resume by id stays folded as a quiet inline pill until opened. */
+.quick { overflow: hidden; border: 1px solid transparent; border-radius: var(--radius-xl); background: transparent; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease); }
+.quick:not([open]) { justify-self: start; max-width: 100%; }
+.quick[open] { border-color: var(--line); background: var(--surface); box-shadow: var(--shadow-card); }
+.quick > summary { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 32px; padding: 0 var(--space-3); border-radius: var(--radius-pill); color: var(--text-2); font-size: var(--fs-control); font-weight: var(--fw-medium); transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease); }
+.quick[open] > summary { display: flex; width: 100%; min-height: var(--row-h); border-radius: 0; border-bottom: 1px solid var(--line); background: var(--surface-2); color: var(--text); font-weight: var(--fw-semibold); }
+.quick > summary small { min-width: 0; margin-left: var(--space-1); overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); text-overflow: ellipsis; white-space: nowrap; }
+.quick[open] > summary small { margin-left: auto; }
+.quick:not([open]) > summary:hover { background: var(--surface-2); color: var(--text); }
 .quickContent { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-4); }
 .quickContent > div:first-child { display: grid; gap: var(--space-0_5); }
 .quickContent > div:first-child strong { font-size: var(--fs-body); font-weight: var(--fw-semibold); }
@@ -15,7 +18,7 @@
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5); }
 .quickContent .actions { justify-content: flex-start; gap: var(--space-2); }
 .heading { min-height: var(--control-h-sm); }
-.sectionHint { margin: calc(var(--space-1) * -1) 0 0; color: var(--text-3); font-size: var(--fs-caption); line-height: 1.5; }
+.sectionHint { display: none; }
 .projectSearch { max-width: 380px; }
 .projectSearch > input { width: 100%; }
 .noMatch { margin: 0; padding: var(--space-5) var(--space-1); color: var(--text-3); font-size: var(--fs-body); text-align: center; }
@@ -23,16 +26,16 @@
 /* Identity and current context lead; launch is the only primary action. Every card stacks the same
    three parts at any width: name (own line), status/context and directory, then one action row.
    The card is its own container so narrow cards adapt to their width, not the page width. */
-.projectGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr)); gap: var(--space-2_5); }
-.project { position: relative; align-content: start; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-radius: var(--radius-lg); container: project-card / inline-size; animation: reveal var(--medium) var(--ease) both; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease); }
-.project:hover { border-color: var(--line-strong); }
+.projectGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr)); gap: var(--space-3); }
+.project { position: relative; align-content: space-between; gap: var(--space-3); padding: var(--space-4); border-radius: var(--radius-xl); container: project-card / inline-size; animation: reveal var(--medium) var(--ease) both; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--medium) var(--ease); }
+.project:hover { border-color: var(--line-strong); box-shadow: var(--shadow-card-hover); }
 .project:focus-visible { outline: var(--focus-ring); outline-offset: -1px; border-color: var(--accent); }
 .repair, .spotlight, .repair:hover, .spotlight:hover { border-color: var(--accent); outline: var(--focus-ring); outline-offset: -1px; box-shadow: 0 0 0 3px var(--accent-ring); }
-.identity { display: grid; gap: var(--space-1); min-width: 0; }
+.identity { display: grid; gap: var(--space-1_5); min-width: 0; }
 .projectTitle { display: flex; align-items: center; gap: var(--space-2_5); min-width: 0; }
 .projectTitle > svg, .projectTitle > :first-child { flex: none; }
-.projectTitle > svg { color: var(--text-2); }
-.projectTitle strong { min-width: 0; overflow: hidden; font-size: var(--fs-title); font-weight: var(--fw-semibold); letter-spacing: -.01em; text-overflow: ellipsis; white-space: nowrap; }
+.projectTitle > svg { color: var(--accent); }
+.projectTitle strong { min-width: 0; overflow: hidden; font-size: var(--fs-title); font-weight: var(--fw-semibold); letter-spacing: -.015em; text-overflow: ellipsis; white-space: nowrap; }
 .contextLine, .metaLine { display: flex; align-items: center; gap: var(--space-2); min-width: 0; padding-left: calc(var(--space-6) + var(--space-2_5)); }
 .contextLine { color: var(--text-2); font-size: var(--fs-caption); }
 .contextLine > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -134,4 +137,12 @@
 @container launcher (min-width: 620px) {
   .quickContent { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .quickContent > div:first-child, .quickContent .actions { grid-column: 1 / -1; }
+}
+/* Local directory cards: identity and the launch row share one grid. A wide card puts launch
+   beside the name so the card is two lines shorter; a narrow card stacks them as before. */
+.main { display: grid; gap: var(--space-3); min-width: 0; }
+@container project-card (min-width: 460px) {
+  .main { grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-3) var(--space-4); }
+  .main > .controls { grid-template-columns: auto; }
+  .main .controlsLead { display: none; }
 }

@@ -55,6 +55,12 @@ pub trait PluginAdapter: Sync {
         super::version::VersionPolicy::same_major(self.capability().version)
     }
     fn capability(&self) -> PluginCapability;
+    /// Optional native diagnostic entry id. A snapshot publishes it only while
+    /// that entry exists, so the shared UI never has to infer a doctor row from
+    /// a state/root shape or show one on an unsupported scope.
+    fn doctor_source(&self) -> Option<&'static str> {
+        None
+    }
     fn command_args(
         &self,
         action: &str,

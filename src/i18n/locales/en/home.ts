@@ -4,6 +4,7 @@ export default {
     viewAll: 'All records',
     resume: 'Continue',
     resumeAria: 'Continue session "{{title}}"',
+    openAria: 'View "{{title}}" in Records',
     untitled: 'Untitled session',
     justNow: 'just now',
     terminalRequested: 'Asked the external terminal to resume the session.',

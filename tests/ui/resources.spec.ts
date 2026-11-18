@@ -1,5 +1,8 @@
+import { installPromptFixtureBridge } from '../../scripts/capture-prompt-fixtures.mjs';
 import { expect, test, type Page } from '@playwright/test';
 import { openCli } from './cli-switcher';
+
+test.beforeEach(async ({ page }) => { await page.addInitScript(installPromptFixtureBridge); });
 
 async function mockResources(page: Page) {
   await page.addInitScript(() => {
@@ -45,8 +48,9 @@ async function mockResources(page: Page) {
             interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '', installCommand: null, upgradeCommand: null },
           profiles: [], common: null, binding: null, effectiveContextId: null, snapshots: [], recoveryNeeded: [], customPath: null,
         };
-        if (command === 'list_mcp_definitions') return definitions;
-        if (command === 'list_mcp_placements') return placements;
+        // Match the independent snapshots returned by native IPC.
+        if (command === 'list_mcp_definitions') return structuredClone(definitions);
+        if (command === 'list_mcp_placements') return structuredClone(placements);
         if (command === 'get_managed_mcp_enabled') return managed[`${args.definitionId}:${args.target.toolId}:${args.target.scope}:${args.target.projectPath}`] ?? null;
         if (command === 'save_mcp_definition') {
           const item = { ...args.draft, id: args.draft.id ?? `mcp-${definitions.length + 1}`, version: (args.draft.expectedVersion ?? 0) + 1 };
@@ -1593,6 +1597,33 @@ for (const state of ['external', 'read_only'] as const) {
     await expect(editor).toHaveAttribute('contenteditable', state === 'external' ? 'true' : 'false');
   });
 }
+
+test('a read-only OMP Skill is switched through disabledExtensions, not its source file', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.evaluate(() => {
+    const win = window as any;
+    win.__resourceNativeSkills.push({ name: 'foreign-skill', path: '/tmp/skills/foreign-skill', digest: null, state: 'read_only', detail: 'Claude Code Skills，只读', packageId: null, source: 'read_only', switchable: true, enabled: false });
+    const original = win.__TAURI_INTERNALS__.invoke;
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: Record<string, any> = {}) => {
+      if (command === 'read_native_skill') return { name: 'foreign-skill', path: args.directory, content: '# Foreign skill' };
+      if (command === 'set_observed_skill_enabled') {
+        win.__resourceNativeSkills[0].enabled = args.enabled;
+        win.__observedToggle = args;
+        return null;
+      }
+      return original(command, args);
+    };
+  });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具' }).click();
+  await page.getByRole('tab', { name: 'Skill', exact: true }).click();
+  await page.getByRole('button', { name: /foreign-skill/ }).click();
+  const toggle = page.getByRole('article').getByRole('switch', { name: '启用 Skill' });
+  await expect(toggle).not.toBeChecked();
+  await toggle.click();
+  await expect.poll(() => page.evaluate(() => (window as any).__observedToggle)).toMatchObject({ name: 'foreign-skill', path: '/tmp/skills/foreign-skill', enabled: true });
+  await expect(page.getByRole('article').getByRole('switch', { name: '启用 Skill' })).toBeChecked();
+});
 
 test('Skill workspace shows skeleton rows on first load and embeds the add entry in the empty state', async ({ page }) => {
   await mockResources(page);

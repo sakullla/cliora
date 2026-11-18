@@ -1,4 +1,24 @@
+import { installPromptFixtureBridge } from '../../scripts/capture-prompt-fixtures.mjs';
 import { expect, test, type Locator, type Page } from '@playwright/test';
+
+// These existing Control-key cases model the Windows/Linux shortcut contract explicitly,
+// independent of the machine running Chromium. Production macOS behavior is unchanged.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript((macHost) => {
+    Object.defineProperty(navigator, 'platform', { configurable: true, value: 'Win32' });
+    if (macHost) document.addEventListener('contextmenu', (event) => {
+      // macOS Chromium still turns real Control+left into a native contextmenu
+      // despite the Win32 navigator fixture. Suppress only that observed host
+      // gesture; retain the real down/up events and all right-button menus.
+      if (navigator.platform === 'Win32' && event.isTrusted && event.button === 0 && event.buttons === 1
+        && event.ctrlKey && !event.metaKey && event.target instanceof Element && event.target.closest('.xterm')) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }, true);
+  }, process.platform === 'darwin');
+  await page.addInitScript(installPromptFixtureBridge);
+});
 
 // The existing accessible scrollbar exposes the public buffer's row position.
 // xterm 6 virtualizes scrolling instead of assigning a native DOM scrollTop.
@@ -13,6 +33,16 @@ test.use({ launchOptions: { args: ['--use-angle=swiftshader', '--enable-unsafe-s
 // These real terminal renderers share the software GPU. Keep this file on one
 // worker so competing contexts cannot starve its rendering assertions.
 test.describe.configure({ mode: 'default' });
+
+// SessionTerminal batches output before xterm's asynchronous parser. A paint
+// frame is not a parse acknowledgement. DECRQM reads cursor visibility without
+// changing a cell or mode; placed last in this packet, its reply acknowledges
+// all preceding caret/prompt bytes. Replies may be coalesced by the input queue.
+async function hiddenCursorOutput(page: Page, text: string) {
+  const before = (await writes(page)).join('').length;
+  await page.evaluate(value => (window as unknown as { __output: (text: string) => void }).__output(`${value}\x1b[?25$p`), text);
+  await expect.poll(async () => (await writes(page)).join('').slice(before)).toContain('\x1b[?25;2$y');
+}
 
 test.describe('product WebGL input integration', () => {
   test('IME commit insertText is sent once and intentional repeated input remains intact', async ({ page }) => {
@@ -99,11 +129,7 @@ test.describe('product WebGL input integration', () => {
     await commit('哈', ' ', 32);
     await expect.poll(async () => (await writes(page)).join('')).toBe('升级审计哈哈');
 
-    await page.evaluate(async () => {
-      (window as unknown as { __output: (text: string) => void }).__output('\x1b[?25l\x1b[3;1H\x1b[7mHIGHLIGHT\x1b[0m\x1b[8;10H\x1b[7m \x1b[0m\x1b[1;1H');
-      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
-      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
-    });
+    await hiddenCursorOutput(page, '\x1b[?25l\x1b[3;1H\x1b[7mHIGHLIGHT\x1b[0m\x1b[8;10H\x1b[7m \x1b[0m\x1b[1;1H');
     const anchor = await input.evaluate(node => {
       const textarea = node as HTMLTextAreaElement;
       textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
@@ -136,12 +162,7 @@ test.describe('product WebGL input integration', () => {
     await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
     const input = page.locator('.xterm-helper-textarea:visible');
     await input.focus();
-    await page.evaluate(async () => {
-      (window as unknown as { __output: (text: string) => void }).__output(
-        '\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l\x1b[41m!\x1b[49m\x1b[3;1HQoder CLI 1.2.3\x1b[8;10H\x1b[44m \x1b[49m\x1b[1;1H');
-      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
-      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
-    });
+    await hiddenCursorOutput(page, '\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l\x1b[41m!\x1b[49m\x1b[3;1HQoder CLI 1.2.3\x1b[8;10H\x1b[44m \x1b[49m\x1b[1;1H');
     const measure = async () => input.evaluate(node => {
       const textarea = node as HTMLTextAreaElement;
       textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
@@ -161,11 +182,7 @@ test.describe('product WebGL input integration', () => {
     expect(anchor.top).toBeLessThan(anchor.screenHeight);
     expect(anchor.left).toBeGreaterThan(30);
     // Once the block is gone, the last confirmed input point is kept, not the window origin.
-    await page.evaluate(async () => {
-      (window as unknown as { __output: (text: string) => void }).__output('\x1b[2J\x1b[H\x1b[3;1Hplain output only');
-      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
-      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
-    });
+    await hiddenCursorOutput(page, '\x1b[2J\x1b[H\x1b[3;1Hplain output only');
     expect(await measure()).toEqual(anchor);
   });
 
@@ -176,12 +193,7 @@ test.describe('product WebGL input integration', () => {
     await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
     const input = page.locator('.xterm-helper-textarea:visible');
     await input.focus();
-    await page.evaluate(async () => {
-      (window as unknown as { __output: (text: string) => void }).__output(
-        '\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l\x1b[41m!\x1b[49m\x1b[3;1HQoder CLI 1.2.3\r\n\x1b[20;1H> 帮我改一个 bug');
-      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
-      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
-    });
+    await hiddenCursorOutput(page, '\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l\x1b[41m!\x1b[49m\x1b[3;1HQoder CLI 1.2.3\r\n\x1b[20;1H> 帮我改一个 bug');
     const anchor = await input.evaluate(node => {
       const textarea = node as HTMLTextAreaElement;
       textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
@@ -1116,6 +1128,25 @@ test('Ctrl+C copies a selection instead of interrupting, and interrupts without 
   expect(await writes(page)).toEqual([]);
   await page.keyboard.press('Control+c');
   await expect.poll(() => writes(page)).toEqual(['\u0003']);
+
+  // The Win32 fixture's host-gesture filter must also keep Control+right menus.
+  await page.keyboard.down('Control');
+  await canvas.click({ button: 'right' });
+  await page.keyboard.up('Control');
+  await expect(menu).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  // An application-dispatched event with the same modifier/button shape is
+  // not the trusted host gesture and must still reach the product menu.
+  const dispatched = await canvas.evaluate((node) => {
+    const box = node.getBoundingClientRect();
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 0, buttons: 1, ctrlKey: true, clientX: box.x + box.width / 2, clientY: box.y + box.height / 2 });
+    node.dispatchEvent(event);
+    return { constructor: event.constructor.name, trusted: event.isTrusted, button: event.button, buttons: event.buttons, ctrl: event.ctrlKey, clientX: event.clientX, clientY: event.clientY, pageX: event.pageX, pageY: event.pageY };
+  });
+  await expect(menu).toBeVisible();
+  await test.info().attach('synthetic-contextmenu', { body: JSON.stringify({ event: dispatched, menu: await menu.boundingBox() }), contentType: 'application/json' });
+  await menu.getByRole('menuitem', { name: /全选/ }).click();
 });
 
 test('the mouse wheel on the alternate screen never turns into arrow keys', async ({ page }) => {
@@ -1142,6 +1173,8 @@ test('a mouse-tracking CLI receives the wheel, and Shift+wheel reads normal scro
   });
   const viewport = page.locator('.xterm-scrollable-element');
   const remaining = async () => (await readScroll(viewport)).remaining;
+  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('line-199');
+  await expect.poll(async () => (await readScroll(viewport)).max).toBeGreaterThan(0);
   await expect.poll(remaining).toBeLessThan(3);
   const scrollTop = async () => (await readScroll(viewport)).top;
   const screen = page.getByRole('region', { name: '当前会话' }).locator('.xterm-screen');
@@ -1197,16 +1230,22 @@ test('the mouse wheel scrolls the native viewport when the CLI does not track th
     (window as unknown as { __output: (text: string) => void }).__output(lines + '\r\n');
   });
   const viewport = page.locator('.xterm-scrollable-element');
+  // remaining === 0 also matches the initial empty buffer. Wait for the final
+  // output row and a positive range before recording the wheel's baseline.
+  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('line-199');
+  await expect.poll(async () => (await readScroll(viewport)).max).toBeGreaterThan(0);
   await expect.poll(async () => (await readScroll(viewport)).remaining).toBe(0);
   const scrollTop = async () => (await readScroll(viewport)).top;
   const box = await page.getByRole('region', { name: '当前会话' }).locator('.xterm-screen').boundingBox();
   await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  await resetWrites(page);
   const start = await scrollTop();
   await page.mouse.wheel(0, -600);
   await expect.poll(scrollTop).toBeLessThan(start);
   const up = await scrollTop();
   await page.mouse.wheel(0, 600);
   await expect.poll(scrollTop).toBeGreaterThan(up);
+  expect(await writes(page)).toEqual([]);
 });
 
 test('tmux-style SGR wheel reports stay with the hovered alternate-screen session', async ({ page }) => {
@@ -2320,6 +2359,8 @@ test('switching sessions preserves a reading position while background output ke
   await openWorkbench(page);
   await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output(Array.from({ length: 240 }, (_, index) => `reading-row-${index}`).join('\r\n') + '\r\n'));
   const viewport = page.locator('[data-pane-session="s1"] .xterm-scrollable-element');
+  await expect(page.locator('[data-pane-session="s1"] .xterm-accessibility-tree')).toContainText('reading-row-239');
+  await expect.poll(async () => (await readScroll(viewport)).max).toBeGreaterThan(0);
   await expect.poll(async () => (await readScroll(viewport)).remaining).toBe(0);
   const scrollbar = page.getByRole('scrollbar', { name: '终端滚动条', exact: true });
   await scrollbar.focus();
@@ -2617,6 +2658,36 @@ async function openManyRecordQueue(page: Page, count: number) {
   const queue = page.getByRole('group', { name: '待恢复的会话' });
   await expect(queue).toBeVisible();
   await expect(page.locator('[data-restore-row]')).toHaveCount(count);
+  await expect(page.locator('[data-restore-row][data-stage="failed"]')).toHaveCount(count);
+  const retries = queue.getByRole('button', { name: '重试恢复', exact: true });
+  await expect(retries).toHaveCount(count);
+  await expect.poll(() => retries.evaluateAll(buttons => buttons.every(button => !(button as HTMLButtonElement).disabled))).toBe(true);
+  // The rows can be ready while the page still gives the stage and its parent
+  // zero height. Wait for allocated, stable geometry before testing containment.
+  // Do not wait for containment itself: a stable overflowing queue must fail.
+  const layout = await queue.evaluate(async (node) => {
+    const stage = node.closest('section')!;
+    const parent = stage.parentElement!;
+    const read = () => [stage, parent, node].map(element => {
+      const { x, y, width, height } = element.getBoundingClientRect();
+      return { x, y, width, height };
+    });
+    let previous = '';
+    let stableFrames = 0;
+    let rects = read();
+    const deadline = performance.now() + 5000;
+    for (let frame = 0; frame < 120 && performance.now() < deadline; frame++) {
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      rects = read();
+      const key = JSON.stringify(rects);
+      const allocated = rects.slice(0, 2).every(rect => rect.width > 0 && rect.height > 0);
+      stableFrames = allocated && key === previous ? stableFrames + 1 : 0;
+      previous = key;
+      if (stableFrames >= 3) return { rects, frame, stableFrames };
+    }
+    throw new Error(`Restore queue layout did not settle: ${JSON.stringify(rects)}`);
+  });
+  await test.info().attach('restore-queue-ready-layout', { body: JSON.stringify(layout), contentType: 'application/json' });
   return queue;
 }
 
@@ -3982,6 +4053,8 @@ test('a temporary look keeps the selected terminal scroll, selection and input s
     const lines = Array.from({ length: 200 }, (_, index) => `line-${String(index).padStart(3, '0')}`).join('\r\n');
     (window as unknown as { __output: (text: string, id?: string) => void }).__output(`${lines}\r\n`, 's1');
   });
+  await expect(page.locator('[data-pane-session="s1"] .xterm-accessibility-tree')).toContainText('line-199');
+  await expect.poll(async () => (await readScroll(viewport)).max).toBeGreaterThan(0);
   await expect.poll(async () => (await readScroll(viewport)).remaining).toBeLessThan(3);
   let settled = -1;
   await expect.poll(async () => {

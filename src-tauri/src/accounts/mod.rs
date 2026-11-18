@@ -6,6 +6,7 @@ mod impact;
 mod reapply;
 mod contract;
 pub mod native;
+pub(crate) mod sqlite;
 mod store;
 use crate::{database::Database, launch};
 pub use contract::*;

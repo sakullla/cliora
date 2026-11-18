@@ -1,0 +1,14 @@
+{
+  "capability": "configuration",
+  "name": "a managed global connection writes only an environment reference",
+  "case": {
+    "kind": "connection",
+    "provider": "alpha",
+    "format": "openai_completions",
+    "baseUrl": "https://alpha.example.test/v1",
+    "model": "one",
+    "secretRef": "connection-00000000-0000-4000-8000-000000000001",
+    "authEnvVar": "OMP_ALPHA_API_KEY",
+    "expectApiKey": "${OMP_ALPHA_API_KEY}"
+  }
+}

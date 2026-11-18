@@ -1,4 +1,5 @@
-import { useRemoteIdentity } from '../../lib/remoteReads';
+import { repositoryPlaces, WORKSPACES_CHANGED } from '../workspaces/WorkspaceBrowser';
+import type { BusinessWorkspace, WorkspaceSelection, WorkspaceSessionContext } from '../../types/workspaces';
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
@@ -22,7 +23,7 @@ import rowMenuStyles from '../../components/RowMenu.module.css';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, SavedWorkbenchSession, TwiglaneReviewSignal, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchExit, WorkbenchGitContext, WorkbenchWorktree, WorkbenchOutput, WorkbenchRestoreCandidate, WorkbenchRestoreEvent, WorkbenchRestoreStage, WorkbenchSession, WorktreeBase, WorktreeBasePreview, WorktreeLaunchEvent, WorktreeLaunchIntent, WorktreeLaunchStage, WorktreeLedgerEntry, WorktreeMenuStatus } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
-import type { LibraryItem } from '../../types/library';
+import type { PromptContext } from '../../types/prompts';
 import type { AdapterDescriptor } from '../../types/native';
 import type { RemoteProject, RemoteTarget } from '../../types/remote';
 import { SessionTitle, stableTitle } from './SessionTitle';
@@ -38,7 +39,6 @@ import { uploadDisplayName, useSessionUploads, type SessionUploadTask } from './
 import uploadStyles from './sessionUploads.module.css';
 import { WorkbenchComposer } from './WorkbenchComposer';
 import { PromptPicker } from './PromptPicker';
-import { StatusBanner } from '../../components/StatusBanner';
 import { TerminalAppearance } from './TerminalAppearance';
 import { WorkbenchEmpty } from './WorkbenchEmpty';
 import { WorkbenchShortcuts } from './WorkbenchShortcuts';
@@ -176,8 +176,11 @@ export function remapArrangement(current: RailArrangement, restored: Record<stri
 }
 
 /** The session the user last had selected; a restore maps it to its new id. */
-function readStoredSelection(): string | null {
-  try { return localStorage.getItem('cliora:workbench-selected'); } catch { return null; }
+function readStoredSelection(targetId = 'local'): string | null {
+  try {
+    return localStorage.getItem(`cliora:workbench-selected:${encodeURIComponent(targetId)}`)
+      ?? (targetId === 'local' ? localStorage.getItem('cliora:workbench-selected') : null);
+  } catch { return null; }
 }
 
 /** Native skips a saved record whose id is already live (`restore_with` keeps `!live`), and a
@@ -332,6 +335,21 @@ function reviewReasonText(t: (key: string) => string, code: string | null | unde
   return t(code && REVIEW_REASON_KEYS[code] ? REVIEW_REASON_KEYS[code] : 'sessions.reviewCodeUnknown');
 }
 
+function reviewResultKey(review: TwiglaneReviewState): string {
+  return `${review.reviewId}:${review.resultRevision ?? 0}`;
+}
+
+function sameReviewCheckout(a: string | null, b: string): boolean {
+  if (!a) return false;
+  const key = (path: string) => {
+    if (/^[a-z]:[\\/]/i.test(path) || /^(?:\\\\|\/\/)[^\\/]+[\\/][^\\/]+/.test(path)) {
+      return path.replace(/^\\\\\?\\/, '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    }
+    return path.replace(/\/+$/, '') || '/';
+  };
+  return key(a) === key(b);
+}
+
 function firstTaskLine(text: string | null | undefined): string | null {
   const line = text?.split(/\r?\n/).map((item) => item.trim()).find(Boolean);
   return line || null;
@@ -364,7 +382,7 @@ function SessionUploadNotice({ task, progressLabel, progressText, failedTitle, r
   </div>;
 }
 
-export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remoteTargetId = 'local', syncedRemoteTargets = [], onRemoteTargetChange, focusSessionId, focusToken, reviewSignal = null, failure, onFailure, onOpenHome, remoteIntent, railHost = null, railSlim = false, onToggleRailSlim, onRailLayout, railToggleRef, windowChrome = null, captionSlotRef }: {
+export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remoteTargetId = 'local', syncedRemoteTargets = [], onRemoteTargetChange, focusSessionId, focusToken, reviewSignal = null, failure, onFailure, onOpenHome, remoteIntent, railHost = null, railSlim = false, onToggleRailSlim, onRailLayout, onLiveCountChange, railToggleRef, windowChrome = null, captionSlotRef }: {
   remoteIntent?: RemoteWorkbenchIntent | null;
   /** The native window frame; set, the session title bar is also the window's title bar. */
   windowChrome?: WindowChrome | null;
@@ -376,6 +394,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   railSlim?: boolean;
   onToggleRailSlim?: () => void;
   onRailLayout?: (layout: WorkbenchRailLayout) => void;
+  onLiveCountChange?: (count: number) => void;
   /** The shell's sidebar toggle calls this so focus mode is left before the sidebar folds. */
   railToggleRef?: MutableRefObject<(() => void) | null>;
   active: boolean;
@@ -424,20 +443,52 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const allSessionsRef = useRef(sessions);
   allSessionsRef.current = sessions;
   const [projects, setProjects] = useState<Project[]>([]);
+  const [businessWorkspaces, setBusinessWorkspaces] = useState<BusinessWorkspace[]>([]);
+  const [businessContexts, setBusinessContexts] = useState<WorkspaceSessionContext[]>([]);
+  const [businessSelection, setBusinessSelection] = useState<WorkspaceSelection | null>(null);
+  const businessSessionKey = sessions.map(item => item.id).join('|');
+  useEffect(() => {
+    if (!active || !nativeAvailable) return;
+    let live = true;
+    let generation = 0;
+    const reload = () => {
+      const request = ++generation;
+      void Promise.allSettled([native.listBusinessWorkspaces(), native.listWorkspaceSessionContexts()]).then(([workspaces, contexts]) => {
+        if (!live || request !== generation) return;
+        if (workspaces.status === 'fulfilled') setBusinessWorkspaces(Array.isArray(workspaces.value) ? workspaces.value : []);
+        // Projects only add choices to the new-session picker and a label to a session; a failed
+        // read keeps the previous values instead of interrupting the workbench with a banner.
+        if (contexts.status === 'fulfilled') setBusinessContexts(Array.isArray(contexts.value) ? contexts.value : []);
+      });
+    };
+    reload(); window.addEventListener(WORKSPACES_CHANGED, reload);
+    return () => { live = false; generation++; window.removeEventListener(WORKSPACES_CHANGED, reload); };
+  }, [active, businessSessionKey]);
   const [remoteProjects, setRemoteProjects] = useState<RemoteProject[]>([]);
   const [loadedRemoteTargets, setLoadedRemoteTargets] = useState<RemoteTarget[] | null>(null);
   const remoteTargets = loadedRemoteTargets ?? syncedRemoteTargets;
   const [activeTargetId, setActiveTargetId] = useState(remoteTargetId);
   const [hostManagerOpen, setHostManagerOpen] = useState(false);
-  const [promptsByHost, setPromptsByHost] = useState<Record<string, LibraryItem[]>>({});
-  const [promptStatus, setPromptStatus] = useState<Record<string, { identity: string; stale: boolean; at: number; failed: boolean }>>({});
-  const [promptReload, setPromptReload] = useState(0);
-  const promptFreshHosts = useRef(new Set<string>());
-  const promptRequestSeq = useRef(new Map<string, number>());
   const [launchSettings, setLaunchSettings] = useState<LaunchSettings | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(focusSessionId);
   const pendingSelectionId = useRef<string | null>(focusSessionId);
   const selectionTarget = useRef(activeTargetId);
+  const selectedByTarget = useRef(new Map<string, string>());
+  function rememberSelection(targetId: string, id: string) {
+    if (selectedByTarget.current.get(targetId) === id) return;
+    selectedByTarget.current.delete(targetId);
+    selectedByTarget.current.set(targetId, id);
+    if (selectedByTarget.current.size > 64) selectedByTarget.current.delete(selectedByTarget.current.keys().next().value!);
+    try {
+      localStorage.setItem(`cliora:workbench-selected:${encodeURIComponent(targetId)}`, id);
+      // Keep the legacy local restore preference; a remote selection must not replace it.
+      if (targetId === 'local') localStorage.setItem('cliora:workbench-selected', id);
+    } catch { /* Host switching still remembers the selection without storage. */ }
+  }
+  function remapLocalSelection(restored: Record<string, string>) {
+    const previous = selectedByTarget.current.get('local') ?? readStoredSelection();
+    if (previous && restored[previous]) rememberSelection('local', restored[previous]);
+  }
   function selectPendingSession(id: string) {
     pendingSelectionId.current = id;
     setSelectedId(id);
@@ -521,8 +572,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   // The per-launch worktree choice; the saved preference only seeds it.
   const [dialogPlace, setDialogPlace] = useState<'direct' | 'worktree'>('direct');
   const dialogPlaceTouched = useRef(false);
-  const [dialogDirectory, setDialogDirectory] = useState<string | null>(null);
   const [baseChoice, setBaseChoice] = useState<WorktreeBase | null>(null);
+  const basePreviewContext = useRef('');
   const [baseRef, setBaseRef] = useState('');
   const [basePreview, setBasePreview] = useState<WorktreeBasePreview | null>(null);
   const [baseBusy, setBaseBusy] = useState(false);
@@ -567,11 +618,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     selectionTarget.current = activeTargetId;
     if (targetChanged) pendingSelectionId.current = null;
     setSelectedId((current) => {
-      if (current && scopedSessions.some((item) => item.id === current)) {
+      if (!targetChanged && current && scopedSessions.some((item) => item.id === current)) {
         if (pendingSelectionId.current === current) pendingSelectionId.current = null;
         return current;
       }
       if (current && pendingSelectionId.current === current) return current;
+      const remembered = selectedByTarget.current.get(activeTargetId) ?? readStoredSelection(activeTargetId);
+      if (remembered && scopedSessions.some((item) => item.id === remembered)) return remembered;
       return scopedSessions.find((item) => item.running)?.id ?? scopedSessions[0]?.id ?? null;
     });
     setSplit((current) => current && current.every((id) => scopedSessions.some((item) => item.id === id)) ? current : null);
@@ -735,6 +788,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   /** Replace one pending row with the real session, without waiting for a second list IPC. */
   function applyRestoredSession(savedId: string, snapshot: WorkbenchSession) {
     if (retiredSessionIds.current.has(snapshot.id)) return;
+    remapLocalSelection({ [savedId]: snapshot.id });
     if (savedId !== snapshot.id) forgetSession(savedId);
     if (!firstSeenAt.current.has(snapshot.id)) firstSeenAt.current.set(snapshot.id, snapshot.startedAt ?? Date.now());
     pendingRestored.current.set(snapshot.id, snapshot);
@@ -765,6 +819,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       markRestoreRowFailed(failure.session, failure.detail, Array.isArray(failure.candidates) ? failure.candidates : []);
     }
     if (!Object.keys(report.restored).length) return;
+    remapLocalSelection(report.restored);
     // Reports also replace old tabs when the progress event was not delivered.
     const replaced = new Set(Object.keys(report.restored).filter((id) => id !== report.restored[id]));
     for (const id of replaced) forgetSession(id);
@@ -936,9 +991,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     return () => { alive = false; stop?.(); };
   }, [t]);
   useEffect(() => {
-    if (!selectedId || restoring) return;
-    try { localStorage.setItem('cliora:workbench-selected', selectedId); } catch { /* optional */ }
-  }, [selectedId, restoring]);
+    // On a host-change render selectedId can still name the previous host.
+    // An empty/loading scope must not overwrite that host's remembered choice.
+    if (!selectedId || restoring || !scopedSessions.some(item => item.id === selectedId)) return;
+    rememberSelection(activeTargetId, selectedId);
+  }, [activeTargetId, selectedId, scopedSessions, restoring]);
   const [clock, setClock] = useState(() => Date.now());
   const writers = useRef(new Map<string, (chunk: OutputChunk) => void>());
   const pending = useRef(new PendingTerminalOutput());
@@ -1047,7 +1104,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     ? selected.directory || projects.find((item) => item.id === selected.projectId)?.path || null
     : null;
   const selectedReview = gitTarget ? reviewStates.get(gitTarget) : null;
-  const returnedReviewId = selectedReview?.status === 'returned' ? selectedReview.reviewId : null;
+  const returnedReviewId = selectedReview?.status === 'returned' ? reviewResultKey(selectedReview) : null;
   const codeStatusNeeded = worktreeMenuOpen || !!returnedReviewId;
   useEffect(() => {
     const ids = new Set(sessions.map((session) => session.id));
@@ -1062,7 +1119,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setReviewStates(retain);
   }, [sessions]);
   useEffect(() => {
-    const reviews = new Set([...reviewStates.values()].map((review) => review.reviewId));
+    const reviews = new Set([...reviewStates.values()].map(reviewResultKey));
     for (const id of announcedReviews.current) {
       if (!reviews.has(id)) announcedReviews.current.delete(id);
     }
@@ -1288,64 +1345,25 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   useEffect(() => {
     if (!gitTarget) return;
     const review = reviewStates.get(gitTarget);
-    if (!review || review.status !== 'returned' || announcedReviews.current.has(review.reviewId)) return;
-    if (codeStatusReviews.get(gitTarget) !== review.reviewId) return;
+    if (!review || review.status !== 'returned' || announcedReviews.current.has(reviewResultKey(review))) return;
+    if (codeStatusReviews.get(gitTarget) !== reviewResultKey(review)) return;
     const status = codeStatuses.get(gitTarget) ?? null;
     const unknownStatus = !!codeStatusUnknown.get(gitTarget);
     if (!status && !unknownStatus) return;
-    announcedReviews.current.add(review.reviewId);
+    announcedReviews.current.add(reviewResultKey(review));
     setNotice(describeReview(review, status, unknownStatus).text);
   }, [gitTarget, reviewStates, codeStatuses, codeStatusUnknown, codeStatusReviews]);
-  const composerHostId = libraryHostId(selected?.projectId, remoteProjects);
-  // The dialog launches on the selected run location, so its prompts come from that host.
-  const dialogHostId = newDialogOpen ? (remoteSshEnabled && activeTargetId !== 'local' ? activeTargetId : 'local') : null;
-  const composerPrompts = composerHostId ? promptsByHost[composerHostId] ?? [] : [];
-  const dialogPrompts = dialogHostId ? promptsByHost[dialogHostId] ?? [] : [];
-  // A remote library read is its own SSH handshake. Reuse a recent result when
-  // the workbench or composer opens again; a failed read is retried next time.
-  const composerIdentity = useRemoteIdentity(composerHostId);
-  const dialogIdentity = useRemoteIdentity(dialogHostId);
-  const promptHostIdentities = useRef(new Map<string, string>());
-  useEffect(() => {
-    if (!active || !nativeAvailable) return;
-    const controller = new AbortController();
-    const hosts = new Set([composerHostId, dialogHostId].filter((host): host is string => !!host));
-    for (const hostId of hosts) {
-      const identity = hostId === composerHostId ? composerIdentity : dialogIdentity;
-      if (promptHostIdentities.current.get(hostId) !== identity) {
-        setPromptsByHost(prev => ({ ...prev, [hostId]: [] }));
-        promptHostIdentities.current.set(hostId, identity);
-      }
-      const seq = (promptRequestSeq.current.get(hostId) ?? 0) + 1;
-      promptRequestSeq.current.set(hostId, seq);
-      const current = () => !controller.signal.aborted && promptRequestSeq.current.get(hostId) === seq;
-      const report = (state: { stale: boolean; at: number }) => {
-        if (current()) setPromptStatus(previous => ({ ...previous, [hostId]: { identity, ...state, at: state.at || (state.stale && previous[hostId]?.identity === identity ? previous[hostId].at : 0), failed: state.stale } }));
-      };
-      const fresh = promptFreshHosts.current.delete(hostId);
-      const request = hostId === 'local'
-        ? native.listLibraryItems('prompt', null, '')
-        : native.listRemoteLibraryItems(hostId, 'prompt', '', { signal: controller.signal, fresh, onFreshness: report });
-      void request.then(items => {
-        if (current()) {
-          setPromptsByHost(prev => ({ ...prev, [hostId]: Array.isArray(items) ? items : [] }));
-          if (hostId === 'local') report({ stale: false, at: Date.now() });
-        }
-      }).catch(() => {
-        if (current()) setPromptStatus(previous => ({ ...previous, [hostId]: {
-          identity, stale: true, at: previous[hostId]?.identity === identity ? previous[hostId].at : 0, failed: true,
-        } }));
-      });
-    }
-    return () => controller.abort();
-  }, [active, composerHostId, dialogHostId, composerOpen, composerIdentity, dialogIdentity, promptReload]);
-  function promptFeedback(hostId: string | null, identity: string) {
-    const state = hostId ? promptStatus[hostId] : undefined;
-    if (!hostId || !state?.failed || state.identity !== identity) return null;
-    return <StatusBanner tone={state.at ? 'warning' : 'error'} action={<Button size="sm" onClick={() => { promptFreshHosts.current.add(hostId); setPromptReload(value => value + 1); }}>{t('sessions.retryPrompts')}</Button>}>
-      {t(state.at ? 'sessions.promptsStale' : 'sessions.promptsFailed')}
-    </StatusBanner>;
+  function sessionPromptContext(session: WorkbenchSession): PromptContext | null {
+    const host = libraryHostId(session.projectId, remoteProjects);
+    if (!host) return null;
+    const scope = businessContexts.find(item => item.sessionId === session.id);
+    return { targetId: host === 'local' ? null : host, workspaceId: scope?.workspaceId ?? null, repositoryId: scope?.repositoryId ?? null };
   }
+  const dialogPromptContext: PromptContext = {
+    targetId: activeTargetId === 'local' ? null : activeTargetId,
+    workspaceId: activeTargetId === 'local' ? businessSelection?.workspaceId ?? null : null,
+    repositoryId: activeTargetId === 'local' ? businessSelection?.repositoryId ?? null : null,
+  };
   // An empty list is the real empty state only once the saved records are known to be empty:
   // otherwise the pending rows (or one line of them) would flash away and come back.
   const restorePreviewKnown = !nativeAvailable || restoreListReady;
@@ -1553,7 +1571,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         if (takeFocus) return focusSessionId;
         if (current && next.some((item) => item.id === current)) return current;
         if (current && pendingSelectionId.current === current) return current;
-        return next.find((item) => item.running)?.id ?? next[0]?.id ?? null;
+        // Only the scoped selection effect may choose a fallback. The global
+        // list can arrive before remote projects and must not pick another host.
+        return null;
       });
       for (const session of next) {
         const write = writers.current.get(session.id);
@@ -1735,6 +1755,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
 
   function placeOf(session: WorkbenchSession): string {
+    // Sessions are named by where they run; business projects are a management grouping only.
     const project = session.projectId ? projects.find((item) => item.id === session.projectId) : undefined;
     if (project?.name) return project.name;
     if (session.directory) return shortPath(displayPath(session.directory));
@@ -1904,6 +1925,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   function openNewSessionDialog(prefill?: { toolId?: string; projectId?: string; directory?: string; place?: 'worktree' }, targetOverride?: string) {
     setDialogError('');
+    setBusinessSelection(null);
     // Each opening starts from the saved preference; the dialog decides this launch.
     // An entry that asked for a worktree is an explicit choice, not the preference.
     dialogPlaceTouched.current = !!prefill?.place;
@@ -2022,6 +2044,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       // Cancelling the dialog resolves null and needs no feedback.
       if (typeof picked === 'string' && picked.trim()) {
         const clean = picked.trim();
+        setBusinessSelection(null);
         setCustomFolderPath(clean);
         setWorkspaceValue(`custom:${clean}`);
         setDialogError('');
@@ -2111,6 +2134,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         ? { ...(preview ? { base: baseOf(preview) } : {}), ...(explicitBranch ? { branch: explicitBranch } : {}) }
         : {};
       const request: LaunchRequest = {
+        ...(businessSelection && !remoteLaunch ? { workspaceId: businessSelection.workspaceId, repositoryId: businessSelection.repositoryId } : {}),
         toolId: effectiveLaunchToolId,
         projectId,
         sessionId: null,
@@ -2362,7 +2386,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     const files = !unknownStatus && status?.state === 'ready' && typeof status.uncommittedFiles === 'number'
       ? status.uncommittedFiles
       : null;
-    if (files === null || !status) return { tone: 'unconfirmed', text: t('sessions.reviewReturnedStatusUnknown') };
+    if (files === null || !status || !sameReviewCheckout(status.worktreePath, review.worktreePath)) return { tone: 'unconfirmed', text: t('sessions.reviewReturnedStatusUnknown') };
     const merged = review.outcome === 'merged';
     if (review.outcome === 'committed' || merged) {
       // 提交/合入声明：OID 必须与基线不同且等于当前 HEAD。
@@ -2944,18 +2968,16 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const remoteHomePath = activeRemoteTarget ? remoteStartPath(activeRemoteTarget) : '';
   // The dialog reads its base from the directory it will really use; the home
   // entry has none, so a worktree cannot be chosen there.
-  useEffect(() => {
-    if (!newDialogOpen) { setDialogDirectory(null); return; }
-    setDialogDirectory(dialogPrepareDirectory());
-  }, [newDialogOpen, workspaceValue, availableProjects, activeRemoteTarget]);
+  const dialogDirectory = newDialogOpen ? dialogPrepareDirectory() : null;
   // The branch a creation would allocate follows the task text, so the first line
   // of the prompt is part of the preview request.
   const dialogTaskLine = useMemo(() => firstTaskLine(initialPrompt), [initialPrompt]);
   // The confirmed base, its short commit and the proposed branch are visible before
-  // anything is written. A keystroke only re-reads after a short pause, and the
-  // previous preview stays on screen meanwhile.
+  // anything is written. Initial selection reads immediately; typing re-reads after
+  // a short pause while keeping the previous preview on screen.
   useEffect(() => {
     if (!nativeAvailable || !newDialogOpen || dialogPlace !== 'worktree' || !dialogDirectory) {
+      basePreviewContext.current = '';
       setBasePreview(null);
       setBaseBusy(false);
       return;
@@ -2964,7 +2986,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     let cancelled = false;
     setBaseBusy(true);
     setBaseError('');
-    const timer = window.setTimeout(() => {
+    const contextKey = `${dialogDirectory}\n${JSON.stringify(baseChoice ?? null)}`;
+    const immediate = basePreviewContext.current !== contextKey;
+    basePreviewContext.current = contextKey;
+    const runPreview = () => {
       if (cancelled) return;
       void native.worktreeBasePreview(dialogDirectory, baseChoice, dialogTaskLine).then((value) => {
         if (cancelled || baseRequest.current !== request) return;
@@ -2976,9 +3001,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         setBaseBusy(false);
         setBaseError(formatFailure(error, t('sessions.worktreeBaseFailed'), t('sessions.failureHint')));
       });
-    }, 240);
+    };
+    if (immediate) {
+      runPreview();
+      return () => { cancelled = true; };
+    }
+    const timer = window.setTimeout(runPreview, 240);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [nativeAvailable, newDialogOpen, dialogPlace, dialogDirectory, baseChoice, dialogTaskLine, t]);
+  }, [nativeAvailable, newDialogOpen, dialogPlace, dialogDirectory, baseChoice, dialogTaskLine]);
   // The repository's setup command is shown and edited in the worktree panel itself,
   // so nothing has to be configured elsewhere before the first creation.
   useEffect(() => {
@@ -3148,6 +3178,27 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     const nextTool = terminalTools.find((item) => item.id === value);
     setLaunchMode(preferredLaunchMode(launchSettings, workspaceValue.startsWith('project:') || workspaceValue.startsWith('remote:') ? 'project' : 'cli', !!nextTool?.yoloAvailable));
   }
+  const businessRepositoryOptions = useMemo(() => {
+    const options: Array<{ value: string; label: string; detail: string; worktree: boolean; selection: WorkspaceSelection }> = [];
+    for (const workspace of businessWorkspaces) {
+      const repositories = [...workspace.repositories].sort((a, b) => Number(b.favorite) - Number(a.favorite));
+      for (const repository of repositories) {
+        const location = repository.locations.find(item => item.available && item.path);
+        if (!location) continue;
+        for (const [path, place] of repositoryPlaces(repository, t('workspaces.mainCheckout'), t('workspaces.worktreeKind'))) {
+          if (options.some(option => option.value === `custom:${path}`)) continue;
+          options.push({
+            value: `custom:${path}`,
+            label: place.main ? repository.name : `${repository.name} · ${place.label}`,
+            detail: t('workspaces.repoOption', { project: workspace.name, path: shortPath(displayPath(path)) }),
+            worktree: !place.main,
+            selection: { workspaceId: workspace.id, repositoryId: repository.id, directory: path, projectId: location.projectId, label: `${workspace.name} / ${repository.name}` },
+          });
+        }
+      }
+    }
+    return options;
+  }, [businessWorkspaces, t]);
   const cliSelectOptions = useMemo<FilterSelectOption[]>(() => toolOptions(terminalTools), [terminalTools]);
   const workspaceSelectOptions = useMemo<FilterSelectOption[]>(() => {
     // A host lists its own places only: its home folder, its saved folders and a picked one.
@@ -3161,11 +3212,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     }
     const list: FilterSelectOption[] = [
       { value: '__home', label: t('sessions.workspaceHome'), icon: <Icon name="home" size={14} /> },
+      // Project repositories (main checkout and attached worktrees) are ordinary directory choices.
+      ...businessRepositoryOptions.map(({ value, label, detail, worktree }) => ({ value, label, detail, icon: <Icon name={worktree ? 'gitWorktree' : 'branch'} size={14} /> })),
       ...availableProjects.map((project) => ({ value: `project:${project.id}`, label: project.name, detail: project.path ? shortPath(displayPath(project.path)) : undefined, icon: <Icon name="folder" size={14} /> })),
     ];
-    if (customFolderPath) list.push({ value: `custom:${customFolderPath}`, label: shortPath(displayPath(customFolderPath)), detail: displayPath(customFolderPath), icon: <Icon name="folder" size={14} /> });
+    if (customFolderPath && !businessRepositoryOptions.some(option => option.value === `custom:${customFolderPath}`)) list.push({ value: `custom:${customFolderPath}`, label: shortPath(displayPath(customFolderPath)), detail: displayPath(customFolderPath), icon: <Icon name="folder" size={14} /> });
     return list;
-  }, [activeRemoteTarget, availableProjects, availableRemoteProjects, customFolderPath, customRemotePath, remoteHomePath, t]);
+  }, [activeRemoteTarget, availableProjects, availableRemoteProjects, businessRepositoryOptions, customFolderPath, customRemotePath, remoteHomePath, t]);
   // Switching hosts can leave a folder from the other place selected; fall back to home.
   useEffect(() => {
     if (newDialogOpen && !workspaceSelectOptions.some((option) => option.value === workspaceValue)) setWorkspaceValue('__home');
@@ -3199,6 +3252,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   // Every live terminal stays mounted, including other hosts' sessions: a remount replays history
   // into a fresh xterm. Ended ones are mounted only while on screen or recently viewed.
   // A temporary look keeps its own terminal mounted without putting it in visibleIds.
+  const scopedSessionIds = useMemo(() => new Set(scopedSessions.map(session => session.id)), [scopedSessions]);
   const mountedSessions = sessions.filter((session) => session.running || visibleIds.includes(session.id) || recentSessionIds.includes(session.id) || session.id === peekSessionId || session.id === menu?.sessionId);
   // A pending selection has no input target until that identity has been listed.
   const stageSession = selected;
@@ -3206,6 +3260,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const railDocked = !!railHost;
   const showRail = !focusMode && !(showEmpty && !listError);
   const railShown = railDocked && showRail;
+  const liveScopedCount = useMemo(() => scopedSessions.filter((item) => item.running).length, [scopedSessions]);
+  useEffect(() => {
+    onLiveCountChange?.(liveScopedCount);
+  }, [onLiveCountChange, liveScopedCount]);
   useEffect(() => {
     onRailLayout?.({ docked: railShown, focus: railDocked && focusMode });
   }, [onRailLayout, railShown, railDocked, focusMode]);
@@ -3372,7 +3430,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           const review = current ? reviewStates.get(current.id) ?? null : null;
           const codeStatus = current ? codeStatuses.get(current.id) ?? null : null;
           const codeStatusStale = !!current && (!!codeStatusUnknown.get(current.id) || !codeStatus || codeStatus.state !== 'ready');
-          const reviewUnverified = !!current && review?.status === 'returned' && codeStatusReviews.get(current.id) !== review.reviewId;
+          const reviewUnverified = !!current && review?.status === 'returned' && codeStatusReviews.get(current.id) !== reviewResultKey(review);
           const reviewView = describeReview(review, codeStatus, codeStatusStale || reviewUnverified);
           const reviewWaiting = !!review && review.status === 'opening' && reviewClock - review.createdAt < REVIEW_UNKNOWN_MS;
           // 发起中不重复点击；失败、超时或拒绝都可以重新发起，并一定拿到新的 reviewId。
@@ -3473,7 +3531,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   const canResume = !remotePane && tools.some(tool => tool.id === session.toolId && tool.resume?.state === 'available' && tool.history?.state === 'available');
                   // Clipboard files use the same queue; local sessions retain staged files.
                   const peeking = peekSessionId === session.id;
-                  return <SessionTerminal key={session.id} sessionId={session.id} toolId={session.toolId} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} suspendInput={!!peekSession && session.id === selectedId} peeking={peeking} keepRendererWarm={renderActive} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onFilesPaste={(inputs) => uploads.enqueueUpload(session.id, remotePane || null, inputs)} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={TERMINAL_LINE_HEIGHT[density]} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
+                  return <SessionTerminal key={session.id} sessionId={session.id} toolId={session.toolId} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} suspendInput={!!peekSession && session.id === selectedId} peeking={peeking} keepRendererWarm={renderActive && scopedSessionIds.has(session.id)} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onFilesPaste={(inputs) => uploads.enqueueUpload(session.id, remotePane || null, inputs)} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={TERMINAL_LINE_HEIGHT[density]} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
                     header={split && visible ? <div className={styles.paneHead}>
                       <SessionActivityIcon tone={sessionTone(session)} slot="pane" className={styles.paneDot} label={stateLabel(session, sessionTone(session))} />
                       <ToolIcon toolId={session.toolId} size={14} />
@@ -3513,7 +3571,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   <div className={styles.peekBody} />
                 </div>}
               </div>
-              {current?.running && composerOpen && <WorkbenchComposer toolId={current.toolId} toolName={toolName(current)} place={placeOf(current)} draft={composerDrafts[current.id] ?? ''} prompts={composerPrompts} promptFeedback={promptFeedback(composerHostId, composerIdentity)} inputRef={composerInputRef} onChange={updateComposerDraft} onFilesPaste={(files) => handles.current.get(current.id)?.pasteFiles(files)} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
+              {current?.running && composerOpen && <WorkbenchComposer active={active} toolId={current.toolId} toolName={toolName(current)} place={placeOf(current)} draft={composerDrafts[current.id] ?? ''} promptContext={sessionPromptContext(current)} promptSourceKey={current.id} workspaces={businessWorkspaces} inputRef={composerInputRef} onChange={updateComposerDraft} onFilesPaste={(files) => handles.current.get(current.id)?.pasteFiles(files)} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
               {current && <footer className={styles.statusBar}>
                 <span className={styles.statusItem} data-host={remote ? 'remote' : 'local'} title={`${t('common.host.label')}：${hostLabel}${remoteHost ? ` · ${remoteHost.user}@${remoteHost.host}` : ''}`}><Icon name={remote ? 'server' : 'monitor'} size={12} />{hostLabel}</span>
                 {/* Git is one chip: branch name, a worktree glyph when this checkout is a linked worktree,
@@ -3696,6 +3754,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           </div>
           <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.pickWorkspaceLabel')}</span><FilterSelect label={t('sessions.pickWorkspaceLabel')} value={workspaceValue} options={workspaceSelectOptions} searchable searchLabel={t('sessions.searchWorkspace')} onPickFolder={() => void pickCustomWorkspaceFolder()} pickFolderLabel={t('sessions.pickFolder')} onChange={(value) => {
             setWorkspaceValue(value);
+            const repository = activeRemoteTarget ? undefined : businessRepositoryOptions.find(option => option.value === value);
+            setBusinessSelection(repository?.selection ?? null);
+            if (repository) { setDialogPlace('direct'); dialogPlaceTouched.current = true; setDialogError(''); }
             if (value.startsWith('project:')) {
               const project = availableProjects.find((item) => 'project:' + item.id === value);
               if (project?.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)) setLaunchToolId(project.preferredTool);
@@ -3777,7 +3838,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           <button type="button" role="radio" aria-checked={launchMode === 'normal'} className={styles.modeCard} onClick={() => setLaunchMode('normal')}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="shield" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeNormal')}</strong><small>{t('sessions.modeNormalDesc')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
           <button type="button" role="radio" aria-checked={launchMode === 'yolo'} disabled={!selectedLaunchTool?.yoloAvailable} title={!selectedLaunchTool?.yoloAvailable ? t('sessions.yoloUnsupported') : undefined} className={styles.modeCard} onClick={() => setLaunchMode('yolo')}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="sparkle" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeYolo')}</strong><small>{selectedLaunchTool?.yoloAvailable ? t('sessions.modeYoloDesc') : t('sessions.yoloUnsupported')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
         </div>{selectedLaunchTool?.resumeLatestAvailable && !activeRemoteTarget && <label className={styles.checkboxRow}><input type="checkbox" checked={resumeLatest} onChange={(event) => setResumeLatest(event.target.checked)} /><span>{t('sessions.resumeLatest')}</span></label>}</div>
-        <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.initialPromptLabel')}</span><textarea rows={3} className={styles.dialogTextarea} value={initialPrompt} placeholder={t('sessions.initialPromptPlaceholder')} aria-label={t('sessions.initialPromptLabel')} onChange={(event) => setInitialPrompt(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing && !launchingNew && effectiveLaunchToolId) { event.preventDefault(); void launchFromDialog(); } }} /><PromptPicker className={styles.dialogPrompts} labelClassName={styles.dialogPromptLabel} prompts={dialogPrompts} onPick={(prompt) => setInitialPrompt(prompt.body)} />{promptFeedback(dialogHostId, dialogIdentity)}</div>
+        <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.initialPromptLabel')}</span><textarea rows={3} className={styles.dialogTextarea} value={initialPrompt} placeholder={t('sessions.initialPromptPlaceholder')} aria-label={t('sessions.initialPromptLabel')} onChange={(event) => setInitialPrompt(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing && !launchingNew && effectiveLaunchToolId) { event.preventDefault(); void launchFromDialog(); } }} /><PromptPicker active={active && newDialogOpen} className={styles.dialogPrompts} labelClassName={styles.dialogPromptLabel} context={dialogPromptContext} sourceKey={`new:${workspaceValue}:${activeTargetId}`} workspaces={businessWorkspaces} onPick={(prompt) => setInitialPrompt(previous => previous ? `${previous}\n${prompt.body}` : prompt.body)} /></div>
         <div className={styles.dialogSummary}>{effectiveLaunchToolId && <span className={styles.dialogSummaryIcon}><ToolIcon toolId={effectiveLaunchToolId} size={20} /></span>}<span>{(() => {
           const place = workspaceValue.startsWith('project:') ? availableProjects.find((item) => 'project:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('remote:') ? availableRemoteProjects.find((item) => 'remote:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('custom:') ? shortPath(displayPath(workspaceValue.slice('custom:'.length))) : workspaceValue.startsWith('rpath:') ? remoteBaseName(workspaceValue.slice('rpath:'.length)) || workspaceValue.slice('rpath:'.length) : t('sessions.workspaceHome');
           const values = { tool: selectedLaunchTool?.name ?? '', place, mode: modeLabel(launchMode) };

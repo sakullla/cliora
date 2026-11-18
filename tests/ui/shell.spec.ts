@@ -1,4 +1,7 @@
+import { installPromptFixtureBridge } from '../../scripts/capture-prompt-fixtures.mjs';
 import { expect, test, type Locator, type Page } from '@playwright/test';
+
+test.beforeEach(async ({ page }) => { await page.addInitScript(installPromptFixtureBridge); });
 
 const pageNames = ['首页', '工作台', '工具', '资料库', '记录'] as const;
 
@@ -812,9 +815,10 @@ test('command palette library entry jumps to the library page and opens the item
   await expect.poll(async () => (await dialog.locator('.command-group').allTextContents()).slice(0, 2)).toEqual(['开始', '最近会话']);
   const groups = await dialog.locator('.command-group').allTextContents();
   expect(groups.indexOf('最近会话')).toBeLessThan(groups.indexOf('页面'));
-  // Secondary action on a recent session jumps to Records instead of resuming.
-  await dialog.getByRole('button', { name: '面板会话1 · 在记录中查看' }).click();
+  // Secondary action on a recent session jumps to Records and focuses that exact session instead of defaulting to s1.
+  await dialog.getByRole('button', { name: '面板会话2 · 在记录中查看' }).click();
   await expect(page.getByRole('heading', { name: '记录', level: 1 })).toBeVisible();
+  await expect(page.locator('[data-session-id="s2"][aria-current="true"]')).toBeVisible();
 
   await page.keyboard.press('Control+K');
   await dialog.getByRole('combobox', { name: '搜索页面、工具或项目' }).fill('面板规则2');
@@ -1207,16 +1211,19 @@ test('workbench modal dialog scales to 40+ CLIs, supports on-demand composer, fi
 
   // Open the docked quick-input composer and send multi-line / prompt text
   await stage.locator('.xterm-screen').click();
-  await page.keyboard.press('Control+Shift+M');
+  await page.keyboard.press('ControlOrMeta+Shift+M');
   const composer = stage.getByRole('textbox', { name: /编写多行内容或从资料库选入提示词/ });
   // 32 library prompts: three stay as pills, the rest open in one searchable list.
   const promptGroup = stage.getByRole('group', { name: '资料库提示词' });
   await expect(promptGroup.locator('button:not([data-select-trigger])')).toHaveCount(3);
-  const allPrompts = promptGroup.getByRole('button', { name: '全部 32 个', exact: true });
+  const allPrompts = promptGroup.getByRole('button', { name: '查找提示词', exact: true });
   await allPrompts.click();
-  await expect(page.getByRole('listbox', { name: '全部 32 个' }).getByRole('option')).toHaveCount(32);
-  await page.getByRole('textbox', { name: '搜索提示词' }).fill('第 30 条');
-  await page.getByRole('option', { name: /提示词 30/ }).click();
+  const picker = page.getByRole('dialog', { name: '查找提示词' });
+  await expect(picker.getByText('共 32 条', { exact: true })).toBeVisible();
+  await picker.getByRole('textbox', { name: '搜索提示词标题或完整正文' }).fill('第 30 条');
+  await picker.getByRole('button', { name: /提示词 30/ }).click();
+  await expect(picker.locator('pre')).toHaveText('第 30 条提示词正文');
+  await picker.getByRole('button', { name: '插入草稿', exact: true }).click();
   await expect(composer).toHaveValue('第 30 条提示词正文');
   await expect(composer).toBeFocused();
   await composer.fill('status check');
@@ -1226,7 +1233,7 @@ test('workbench modal dialog scales to 40+ CLIs, supports on-demand composer, fi
   ]);
 
   // Search terminal output
-  await page.keyboard.press('Control+Shift+F');
+  await page.keyboard.press('ControlOrMeta+Shift+F');
   await stage.getByRole('searchbox', { name: '在终端输出中查找…' }).fill('ready-line');
   await expect(stage).toContainText('1 / 1');
 
@@ -1316,7 +1323,7 @@ test('workbench re-reads library prompts after the library changes', async ({ pa
   await expect(dialog).toBeHidden();
 
   await stage.locator('.xterm-screen').click();
-  await page.keyboard.press('Control+Shift+M');
+  await page.keyboard.press('ControlOrMeta+Shift+M');
   const composerPrompts = stage.getByRole('group', { name: '资料库提示词' });
   await expect(composerPrompts).toContainText('新标题');
   await page.keyboard.press('Escape');
@@ -1325,7 +1332,7 @@ test('workbench re-reads library prompts after the library changes', async ({ pa
   // Reopening the composer re-reads the library too.
   await rename('第三版');
   await stage.locator('.xterm-screen').click();
-  await page.keyboard.press('Control+Shift+M');
+  await page.keyboard.press('ControlOrMeta+Shift+M');
   await expect(composerPrompts).toContainText('第三版');
 });
 

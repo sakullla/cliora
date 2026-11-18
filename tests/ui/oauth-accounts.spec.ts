@@ -160,9 +160,11 @@ test('unsupported managed sign-in keeps the real reason and offers no pseudo sig
   await expect(work.locator('[data-state="signed_in"]')).toHaveText('已登录');
   await expect(work.getByRole('button', { name: '重新认证' })).toHaveCount(0);
   await expect(work.getByRole('button', { name: '登录', exact: true })).toHaveCount(0);
-  await work.getByRole('button', { name: '检查状态' }).click();
-  await expect.poll(() => page.evaluate(() => (window as any).oauthHarness.calls.filter((call: any) => call.command === 'check_account').length)).toBe(1);
-  expect(await page.evaluate(() => (window as any).oauthHarness.calls.filter((call: any) => call.command === 'start_account_login'))).toEqual([]);
+  // Read-only providers expose no managed actions, including status checks,
+  // rename and destructive controls.
+  await expect(work.getByRole('button')).toHaveCount(0);
+  await expect(work.getByRole('region', { name: '危险操作' })).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).oauthHarness.calls.filter((call: any) => ['check_account', 'start_account_login', 'logout_account', 'delete_account', 'rename_account'].includes(call.command)))).toEqual([]);
 });
 
 test('sign-out and deletion list the real links first and a cancel changes nothing', async ({ page }) => {

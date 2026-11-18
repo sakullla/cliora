@@ -109,6 +109,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
   const [trusted, setTrusted] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [doctorBusy, setDoctorBusy] = useState(false);
   const [stale, setStale] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [operations, setOperations] = useState<Operation[]>([]);
@@ -127,12 +128,15 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
   const restoreFocus = useRef<string | null>(null);
   const accountLabel = useAccountLabels(!!remoteTargetId);
   const entries = snapshot?.entries ?? [];
+  // The adapter publishes the diagnostic entry id only while that row exists;
+  // never infer a doctor row from state/root or show it on an unsupported scope.
+  const doctorEntry = snapshot?.doctor ? entries.find(entry => entry.id === snapshot.doctor) : undefined;
   const needle = search.trim().toLocaleLowerCase();
   const filtered = entries.filter(entry => `${entry.name} ${entry.source} ${entry.id}`.toLocaleLowerCase().includes(needle) && (filter === 'all' || (filter === 'readonly' ? entry.readOnly : filter === 'enabled' ? entry.enabled === true : entry.enabled === false)));
   const installedCount = entries.filter(entry => entry.state !== 'not_installed').length;
   const filteredInstalledCount = filtered.filter(entry => entry.state !== 'not_installed').length;
   const sourceIssue = sourceProblem(source.trim());
-  const canInstall = !!snapshot?.baseline && snapshot.capability.actions.includes('install');
+  const canInstall = !!snapshot?.baseline && snapshot.capability.actions.includes('install') && !doctorBusy;
   const offersInstall = !!snapshot?.capability.actions.includes('install') && !remoteTargetId;
   const blockProjectUpdate = uiAdapterFor(toolId).plugins?.projectUpdate === false && scope === 'project';
   const installLabel = uiAdapterFor(toolId).plugins?.installLabel ?? t('tools.plugins.installDefault');
@@ -141,7 +145,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
 
   useEffect(() => {
     const id = ++generation.current;
-    setSnapshot(null); setError(''); setNotice(''); setBusy(true); setStale(false); setSelectedKey(null); setOperations([]); setTrusted(false); setContents({}); setPreview(null); setInstallOpen(false);
+    setSnapshot(null); setError(''); setNotice(''); setBusy(true); setDoctorBusy(false); setStale(false); setSelectedKey(null); setOperations([]); setTrusted(false); setContents({}); setPreview(null); setInstallOpen(false);
     const cached = !remoteTargetId ? remembered.get(cacheKey) : undefined;
     if (cached && Date.now() - cached.at < 30_000) { setSnapshot(cached.snapshot); setBusy(false); return () => { generation.current++; }; }
     // Retain a previous inventory while revalidating; operations still scan
@@ -158,6 +162,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
     // Remote plugin inventory is currently read-only. Never fall through to
     // the native plugin scanner or installer when a remote host is selected.
     if (remoteTargetId) return;
+    if (doctorBusy) return;
     if (operations.some(operation => operation.status === 'running')) return;
     const operation = operations.find(item => item.status === 'queued');
     if (!operation || operation.generation !== generation.current) return;
@@ -171,7 +176,11 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
         setSnapshot(latest); setStale(false);
         if (!latest.baseline || !latest.capability.actions.includes(operation.action)) throw new Error(t('tools.plugins.operationUnavailable'));
         const entry = operation.entryId ? latest.entries.find(item => item.id === operation.entryId) : null;
-        if (operation.action !== 'install' && (!entry || entry.state === 'not_installed')) throw new Error(t('tools.plugins.operationEntryChanged'));
+        // A writable missing-cache marketplace row is still a valid native
+        // uninstall target: its registry row exists even though the package is
+        // gone. Other not-installed rows (catalog/diagnostics) stay blocked.
+        const cleanup = operation.action === 'uninstall' && !!entry && entry.state === 'not_installed' && !entry.readOnly && !!entry.root;
+        if (operation.action !== 'install' && (!entry || (entry.state === 'not_installed' && !cleanup))) throw new Error(t('tools.plugins.operationEntryChanged'));
         if (entry?.readOnly || (operation.action === 'update' && blockProjectUpdate)) throw new Error(t('tools.plugins.operationUnavailable'));
         const result = await native.operateNativePlugin({ target, action: operation.action, source: operation.source, baseline: latest.baseline, trusted: operation.trusted });
         if (id !== generation.current) return;
@@ -204,7 +213,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
         setStale(true); setError(detail);
       }
     })();
-  }, [operations, target]);
+  }, [operations, target, doctorBusy]);
 
   const wasVisible = useRef(remoteReads.active);
   useEffect(() => {
@@ -213,7 +222,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
   }, [remoteReads.active]);
 
   async function refresh(fresh = true) {
-    if (refreshing.current || busy || working) return;
+    if (refreshing.current || busy || working || doctorBusy) return;
     const id = generation.current;
     refreshing.current = true;
     setBusy(true); setError('');
@@ -230,8 +239,51 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
     }
   }
 
+  async function runDoctor() {
+    if (!snapshot?.baseline || !doctorEntry || busy || working || doctorBusy) return;
+    const id = generation.current;
+    // doctor --fix may install missing packages or remove lock residual; it is
+    // never an automatic rollback. The user confirms the native repair first.
+    if (!await confirmAction(
+      t('tools.plugins.doctorConfirm'),
+      () => id === generation.current,
+      { title: t('tools.plugins.doctorTitle'), confirmLabel: t('tools.plugins.doctorRun') },
+    )) return;
+    if (id !== generation.current) return;
+    setDoctorBusy(true); setError(''); setNotice('');
+    try {
+      // The adapter publishes the native doctor action; the diagnostic row is
+      // its baseline source. The shared service rescans after the command.
+      const result = await native.operateNativePlugin({
+        target,
+        action: 'doctor',
+        source: doctorEntry.id,
+        baseline: snapshot.baseline,
+        trusted: false,
+      });
+      if (id !== generation.current) return;
+      remembered.delete(cacheKey);
+      if (result.snapshot) {
+        remember(cacheKey, result.snapshot);
+        setSnapshot(result.snapshot);
+        setStale(false);
+      } else {
+        setStale(true);
+      }
+      setContents({});
+      if (result.status === 'failed_possible_side_effects') setError(`${result.detail} ${t('tools.plugins.sideEffects')}`);
+      else setNotice(result.detail);
+    } catch (value) {
+      if (id !== generation.current) return;
+      setStale(true);
+      setError(message(value));
+    } finally {
+      if (id === generation.current) setDoctorBusy(false);
+    }
+  }
+
   async function operate(action: PluginAction, entry?: PluginEntry) {
-    if (!snapshot?.baseline) return;
+    if (!snapshot?.baseline || doctorBusy) return;
     const operationSource = entry?.id ?? source.trim();
     if (action === 'install' && (!trusted || sourceIssue || !canInstall)) return;
     if (operations.some(operation => ['queued', 'running'].includes(operation.status) && (operation.entryId === entry?.id || (action === 'install' && operation.action === 'install' && operation.source === operationSource)))) return;
@@ -247,7 +299,13 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
 
   function operationFor(entry: PluginEntry) { return operations.find(operation => operation.entryId === entry.id && (operation.status === 'queued' || operation.status === 'running')); }
   function entryActions(entry: PluginEntry) {
-    if (entry.state === 'not_installed') return [];
+    if (entry.state === 'not_installed') {
+      // A writable missing-cache marketplace row still has a native registry
+      // entry, so uninstall can remove that residual record. A diagnostics row
+      // (no root) or a read-only catalog row offers no lifecycle action.
+      if (entry.readOnly || !entry.root) return [];
+      return (['uninstall'] as PluginAction[]).filter(action => snapshot?.capability.actions.includes(action));
+    }
     return (['update', entry.enabled === false ? 'enable' : 'disable', 'uninstall'] as PluginAction[]).filter(action => snapshot?.capability.actions.includes(action));
   }
   function clearFilters() { setSearch(''); setFilter('all'); }
@@ -412,7 +470,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
     heading={t('tools.plugins.title')}
     count={countText}
     actions={<>
-      <IconButton size="sm" className={doc.iconButton} aria-label={t('tools.plugins.rescan')} title={t('tools.plugins.rescan')} disabled={busy || working} data-spinning={(busy && !!snapshot) || undefined} onClick={() => void refresh()} icon={<Icon name="refresh" size={15} />} />
+      <IconButton size="sm" className={doc.iconButton} aria-label={t('tools.plugins.rescan')} title={t('tools.plugins.rescan')} disabled={busy || working || doctorBusy} data-spinning={(busy && !!snapshot) || undefined} onClick={() => void refresh()} icon={<Icon name="refresh" size={15} />} />
       {offersInstall && <IconButton size="sm" variant="primary" aria-label={t('tools.plugins.installTitle')} title={t('tools.plugins.installTitle')} disabled={!canInstall} onClick={openInstall} icon={<Icon name="plus" size={16} />} />}
     </>}
     search={snapshot ? <SearchField type="search" pageSearch title={searchShortcutHint()} label={t('tools.plugins.searchLabel')} placeholder={t('tools.plugins.searchPlaceholder')} value={search} onChange={setSearch} /> : undefined}
@@ -420,6 +478,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
     notices={<><RemoteReadStatus state={remoteReads} />
       {busy && snapshot && <p className={panel.progress} role="status">{snapshot.baseline ? t('tools.plugins.refreshing') : t('tools.plugins.verifying')}</p>}
       {stale && snapshot?.baseline && <div className={panel.staleNotice} role="status"><strong>{t('tools.plugins.staleTitle')}</strong><span>{t('tools.plugins.staleDetail')}</span><Button size="sm" disabled={busy || working} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</Button></div>}
+      {snapshot?.baseline && doctorEntry && <div className={panel.staleNotice} role="status" data-tone="warn"><strong>{t('tools.plugins.doctorTitle')}</strong><span>{doctorEntry.policy}</span><Button size="sm" disabled={busy || working || doctorBusy} onClick={() => void runDoctor()}>{doctorBusy ? t('tools.plugins.operating') : t('tools.plugins.doctorRun')}</Button></div>}
       {operations.length > 0 && <div className={panel.queue} aria-label={t('tools.plugins.queueLabel')}><div className={panel.queueTitle}><strong>{t('tools.plugins.queueTitle')}</strong><span>{t('tools.plugins.queueSerial')}</span></div>{operations.map(item => <div className={panel.queueRow} key={item.id} data-state={item.status}><span><strong>{actionLabel(item.action)} · {item.name}</strong>{item.detail && <small>{item.detail}</small>}</span><span className={panel.queueState}>{t(`tools.plugins.operationState.${item.status}`)}</span>{item.status === 'queued' && <button type="button" onClick={() => setOperations(current => current.filter(entry => entry.id !== item.id))}>{t('tools.plugins.cancelQueued')}</button>}{item.status === 'failed' && <button type="button" disabled={item.action === 'install' && (!source.trim() || !trusted || !!sourceIssue || !canInstall)} onClick={() => { if (item.action === 'install') { void operate('install'); return; } setError(''); setOperations(current => current.map(entry => entry.id === item.id ? { ...entry, status: 'queued', detail: undefined } : entry)); }}>{t('tools.plugins.retry')}</button>}{item.status === 'succeeded' && item.entryId === null && <button type="button" onClick={() => setOperations(current => current.filter(entry => entry.id !== item.id))}>{t('tools.plugins.dismiss')}</button>}</div>)}</div>}
     </>}
     listFooterLabel={t('tools.plugins.compatSummary')}
@@ -474,7 +533,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId, remote
           {operation && <Badge tone="warning">{t(`tools.plugins.operationState.${operation.status}`)}</Badge>}
         </>}
         tools={<>
-          {entryActions(opened).map(action => <Button size="sm" key={action} variant={action === 'uninstall' ? 'ghost' : action === 'update' ? 'secondary' : action === 'enable' ? 'primary' : 'secondary'} className={action === 'uninstall' ? styles.danger : undefined} title={opened.readOnly ? policyLabel(opened.policy) : action === 'update' && blockProjectUpdate ? t('tools.plugins.updateProjectTitle') : operation ? t('tools.plugins.sameItemPending') : undefined} disabled={!snapshot?.baseline || !!operation || opened.readOnly || (action === 'update' && blockProjectUpdate)} onClick={() => void operate(action, opened)}>{actionLabel(action)}</Button>)}
+          {entryActions(opened).map(action => <Button size="sm" key={action} variant={action === 'uninstall' ? 'ghost' : action === 'update' ? 'secondary' : action === 'enable' ? 'primary' : 'secondary'} className={action === 'uninstall' ? styles.danger : undefined} title={opened.readOnly ? policyLabel(opened.policy) : action === 'update' && blockProjectUpdate ? t('tools.plugins.updateProjectTitle') : operation ? t('tools.plugins.sameItemPending') : undefined} disabled={!snapshot?.baseline || !!operation || doctorBusy || opened.readOnly || (action === 'update' && blockProjectUpdate)} onClick={() => void operate(action, opened)}>{actionLabel(action)}</Button>)}
         </>}
         meta={<span className={styles.meta}>
           <span><Icon name="package" size={12} />{origin(opened)}</span>

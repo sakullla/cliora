@@ -1,0 +1,23 @@
+[
+  {
+    "name": "plugins_directory",
+    "status": "ok",
+    "message": "Found at <home>/.omp/plugins"
+  },
+  {
+    "name": "package_manifest",
+    "status": "warning",
+    "message": "Not created yet"
+  },
+  {
+    "name": "node_modules",
+    "status": "ok",
+    "message": "Found"
+  },
+  {
+    "name": "orphan:t5-fixture-plugin",
+    "status": "warning",
+    "message": "Plugin in config but not installed",
+    "fixed": false
+  }
+]

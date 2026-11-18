@@ -62,16 +62,16 @@
   animation: shimmer 1.4s linear infinite;
 }
 /* Profiles stay on one line; extra chips scroll sideways instead of stacking the row taller. */
-.switch > div[role="radiogroup"] { display: flex; flex-wrap: nowrap; gap: var(--space-0_5); width: fit-content; max-width: 100%; padding: var(--space-0_75); overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); scrollbar-width: none; }
+.switch > div[role="radiogroup"] { display: flex; flex-wrap: nowrap; gap: var(--space-0_5); width: fit-content; max-width: 100%; padding: var(--space-0_75); overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-2); scrollbar-width: none; }
 .switch > div[role="radiogroup"]::-webkit-scrollbar { display: none; }
 .switch > div[role="radiogroup"] > button {
   flex: none;
   max-width: 220px;
-  min-height: var(--space-6);
+  min-height: 24px;
   padding: 0 var(--space-2_5);
   overflow: hidden;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   background: transparent;
   color: var(--text-2);
   font-size: var(--fs-caption);
@@ -79,7 +79,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   box-shadow: none;
-  transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease);
+  transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
 .switch > div[role="radiogroup"] > button:hover:not(:disabled) { background: var(--surface-3); color: var(--text); box-shadow: none; }
 .switch > div[role="radiogroup"] > button.activeConfig,

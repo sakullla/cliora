@@ -8,9 +8,28 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// How an adapter's managed account credentials may leave the machine.
+///
+/// The default treats `NativeContext.auth_files` as a login's own files. An
+/// adapter whose credential store also holds unrelated native state must keep
+/// whole-file export/import closed; a per-login snapshot is a separate,
+/// evidence-backed capability rather than a guessed file subset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthExportPolicy {
+    WholeFiles,
+    SharedDatabase,
+}
+
 pub trait AccountAdapter: Sync {
+    /// Whole files are the default. `SharedDatabase` forbids exporting the file
+    /// list as an account snapshot; portable collection then reports a blocker.
+    fn auth_export_policy(&self) -> AuthExportPolicy {
+        AuthExportPolicy::WholeFiles
+    }
     /// CLI prints a URL but does not launch a browser. Streaming bridge is Windows-only.
-    fn browser_login_endpoint(&self) -> Option<&'static str> { None }
+    fn browser_login_endpoint(&self) -> Option<&'static str> {
+        None
+    }
     fn native_environment_keys(&self) -> &'static [&'static str] {
         &[]
     }
@@ -169,6 +188,15 @@ pub(crate) fn native_path(
     Ok(path)
 }
 
+/// Provider labels are display keys from native metadata, never free text.
+pub(crate) fn valid_provider(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 80
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_./:".contains(&b))
+}
+
 /// Local credential presence is not a verified managed identity. Never emit raw records.
 pub(crate) fn discover_records(value: &Value, now: i64) -> Vec<NativeLogin> {
     let Some(records) = value.as_object() else {
@@ -177,12 +205,7 @@ pub(crate) fn discover_records(value: &Value, now: i64) -> Vec<NativeLogin> {
     records
         .iter()
         .filter_map(|(provider, auth)| {
-            if provider.is_empty()
-                || provider.len() > 80
-                || !provider
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"-_./:".contains(&b))
-            {
+            if !valid_provider(provider) {
                 return None;
             }
             let kind = auth["type"].as_str()?;

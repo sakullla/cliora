@@ -98,6 +98,7 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
   const [message, setMessage] = useState('');
   const [run, setRun] = useState<SyncRun | null>(null);
   const [receiptOpen, setReceiptOpen] = useState(false);
+  const [localOnlyExpanded, setLocalOnlyExpanded] = useState(false);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
@@ -354,7 +355,7 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
     return t('settings.webdav.tagWrite');
   }
 
-  function summary(activity: Activity, conflictCount: number) {
+  function summary(activity: Activity, conflictCount: number, localOnlyCount = 0) {
     const moved = Math.max(activity.uploaded + activity.downloaded, activity.transfers.length);
     const headline = conflictCount > 0 && moved === 0
       ? t('settings.webdav.conflictsLeft', { count: conflictCount })
@@ -364,6 +365,11 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
     const detail = moved === 0
       ? (activity.compared > 0 ? t('settings.webdav.alreadyAlignedDetail', { count: activity.compared }) : t('settings.webdav.emptyTransfer'))
       : t('settings.webdav.syncedSomeDetail', { downloaded: activity.downloaded, uploaded: activity.uploaded });
+    if (localOnlyCount > 0) return {
+      moved,
+      headline: t('settings.webdav.syncLimited', { count: localOnlyCount }),
+      detail: t('settings.webdav.syncLimitedDetail', { count: localOnlyCount, downloaded: activity.downloaded, uploaded: activity.uploaded }) + (conflictCount ? ` ${t('settings.webdav.conflictsLeft', { count: conflictCount })}` : ''),
+    };
     return { moved, headline, detail };
   }
 
@@ -388,12 +394,12 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
     </div>;
   }
 
-  function resultView(activity: Activity | null, headline: string, detail: string, conflictCount: number, moved: number, onClose: () => void) {
+  function resultView(activity: Activity | null, headline: string, detail: string, conflictCount: number, moved: number, onClose: () => void, localOnlyCount = 0) {
     const received = activity?.transfers.filter((item) => item.direction === 'download') ?? [];
     const sent = activity?.transfers.filter((item) => item.direction !== 'download') ?? [];
     return <div className={`sync-dialog sync-activity ${styles.dialogBody}`}>
       <div className={styles.result}>
-        <span className={styles.resultMark} data-tone={conflictCount > 0 ? 'warn' : undefined} aria-hidden="true"><Icon name={conflictCount > 0 ? 'alert' : 'check'} size={24} /></span>
+        <span className={styles.resultMark} data-tone={conflictCount > 0 || localOnlyCount > 0 ? 'warn' : undefined} aria-hidden="true"><Icon name={conflictCount > 0 || localOnlyCount > 0 ? 'alert' : 'check'} size={24} /></span>
         <div className={styles.resultCopy}>
           <p className={styles.headline}>{headline}</p>
           <p className={styles.detail}>{detail}</p>
@@ -417,10 +423,12 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
     return true;
   });
   const conflicts = status?.conflicts ?? [];
+  const localOnly = status?.localOnly ?? [];
+  const visibleLocalOnly = localOnlyExpanded ? localOnly : localOnly.slice(0, PREVIEW_LIMIT);
   const applyCount = missingProjects.length + blockers.length;
-  const issueCount = applyCount + conflicts.length;
+  const issueCount = applyCount + conflicts.length + localOnly.length;
   const itemIssues = issueCount > 0;
-  const issueWhy = conflicts.length && applyCount
+  const issueWhy = localOnly.length && !applyCount && !conflicts.length ? t('settings.webdav.localOnlyHint', { count: localOnly.length }) : conflicts.length && applyCount
     ? t('settings.webdav.issueWhyBoth', { conflicts: conflicts.length, apply: applyCount })
     : conflicts.length
       ? t('settings.webdav.issueWhyConflicts', { count: conflicts.length })
@@ -430,11 +438,11 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
   const last = status?.lastSuccess ? relativeTime(status.lastSuccess, i18n.language) : null;
   const host = endpointHost(status?.endpoint);
   const activity = activityOf(status);
-  const activitySummary = activity ? summary(activity, conflicts.length) : null;
+  const activitySummary = activity ? summary(activity, conflicts.length, localOnly.length) : null;
   const hiddenTransfers = Math.max(0, (activity?.transfers.length ?? 0) - PREVIEW_LIMIT);
   const receiptAt = status?.receipt?.at ? relativeTime(status.receipt.at, i18n.language) : null;
   const resultActivity = run?.result ? activityOf(run.result) : null;
-  const resultSummary = resultActivity ? summary(resultActivity, run?.result?.conflicts.length ?? 0) : null;
+  const resultSummary = resultActivity ? summary(resultActivity, run?.result?.conflicts.length ?? 0, run?.result?.localOnly?.length ?? 0) : null;
   const phaseLabels = [t('settings.webdav.phaseConnect'), t('settings.webdav.phaseCompare'), t('settings.webdav.phaseTransfer'), t('settings.webdav.phaseApply')];
   const tone = !status?.configured ? 'idle' : status.lastError ? 'danger' : !status.enabled ? 'paused' : itemIssues ? 'warning' : 'ok';
   const syncing = !!run?.running;
@@ -533,10 +541,22 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
     {error && <Notice tone="error" onDismiss={() => setError('')}>{error}</Notice>}
     {message && <Notice tone="success" onDismiss={() => setMessage('')}>{message}</Notice>}
 
-    {itemIssues && <Card className={styles.card} data-tone="warning">
+    {!!localOnly.length && <Card className={styles.card} data-local-only>
+      <header className={styles.cardHead}>
+        <span className={styles.cardIcon} data-tone="warning" aria-hidden="true"><Icon name="info" size={16} /></span>
+        <div><h3>{t('settings.webdav.localOnlyTitle')} <Badge tone="warning">{localOnly.length}</Badge></h3><p>{t('settings.webdav.localOnlyHint', { count: localOnly.length })}</p></div>
+      </header>
+      <ul className={styles.issues}>{visibleLocalOnly.map((item) => <li className={styles.issue} key={item.key}>
+        <span className={styles.issueIcon} aria-hidden="true"><Icon name="folder" size={16} /></span>
+        <span className={styles.issueBody}><span className={styles.issueTitle}><strong>{item.label}</strong><Badge>{kindLabel(item.kind)}</Badge><Badge tone="warning">{t('settings.webdav.localOnlyBadge')}</Badge></span><small>{item.reason}</small></span>
+      </li>)}</ul>
+      {localOnly.length > PREVIEW_LIMIT && <Button variant="ghost" onClick={() => setLocalOnlyExpanded((value) => !value)}>{localOnlyExpanded ? t('settings.webdav.localOnlyLess') : t('settings.webdav.localOnlyMore', { count: localOnly.length - PREVIEW_LIMIT })}</Button>}
+    </Card>}
+
+    {(applyCount > 0 || conflicts.length > 0) && <Card className={styles.card} data-tone="warning">
       <header className={styles.cardHead}>
         <span className={styles.cardIcon} data-tone="warning" aria-hidden="true"><Icon name="alert" size={16} /></span>
-        <div><h3><span>{t('settings.webdav.actionsTitle')}</span><Badge tone="warning">{issueCount}</Badge></h3><p>{issueWhy}</p></div>
+        <div><h3><span>{t('settings.webdav.actionsTitle')}</span><Badge tone="warning">{applyCount + conflicts.length}</Badge></h3><p>{issueWhy}</p></div>
       </header>
       {!!conflicts.length && <section className={styles.issueGroup}>
         <h4><span>{t('settings.webdav.sectionConflicts')}</span><Badge>{conflicts.length}</Badge></h4>
@@ -611,10 +631,10 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
         {!!run.lines.length && <TransferList items={run.lines.map((line) => ({ ...line, key: line.id }))} live />}
         <p className={styles.runHint}>{t('settings.webdav.progressBackground')}</p>
       </div>}
-      {run && !run.running && resultView(resultActivity, resultSummary?.headline ?? t('settings.webdav.emptyTransfer'), resultSummary?.detail ?? t('settings.webdav.emptyTransfer'), run.result?.conflicts.length ?? 0, resultSummary?.moved ?? 0, closeRun)}
+      {run && !run.running && resultView(resultActivity, resultSummary?.headline ?? t('settings.webdav.emptyTransfer'), resultSummary?.detail ?? t('settings.webdav.emptyTransfer'), run.result?.conflicts.length ?? 0, resultSummary?.moved ?? 0, closeRun, run.result?.localOnly?.length ?? 0)}
     </GuideDialog>
     <GuideDialog open={receiptOpen && !run?.open} title={t('settings.webdav.progressDoneTitle')} hint={receiptAt ? receiptAt.absolute : undefined} onClose={() => setReceiptOpen(false)}>
-      {activitySummary && activity && resultView(activity, activitySummary.headline, activitySummary.detail, conflicts.length, activitySummary.moved, () => setReceiptOpen(false))}
+      {activitySummary && activity && resultView(activity, activitySummary.headline, activitySummary.detail, conflicts.length, activitySummary.moved, () => setReceiptOpen(false), localOnly.length)}
     </GuideDialog>
   </section>;
 }

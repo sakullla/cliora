@@ -1,0 +1,8 @@
+{
+  "capability": "resources",
+  "name": "OMP Agents support Markdown definitions and a preserved frontmatter template",
+  "case": {
+    "kind": "agents",
+    "action": "capability"
+  }
+}

@@ -1417,10 +1417,34 @@ pub async fn remove_native_mcp(
 }
 
 #[tauri::command]
+pub async fn set_external_mcp_enabled(
+    app: AppHandle,
+    target: resources::mcp::McpTargetRequest,
+    name: String,
+    enabled: bool,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        resources::mcp::set_external_mcp_enabled(
+            &db,
+            &AppCredentialStore,
+            &adapters::Registry::builtins(),
+            &home,
+            &target,
+            &name,
+            enabled,
+        )
+        .map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn list_native_mcp(
     app: AppHandle,
     target: resources::mcp::McpTargetRequest,
-) -> Result<Vec<resources::mcp::NativeMcpEntry>, ApiError> {
+) -> Result<resources::mcp::NativeMcpStore, ApiError> {
     blocking(move || {
         let home = home()?;
         let db = app.state::<AppState>().database(&app)?;
@@ -2254,6 +2278,7 @@ pub struct RegisteredToolWorkspace {
     pub effective_context_id: Option<String>,
     pub native_context_error: Option<String>,
     pub snapshots: Vec<NativeSnapshot>,
+    pub applied_file_state: apply::AppliedFileState,
     pub recovery_needed: Vec<String>,
 }
 
@@ -2354,7 +2379,7 @@ pub async fn get_registered_tool_workspace(
                 Scope::Global => "global".into(),
                 Scope::Project => format!("project:{}", project.as_ref().unwrap().display()),
             };
-            let saved =
+            let mut saved =
                 crate::native::workspace::saved_workspace(&registry, database, &tool_id, &key)
                     .map_err(native_error)?;
             let (_context, context_error) = match crate::accounts::selection::enter_bound(
@@ -2406,6 +2431,14 @@ pub async fn get_registered_tool_workspace(
             } else {
                 probe.native_files.iter().map(native_snapshot).collect()
             };
+            let applied_file_state = if summary {
+                apply::AppliedFileState::Unchecked
+            } else if context_error.is_some() {
+                apply::AppliedFileState::Unknown
+            } else {
+                apply::applied_file_state(saved.binding.as_ref(), &probe.native_files)
+            };
+            if let Some(binding) = &mut saved.binding { binding.managed.clear(); }
             Ok(RegisteredToolWorkspace {
                 effective_context_id: crate::accounts::selection::current(&tool_id)
                     .map(|context| context.id),
@@ -2416,6 +2449,7 @@ pub async fn get_registered_tool_workspace(
                 profile_model_summaries: saved.profile_model_summaries,
                 common: saved.common,
                 binding: saved.binding,
+                applied_file_state,
                 snapshots,
                 recovery_needed,
             })
@@ -2720,6 +2754,48 @@ pub async fn set_skill_enabled(
                 &tool_id,
                 scope,
                 project_path.as_deref(),
+                enabled,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn set_observed_skill_enabled(
+    app: AppHandle,
+    expected_context_id: Option<String>,
+    tool_id: String,
+    scope: Scope,
+    project_path: Option<String>,
+    name: String,
+    path: String,
+    enabled: bool,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            let home = home()?;
+            let _context = crate::accounts::selection::enter_bound(
+                db,
+                &home,
+                &tool_id,
+                scope,
+                project_path.as_deref().map(Path::new),
+            )
+            .map_err(native_error)?;
+            crate::accounts::selection::validate_expected(&tool_id, expected_context_id.as_deref())
+                .map_err(native_error)?;
+            resources::skills::set_observed_enabled(
+                db,
+                &AppCredentialStore,
+                &adapters::Registry::builtins(),
+                &home,
+                &tool_id,
+                scope,
+                project_path.as_deref(),
+                &name,
+                &path,
                 enabled,
             )
             .map_err(native_error)
@@ -3892,8 +3968,7 @@ fn review_directory(session_id: &str) -> Result<PathBuf, ApiError> {
 }
 
 /// Start one review: a fresh reviewId, the canonical worktree path and its HEAD.
-/// Nothing is registered when the system refuses to open the link, so a failed
-/// attempt never looks like a pending one.
+/// Register before publishing the URL; a definite failure rolls back only this unconfirmed attempt.
 #[tauri::command]
 pub async fn twiglane_start_review(
     app: AppHandle,
@@ -3905,13 +3980,21 @@ pub async fn twiglane_start_review(
         let path = crate::twiglane::url_path(&root).map_err(crate::twiglane::api_error)?;
         let previous = app.state::<AppState>().reviews.latest_for_session(&session_id);
         let baseline = crate::twiglane::baseline(&session_id, &root, previous.as_ref());
-        let state = crate::twiglane::new_review(&session_id, &path, baseline.clone());
-        let url = crate::twiglane::checked_review_url(&state.review_id, &session_id, &path, baseline.as_deref())
-            .map_err(crate::twiglane::api_error)?;
-        tauri_plugin_opener::open_url(&url, None::<&str>)
-            .map_err(|_| crate::twiglane::api_error("open_failed"))?;
-        app.state::<AppState>().reviews.begin(state.clone());
-        Ok(state)
+        let mut state = crate::twiglane::new_review(&session_id, &path, baseline);
+        app.state::<AppState>().with_database(&app, |db| {
+            let host = crate::workspaces::local_host_id().map_err(native_error)?;
+            if let Some(context) = crate::workspaces::session_contexts(db).map_err(native_error)?.into_iter().find(|context| context.session_id == session_id && context.host_id == host) {
+                // Attribution belongs to this session, never to the currently selected project.
+                state.workspace_id = Some(context.workspace_id.clone());
+                state.repository_id = Some(context.repository_id);
+                state.workspace_name = crate::workspaces::display_name(db, &context.workspace_id).map_err(native_error)?.map(|name| name.chars().take(80).collect());
+            }
+            Ok(())
+        })?;
+        let url = crate::twiglane::source_review_url(&state).map_err(crate::twiglane::api_error)?;
+        app.state::<AppState>().reviews.publish(state, || {
+            tauri_plugin_opener::open_url(&url, None::<&str>).map_err(|_| ())
+        }).map_err(crate::twiglane::api_error)
     })
     .await
 }
@@ -3933,11 +4016,16 @@ pub async fn twiglane_review_link(
     app: AppHandle,
     url: String,
 ) -> Result<crate::twiglane::LinkOutcome, ApiError> {
-    let outcome = match crate::twiglane::parse_event_url(&url) {
-        Ok(event) => app.state::<AppState>().reviews.apply(event),
-        Err(code) => crate::twiglane::LinkOutcome::ignored(code),
-    };
-    Ok(outcome)
+    blocking(move || {
+        let outcome = match crate::twiglane::parse_event_url(&url) {
+            Ok(event) => app.state::<AppState>().reviews.apply(event),
+            Err(code) => crate::twiglane::LinkOutcome::ignored(code),
+        };
+        if outcome.kind == "returned" {
+            if let Some(session_id) = outcome.session_id.as_deref() { app.state::<AppState>().reviews.recheck_return(session_id); }
+        }
+        Ok(outcome)
+    }).await
 }
 
 #[tauri::command]
@@ -6976,4 +7064,573 @@ pub async fn restore_configuration_backup(
     .await?;
     let _ = notify.emit("cliora:bindings-changed", tool);
     Ok(result)
+}
+
+// Business workspaces never replace directory-scoped native configuration records.
+#[tauri::command]
+pub async fn list_business_workspaces(
+    app: AppHandle,
+) -> Result<Vec<crate::workspaces::Workspace>, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::list(
+                db,
+                &crate::workspaces::local_host_id().map_err(native_error)?,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn create_business_workspace(
+    app: AppHandle,
+    name: String,
+) -> Result<crate::workspaces::Workspace, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::create(
+                db,
+                &crate::workspaces::local_host_id().map_err(native_error)?,
+                &name,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn rename_business_workspace(
+    app: AppHandle,
+    workspace_id: String,
+    name: String,
+    expected_version: u64,
+) -> Result<crate::workspaces::Workspace, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::rename(
+                db,
+                &crate::workspaces::local_host_id().map_err(native_error)?,
+                &workspace_id,
+                &name,
+                expected_version,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn delete_business_workspace(app: AppHandle, workspace_id: String) -> Result<(), ApiError> {
+    blocking(move || {
+        app.state::<AppState>()
+            .with_database(&app, |db| crate::workspaces::delete(db, &workspace_id).map_err(native_error))
+    })
+    .await
+}
+#[tauri::command]
+pub async fn scan_workspace_repositories(
+    paths: Vec<String>,
+    operation_id: String,
+    recursive: bool,
+) -> Result<crate::workspaces::ScanResult, ApiError> {
+    blocking(move || {
+        crate::workspaces::scan(&paths, &operation_id, recursive).map_err(native_error)
+    })
+    .await
+}
+#[tauri::command]
+pub fn cancel_workspace_scan(operation_id: String) {
+    crate::workspaces::cancel_scan(&operation_id);
+}
+#[tauri::command]
+pub async fn add_workspace_repositories(
+    app: AppHandle,
+    workspace_id: String,
+    paths: Vec<String>,
+    expected_version: u64,
+) -> Result<Vec<crate::workspaces::MemberResult>, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::add_paths(
+                db,
+                &crate::workspaces::local_host_id().map_err(native_error)?,
+                &workspace_id,
+                &paths,
+                expected_version,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn remove_workspace_repository(
+    app: AppHandle,
+    workspace_id: String,
+    repository_id: String,
+    expected_version: u64,
+) -> Result<crate::workspaces::Workspace, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::remove_member(
+                db,
+                &crate::workspaces::local_host_id().map_err(native_error)?,
+                &workspace_id,
+                &repository_id,
+                expected_version,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn favorite_workspace_repository(
+    app: AppHandle,
+    workspace_id: String,
+    repository_id: String,
+    favorite: bool,
+) -> Result<crate::workspaces::Workspace, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::favorite(
+                db,
+                &crate::workspaces::local_host_id().map_err(native_error)?,
+                &workspace_id,
+                &repository_id,
+                favorite,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn relink_workspace_repository(
+    app: AppHandle,
+    workspace_id: String,
+    repository_id: String,
+    path: String,
+    expected_version: u64,
+) -> Result<crate::workspaces::Workspace, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::relink(
+                db,
+                &crate::workspaces::local_host_id().map_err(native_error)?,
+                &workspace_id,
+                &repository_id,
+                &path,
+                expected_version,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn preview_workspace_manifest(
+    app: AppHandle,
+    path: String,
+) -> Result<crate::workspaces::ManifestPreview, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::preview_manifest(db, &path).map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn attach_workspace_manifest(
+    app: AppHandle,
+    path: String,
+    expected_digest: String,
+    replace: bool,
+) -> Result<crate::workspaces::Workspace, ApiError> {
+    let notify = app.clone();
+    let result = blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::attach_manifest(
+                db,
+                &crate::workspaces::local_host_id().map_err(native_error)?,
+                &path,
+                &expected_digest,
+                replace,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await?;
+    let _ = notify.emit("cliora:workspaces-changed", &result.id);
+    Ok(result)
+}
+#[tauri::command]
+pub async fn export_workspace_manifest(
+    app: AppHandle,
+    workspace_id: String,
+    path: String,
+    expected_version: u64,
+) -> Result<crate::workspaces::Workspace, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::export_manifest(
+                db,
+                &crate::workspaces::local_host_id().map_err(native_error)?,
+                &workspace_id,
+                &path,
+                expected_version,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn refresh_workspace_manifest(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<crate::workspaces::Workspace, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::refresh_manifest(
+                db,
+                &crate::workspaces::local_host_id().map_err(native_error)?,
+                &workspace_id,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn list_workspace_session_contexts(
+    app: AppHandle,
+) -> Result<Vec<crate::workspaces::SessionContext>, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::session_contexts(db).map_err(native_error)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn launch_workspace_cli(
+    app: AppHandle,
+    workspace_id: String,
+    repository_id: String,
+    mut request: launch::LaunchEnvelope,
+) -> Result<launch::LaunchResult, ApiError> {
+    blocking(move || {
+        if request.request.session_id.is_some() {
+            return Err(native_error(
+                "请从原会话恢复入口继续，不能将历史会话迁到所选仓库".into(),
+            ));
+        }
+
+        let host = crate::workspaces::local_host_id().map_err(native_error)?;
+        let (project, directory) = app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::prepare_launch(
+                db,
+                &host,
+                &workspace_id,
+                &repository_id,
+                request.request.directory.as_deref(),
+            )
+            .map_err(native_error)
+        })?;
+        request.request.project_id = Some(project);
+        request.request.directory = Some(directory.clone());
+        let mut result = launch_now(&app, request)?;
+        if let Some(id) = &result.session_id {
+            let actual = crate::session_host::local_directory(id)
+                .ok()
+                .flatten()
+                .and_then(|p| p.to_str().map(str::to_owned))
+                .unwrap_or(directory);
+            let context = crate::workspaces::SessionContext {
+                session_id: id.clone(),
+                workspace_id,
+                repository_id,
+                host_id: host,
+                directory: actual,
+            };
+            if let Err(error) = app.state::<AppState>().with_database(&app, |db| {
+                crate::workspaces::remember_session(db, &context).map_err(native_error)
+            }) {
+                result
+                    .warnings
+                    .push(format!("会话已启动，项目归属未保存：{}", error.message));
+            }
+        }
+        let _ = app.emit("cliora:workspaces-changed", "session");
+        Ok(result)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn preview_workspace_link(
+    app: AppHandle,
+    url: String,
+) -> Result<crate::workspaces::ManifestPreview, ApiError> {
+    blocking(move || {
+        let path = crate::workspaces::manifest_link(&url).map_err(native_error)?;
+        app.state::<AppState>().with_database(&app, |db| {
+            crate::workspaces::preview_manifest(db, &path).map_err(native_error)
+        })
+    })
+    .await
+}
+
+// Prompt APIs keep business scope distinct from the legacy rule/configuration directory scope.
+fn prepare_prompt_context(_db: &Database) -> Result<(), ApiError> {
+    // Launch directories are no longer seeded as business projects; prompt scopes resolve
+    // through the mappings that already exist, and unmapped legacy scopes stay unresolved.
+    Ok(())
+}
+#[tauri::command]
+pub async fn query_prompts(
+    window: tauri::WebviewWindow,
+    operation: Option<crate::remote::operations::Request>,
+    app: AppHandle,
+    target_id: Option<String>,
+    query: crate::prompts::PromptQuery,
+) -> Result<crate::prompts::PromptPage, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    let target = target_id
+        .as_deref()
+        .map(|id| enabled_target(&db, id))
+        .transpose()?;
+    if let Some(target) = &target {
+        bind_remote_target(target)?;
+    }
+    remote_blocking(
+        window,
+        operation,
+        crate::remote::operations::Kind::Read,
+        move || {
+            crate::prompts::validate_query_context(&db, &query).map_err(native_error)?;
+            if let Some(target) = target {
+                let usage = crate::prompts::usage(&db, &crate::remote::prompts::namespace(&target))
+                    .map_err(native_error)?;
+                crate::remote::prompts::query(&target, &query, &usage)
+                    .map_err(|e| native_error(e.to_string()))
+            } else {
+                prepare_prompt_context(&db)?;
+                crate::prompts::query(&db, &query).map_err(native_error)
+            }
+        },
+    )
+    .await
+}
+#[tauri::command]
+pub async fn get_prompt(
+    window: tauri::WebviewWindow,
+    operation: Option<crate::remote::operations::Request>,
+    app: AppHandle,
+    target_id: Option<String>,
+    id: String,
+    expected_version: Option<u64>,
+) -> Result<crate::prompts::PromptDocument, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    let target = target_id
+        .as_deref()
+        .map(|id| enabled_target(&db, id))
+        .transpose()?;
+    if let Some(target) = &target {
+        bind_remote_target(target)?;
+    }
+    remote_blocking(
+        window,
+        operation,
+        crate::remote::operations::Kind::Read,
+        move || {
+            if let Some(target) = target {
+                crate::remote::prompts::get(&target, &id, expected_version)
+                    .map_err(|e| native_error(e.to_string()))
+            } else {
+                prepare_prompt_context(&db)?;
+                crate::prompts::get(&db, &id, expected_version).map_err(native_error)
+            }
+        },
+    )
+    .await
+}
+#[tauri::command]
+pub async fn save_prompt(
+    window: tauri::WebviewWindow,
+    operation: Option<crate::remote::operations::Request>,
+    app: AppHandle,
+    target_id: Option<String>,
+    draft: crate::prompts::PromptDraft,
+) -> Result<crate::prompts::PromptDocument, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    let target = target_id
+        .as_deref()
+        .map(|id| enabled_target(&db, id))
+        .transpose()?;
+    if let Some(target) = &target {
+        bind_remote_target(target)?;
+    }
+    remote_blocking(
+        window,
+        operation,
+        crate::remote::operations::Kind::Write,
+        move || {
+            if let Some(target) = target {
+                let item_id = uuid::Uuid::new_v4().to_string();
+                let batch = crate::prompts::PromptBatch {
+                    operation_id: uuid::Uuid::new_v4().to_string(),
+                    items: vec![crate::prompts::BatchItem {
+                        item_id: item_id.clone(),
+                        action: if draft.id.is_some() {
+                            crate::prompts::BatchAction::Replace
+                        } else {
+                            crate::prompts::BatchAction::Create
+                        },
+                        draft,
+                    }],
+                };
+                let result = crate::remote::prompts::apply_batch(&target, &db, &batch)
+                    .map_err(|e| native_error(e.to_string()))?;
+                let item = &result.items[0];
+                if let Some(error) = &item.error {
+                    return Err(native_error(error.clone()));
+                }
+                crate::remote::prompts::get(
+                    &target,
+                    item.id.as_deref().unwrap_or(&item_id),
+                    item.version,
+                )
+                .map_err(|e| native_error(e.to_string()))
+            } else {
+                prepare_prompt_context(&db)?;
+                crate::prompts::save(&db, &draft).map_err(native_error)
+            }
+        },
+    )
+    .await
+}
+#[tauri::command]
+pub async fn apply_prompt_batch(
+    window: tauri::WebviewWindow,
+    operation: Option<crate::remote::operations::Request>,
+    app: AppHandle,
+    target_id: Option<String>,
+    batch: crate::prompts::PromptBatch,
+) -> Result<crate::prompts::BatchResult, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    let target = target_id
+        .as_deref()
+        .map(|id| enabled_target(&db, id))
+        .transpose()?;
+    if let Some(target) = &target {
+        bind_remote_target(target)?;
+    }
+    remote_blocking(
+        window,
+        operation,
+        crate::remote::operations::Kind::Write,
+        move || {
+            if let Some(target) = target {
+                crate::remote::prompts::apply_batch(&target, &db, &batch)
+                    .map_err(|e| native_error(e.to_string()))
+            } else {
+                prepare_prompt_context(&db)?;
+                crate::prompts::apply_batch(&db, &batch).map_err(native_error)
+            }
+        },
+    )
+    .await
+}
+#[tauri::command]
+pub async fn preview_prompt_import(
+    window: tauri::WebviewWindow,
+    operation: Option<crate::remote::operations::Request>,
+    app: AppHandle,
+    target_id: Option<String>,
+    input: crate::prompts::ImportInput,
+) -> Result<crate::prompts::ImportPreview, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    let target = target_id
+        .as_deref()
+        .map(|id| enabled_target(&db, id))
+        .transpose()?;
+    if let Some(target) = &target {
+        bind_remote_target(target)?;
+    }
+    remote_blocking(
+        window,
+        operation,
+        crate::remote::operations::Kind::Read,
+        move || {
+            let existing = if let Some(target) = target {
+                crate::remote::prompts::list(&target).map_err(|e| native_error(e.to_string()))?
+            } else {
+                prepare_prompt_context(&db)?;
+                crate::prompts::all_documents(&db).map_err(native_error)?
+            };
+            let mut preview =
+                crate::prompts::preview_import(input, &existing).map_err(native_error)?;
+            for row in &mut preview.rows {
+                if row.error.is_none() {
+                    row.error = crate::prompts::validate_draft_scope(&db, &row.item.draft).err();
+                }
+            }
+            Ok(preview)
+        },
+    )
+    .await
+}
+#[tauri::command]
+pub async fn delete_prompt(
+    window: tauri::WebviewWindow,
+    operation: Option<crate::remote::operations::Request>,
+    app: AppHandle,
+    target_id: Option<String>,
+    id: String,
+    expected_version: u64,
+) -> Result<(), ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    let target = target_id
+        .as_deref()
+        .map(|id| enabled_target(&db, id))
+        .transpose()?;
+    if let Some(target) = &target {
+        bind_remote_target(target)?;
+    }
+    remote_blocking(
+        window,
+        operation,
+        crate::remote::operations::Kind::Write,
+        move || {
+            if let Some(target) = target {
+                crate::remote::prompts::delete(&target, &id, expected_version)
+                    .map_err(|e| native_error(e.to_string()))
+            } else {
+                crate::prompts::get(&db, &id, Some(expected_version)).map_err(native_error)?;
+                crate::library::delete(&db, &id, expected_version).map_err(native_error)
+            }
+        },
+    )
+    .await
+}
+#[tauri::command]
+pub async fn record_prompt_usage(
+    app: AppHandle,
+    target_id: Option<String>,
+    id: String,
+    favorite: Option<bool>,
+    used: bool,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        let host = if let Some(id) = target_id {
+            crate::remote::prompts::namespace(&enabled_target(&db, &id)?)
+        } else {
+            "local".into()
+        };
+        crate::prompts::record_usage(&db, &host, &id, favorite, used).map_err(native_error)
+    })
+    .await
 }

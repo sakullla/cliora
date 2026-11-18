@@ -1,0 +1,13 @@
+{
+  "capability": "resources",
+  "name": "OMP agent disable and enable only edit task.disabledAgents",
+  "case": {
+    "kind": "agents",
+    "action": "toggle",
+    "cases": [
+      { "agent": "reviewer", "enabled": false, "current": ["scout"], "expect": ["scout", "reviewer"] },
+      { "agent": "scout", "enabled": true, "current": ["scout"], "expect": null },
+      { "agent": "scout", "enabled": true, "current": [], "expect": null }
+    ]
+  }
+}

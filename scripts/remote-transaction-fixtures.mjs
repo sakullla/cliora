@@ -55,7 +55,10 @@ export function transactionToolWrapper(tool, home, control) {
   return `#!/bin/sh
 expected=${quote(home)}
 control=${quote(control)}
-[ "$HOME" = "$expected" ] && [ -f "$control/enabled" ] || exec /usr/bin/${tool} "$@"
+native_tool=/usr/bin/${tool}
+[ -x "$native_tool" ] || native_tool=/bin/${tool}
+[ -x "$native_tool" ] || exit 80
+[ "$HOME" = "$expected" ] && [ -f "$control/enabled" ] || exec "$native_tool" "$@"
 mode=$(cat "$control/mode" 2>/dev/null)
 source=''
 for argument in "$@"; do
@@ -78,7 +81,7 @@ fi` : `case "$source" in
     fi;;
   *-restore) [ "$mode" != rollback-failure ] || exit 54;;
 esac`}
-exec /usr/bin/${tool} "$@"
+exec "$native_tool" "$@"
 `;
 }
 

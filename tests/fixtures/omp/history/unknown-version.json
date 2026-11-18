@@ -1,0 +1,9 @@
+{
+  "capability": "history",
+  "name": "a future session version stays unavailable instead of being guessed",
+  "case": {
+    "action": "unsupported",
+    "fixture": "omp-v3-unknown-version.jsonl",
+    "errorContains": "版本"
+  }
+}

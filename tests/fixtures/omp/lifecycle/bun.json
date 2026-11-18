@@ -1,0 +1,5 @@
+{
+  "capability": "lifecycle",
+  "name": "Missing Bun is reported with a reason and never replaced by another source",
+  "case": { "kind": "bun" }
+}

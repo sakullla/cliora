@@ -1,11 +1,11 @@
-//! cliora ↔ Twiglane 审查协议 v2 的 cliora 侧实现。
+//! Cliora ↔ Twiglane v3 review protocol with strict v2 compatibility.
 //!
-//! 协议唯一来源是 `docs/integrations/twiglane-review-v2.md`。这个模块只做四件事：
+//! 协议唯一来源是 `docs/integrations/twiglane-review-v3.md`。这个模块只做四件事：
 //! 生成 `twiglane://review` 链接、校验并处理回送的 `cliora://review` 事件、维护内存态
 //! 审查关联，以及在目标 worktree 上用参数数组读取真实 Git 状态。
 //! 它不写 Git、不改会话、不联网：所有失败都在任何仓库写入之前结束。
 //!
-//! v2 与 v1 不兼容：两端同步升级，其他版本一律 `unsupported_version`，没有回退。
+//! New requests use v3; legacy v2 events must match a registered v2 source. No automatic fallback.
 //! returned 的 Git outcome 与工作区声明正交，两者都只是待复核声明；有界的 `meta.*`
 //! 只被保存，不执行、不影响核心解析与复核。
 
@@ -28,10 +28,10 @@ pub(crate) const MAX_URL_BYTES: usize = 2048;
 /// 协议规定的路径长度上限（字符）。
 const MAX_PATH_CHARS: usize = 1000;
 /// 协议主版本。
-const VERSION: &str = "2";
+const VERSION: &str = "3";
 /// 入站事件允许的核心查询参数名。除合法的 `meta.*` 外，任何其它名字都是无效输入。
-const PARAMS: [&str; 8] =
-    ["v", "event", "reviewId", "sessionId", "reason", "outcome", "headOid", "worktreeState"];
+const PARAMS: [&str; 9] =
+    ["v", "event", "reviewId", "sessionId", "reason", "outcome", "headOid", "worktreeState", "resultRevision"];
 /// 扩展元数据参数名的固定前缀。
 const META_PREFIX: &str = "meta.";
 /// 一条 returned 最多携带的 meta 个数。
@@ -63,6 +63,13 @@ pub(crate) const STATUS_RETURNED: &str = "returned";
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewState {
+    #[serde(skip)]
+    pub(crate) verified_head: Option<String>,
+    pub result_revision: u64,
+    pub protocol_version: u8,
+    pub workspace_id: Option<String>,
+    pub repository_id: Option<String>,
+    pub workspace_name: Option<String>,
     pub review_id: String,
     pub session_id: String,
     pub worktree_path: String,
@@ -110,6 +117,7 @@ impl LinkOutcome {
 /// 入站链接的三种合法语义。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum LinkEvent {
+    V3 { event: Box<LinkEvent>, result_revision: Option<u64> },
     Accepted { review_id: String, session_id: String },
     Rejected { review_id: String, session_id: String, reason: String },
     Returned {
@@ -248,7 +256,7 @@ fn has_raw_whitespace_or_control(url: &str) -> bool {
     url.chars().any(|character| character.is_control() || character.is_whitespace())
 }
 
-/// 生成 twiglane://review?v=2&...。参数顺序固定，baseline 为空时不出现。
+/// 生成 twiglane://review?v=3&...。参数顺序固定，baseline 为空时不出现。
 pub(crate) fn review_url(
     review_id: &str,
     session_id: &str,
@@ -281,6 +289,22 @@ pub(crate) fn checked_review_url(
     if url.len() > MAX_URL_BYTES {
         return Err("path_too_long");
     }
+    Ok(url)
+}
+
+/// v3 source data is display-only and bounded; never include project membership or prompt content.
+pub(crate) fn source_review_url(state: &ReviewState) -> Result<String, &'static str> {
+    let mut url = checked_review_url(&state.review_id, &state.session_id, &state.worktree_path, state.baseline.as_deref())?;
+    for (key, value) in [("workspaceId", state.workspace_id.as_deref()), ("repositoryId", state.repository_id.as_deref()), ("workspaceName", state.workspace_name.as_deref())] {
+        if let Some(value) = value {
+            if (key != "workspaceName" && !is_uuid(value)) || (key == "workspaceName" && (value.is_empty() || value.chars().count() > 80 || value.chars().any(char::is_control))) {
+                return Err("invalid_source");
+            }
+            url.push('&'); url.push_str(key); url.push('='); url.push_str(&percent_encode(value));
+        }
+    }
+    if state.workspace_name.is_some() && state.workspace_id.is_none() { return Err("invalid_source"); }
+    if url.len() > MAX_URL_BYTES { return Err("path_too_long"); }
     Ok(url)
 }
 
@@ -324,7 +348,7 @@ pub(crate) fn parse_event_url(url: &str) -> Result<LinkEvent, &'static str> {
         }
     };
     match params.get("v").copied() {
-        Some(VERSION) => {}
+        Some("2" | "3") => {}
         // v1 与其他主版本都不得按 v2 猜测处理，也没有回退。
         Some(_) | None => return Err("unsupported_version"),
     }
@@ -348,7 +372,16 @@ pub(crate) fn parse_event_url(url: &str) -> Result<LinkEvent, &'static str> {
             meta.insert(key.to_owned(), value);
         }
     }
-    match event.as_str() {
+    let revision_text = text("resultRevision")?;
+    let result_revision = match (params.get("v").copied(), event.as_str(), revision_text.as_deref()) {
+        (Some("3"), "returned", Some(raw)) if !raw.is_empty() && !raw.starts_with('0') && raw.bytes().all(|byte| byte.is_ascii_digit()) => {
+            Some(raw.parse::<u64>().ok().filter(|revision| *revision <= 9_007_199_254_740_991).ok_or("malformed_request")?)
+        }
+        (Some("3"), "returned", _) => return Err("malformed_request"),
+        (_, _, Some(_)) => return Err("malformed_request"),
+        _ => None,
+    };
+    let parsed = match event.as_str() {
         "accepted" => {
             if reason.is_some() || outcome.is_some() || head_oid.is_some() || worktree_state.is_some() || !meta.is_empty() {
                 return Err("malformed_request");
@@ -390,7 +423,8 @@ pub(crate) fn parse_event_url(url: &str) -> Result<LinkEvent, &'static str> {
             Ok(LinkEvent::Returned { review_id, session_id, outcome, head_oid, worktree_state, meta })
         }
         _ => Err("malformed_request"),
-    }
+    }?;
+    Ok(if params.get("v") == Some(&"3") { LinkEvent::V3 { event: Box::new(parsed), result_revision } } else { parsed })
 }
 
 /// 一条入站事件对注册表的结果。
@@ -407,6 +441,7 @@ enum UpdateOutcome {
 struct RegistryData {
     entries: HashMap<String, ReviewState>,
     latest: HashMap<String, String>,
+    open_parents: HashMap<String, Option<String>>,
 }
 
 /// 内存态审查关联：每个 session 只认最新 reviewId，重启后自然清空。
@@ -423,8 +458,37 @@ impl ReviewRegistry {
     /// 记录一次新发起的审查，并使同一会话的旧 reviewId 失效。
     pub(crate) fn begin(&self, state: ReviewState) {
         let mut data = self.lock();
-        data.latest.insert(state.session_id.clone(), state.review_id.clone());
+        let previous = data.latest.insert(state.session_id.clone(), state.review_id.clone());
+        data.open_parents.insert(state.review_id.clone(), previous);
         data.entries.insert(state.review_id.clone(), state);
+    }
+
+    /// Register before exposing the URL. A running peer can receipt immediately during open_url.
+    pub(crate) fn publish<F>(&self, state: ReviewState, open: F) -> Result<ReviewState, &'static str>
+    where F: FnOnce() -> Result<(), ()> {
+        let review_id = state.review_id.clone(); let session_id = state.session_id.clone();
+        self.begin(state);
+        if open().is_err() && self.rollback_open(&review_id, &session_id) { return Err("open_failed"); }
+        self.lock().open_parents.remove(&review_id);
+        self.latest_for_session(&session_id).ok_or("open_failed")
+    }
+
+    /// Remove only this still-unconfirmed attempt. Confirmed peer facts and concurrent newer
+    /// attempts survive; dependent rollback parents skip a failed attempt rather than revive it.
+    fn rollback_open(&self, review_id: &str, session_id: &str) -> bool {
+        let mut data = self.lock();
+        let Some(entry) = data.entries.get(review_id) else { return true; };
+        if entry.session_id != session_id || entry.status != STATUS_OPENING { return false; }
+        let previous = data.open_parents.remove(review_id).flatten();
+        data.entries.remove(review_id);
+        for parent in data.open_parents.values_mut() {
+            if parent.as_deref() == Some(review_id) { *parent = previous.clone(); }
+        }
+        if data.latest.get(session_id).map(String::as_str) == Some(review_id) {
+            if let Some(previous) = previous.filter(|id| data.entries.contains_key(id)) { data.latest.insert(session_id.into(), previous); }
+            else { data.latest.remove(session_id); }
+        }
+        true
     }
 
     /// 只有当作最新 reviewId 且记录仍在时更新状态，旧请求不会被晚到的结果改写。
@@ -457,78 +521,59 @@ impl ReviewRegistry {
         data.entries.get(review_id).cloned()
     }
 
+    /// Record a baseline advance only after native HEAD and dirty-state verification.
+    /// The UI still refreshes on every return; this protects the next review's baseline as well.
+    pub(crate) fn recheck_return(&self, session_id: &str) {
+        let Some(source) = self.latest_for_session(session_id) else { return; };
+        if source.status != STATUS_RETURNED || !matches!(source.outcome.as_deref(), Some("committed" | "merged")) { return; }
+        let status = code_status(session_id, Path::new(&source.worktree_path));
+        let valid = status.state == "ready" && status.head_oid == source.head_oid && source.head_oid != source.baseline
+            && status.uncommitted_files.is_some_and(|files| !matches!((source.worktree_state.as_deref(), files), (Some("clean"), 1..) | (Some("dirty"), 0)));
+        self.update(&source.review_id, session_id, |entry| {
+            if entry.result_revision == source.result_revision && entry.head_oid == source.head_oid && entry.worktree_state == source.worktree_state && entry.outcome == source.outcome && entry.status == STATUS_RETURNED {
+                entry.verified_head = if valid { source.head_oid } else { None };
+            }
+        });
+    }
+
     /// 应用一条入站事件：未知或被取代的 reviewId 一律丢弃，不覆盖新结果。
     /// 未知来源回 `unknown_review`，迟到事件回 `superseded_review`，两者由调用方分别提示。
     pub(crate) fn apply(&self, event: LinkEvent) -> LinkOutcome {
+        let (version, revision, event) = match event { LinkEvent::V3 { event, result_revision } => (3, result_revision, *event), event => (2, None, event) };
+        let (review_id, session_id) = match &event {
+            LinkEvent::Accepted { review_id, session_id } | LinkEvent::Rejected { review_id, session_id, .. }
+            | LinkEvent::Returned { review_id, session_id, .. } => (review_id.clone(), session_id.clone()),
+            LinkEvent::V3 { .. } => return LinkOutcome::ignored("malformed_request"),
+        };
+        // Identity, ordering and mutation share one critical section. Concurrent IPC handlers
+        // must not both pass a stale revision check and then overwrite each other.
+        let mut data = self.lock();
+        let Some(source) = data.entries.get(&review_id) else { return LinkOutcome::ignored("unknown_review"); };
+        if source.session_id != session_id { return LinkOutcome::ignored("unknown_review"); }
+        if data.latest.get(&session_id) != Some(&review_id) { return LinkOutcome::ignored("superseded_review"); }
+        let source = data.entries.get_mut(&review_id).expect("source was checked above");
+        if source.protocol_version != version { return LinkOutcome::ignored("source_version_mismatch"); }
+        if version == 3 && source.status == STATUS_RETURNED && !matches!(event, LinkEvent::Returned { .. }) {
+            return LinkOutcome::ignored("late_receipt");
+        }
+        if version == 3 && revision.is_some_and(|revision| revision <= source.result_revision) {
+            return LinkOutcome::ignored("duplicate_result");
+        }
+        let mut result = LinkOutcome { kind: String::new(), session_id: Some(session_id), review_id: Some(review_id), outcome: None, head_oid: None, worktree_state: None, reason: None };
         match event {
-            LinkEvent::Accepted { review_id, session_id } => {
-                match self.update(&review_id, &session_id, |entry| {
-                    entry.status = STATUS_ACCEPTED.into();
-                    entry.reason = None;
-                }) {
-                    UpdateOutcome::Applied => LinkOutcome {
-                        kind: "accepted".into(),
-                        session_id: Some(session_id),
-                        review_id: Some(review_id),
-                        outcome: None,
-                        head_oid: None,
-                        worktree_state: None,
-                        reason: None,
-                    },
-                    other => LinkOutcome::ignored(other.code()),
-                }
-            }
-            LinkEvent::Rejected { review_id, session_id, reason } => {
-                match self.update(&review_id, &session_id, |entry| {
-                    entry.status = STATUS_REJECTED.into();
-                    entry.reason = Some(reason.clone());
-                }) {
-                    UpdateOutcome::Applied => LinkOutcome {
-                        kind: "rejected".into(),
-                        session_id: Some(session_id),
-                        review_id: Some(review_id),
-                        outcome: None,
-                        head_oid: None,
-                        worktree_state: None,
-                        reason: Some(reason),
-                    },
-                    other => LinkOutcome::ignored(other.code()),
-                }
-            }
-            LinkEvent::Returned { review_id, session_id, outcome, head_oid, worktree_state, meta } => {
-                match self.update(&review_id, &session_id, |entry| {
-                    entry.status = STATUS_RETURNED.into();
-                    entry.outcome = Some(outcome.clone());
-                    entry.head_oid = head_oid.clone();
-                    entry.worktree_state = Some(worktree_state.clone());
-                    // 新结果整体替代旧结果：上一次返回的 meta 不会残留到这一次。
-                    entry.meta = meta;
-                    entry.reason = None;
-                }) {
-                    UpdateOutcome::Applied => LinkOutcome {
-                        kind: "returned".into(),
-                        session_id: Some(session_id),
-                        review_id: Some(review_id),
-                        outcome: Some(outcome),
-                        head_oid,
-                        worktree_state: Some(worktree_state),
-                        reason: None,
-                    },
-                    other => LinkOutcome::ignored(other.code()),
-                }
+            LinkEvent::V3 { .. } => return LinkOutcome::ignored("malformed_request"),
+            LinkEvent::Accepted { .. } => { source.status = STATUS_ACCEPTED.into(); result.kind = "accepted".into(); }
+            LinkEvent::Rejected { reason, .. } => { source.status = STATUS_REJECTED.into(); source.reason = Some(reason.clone()); result.kind = "rejected".into(); result.reason = Some(reason); }
+            LinkEvent::Returned { outcome, head_oid, worktree_state, meta, .. } => {
+                source.status = STATUS_RETURNED.into(); source.result_revision = revision.unwrap_or(0); source.verified_head = None;
+                source.outcome = Some(outcome.clone()); source.head_oid = head_oid.clone(); source.worktree_state = Some(worktree_state.clone()); source.meta = meta;
+                result.kind = "returned".into(); result.outcome = Some(outcome); result.head_oid = head_oid; result.worktree_state = Some(worktree_state);
             }
         }
+        if result.kind != "rejected" { source.reason = None; }
+        result
     }
-}
 
-impl UpdateOutcome {
-    fn code(&self) -> &'static str {
-        match self {
-            UpdateOutcome::Applied => "applied",
-            UpdateOutcome::Unknown => "unknown_review",
-            UpdateOutcome::Superseded => "superseded_review",
-        }
-    }
 }
 
 fn now_millis() -> u64 {
@@ -538,6 +583,12 @@ fn now_millis() -> u64 {
 /// 新建一条 opening 审查记录。每次显式发起或重试都会得到新的 reviewId。
 pub(crate) fn new_review(session_id: &str, worktree_path: &str, baseline: Option<String>) -> ReviewState {
     ReviewState {
+        verified_head: None,
+        result_revision: 0,
+        protocol_version: 3,
+        workspace_id: None,
+        repository_id: None,
+        workspace_name: None,
         review_id: uuid::Uuid::new_v4().hyphenated().to_string(),
         session_id: session_id.into(),
         worktree_path: worktree_path.into(),
@@ -589,6 +640,7 @@ pub(crate) fn baseline(session_id: &str, root: &Path, previous: Option<&ReviewSt
         .filter(|review| review.status == STATUS_RETURNED)
         .filter(|review| matches!(review.outcome.as_deref(), Some("committed" | "merged")))
         .filter(|review| path.as_deref() == Some(review.worktree_path.as_str()))
+        .filter(|review| review.verified_head.is_some() && review.verified_head == review.head_oid)
         .and_then(|review| review.head_oid.clone())
         .filter(|oid| is_oid(oid))
         .filter(|oid| crate::session_baseline::is_ancestor(root, oid, "HEAD"))
@@ -632,6 +684,7 @@ pub(crate) fn code_status(session_id: &str, directory: &Path) -> CodeStatus {
 /// 链接里使用的规范路径文字：DOS/UNC 形式、正斜杠分隔。
 pub(crate) fn url_path(root: &Path) -> Result<String, &'static str> {
     let text = crate::launch::terminal_path(root).map_err(|_| "invalid_path")?;
+    #[cfg(target_os = "windows")]
     let text = text.replace('\\', "/");
     if !is_valid_path(&text) {
         return Err("invalid_path");
@@ -670,6 +723,7 @@ mod tests {
 
     fn review(review_id: &str, session_id: &str) -> ReviewState {
         let mut state = new_review(session_id, "C:/w/a", Some(OID.into()));
+        state.protocol_version = 2;
         state.review_id = review_id.into();
         state
     }
@@ -680,7 +734,7 @@ mod tests {
         assert_eq!(
             url,
             format!(
-                "twiglane://review?v=2&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&worktreePath=C%3A%2Fw%2Fa%20b%2F%E4%BB%A3%E7%A0%81&baseline={OID}"
+                "twiglane://review?v=3&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&worktreePath=C%3A%2Fw%2Fa%20b%2F%E4%BB%A3%E7%A0%81&baseline={OID}"
             )
         );
         // 空仓库读不到 HEAD 时不发 baseline，也不发空值。
@@ -761,12 +815,12 @@ mod tests {
     #[test]
     fn inbound_links_reject_version_scheme_and_parameter_violations() {
         let cases = [
-            format!("cliora://review?v=3&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
+            format!("cliora://review?v=4&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
             format!("cliora://review?v=1&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
             format!("cliora://review?v=1&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&outcome=reviewed"),
             format!("cliora://review?event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
             format!("cliora://other?v=2&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
-            format!("twiglane://review?v=2&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
+            format!("twiglane://review?v=3&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
             format!("cliora://review/path?v=2&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
             format!("cliora://review?v=2&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}#x"),
             format!("cliora://review?v=2&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&foo=1"),
@@ -837,13 +891,13 @@ mod tests {
             format!("cliora://review?v=1&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
             format!("cliora://review?v=1&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&outcome=reviewed"),
             format!("cliora://review?v=1&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&outcome=reviewed&worktreeState=dirty"),
-            format!("cliora://review?v=3&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
+            format!("cliora://review?v=4&event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
             format!("cliora://review?event=accepted&reviewId={REVIEW_ID}&sessionId={SESSION_ID}"),
         ] {
             assert_eq!(parse_event_url(&url), Err("unsupported_version"), "{url}");
         }
         // 发起端只生成 v2 链接。
-        assert!(review_url(REVIEW_ID, SESSION_ID, "C:/w", None).starts_with("twiglane://review?v=2&"));
+        assert!(review_url(REVIEW_ID, SESSION_ID, "C:/w", None).starts_with("twiglane://review?v=3&"));
     }
 
     #[test]
@@ -1160,4 +1214,137 @@ mod tests {
         // 链接里的路径文字必须是正斜杠的 DOS 形式，供 Twiglane 再次 canonicalize。
         assert!(!url_path(&repo).unwrap().contains('\\'));
     }
+    #[test]
+    fn shared_v3_event_fixtures_are_strict_for_both_versions() {
+        let fixtures: serde_json::Value = serde_json::from_str(include_str!("../../tests/fixtures/reviews/protocol-v3.json")).unwrap();
+        for case in fixtures["events"].as_array().unwrap() {
+            assert_eq!(parse_event_url(case["url"].as_str().unwrap()).is_ok(), case["valid"].as_bool().unwrap(), "{}", case["name"]);
+        }
+    }
+
+    #[test]
+    fn v3_registry_rejects_older_results_versions_and_late_receipts() {
+        let registry = ReviewRegistry::default();
+        let source = new_review(SESSION_ID, "/work/a", Some(OID.into()));
+        let id = source.review_id.clone();
+        registry.begin(source);
+        let returned = |revision| parse_event_url(&format!("cliora://review?v=3&event=returned&reviewId={id}&sessionId={SESSION_ID}&outcome=committed&headOid={NEXT_OID}&worktreeState=dirty&resultRevision={revision}")).unwrap();
+        assert_eq!(registry.apply(returned(2)).kind, "returned");
+        assert_eq!(registry.apply(returned(1)).reason.as_deref(), Some("duplicate_result"));
+        assert_eq!(registry.apply(returned(2)).reason.as_deref(), Some("duplicate_result"));
+        for event in ["accepted", "rejected&reason=open_failed"] {
+            let event = parse_event_url(&format!("cliora://review?v=3&event={event}&reviewId={id}&sessionId={SESSION_ID}")).unwrap();
+            assert_eq!(registry.apply(event).reason.as_deref(), Some("late_receipt"));
+        }
+        let wrong_version = parse_event_url(&format!("cliora://review?v=2&event=accepted&reviewId={id}&sessionId={SESSION_ID}")).unwrap();
+        assert_eq!(registry.apply(wrong_version).reason.as_deref(), Some("source_version_mismatch"));
+        let state = registry.latest_for_session(SESSION_ID).unwrap();
+        assert_eq!(state.result_revision, 2);
+        assert_eq!(state.status, STATUS_RETURNED);
+        assert_eq!(state.head_oid.as_deref(), Some(NEXT_OID));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn posix_review_paths_preserve_case_and_literal_backslashes() {
+        let temp = tempfile::tempdir().unwrap();
+        for name in ["Repo", "Repo\\literal", "Repo/literal"] {
+            let directory = temp.path().join(name);
+            std::fs::create_dir_all(&directory).unwrap();
+            assert!(git(&directory, &["init", "-b", "main"]));
+            let root = checked_worktree(&directory).unwrap();
+            assert_eq!(url_path(&root).unwrap(), root.to_str().unwrap());
+        }
+    }
+
+    #[test]
+    fn real_git_return_verification_preserves_other_repository_and_rejects_dirty_claims() {
+        let temp = tempfile::tempdir().unwrap();
+        let Some(root) = init_repo(temp.path()) else { return; };
+        std::fs::write(root.join("a.txt"), "start\n").unwrap();
+        assert!(commit_all(&root, "start"));
+        let start = head_oid(&root).unwrap();
+        let linked = temp.path().join("linked");
+        assert!(git(&root, &["worktree", "add", "-b", "feature", linked.to_str().unwrap()]));
+        std::fs::write(linked.join("b.txt"), "B remains dirty\n").unwrap();
+        let registry = ReviewRegistry::default();
+        let mut source = new_review(SESSION_ID, &url_path(&root).unwrap(), Some(start));
+        source.review_id = REVIEW_ID.into();
+        registry.begin(source);
+        std::fs::write(root.join("a.txt"), "committed\n").unwrap();
+        assert!(commit_all(&root, "A only"));
+        let committed = head_oid(&root).unwrap();
+        std::fs::write(root.join("remaining.txt"), "A remains dirty\n").unwrap();
+        let event = |revision, claim| parse_event_url(&format!("cliora://review?v=3&event=returned&reviewId={REVIEW_ID}&sessionId={SESSION_ID}&outcome=committed&headOid={committed}&worktreeState={claim}&resultRevision={revision}")).unwrap();
+        registry.apply(event(1, "clean")); registry.recheck_return(SESSION_ID);
+        assert!(registry.latest_for_session(SESSION_ID).unwrap().verified_head.is_none());
+        registry.apply(event(2, "dirty")); registry.recheck_return(SESSION_ID);
+        assert_eq!(registry.latest_for_session(SESSION_ID).unwrap().verified_head.as_deref(), Some(committed.as_str()));
+        assert_eq!(code_status(SESSION_ID, &linked).uncommitted_files, Some(1));
+        assert_ne!(head_oid(&linked).as_deref(), Some(committed.as_str()), "A's commit cannot advance B's HEAD");
+        registry.apply(event(1, "clean"));
+        assert_eq!(registry.latest_for_session(SESSION_ID).unwrap().result_revision, 2);
+    }
+
+    #[test]
+    fn concurrent_v3_results_always_keep_the_highest_revision() {
+        let registry = std::sync::Arc::new(ReviewRegistry::default());
+        let source = new_review(SESSION_ID, "/work/a", Some(OID.into()));
+        let id = source.review_id.clone(); registry.begin(source);
+        let start = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let mut threads = Vec::new();
+        for lane in 0..16 {
+            let registry = registry.clone(); let id = id.clone(); let start = start.clone();
+            threads.push(std::thread::spawn(move || {
+                start.wait();
+                for step in (0..32).rev() {
+                    let revision = lane * 32 + step + 1;
+                    let event = parse_event_url(&format!("cliora://review?v=3&event=returned&reviewId={id}&sessionId={SESSION_ID}&outcome=reviewed&worktreeState=dirty&resultRevision={revision}")).unwrap();
+                    registry.apply(event);
+                }
+            }));
+        }
+        for thread in threads { thread.join().unwrap(); }
+        assert_eq!(registry.latest_for_session(SESSION_ID).unwrap().result_revision, 512);
+    }
+
+    #[test]
+    fn publishing_registers_before_immediate_receipts_and_rolls_back_only_unconfirmed_failure() {
+        let registry = ReviewRegistry::default();
+        let original = new_review(SESSION_ID, "/work/a", Some(OID.into())); let original_id = original.review_id.clone(); registry.begin(original);
+        let failed = new_review(SESSION_ID, "/work/a", Some(OID.into()));
+        assert_eq!(registry.publish(failed, || Err(())).unwrap_err(), "open_failed");
+        assert_eq!(registry.latest_for_session(SESSION_ID).unwrap().review_id, original_id);
+        let immediate = new_review(SESSION_ID, "/work/a", Some(OID.into())); let immediate_id = immediate.review_id.clone();
+        let result = registry.publish(immediate, || {
+            assert_eq!(registry.apply(LinkEvent::V3 { event: Box::new(LinkEvent::Accepted { review_id: immediate_id.clone(), session_id: SESSION_ID.into() }), result_revision: None }).kind, "accepted");
+            Ok(())
+        }).unwrap();
+        assert_eq!(result.status, STATUS_ACCEPTED);
+        let confirmed = new_review(SESSION_ID, "/work/a", Some(OID.into())); let confirmed_id = confirmed.review_id.clone();
+        let result = registry.publish(confirmed, || {
+            registry.apply(LinkEvent::V3 { event: Box::new(LinkEvent::Returned { review_id: confirmed_id.clone(), session_id: SESSION_ID.into(), outcome: "reviewed".into(), head_oid: None, worktree_state: "dirty".into(), meta: BTreeMap::new() }), result_revision: Some(1) });
+            Err(())
+        }).unwrap();
+        assert_eq!(result.review_id, confirmed_id); assert_eq!(result.status, STATUS_RETURNED);
+    }
+
+    #[test]
+    fn rollback_cannot_delete_a_concurrent_newer_source_or_restore_another_failed_open() {
+        let registry = ReviewRegistry::default();
+        let original = new_review(SESSION_ID, "/work/a", None); let original_id = original.review_id.clone(); registry.begin(original);
+        let first = new_review(SESSION_ID, "/work/a", None); let first_id = first.review_id.clone(); registry.begin(first);
+        let second = new_review(SESSION_ID, "/work/b", None); let second_id = second.review_id.clone(); registry.begin(second);
+        assert!(registry.rollback_open(&first_id, SESSION_ID));
+        assert_eq!(registry.latest_for_session(SESSION_ID).unwrap().review_id, second_id);
+        assert!(registry.rollback_open(&second_id, SESSION_ID));
+        assert_eq!(registry.latest_for_session(SESSION_ID).unwrap().review_id, original_id);
+        let opening = new_review(SESSION_ID, "/work/a", None); let opening_id = opening.review_id.clone(); registry.begin(opening);
+        let newest = new_review(SESSION_ID, "/work/b", None); let newest_id = newest.review_id.clone(); registry.begin(newest);
+        registry.apply(LinkEvent::V3 { event: Box::new(LinkEvent::Accepted { review_id: newest_id.clone(), session_id: SESSION_ID.into() }), result_revision: None });
+        assert!(registry.rollback_open(&opening_id, SESSION_ID));
+        assert_eq!(registry.latest_for_session(SESSION_ID).unwrap().review_id, newest_id);
+        assert_eq!(registry.latest_for_session(SESSION_ID).unwrap().status, STATUS_ACCEPTED);
+    }
+
 }

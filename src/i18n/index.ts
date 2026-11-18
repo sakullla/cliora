@@ -1,19 +1,6 @@
+import { translationResources } from './catalog';
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
-import zhCommon from './locales/zh/common';
-import zhHome from './locales/zh/home';
-import zhTools from './locales/zh/tools';
-import zhLibrary from './locales/zh/library';
-import zhRecords from './locales/zh/records';
-import zhSettings from './locales/zh/settings';
-import zhSessions from './locales/zh/sessions';
-import enCommon from './locales/en/common';
-import enHome from './locales/en/home';
-import enTools from './locales/en/tools';
-import enLibrary from './locales/en/library';
-import enRecords from './locales/en/records';
-import enSettings from './locales/en/settings';
-import enSessions from './locales/en/sessions';
 
 export const supportedLanguages = ['zh', 'en'] as const;
 export type AppLanguage = (typeof supportedLanguages)[number];
@@ -56,10 +43,7 @@ export function setLanguage(language: AppLanguage): void {
 void i18n.use(initReactI18next).init({
   lng: detectLanguage(),
   fallbackLng: 'zh',
-  resources: {
-    zh: { translation: { common: zhCommon, home: zhHome, tools: zhTools, library: zhLibrary, records: zhRecords, settings: zhSettings, sessions: zhSessions } },
-    en: { translation: { common: enCommon, home: enHome, tools: enTools, library: enLibrary, records: enRecords, settings: enSettings, sessions: enSessions } },
-  },
+  resources: translationResources,
   interpolation: { escapeValue: false },
   returnEmptyString: false,
 });

@@ -140,6 +140,11 @@ pub fn save(db: &Database, mut draft: LibraryDraft) -> Result<LibraryItem, Strin
             let present: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?1)", [project_id], |row| row.get(0)).map_err(|error| error.to_string())?;
             if !present { return Err("项目已不存在，请重新选择".into()); }
         }
+        let prompt_meta=if draft.kind==LibraryKind::Prompt {
+            let previous=tx.query_row("SELECT id,kind,title,body,category,project_id,version,updated_at FROM library_items WHERE id=?1",[&id],row_item).optional().map_err(|e|e.to_string())?;
+            let incoming=LibraryItem{id:id.clone(),kind:draft.kind,title:draft.title.clone(),body:String::new(),category:draft.category.clone(),project_id:draft.project_id.clone(),version:0,updated_at:0};
+            Some(crate::prompts::legacy_write_metadata(&tx,previous.as_ref(),&incoming)?)
+        } else {None};
         let changed = match draft.expected_version {
             Some(version) => tx.execute(
                 "UPDATE library_items SET title = ?2, body = ?3, category = ?4, project_id = ?5, version = version + 1, updated_at = ?6
@@ -153,6 +158,7 @@ pub fn save(db: &Database, mut draft: LibraryDraft) -> Result<LibraryItem, Strin
             ),
         }.map_err(|error| error.to_string())?;
         if changed != 1 { return Err("资料已在其他窗口更改，请重新读取后再保存".into()); }
+        if let Some(meta)=prompt_meta {crate::prompts::restore_metadata(&tx,&id,&meta)?;}
         tx.commit().map_err(|error| error.to_string())
     })?;
     get(db, &id)
@@ -160,16 +166,14 @@ pub fn save(db: &Database, mut draft: LibraryDraft) -> Result<LibraryItem, Strin
 
 pub fn delete(db: &Database, id: &str, expected_version: u64) -> Result<(), String> {
     db.with_connection(|conn| {
-        let changed = conn
-            .execute(
-                "DELETE FROM library_items WHERE id = ?1 AND version = ?2",
-                params![id, expected_version as i64],
-            )
-            .map_err(|error| error.to_string())?;
-        if changed != 1 {
-            return Err("资料已在其他窗口更改，请重新读取后再删除".into());
+        let tx=conn.transaction().map_err(|e|e.to_string())?;
+        let item=tx.query_row("SELECT id,kind,title,body,category,project_id,version,updated_at FROM library_items WHERE id=?1 AND version=?2",params![id,expected_version as i64],row_item).optional().map_err(|e|e.to_string())?.ok_or("资料已在其他窗口更改，请重新读取后再删除")?;
+        if item.kind==LibraryKind::Prompt {
+            let meta=crate::prompts::effective_metadata(&tx,&item)?;
+            crate::portable::sync::remember_prompt_scope(&tx,id,&meta.scope)?;
         }
-        Ok(())
+        tx.execute("DELETE FROM library_items WHERE id=?1 AND version=?2",params![id,expected_version as i64]).map_err(|e|e.to_string())?;
+        tx.commit().map_err(|e|e.to_string())
     })
 }
 

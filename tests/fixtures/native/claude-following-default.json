@@ -1,0 +1,6 @@
+{
+  "model": "claude-sonnet-4-6",
+  "env": {
+    "USER_CUSTOM_OPTION": "preserve"
+  }
+}

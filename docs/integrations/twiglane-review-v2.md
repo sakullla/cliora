@@ -1,8 +1,8 @@
 # cliora ↔ Twiglane 审查协议 v2
 
-本文件是两端（cliora 发起端、Twiglane 接收端）唯一的合同来源，替代已废止的 v1。任何一端改变字段、校验规则、错误码或结果语义，都必须先改这里，再同时改两端的解析与测试。协议只使用系统 deep link，不引入常驻端口、共享数据库或内嵌 WebView。
+本文件保留 v2 兼容分支。新版发起使用 [v3 合同](twiglane-review-v3.md)，不得在 v3 失败后自动降级。本文件的字段仅适用于 v2，替代已废止的 v1。任何一端改变字段、校验规则、错误码或结果语义，都必须先改这里，再同时改两端的解析与测试。协议只使用系统 deep link，不引入常驻端口、共享数据库或内嵌 WebView。
 
-两端同步升级到 v2：v2 不兼容 v1，也不提供回退。收到 `v=1` 或其他任何版本都按 `unsupported_version` 拒绝，不按 v2 猜测处理，也不为同一次审查发送两种版本的事件。
+新版接收合法 v2 请求，并按已登记来源版本回送 v2。v2 请求不得带 workspaceId/repositoryId/workspaceName，v2 事件不得带 resultRevision；v3 独立解析。v1 和未知版本拒绝，无自动回退。
 
 ## 1. 角色与方向
 
@@ -101,8 +101,8 @@ Twiglane 的内存态来源上下文仍存在时，用户点击“返回 cliora�
 | `outcome` | 含义 | `headOid` |
 | --- | --- | --- |
 | `reviewed` | 本次审查期间**没有**提交或合入。它不再表示“只做了浏览”：工作区可能有未提交修改 | 不得携带 |
-| `committed` | 本次审查期间成功创建的本地提交（`commit_changes`，或 `commit_and_push` 中 `committed=true` 的阶段） | 必填，取该次成功操作的提交对象 ID |
-| `merged` | `start_merge` 的快进或变基完成，或 `complete_merge` 成功 | 必填，取完成后的 HEAD |
+| `committed` | 本次审查期间已核实创建的本地提交：普通提交、commit-and-push 的已提交阶段、拣选、还原、修订，以及拣选/还原的继续完成；部分批次在后续冲突前已创建的提交单独计入 | 必填，取该次成功操作的提交对象 ID |
+| `merged` | `start_merge` 的快进或变基完成，或实际 merge/rebase 的 `complete_merge` 成功；拣选/还原继续完成归 committed | 必填，取完成后的 HEAD |
 
 **工作区状态** `worktreeState` 描述返回时 Twiglane 读取到的工作区，与 outcome 正交：
 
@@ -114,7 +114,7 @@ Twiglane 的内存态来源上下文仍存在时，用户点击“返回 cliora�
 
 因此 `reviewed + dirty`（只编辑未提交）、`committed + dirty`（提交后仍有其他修改）、`merged + dirty` 都是合法且需要如实展示的组合。Twiglane 中普通文件保存只写工作区文件：它不改变 outcome，不产生 `edited`、批准或测试通过之类的结果；审阅标记数量也不进入协议。
 
-失败、取消、过期响应、仅产生冲突草稿的合并都不记录结果，也不得回送 `committed`/`merged`。推送失败不影响已完成的提交声明，但也不得声称推送成功。新结果替代旧结果；同一来源只保留最新一次结果。
+全跳过、未核实创建提交的失败/取消、过期响应和纯冲突草稿不制造结果，也不抹去该来源已有的真实结果。已由受控写操作核实的提交阶段即使后续批次遇到冲突仍保留；不从 checkout/reset 等单纯 HEAD 位移推断提交。推送失败不影响已完成的提交声明，但也不得声称推送成功。新结果替代旧结果；同一来源只保留最新一次结果。
 
 ```
 cliora://review?v=2&event=returned&reviewId=6f1a2b3c-...&sessionId=0b1c2d3e-...&outcome=reviewed&worktreeState=dirty&meta.twiglane.version=0.3.3
@@ -150,7 +150,7 @@ Twiglane 的保存、审阅标记或 meta 都不映射为批准、测试通过�
 
 - cliora 按 `reviewId` 维护内存态注册表（sessionId、worktreePath、基线 HEAD、最新状态与结果、工作区声明与 meta）；每个 session 只认最新 reviewId，显式重新发起的新 reviewId 使旧结果失效。
 - 注册表不持久化。应用重启后旧链接到达视为“来源审查已失效”：不创建替代会话、不修改现有会话、不写 Git。
-- Twiglane 的内存态上下文绑定 canonical 仓库路径。独立打开其他仓库会清除当前来源展示，但不清除任何仓库已有草稿；返回 cliora 之后来源与最新结果仍保留在当前会话里，直到独立打开别的仓库。
+- Twiglane 的内存态上下文绑定 canonical 仓库路径。新版运行时按 reviewId 保留来源；切仓只改变活动展示，切回可恢复并显式选择。最多保留 8 条（含待接受），满时明确报错；用户关闭来源才释放，不淘汰活动来源。来源不持久化，重启后重新发起。v2 结果没有递增序号，因此 v2 的重复返回仍按原“最新接收替代”兼容语义处理。
 - 迟到的 returned（reviewId 不是当前最新的）必须被丢弃，不得覆盖更新结果。
 - 超过 10 秒未收到 accepted/rejected，cliora 显示“打开结果未知，可能未安装或版本不兼容”，提供重试与安装说明；系统接受 URL 不等于 Twiglane 已打开。
 

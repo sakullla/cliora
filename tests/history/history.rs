@@ -761,6 +761,7 @@ fn database_v22_native_usage_migration_preserves_legacy_tokens_and_json() {
     let db = Database::open(&path).unwrap();
     let id = store_events(&db, "codex", "legacy", Some("gpt-5"), vec![event("legacy-request", Some("gpt-5"), FIXTURE_DAY, (10, 2, None, None), false)]);
     db.with_connection(|conn| {
+        crate::database::remove_later_fixture_tables(conn, 22).map_err(|error| error.to_string())?;
         conn.execute_batch("ALTER TABLE history_usage DROP COLUMN native_usage_json; DROP TABLE remote_session_index; PRAGMA user_version = 22;").map_err(|error| error.to_string())?;
         // Old payloads have no optional nativeUsage field.
         conn.execute("UPDATE history_sessions SET usage_json = json_remove(usage_json, '$[0].nativeUsage')", []).map_err(|error| error.to_string())?;
@@ -1440,7 +1441,7 @@ fn opencode_v2_storage_lists_parses_usage_and_variant_model() {
     let sources = opencode::sources(temp.path()).unwrap();
     assert_eq!(sources.len(), 1);
     assert_eq!(sources[0].native_id.as_deref(), Some("ses_v2_fixture"));
-    assert_eq!(sources[0].fingerprint, "opencode-session-v3|v2|1792026341382");
+    assert_eq!(sources[0].fingerprint, "opencode-session-v4|v2|1792026341382");
     let session = opencode::parse(&sources[0]).unwrap();
     assert_eq!(session.title, "T8 verify session");
     assert_eq!(session.cwd.as_deref(), Some("C:/verify/project"));
@@ -1894,6 +1895,7 @@ fn v17_history_upgrade_rereads_unchanged_sources_and_preserves_associations() {
     let id = list(&db, &HistoryFilter::default()).unwrap()[0].id.clone();
     set_favorite(&db, &id, true).unwrap();
     db.with_connection(|conn| {
+        crate::database::remove_later_fixture_tables(conn, 17).map_err(|error| error.to_string())?;
         conn.execute_batch("ALTER TABLE history_usage DROP COLUMN request_count;
             UPDATE history_sessions SET project_id='linked-project', usage_json='[]';
             DROP TABLE remote_session_index; PRAGMA user_version = 17;").map_err(|error| error.to_string())
@@ -2201,6 +2203,7 @@ fn legacy_rows_without_association_fields_are_unknown_and_have_no_jump() {
     db.with_connection(|conn| {
         let usage: String = conn.query_row("SELECT usage_json FROM history_sessions WHERE id=?1", [&id], |row| row.get(0)).map_err(|error| error.to_string())?;
         assert!(!usage.contains("attributions"), "{usage}");
+        crate::database::remove_later_fixture_tables(conn, 23).map_err(|error| error.to_string())?;
         conn.execute_batch("ALTER TABLE history_sessions DROP COLUMN children_json; DROP TABLE remote_session_index; PRAGMA user_version = 23;").map_err(|error| error.to_string())?;
         Ok(())
     }).unwrap();
@@ -2229,3 +2232,28 @@ fn legacy_rows_without_association_fields_are_unknown_and_have_no_jump() {
     assert!(fs::read_to_string(md_path).unwrap().contains("归属：未知"));
 }
 
+
+
+#[test]
+fn selected_json_fields_keep_native_values_and_validate_discarded_subtrees() {
+    let source = br#"{"type":"message","content":{"text":"kept"},"debug":{"nested":[1,2,{"unused":true}]}}"#;
+    let selected = parse_json_fields(source, Some(&["type", "content"])).unwrap();
+    assert_eq!(selected, serde_json::json!({"type":"message","content":{"text":"kept"}}));
+    assert!(parse_json_fields(br#"{"type":"message","debug":[invalid]}"#, Some(&["type"])).is_err());
+    assert!(parse_json_fields(br#"{"type":"message"} trailing"#, Some(&["type"])).is_err());
+}
+
+#[test]
+#[ignore = "fixed JSON projection performance measurement"]
+fn performance_json_projection() {
+    let row = serde_json::to_vec(&serde_json::json!({"type":"message", "content":"visible text", "debug": (0..20000).map(|index| serde_json::json!({"index":index,"arguments":"diagnostic".repeat(10)})).collect::<Vec<_>>() })).unwrap();
+    for selected in [false,true] {
+        let started = std::time::Instant::now();
+        for _ in 0..20 {
+            let value = parse_json_fields(&row, if selected { Some(&["type","content"]) } else { None }).unwrap();
+            assert_eq!(value["content"], "visible text");
+            std::hint::black_box(value);
+        }
+        eprintln!("history JSON projection selected={selected} bytes={} iterations=20 elapsed_ms={:.2}", row.len(), started.elapsed().as_secs_f64()*1000.0);
+    }
+}

@@ -1,0 +1,16 @@
+{
+  "capability": "resources",
+  "name": "Invalid MCP entries are visible individually without hiding valid ones",
+  "case": {
+    "kind": "mcp",
+    "action": "entry-validation",
+    "cases": [
+      { "name": "valid-stdio", "entry": { "type": "stdio", "command": "npx" } },
+      { "name": "valid-http", "entry": { "type": "http", "url": "https://example.test/mcp" } },
+      { "name": "unknown-type", "entry": { "type": "websocket", "url": "https://example.test/mcp" }, "issue": "未知" },
+      { "name": "both-command-url", "entry": { "command": "npx", "url": "https://example.test/mcp" }, "issue": "同时" },
+      { "name": "missing-command", "entry": { "type": "stdio", "args": [] }, "issue": "缺少 command" },
+      { "name": "missing-url", "entry": { "type": "http" }, "issue": "缺少 url" }
+    ]
+  }
+}

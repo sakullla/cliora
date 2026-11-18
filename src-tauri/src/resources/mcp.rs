@@ -148,6 +148,47 @@ pub struct NativeMcpEntry {
     pub headers: IndexMap<String, String>,
     pub enabled: bool,
     pub protected_values: bool,
+    /// Display label of a read-only foreign source; absent for CLI-owned entries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// True for a server discovered from another tool or plugin package.
+    #[serde(default)]
+    pub read_only: bool,
+    /// Native file or package that owns a read-only entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// Per-entry parse/schema problem; other entries stay visible.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue: Option<String>,
+    /// Read-only source with a CLI-owned enable/disable override.
+    #[serde(default)]
+    pub switchable: bool,
+}
+
+/// One unreadable or malformed foreign MCP source.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeMcpIssue {
+    pub kind: &'static str,
+    pub source: String,
+    pub path: String,
+    pub message: String,
+}
+
+/// Native entries plus per-source read errors. Valid entries remain visible
+/// when one foreign file cannot be read or parsed.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeMcpStore {
+    pub entries: Vec<NativeMcpEntry>,
+    pub issues: Vec<NativeMcpIssue>,
+}
+
+impl std::ops::Deref for NativeMcpStore {
+    type Target = [NativeMcpEntry];
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
 }
 
 fn valid_name(name: &str) -> bool {
@@ -404,7 +445,7 @@ pub fn remove_native(
 ) -> Result<(), String> {
     let name = name.trim();
     if name.is_empty() { return Err("请选择要删除的 MCP".into()); }
-    let (location, scope_key, _) = target_location(db, registry, target, home)?;
+    let (location, scope_key, _) = target_location(db, registry, target, home, true)?;
     let (baseline, parsed) = parse_native(&location)?;
     let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
     let name_owned = name.to_owned();
@@ -467,12 +508,19 @@ fn target_location(
     registry: &Registry,
     target: &McpTargetRequest,
     home: &Path,
+    for_write: bool,
 ) -> Result<(McpLocation, String, Option<String>), String> {
     let _context = crate::accounts::selection::enter_bound(db, home, &target.tool_id, target.scope, target.project_path.as_deref().map(Path::new))?;
     crate::accounts::selection::validate_expected(&target.tool_id,target.context_id.as_deref())?;
     let cli = registry
         .get(&target.tool_id)
         .ok_or("此 CLI 尚无注册适配器")?;
+    if for_write && target.scope == Scope::Project && !cli.mcp_project_scope_effective(home)? {
+        return Err(format!(
+            "{} 配置 mcp.enableProjectConfig=false；项目 MCP 来源未生效，已拒绝写入",
+            cli.name()
+        ));
+    }
     let project = match target.scope {
         Scope::Global => None,
         Scope::Project => Some(projects::checked_directory(
@@ -638,75 +686,293 @@ pub fn list_native(
     registry: &Registry,
     home: &Path,
     target: &McpTargetRequest,
-) -> Result<Vec<NativeMcpEntry>, String> {
-    let (location, _, _) = target_location(db, registry, target, home)?;
+) -> Result<NativeMcpStore, String> {
+    let (location, _, _) = target_location(db, registry, target, home, false)?;
     let (_, parsed) = parse_native(&location)?;
     let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
     let entries = adapter.mcp_entries(&parsed, &location)?;
     let redact = adapter.mcp_redacts_secrets();
-    Ok(entries
+    let project = match target.scope {
+        Scope::Global => None,
+        Scope::Project => Some(projects::checked_directory(
+            target.project_path.as_deref().ok_or("请选择项目目录")?,
+        )?),
+    };
+    let mut issues: Vec<NativeMcpIssue> = Vec::new();
+    let project_effective = match target.scope {
+        Scope::Global => true,
+        Scope::Project => match adapter.mcp_project_scope_effective(home) {
+            Ok(effective) => effective,
+            Err(error) => {
+                issues.push(NativeMcpIssue {
+                    kind: "mcp_project_config",
+                    source: adapter.name().to_owned(),
+                    path: location.path.display().to_string(),
+                    message: format!(
+                        "{} 无法确认 mcp.enableProjectConfig：{error}；项目来源按可能生效显示",
+                        adapter.name()
+                    ),
+                });
+                true
+            }
+        },
+    };
+    if !project_effective {
+        issues.push(NativeMcpIssue {
+            kind: "mcp_project_disabled",
+            source: adapter.name().to_owned(),
+            path: location.path.display().to_string(),
+            message: format!(
+                "{} 配置 mcp.enableProjectConfig=false；项目 MCP 来源未生效",
+                adapter.name()
+            ),
+        });
+    }
+    let mut native: Vec<NativeMcpEntry> = entries
         .iter()
-        .filter_map(|(name, raw)| {
-            let view = adapter.mcp_entry_view(raw);
-            let raw = view.as_object()?;
-            let command = raw.get("command");
-            let (command, args) = match command {
-                Some(Value::String(command)) => (
-                    command.clone(),
-                    raw.get("args")
-                        .and_then(Value::as_array)
-                        .map(|args| {
-                            args.iter()
-                                .filter_map(Value::as_str)
-                                .map(str::to_owned)
-                                .collect()
+        .map(|(name, raw)| {
+            let mut entry = visible_entry_of(name, &adapter.mcp_entry_view(raw), redact);
+            if !project_effective {
+                entry.enabled = false;
+                entry.issue = Some(
+                    entry
+                        .issue
+                        .map(|issue| {
+                            format!("{issue}；OMP mcp.enableProjectConfig=false，项目条目未生效")
                         })
-                        .unwrap_or_default(),
-                ),
-                Some(Value::Array(command)) => {
-                    let mut parts = command.iter().filter_map(Value::as_str);
-                    (
-                        parts.next().unwrap_or("").to_owned(),
-                        parts.map(str::to_owned).collect(),
-                    )
-                }
-                _ => (String::new(), Vec::new()),
-            };
-            let url = raw
-                .get("url")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned();
-            let (env, env_protected) = visible_secret_map(raw.get("env").or_else(|| raw.get("environment")), redact);
-            let (headers, header_protected) = visible_secret_map(raw.get("headers").or_else(|| raw.get("http_headers")), redact);
-            Some(NativeMcpEntry {
-                name: name.clone(),
-                transport: if url.is_empty() {
-                    McpTransport::Stdio
-                } else if !["type", "transport"].iter().any(|key| raw.get(*key).and_then(Value::as_str) == Some("sse")) {
-                    McpTransport::Http
-                } else {
-                    McpTransport::Sse
-                },
-                command,
-                args,
-                cwd: raw.get("cwd").and_then(Value::as_str).unwrap_or("").to_owned(),
-                url,
-                env,
-                headers,
-                enabled: raw
-                    .get("enabled")
-                    .and_then(Value::as_bool)
-                    .or_else(|| {
-                        raw.get("disabled")
-                            .and_then(Value::as_bool)
-                            .map(|value| !value)
-                    })
-                    .unwrap_or(true),
-                protected_values: env_protected || header_protected,
-            })
+                        .unwrap_or_else(|| {
+                            "OMP mcp.enableProjectConfig=false，项目条目未生效".into()
+                        }),
+                );
+            }
+            entry
         })
-        .collect())
+        .collect();
+    let switchable = adapter
+        .mcp_external_switch(target.scope, home, project.as_deref())
+        .is_some();
+    match adapter.mcp_observations(target.scope, home, project.as_deref()) {
+        Ok(found) => {
+            issues.extend(found.issues.into_iter().map(|issue| NativeMcpIssue {
+                kind: "mcp_source",
+                source: issue.source.to_owned(),
+                path: issue.path.display().to_string(),
+                message: issue.message,
+            }));
+            for observation in found.servers {
+                if native.iter().any(|entry| entry.name == observation.name) {
+                    continue;
+                }
+                // External entries are never validated with this CLI's own
+                // native transport rules; their provider owns the schema.
+                // Literal env/header secrets stay out of the public view.
+                let mut entry =
+                    visible_entry_of(&observation.name, &observation.entry, true);
+                entry.enabled = observation.enabled;
+                entry.read_only = true;
+                entry.switchable = switchable;
+                entry.source = Some(observation.source.to_owned());
+                entry.detail = Some(
+                    if observation.detail.is_empty() {
+                        observation.path.display().to_string()
+                    } else {
+                        format!("{} · {}", observation.detail, observation.path.display())
+                    },
+                );
+                native.push(entry);
+            }
+        }
+        Err(error) => issues.push(NativeMcpIssue {
+            kind: "mcp_observation",
+            source: adapter.name().to_owned(),
+            path: location.path.display().to_string(),
+            message: error,
+        }),
+    }
+    Ok(NativeMcpStore {
+        entries: native,
+        issues,
+    })
+}
+
+/// Enable or disable one imported MCP server through the CLI's own override.
+/// The foreign source file is located only to prove ownership; it is never the
+/// write target.
+pub fn set_external_mcp_enabled(
+    db: &Database,
+    credentials: &dyn CredentialStore,
+    registry: &Registry,
+    home: &Path,
+    target: &McpTargetRequest,
+    name: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("请选择要启停的外部 MCP".into());
+    }
+    let (location, _, _) = target_location(db, registry, target, home, true)?;
+    let adapter = registry
+        .get(&target.tool_id)
+        .ok_or("此 CLI 尚无注册适配器")?;
+    let (_, parsed) = parse_native(&location)?;
+    if adapter.mcp_entries(&parsed, &location)?.contains_key(name) {
+        return Err("这是本 CLI 自有条目，请在条目设置中启停".into());
+    }
+    let project = match target.scope {
+        Scope::Global => None,
+        Scope::Project => Some(projects::checked_directory(
+            target.project_path.as_deref().ok_or("请选择项目目录")?,
+        )?),
+    };
+    let found = adapter.mcp_observations(target.scope, home, project.as_deref())?;
+    let observation = found
+        .servers
+        .into_iter()
+        .find(|observation| observation.name == name)
+        .ok_or("当前生效列表中找不到这个外部 MCP，请重新扫描")?;
+    let source_enabled = observation
+        .entry
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let switch = adapter
+        .mcp_external_switch(target.scope, home, project.as_deref())
+        .ok_or_else(|| format!("{} 没有可用的外部 MCP 启停覆盖", adapter.name()))?;
+    if switch.path == observation.path {
+        return Err("启停覆盖指向第三方来源文件，已拒绝写入".into());
+    }
+    let baseline = transaction::read_native(&switch.path)?;
+    let parsed_overlay = format::parse(switch.kind, &baseline)?;
+    let changes = adapter
+        .mcp_external_changes(&parsed_overlay, name, enabled, source_enabled)
+        .ok_or_else(|| format!("{} 没有可用的外部 MCP 启停字段", adapter.name()))?;
+    if changes.is_empty() {
+        return Ok(());
+    }
+    transaction::apply(
+        db,
+        credentials,
+        &[transaction::FilePatch {
+            path: switch.path,
+            kind: switch.kind,
+            baseline,
+            changes,
+            sensitive: true,
+            force_restrict: false,
+        }],
+        |_| Ok(()),
+    )?;
+    Ok(())
+}
+
+fn visible_entry_of(
+    name: &str,
+    view: &Value,
+    redact: bool,
+) -> NativeMcpEntry {
+    let raw = view.as_object();
+    let raw = match raw {
+        Some(raw) => raw,
+        None => {
+            return NativeMcpEntry {
+                name: name.to_owned(),
+                transport: McpTransport::Stdio,
+                command: String::new(),
+                args: Vec::new(),
+                cwd: String::new(),
+                url: String::new(),
+                env: IndexMap::new(),
+                headers: IndexMap::new(),
+                enabled: false,
+                protected_values: false,
+                source: None,
+                read_only: false,
+                detail: None,
+                issue: Some("MCP 条目不是对象".into()),
+                switchable: false,
+            }
+        }
+    };
+    let command = raw.get("command");
+    let (command, args) = match command {
+        Some(Value::String(command)) => (
+            command.clone(),
+            raw.get("args")
+                .and_then(Value::as_array)
+                .map(|args| {
+                    args.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
+        ),
+        Some(Value::Array(command)) => {
+            let mut parts = command.iter().filter_map(Value::as_str);
+            (
+                parts.next().unwrap_or("").to_owned(),
+                parts.map(str::to_owned).collect(),
+            )
+        }
+        _ => (String::new(), Vec::new()),
+    };
+    let url = raw
+        .get("url")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    let (env, env_protected) =
+        visible_secret_map(raw.get("env").or_else(|| raw.get("environment")), redact);
+    let (headers, header_protected) =
+        visible_secret_map(raw.get("headers").or_else(|| raw.get("http_headers")), redact);
+    let raw_type = raw
+        .get("type")
+        .or_else(|| raw.get("transport"))
+        .and_then(Value::as_str);
+    let transport = if matches!(raw_type, Some("sse")) {
+        McpTransport::Sse
+    } else if !url.is_empty() {
+        McpTransport::Http
+    } else {
+        McpTransport::Stdio
+    };
+    NativeMcpEntry {
+        name: name.to_owned(),
+        transport,
+        command,
+        args,
+        cwd: raw
+            .get("cwd")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned(),
+        url,
+        env,
+        headers,
+        enabled: raw
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .or_else(|| raw.get("disabled").and_then(Value::as_bool).map(|value| !value))
+            .unwrap_or(true),
+        protected_values: env_protected || header_protected,
+        source: None,
+        read_only: false,
+        detail: None,
+        issue: raw
+            .get("issue")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                let raw_type = raw_type?;
+                (!matches!(
+                    raw_type,
+                    "stdio" | "http" | "sse" | "streamable-http" | "local" | "remote"
+                ))
+                .then(|| format!("未知的 MCP 传输类型：{raw_type}"))
+            }),
+        switchable: false,
+    }
 }
 
 pub fn preview_targets(
@@ -735,7 +1001,7 @@ fn preview_definition(
         }
         let mut result = McpTargetResult { operation, context_id:target.context_id.clone(), tool_id: target.tool_id.clone(), scope: target.scope,
             project_path: target.project_path.clone(), path: None, status: "unsupported", detail: String::new(), baseline_hash: None, preview_token: None, existing: None, proposed: None };
-        match target_location(db, registry, &target, home) {
+        match target_location(db, registry, &target, home, true) {
             Ok((location, scope_key, version)) => {
                 result.path = Some(location.path.display().to_string());
                 if operation == McpTargetOperation::Write {
@@ -882,7 +1148,7 @@ fn commit_targets(
             project_path: target.project_path.clone(), path: None, status: "failed", detail: String::new(), baseline_hash: None, preview_token: None, existing: None, proposed: None };
         let attempt = (|| {
             let definition = definition.as_ref().map_err(Clone::clone)?;
-            let (location, scope_key, version) = target_location(db, registry, &target, home)?;
+            let (location, scope_key, version) = target_location(db, registry, &target, home, true)?;
             result.path = Some(location.path.display().to_string());
             if operation == McpTargetOperation::Write {
                 if let Some(adapter) = registry.get(&target.tool_id) {
