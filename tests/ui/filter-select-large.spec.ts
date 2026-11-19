@@ -47,6 +47,8 @@ test('a picker over hundreds of projects paints its final rows at once and rende
   await trigger.click();
   const list = page.getByRole('listbox', { name: '项目筛选' });
   await expect(list).toBeVisible();
+  // The click and the visibility check can both resolve before the first animation frame runs.
+  await expect.poll(() => page.evaluate(() => Array.isArray((window as any).__firstFrame))).toBe(true);
   const first = await page.evaluate(() => (window as any).__firstFrame as boolean[] | null);
   expect(first?.length).toBeGreaterThan(0);
   expect(first!.every(Boolean)).toBe(true);
