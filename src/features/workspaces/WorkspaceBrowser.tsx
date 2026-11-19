@@ -30,6 +30,8 @@ const toolKey = 'cliora:workspace-tool';
 const stored = (key: string) => { try { return localStorage.getItem(key) ?? ''; } catch { return ''; } };
 const remember = (key: string, value: string) => { try { if (value) localStorage.setItem(key, value); else localStorage.removeItem(key); } catch { /* optional preference */ } };
 const failure = (value: unknown) => formatFailure(value, i18n.t('workspaces.failed'), i18n.t('workspaces.retry'));
+/** A worktree choice belongs to one project's member, so A → B → A returns to A's own checkout. */
+const placeKey = (workspaceId: string, repositoryId: string) => `${workspaceId}\u0000${repositoryId}`;
 
 /** Worktree choices of one repository: its main checkout first, then attached worktrees. */
 export function repositoryPlaces(repository: WorkspaceRepository, mainLabel: string, worktreeLabel: string) {
@@ -75,6 +77,7 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
   const listRef = useRef<HTMLDivElement>(null);
   const [toolId, setToolId] = useState(() => stored(toolKey));
   const [launching, setLaunching] = useState('');
+  // Keyed per project and repository: switching projects leaves every member's own choice alone.
   const [paths, setPaths] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -210,17 +213,39 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
     if (!current) return;
     try {
       const path = await open({ directory: true, multiple: false, title: t('workspaces.relink') });
-      if (typeof path === 'string') await operate(() => native.relinkWorkspaceRepository(current.id, repository.id, path, current.revision));
+      if (typeof path === 'string') {
+        await operate(() => native.relinkWorkspaceRepository(current.id, repository.id, path, current.revision));
+        if (mounted.current) returnFocus(repository.id);
+      }
     } catch (value) { setError(failure(value)); }
+  }
+  /** Creating or renaming updates the project list in the same render that selects it, so the header
+   *  (and the trigger the dialog returns focus to) is never rebuilt with a missing current project. */
+  async function saveProject() {
+    const name = (editName ?? '').trim();
+    if (!name) return;
+    const target = renaming ? current : null;
+    await operate(async () => {
+      const value = target ? await native.renameBusinessWorkspace(target.id, name, target.revision) : await native.createBusinessWorkspace(name);
+      setWorkspaces(previous => previous.some(item => item.id === value.id) ? previous.map(item => item.id === value.id ? value : item) : [...previous, value]);
+      setSelectedId(value.id);
+      setEditName(null);
+      return value;
+    });
   }
   async function deleteProject() {
     if (!current || !await confirmAction(t('workspaces.deleteConfirm', { name: current.name }), () => mounted.current, { title: t('workspaces.deleteProject'), confirmLabel: t('workspaces.deleteProject') })) return;
     const id = current.id;
-    await operate(async () => { await native.deleteBusinessWorkspace(id); setSelectedId(previous => previous === id ? '' : previous); setQuery(''); setFilter('all'); setPaths({}); });
+    await operate(async () => { await native.deleteBusinessWorkspace(id); setSelectedId(previous => previous === id ? '' : previous); setQuery(''); setFilter('all'); });
+    // The project's own choices leave with it; other projects keep theirs.
+    setPaths(previous => Object.fromEntries(Object.entries(previous).filter(([key]) => !key.startsWith(`${id}\u0000`))));
+    if (mounted.current) returnFocus('');
   }
   async function remove(repository: WorkspaceRepository) {
     if (!current || !await confirmAction(t('workspaces.removeConfirm', { name: repository.name }), () => mounted.current, { title: t('workspaces.remove'), confirmLabel: t('workspaces.remove') })) return;
+    const neighbour = Math.max(0, shown.findIndex(repo => repo.id === repository.id));
     await operate(() => native.removeWorkspaceRepository(current.id, repository.id, current.revision));
+    if (mounted.current) returnFocus(repository.id, neighbour);
   }
   /** A star flips at once; the whole list never waits on (or is disabled by) a favorite. */
   async function toggleFavorite(repository: WorkspaceRepository) {
@@ -240,11 +265,10 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
   }
   async function pick(repository: WorkspaceRepository) {
     if (!current) return;
-    const available = repository.locations.find(location => location.available);
-    const directory = paths[repository.id] || available?.path;
-    if (!directory || !available) return;
+    const { available, path } = placeOf(current.id, repository);
+    if (!available || !path) return;
     if (!launchTool) { setError(t('workspaces.chooseTool')); return; }
-    const selection = { workspaceId: current.id, repositoryId: repository.id, directory, projectId: available.projectId, label: `${current.name} / ${repository.name}` };
+    const selection = { workspaceId: current.id, repositoryId: repository.id, directory: path, projectId: available.projectId, label: `${current.name} / ${repository.name}` };
     setLaunching(repository.id);
     await operate(async () => {
       const result = await native.launchCli({ ...selection, toolId: launchTool, projectId: available.projectId, sessionId: null, mode: preferredLaunchMode(launchSettings, 'project', !!enabledTools.find(tool => tool.id === launchTool)?.yoloAvailable), worktreeIntent: 'given' });
@@ -253,6 +277,26 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
       if (result.warnings?.length) setNotice(result.warnings.join('\n'));
     });
     if (mounted.current) setLaunching('');
+  }
+  /** The checkout a row works in: the remembered choice only while it still exists locally. */
+  function placeOf(workspaceId: string, repository: WorkspaceRepository) {
+    const places = repositoryPlaces(repository, t('workspaces.mainCheckout'), t('workspaces.worktreeKind'));
+    const available = repository.locations.find(location => location.available);
+    const remembered = paths[placeKey(workspaceId, repository.id)];
+    const chosen = remembered && places.has(remembered) ? remembered : '';
+    return { places, available, remembered, chosen, path: chosen || available?.path || '', fallback: !!remembered && !chosen };
+  }
+  /** A removed or repaired row must not drop the keyboard onto the page: keep it in the project. */
+  function returnFocus(repositoryId: string, neighbour = 0) {
+    requestAnimationFrame(() => {
+      // Removing a project never pulls focus away from what the project still shows.
+      if (!repositoryId && blockRef.current?.contains(document.activeElement) && document.activeElement !== document.body) return;
+      const rows = Array.from(listRef.current?.querySelectorAll<HTMLElement>('[data-repository-id]') ?? []);
+      const at = rows.findIndex(row => row.dataset.repositoryId === repositoryId);
+      const row = at >= 0 ? rows[at] : rows[Math.min(neighbour, rows.length - 1)];
+      const target = row?.querySelector<HTMLElement>('[data-row-primary]:not(:disabled)') ?? blockRef.current?.querySelector<HTMLElement>('[data-project-add]:not(:disabled)') ?? null;
+      target?.focus({ preventScroll: true });
+    });
   }
   const allRepositories = current?.repositories ?? [];
   const root = useMemo(() => commonRoot(allRepositories.flatMap(repo => repo.locations.filter(location => location.path && !location.targetId).map(location => location.path!))), [allRepositories]);
@@ -356,7 +400,7 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
     {workspaces.length > 0 && current ? <>
       <div className={styles.header}>
         <div className={styles.titleBlock}>
-          <FilterSelect variant="title" className={styles.select} disabled={busy || scanBusy || candidates !== null} label={t('workspaces.select')} triggerDetail={false} value={selectedId} options={workspaces.map(item => ({ value: item.id, label: item.name, detail: t('workspaces.repositories', { count: item.repositories.length }) }))} onChange={id => { setSelectedId(id); setQuery(''); setPaths({}); setFilter('all'); }} />
+          <FilterSelect variant="title" className={styles.select} disabled={busy || scanBusy || candidates !== null} label={t('workspaces.select')} triggerDetail={false} value={selectedId} options={workspaces.map(item => ({ value: item.id, label: item.name, detail: t('workspaces.repositories', { count: item.repositories.length }) }))} onChange={id => { setSelectedId(id); setQuery(''); setFilter('all'); }} />
           <span className={styles.meta}>
             <span>{t('workspaces.repositories', { count: allRepositories.length })}</span>
             {root && <span className={styles.root} title={t('workspaces.rootHint', { path: displayPath(root) })}><Icon name="folder" size={12} /><span>{displayPath(root)}</span></span>}
@@ -366,7 +410,7 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
           </span>
         </div>
         <div className={styles.headerActions}>
-          <Button size="sm" variant="primary" disabled={busy || scanBusy} icon={<Icon name="plus" size={14} />} onClick={() => void discover(false)}>{t('workspaces.add')}</Button>
+          <Button size="sm" variant="primary" data-project-add disabled={busy || scanBusy} icon={<Icon name="plus" size={14} />} onClick={() => void discover(false)}>{t('workspaces.add')}</Button>
           {projectMenu}
         </div>
       </div>
@@ -383,15 +427,13 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
         </div>
         {shown.length > 0 ? <div className={styles.list} ref={listRef} aria-label={t('workspaces.previewRepositories')} onKeyDown={event => moveFocus(event)}>
           {shown.map(repo => {
-            const available = repo.locations.find(location => location.available);
-            const places = repositoryPlaces(repo, t('workspaces.mainCheckout'), t('workspaces.worktreeKind'));
-            const selectedPath = paths[repo.id] || available?.path || '';
+            const { places, available, remembered, path: selectedPath, fallback } = placeOf(current.id, repo);
             const broken = !available;
             const missing = repo.locations[0];
             return <article key={repo.id} className={styles.row} data-repository-id={repo.id} data-state={broken ? 'unavailable' : undefined} data-favorite={repo.favorite || undefined}>
               <span className={styles.name}>{broken && <span className={styles.dot} aria-hidden="true" />}<strong title={repo.name}>{repo.name}</strong>{available?.kind === 'legacy' && <Badge>{t('workspaces.legacy')}</Badge>}</span>
-              <span className={styles.path} title={broken ? [missing?.path && displayPath(missing.path), t('workspaces.unavailable'), missing?.reason].filter(Boolean).join(' · ') : displayPath(selectedPath)}>{broken ? <>{missing?.path ? relativePath(missing.path, repo.name) && <span>{relativePath(missing.path, repo.name)}</span> : <span>{t('workspaces.invalid')}</span>}<em>{t('workspaces.unavailable')}{missing?.reason ? ` · ${missing.reason}` : ''}</em></> : <span>{relativePath(selectedPath, repo.name)}</span>}</span>
-              {places.size > 1 ? <select className={styles.place} aria-label={`${repo.name} ${t('workspaces.worktree')}`} title={selectedPath} value={selectedPath} onChange={event => setPaths(previous => ({ ...previous, [repo.id]: event.target.value }))}>{[...places].map(([path, place]) => <option key={path} value={path}>{place.label}</option>)}</select> : <span />}
+              <span className={styles.path} title={broken ? [missing?.path && displayPath(missing.path), t('workspaces.unavailable'), missing?.reason].filter(Boolean).join(' · ') : displayPath(selectedPath)}>{broken ? <>{missing?.path ? relativePath(missing.path, repo.name) && <span>{relativePath(missing.path, repo.name)}</span> : <span>{t('workspaces.invalid')}</span>}<em>{t('workspaces.unavailable')}{missing?.reason ? ` · ${missing.reason}` : ''}</em></> : <><span>{relativePath(selectedPath, repo.name)}</span>{fallback && <em className={styles.fallback} title={t('workspaces.worktreeFallbackHint', { path: displayPath(remembered ?? '') })}>{t('workspaces.worktreeFallback')}</em>}</>}</span>
+              {places.size > 1 ? <select className={styles.place} aria-label={`${repo.name} ${t('workspaces.worktree')}`} title={selectedPath} value={selectedPath} onChange={event => setPaths(previous => ({ ...previous, [placeKey(current.id, repo.id)]: event.target.value }))}>{[...places].map(([path, place]) => <option key={path} value={path}>{place.label}</option>)}</select> : <span />}
               <span className={styles.rowActions}>
                 <Button size="sm" variant="ghost" className={styles.favorite} aria-label={t(repo.favorite ? 'workspaces.unfavorite' : 'workspaces.favorite')} title={t(repo.favorite ? 'workspaces.unfavorite' : 'workspaces.favorite')} aria-pressed={repo.favorite} icon={<Icon name="star" size={14} />} onClick={() => void toggleFavorite(repo)} />
                 {broken
@@ -410,13 +452,13 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
       <span className={styles.introIcon} aria-hidden="true"><Icon name="folder" size={18} /></span>
       <div className={styles.introCopy}><strong>{loading ? t('workspaces.loading') : t('workspaces.empty')}</strong><span>{loadError || t('workspaces.hint')}</span></div>
       {!loading && <div className={styles.headerActions}>
-        {loadError ? <Button size="sm" onClick={() => void reload(true)}>{t('workspaces.retry')}</Button> : <Button size="sm" variant="primary" disabled={busy} icon={<Icon name="plus" size={14} />} onClick={startCreate}>{t('workspaces.create')}</Button>}
+        {loadError ? <Button size="sm" onClick={() => void reload(true)}>{t('workspaces.retry')}</Button> : <Button size="sm" variant="primary" data-project-add disabled={busy} icon={<Icon name="plus" size={14} />} onClick={startCreate}>{t('workspaces.create')}</Button>}
         <Button size="sm" variant="ghost" disabled={busy} onClick={() => void chooseManifest()}>{t('workspaces.openManifest')}</Button>
       </div>}
     </div>}
     </div>
     <GuideDialog open={editName !== null} title={t(renaming ? 'workspaces.rename' : 'workspaces.create')} hint={t(renaming ? 'workspaces.renameHint' : 'workspaces.createHint')} closeDisabled={busy} onClose={() => setEditName(null)}>
-      <form className={styles.form} onSubmit={event => { event.preventDefault(); if (!editName?.trim()) return; void operate(async () => { const value = renaming && current ? await native.renameBusinessWorkspace(current.id, editName ?? '', current.revision) : await native.createBusinessWorkspace(editName ?? ''); setSelectedId(value.id); setEditName(null); }); }}>
+      <form className={styles.form} onSubmit={event => { event.preventDefault(); void saveProject(); }}>
         <label>{t('workspaces.name')}<input autoFocus value={editName ?? ''} onChange={event => setEditName(event.target.value)} maxLength={160} /></label>
         {error && <p className={styles.error} role="alert">{error}</p>}
         <div className="dialog-footer"><Button variant="ghost" disabled={busy} onClick={() => setEditName(null)}>{t('workspaces.cancel')}</Button><Button type="submit" variant="primary" loading={busy} disabled={!editName?.trim()}>{t('workspaces.save')}</Button></div>

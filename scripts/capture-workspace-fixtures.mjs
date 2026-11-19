@@ -16,6 +16,13 @@ export function installWorkspaceFixtures() {
   window.__workspaceFixture = fixture;
   const copy = value => structuredClone(value);
   const find = id => workspaces.find(item => item.id === id);
+  // A checkout can disappear between two reads; the page hears the new list exactly like a refresh.
+  fixture.setWorktrees = (workspaceId, repositoryId, worktrees) => {
+    const row = find(workspaceId);
+    row.repositories.find(repo => repo.id === repositoryId).locations[0].worktrees = copy(worktrees);
+    row.revision++;
+    window.dispatchEvent(new CustomEvent('cliora:business-workspaces-changed', { detail: { workspace: copy(row) } }));
+  };
   const candidates = [
     { path: '/work/new/api', name: 'api', kind: 'repository', reason: null, commonDirectory: '/work/new/api/.git' },
     { path: '/work/new/web', name: 'web', kind: 'repository', reason: null, commonDirectory: '/work/new/web/.git' },

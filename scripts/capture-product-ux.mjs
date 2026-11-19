@@ -13,13 +13,14 @@ if (!fs.existsSync(path.join(buildDirectory, 'index.html'))) throw new Error('Ru
 const allScenes = [
   { id: 'pages', script: 'capture-ui.mjs', args: ['--only', 'tools,library,sessions,usage,settings'] },
   { id: 'home', script: 'capture-ui.mjs', args: ['--home'] },
+  { id: 'projects', script: 'capture-ui.mjs', args: ['--projects'] },
   { id: 'workbench', script: 'capture-workbench.mjs', args: [] },
   { id: 'memory', script: 'capture-memory.mjs', args: [] },
   { id: 'sync', script: 'capture-sync.mjs', args: [] },
 ];
 const onlyIndex = process.argv.indexOf('--only');
 const requested = onlyIndex < 0 ? allScenes.map(scene => scene.id) : (process.argv[onlyIndex + 1] ?? '').split(',');
-if (requested.some(id => !allScenes.some(scene => scene.id === id))) throw new Error('--only accepts pages,home,workbench,memory,sync');
+if (requested.some(id => !allScenes.some(scene => scene.id === id))) throw new Error('--only accepts pages,home,projects,workbench,memory,sync');
 const scenes = allScenes.filter(scene => requested.includes(scene.id));
 const option = (flag, fallback) => {
   const index = process.argv.indexOf(flag);
@@ -67,7 +68,7 @@ try {
     });
     await new Promise(resolve => log.end(resolve));
     child = undefined;
-    const expectedManifest = scene.id === 'pages' ? 'capture-ui-manifest.json' : scene.id === 'home' ? 'capture-ui-home-manifest.json' : `capture-${scene.id}-manifest.json`;
+    const expectedManifest = scene.id === 'pages' ? 'capture-ui-manifest.json' : scene.id === 'home' ? 'capture-ui-home-manifest.json' : scene.id === 'projects' ? 'capture-ui-projects-manifest.json' : `capture-${scene.id}-manifest.json`;
     const manifests = fs.existsSync(path.join(directory, expectedManifest)) ? [expectedManifest] : [];
     const failures = manifests.flatMap(name => {
       try {
