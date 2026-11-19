@@ -44,7 +44,10 @@ pub(crate) const LAUNCH_REASON: &str =
 pub(crate) const RESUME_REASON: &str =
     "使用 OMP 的 --resume [value] 恢复指定会话、--continue 恢复最近会话；本机尚未用真实 omp 验收";
 pub(crate) const BUN_INSTALL_COMMAND: &str = "bun add -g @oh-my-pi/pi-coding-agent";
-pub(crate) const BUN_UPDATE_COMMAND: &str = "bun update -g @oh-my-pi/pi-coding-agent";
+/// `--latest` ignores the caret range Bun wrote on install (`^18.22.2`); without
+/// it a new major such as 19.0.0 reports "nothing to update" and exits 0
+/// (observed with Bun 1.4.4 on 2026-11-19).
+pub(crate) const BUN_UPDATE_COMMAND: &str = "bun update -g --latest @oh-my-pi/pi-coding-agent";
 pub(crate) const BUN_UNINSTALL_COMMAND: &str = "bun remove -g @oh-my-pi/pi-coding-agent";
 /// Package path fragment inside an npm global `node_modules` tree.
 const NPM_PACKAGE_FRAGMENT: &str = "node_modules/@oh-my-pi/pi-coding-agent/";

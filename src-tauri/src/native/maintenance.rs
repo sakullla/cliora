@@ -520,7 +520,7 @@ mod tests {
             assert_eq!(expected.as_deref(), Some("native"), "安装后必须按 native 来源验证");
         }
         let (upgrade_bun, expected) = script(omp, "upgrade", "bun", Some("18.20.2")).unwrap();
-        assert_eq!(upgrade_bun, "bun update -g @oh-my-pi/pi-coding-agent");
+        assert_eq!(upgrade_bun, "bun update -g --latest @oh-my-pi/pi-coding-agent");
         assert_eq!(expected.as_deref(), Some("bun"), "升级后必须按 Bun 来源验证");
         let (upgrade_native, expected) = script(omp, "upgrade", "native", Some("18.20.2")).unwrap();
         assert_eq!(upgrade_native, "omp update");

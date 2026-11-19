@@ -52,7 +52,7 @@ test('source and maintenance fixtures name Bun while the precompiled installer s
   assert.ok(standalone && standalone.native === true, '独立二进制对应 native');
   const maintenance = cases.find(item => item.fixture.case.kind === 'maintenance').fixture.case.expect;
   assert.equal(maintenance.install, 'bun add -g @oh-my-pi/pi-coding-agent');
-  assert.equal(maintenance.upgradeBun, 'bun update -g @oh-my-pi/pi-coding-agent');
+  assert.equal(maintenance.upgradeBun, 'bun update -g --latest @oh-my-pi/pi-coding-agent');
   assert.equal(maintenance.upgradeNative, 'omp update');
   assert.equal(maintenance.uninstallBun, 'bun remove -g @oh-my-pi/pi-coding-agent');
   assert.equal(maintenance.nativeInstallWindows, 'irm https://omp.sh/install.ps1 | iex');

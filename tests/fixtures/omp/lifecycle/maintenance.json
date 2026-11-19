@@ -6,7 +6,7 @@
     "guidanceContains": "can1357/oh-my-pi",
     "expect": {
       "install": "bun add -g @oh-my-pi/pi-coding-agent",
-      "upgradeBun": "bun update -g @oh-my-pi/pi-coding-agent",
+      "upgradeBun": "bun update -g --latest @oh-my-pi/pi-coding-agent",
       "upgradeNative": "omp update",
       "uninstallBun": "bun remove -g @oh-my-pi/pi-coding-agent",
       "nativeInstallNull": true,

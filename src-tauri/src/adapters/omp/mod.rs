@@ -808,7 +808,7 @@ mod tests {
         assert!(adapter.npm_install_command().is_none());
         assert_eq!(
             adapter.source_upgrade_command("bun", Some("18.20.2")).as_deref(),
-            Some("bun update -g @oh-my-pi/pi-coding-agent")
+            Some("bun update -g --latest @oh-my-pi/pi-coding-agent")
         );
         assert_eq!(
             adapter.source_upgrade_command("native", Some("18.20.2")).as_deref(),

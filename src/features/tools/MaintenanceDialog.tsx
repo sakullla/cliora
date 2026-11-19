@@ -53,6 +53,11 @@ function useElapsed(state: MaintenanceState | null) {
 
 type Phase = 'running' | 'done' | 'error';
 
+function sameVersion(a: string, b: string) {
+  const plain = (value: string) => value.trim().replace(/^v/i, '');
+  return plain(a) === plain(b);
+}
+
 export function MaintenanceDialog({ state, busy, canRetry, onCancel, onRetry, onClose, onMinimize, onRestore }: {
   state: MaintenanceState | null;
   busy: boolean;
@@ -68,13 +73,17 @@ export function MaintenanceDialog({ state, busy, canRetry, onCancel, onRetry, on
   const [logOpen, setLogOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const logRef = useRef<HTMLPreElement>(null);
-  const phase: Phase = !state || state.running ? 'running' : state.error ? 'error' : 'done';
+  // An update command can exit 0 without changing anything (a package manager kept the old
+  // range); the same version before and after is not reported as a success.
+  const unchanged = !!state && !state.running && !state.error && (state.action === 'upgrade' || state.action === 'upgrade_major')
+    && !!state.from && !!state.version && sameVersion(state.from, state.version);
+  const phase: Phase = !state || state.running ? 'running' : state.error || unchanged ? 'error' : 'done';
   const text = plain(state?.output ?? '');
   const lines = text.split('\n').map((line) => line.trimEnd()).filter(Boolean);
   const lastLine = lines.at(-1) ?? '';
 
   // A failure opens the log: the installer output is usually the only explanation.
-  useEffect(() => { if (state && !state.running && state.error && state.output) setLogOpen(true); }, [state?.running, state?.error]);
+  useEffect(() => { if (state && !state.running && (state.error || unchanged) && state.output) setLogOpen(true); }, [state?.running, state?.error, unchanged]);
   useEffect(() => { setLogOpen(false); setCopied(false); }, [state?.startedAt]);
   useLayoutEffect(() => {
     const node = logRef.current;
@@ -91,11 +100,11 @@ export function MaintenanceDialog({ state, busy, canRetry, onCancel, onRetry, on
     ? t(`tools.workspace.maintenanceHeadline.running.${state.action}`, { name: state.name })
     : phase === 'done'
       ? t(`tools.workspace.maintenanceHeadline.done.${state.action}`, { name: state.name })
-      : t('tools.workspace.maintenanceHeadline.failed', { name: state.name });
+      : unchanged ? t('tools.workspace.maintenanceHeadline.unchanged', { name: state.name }) : t('tools.workspace.maintenanceHeadline.failed', { name: state.name });
   const status = phase === 'running'
     ? (state.cancelling ? t('tools.workspace.maintenanceCancelling') : t('tools.workspace.maintenanceRunning'))
     : phase === 'error'
-      ? state.error
+      ? state.error || t('tools.workspace.maintenanceUnchanged', { version: state.version })
       : state.version ? t('tools.workspace.maintenanceDone', { version: state.version }) : t('tools.workspace.maintenanceDoneNoVersion');
   const to = phase === 'done' ? state.version ?? state.target : state.target;
   const showFlow = state.action !== 'uninstall_npm' && (state.from || to);

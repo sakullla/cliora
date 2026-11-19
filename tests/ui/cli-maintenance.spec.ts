@@ -25,7 +25,7 @@ async function setup(page: Page, supported = true, currentVersion = '3000.11.2',
             installUrl: 'https://github.com/can1357/oh-my-pi',
             upgradeHint: '',
             installCommand: bunScenario === 'missing' ? 'bun add -g @oh-my-pi/pi-coding-agent' : null,
-            upgradeCommand: bunScenario === 'installed' ? 'bun update -g @oh-my-pi/pi-coding-agent' : null,
+            upgradeCommand: bunScenario === 'installed' ? 'bun update -g --latest @oh-my-pi/pi-coding-agent' : null,
             nativeInstallCommand: 'irm https://omp.sh/install.ps1 | iex', npmInstallCommand: null, majorUpgrade: null,
           } : { tool: 'devin', latestVersionSupported: supported, selectedPath: '/fixture/devin', installations: [{ path: '/fixture/devin', version: currentVersion, status: 'available', source: 'native' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: 'https://devin.ai', upgradeHint: '', installCommand: null, upgradeCommand: 'fixture-update', majorUpgrade }, profiles: [], binding: null, common: null, snapshots: [], recoveryNeeded: [], customPath: null,
         };
@@ -40,6 +40,8 @@ async function setup(page: Page, supported = true, currentVersion = '3000.11.2',
         if (command === 'maintain_registered_cli') {
           attempts++;
           if (progressCallback) callbacks.get(progressCallback)?.({ payload: { toolId: 'devin', output: 'Downloading package…\nRunning postinstall…' } });
+          // A package manager that keeps the old range exits 0 without changing the version.
+          if ((window as any).__maintainUnchanged) return { output: 'Checked 69 packages, nothing to update', version: currentVersion };
           if (attempts === 1) return new Promise((_resolve, reject) => { rejectInstall = reject; });
           return { output: `completed ${args.action}`, version: '3000.11.3' };
         }
@@ -140,6 +142,19 @@ test('major upgrade runs the explicit adapter-declared action', async ({ page })
   await expect(progress.getByLabel('安装日志')).toContainText('completed upgrade_major');
 });
 
+test('an update that leaves the version unchanged is not reported as a success', async ({ page }) => {
+  await page.addInitScript(() => { (window as any).__maintainUnchanged = true; });
+  await setup(page);
+  await page.getByRole('button', { name: '重试查询' }).click();
+  await expect(page.getByText('最新 3000.11.3')).toBeVisible();
+  await page.getByRole('button', { name: '更新', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '更新', exact: true }).click();
+  const progress = page.getByRole('dialog', { name: 'Devin 安装与更新' });
+  await expect(progress.getByRole('heading', { name: 'Devin 未更新' })).toBeVisible();
+  await expect(progress.getByText('更新命令已结束，但版本仍是 3000.11.2。请查看日志了解原因。')).toBeVisible();
+  await expect(progress.getByLabel('安装日志')).toContainText('nothing to update');
+});
+
 test('unsupported major upgrade path shows official guidance without an action', async ({ page }) => {
   await setup(page, true, '1.18.34', '1.18.34', { label: '升级到 OpenCode 2', command: null, guidance: '此安装低于 1.19.0，没有官方 upgrade --major；请按官方迁移指引手动升级到 OpenCode 2。' });
   await expect(page.getByRole('button', { name: '升级到 OpenCode 2' })).toHaveCount(0);
@@ -150,7 +165,7 @@ test('unsupported major upgrade path shows official guidance without an action',
 test('a Bun source is named as Bun and its update action keeps that channel', async ({ page }) => {
   await setup(page, true, '18.20.2', '18.20.3', null, 'installed');
   await expect(page.getByText('Bun', { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole('button', { name: '更新 Bun' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '用 Bun 更新' })).toBeVisible();
   await expect(page.getByRole('button', { name: '更新', exact: true })).toHaveCount(0);
   await expect(page.getByRole('link', { name: '安装 ↗' })).toHaveCount(0);
 });
