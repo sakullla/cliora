@@ -106,7 +106,7 @@ npm run verify                            # 前端测试与构建
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-README 截图由 `node scripts/capture-readme.mjs` 用模拟数据生成（需先运行 `npm run dev -- --port 14736`）。架构约定、适配器扩展方式与平台验证记录见 [技术参考](docs/reference.md) 和 [AGENTS.md](AGENTS.md)。
+README 截图由 `node scripts/capture-readme.mjs` 用模拟数据生成（需先运行 `npm run dev -- --port 14736`）。架构约定、适配器扩展方式与平台验证记录见 [技术参考](docs/reference.md) 和 [AGENTS.md](AGENTS.md)，CI 与发版流程见 [.github/RELEASING.md](.github/RELEASING.md)。
 
 ## 参与贡献
 

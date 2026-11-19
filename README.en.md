@@ -88,7 +88,7 @@ npm run verify
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-README screenshots are generated with mock data by `node scripts/capture-readme.mjs` (start `npm run dev -- --port 14736` first). Architecture rules, adapter extension points and platform evidence are in the [technical reference](docs/reference.md) and [AGENTS.md](AGENTS.md).
+README screenshots are generated with mock data by `node scripts/capture-readme.mjs` (start `npm run dev -- --port 14736` first). Architecture rules, adapter extension points and platform evidence are in the [technical reference](docs/reference.md) and [AGENTS.md](AGENTS.md); CI and releases are described in [.github/RELEASING.md](.github/RELEASING.md).
 
 ## Contributing
 
