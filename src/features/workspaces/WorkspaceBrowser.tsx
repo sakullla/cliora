@@ -106,13 +106,24 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
   const [partial, setPartial] = useState(false);
   const [scanQuery, setScanQuery] = useState('');
   const [preview, setPreview] = useState<WorkspaceManifestPreview | null>(null);
+  /** The member a v2 handoff came from; cleared as soon as this page has continued (or dropped) it. */
+  const [sourceIntent, setSourceIntent] = useState<{ workspaceId: string; repositoryId: string } | null>(null);
   const [scanBusy, setScanBusy] = useState(false);
   useEffect(() => {
     if (!incomingManifest) return;
-    setPreview(incomingManifest);
-    // Handoff is one-shot. Local cancellation/acceptance must not leave a parent intent
-    // that reopens the same (possibly stale) preview when this page mounts again.
+    // Handoff is one-shot: the parent intent is consumed before anything can be replayed, so a
+    // cancelled preview or a later visit never reopens the same (possibly stale) file.
     onManifestConsumed?.(incomingManifest);
+    const source = incomingManifest.sourceRepositoryId;
+    if (source && incomingManifest.attached && !incomingManifest.conflict) {
+      // This project is already linked with exactly this content: continue the source member
+      // instead of asking the user to confirm the same file again.
+      setSelectedId(incomingManifest.manifest.workspaceId);
+      setQuery(''); setFilter('all');
+      setSourceIntent({ workspaceId: incomingManifest.manifest.workspaceId, repositoryId: source });
+      return;
+    }
+    setPreview(incomingManifest);
   }, [incomingManifest, onManifestConsumed]);
   const scanId = useRef<string | null>(null);
   const mounted = useRef(true);
@@ -205,10 +216,12 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
       if (path) await operate(async () => { await native.exportWorkspaceManifest(current.id, path, current.revision); setNotice(t('workspaces.publishHint')); });
     } catch (value) { setError(failure(value)); }
   }
-  async function openInTwiglane() {
+  async function openInTwiglane(repository: WorkspaceRepository) {
     if (!current?.manifestPath || busy) return;
     setError(''); setNotice('');
-    const url = `twiglane://workspace?v=1&file=${encodeURIComponent(current.manifestPath)}`;
+    // v2 names the member this row stands for: Twiglane continues that repository, not a guess
+    // made from the project name.
+    const url = `twiglane://workspace?v=2&file=${encodeURIComponent(current.manifestPath)}&repository=${encodeURIComponent(repository.id)}`;
     try { await native.openExternalUrl(url); }
     catch (value) { if (mounted.current) setError(failure(value)); }
   }
@@ -321,6 +334,7 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
       const at = rows.findIndex(row => row.dataset.repositoryId === repositoryId);
       const row = at >= 0 ? rows[at] : rows[Math.min(neighbour, rows.length - 1)];
       const target = row?.querySelector<HTMLElement>('[data-row-primary]:not(:disabled)') ?? blockRef.current?.querySelector<HTMLElement>('[data-project-add]:not(:disabled)') ?? null;
+      row?.scrollIntoView({ block: 'nearest' });
       target?.focus({ preventScroll: true });
     });
   }
@@ -410,12 +424,40 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
     }
   }, [spotlightProject?.id, spotlightProject?.token, workspaces, selectedId, query, filter, loading]);
 
+  // A v2 handoff continues the sender's own member: this page selects that project, clears any
+  // narrowing the viewer left behind and lands on the member row. It never picks another
+  // repository and never launches or writes anything on its own.
+  useEffect(() => {
+    // Wait for the list, its selection, and the end of any in-flight write: the row's primary
+    // action is disabled while an operation runs, so focusing earlier would land nowhere.
+    if (!sourceIntent || busy || loading || workspaces.length === 0) return;
+    setQuery(''); setFilter('all');
+    const workspace = workspaces.find(item => item.id === sourceIntent.workspaceId) ?? null;
+    // A first-time acceptance reaches this effect before the refreshed list carries the project;
+    // the intent waits for that read instead of being dropped.
+    if (!workspace) return;
+    if (selectedId !== sourceIntent.workspaceId) {
+      setSelectedId(sourceIntent.workspaceId);
+      return;
+    }
+    const repository = workspace.repositories.find(item => item.id === sourceIntent.repositoryId) ?? null;
+    setSourceIntent(null);
+    if (!repository) {
+      // The local copy no longer carries that member; nothing else is opened in its place.
+      setError(t('workspaces.sourceStale'));
+      return;
+    }
+    // A member without a usable directory stays here as the repair context: its row explains why
+    // and its primary action is the relink entry the user needs.
+    if (!repository.locations.some(location => location.available)) setNotice(`${repository.name} · ${t('workspaces.unavailable')} · ${t('workspaces.relink')}`);
+    returnFocus(repository.id);
+  }, [sourceIntent, workspaces, selectedId, loading, busy, t]);
+
   const projectMenu = <RowMenu label={t('workspaces.projectActions')}>
     {current && <button type="button" role="menuitem" disabled={busy || scanBusy} onClick={() => void discover(true)}>{t('workspaces.discover')}</button>}
     <button type="button" role="menuitem" disabled={busy} onClick={startCreate}>{t('workspaces.create')}</button>
     {current && <button type="button" role="menuitem" disabled={busy} onClick={() => { setRenaming(true); setEditName(current.name); }}>{t('workspaces.rename')}</button>}
     <button type="button" role="menuitem" disabled={busy} onClick={() => void chooseManifest()}>{t('workspaces.openManifest')}</button>
-    {current?.manifestPath && <button type="button" role="menuitem" disabled={busy} onClick={() => void openInTwiglane()}>{t('workspaces.openInTwiglane')}</button>}
     {current && !current.manifestPath && <button type="button" role="menuitem" disabled={busy} onClick={() => void publish()}>{t('workspaces.publish')}</button>}
     <button type="button" role="menuitem" disabled={busy || loading} onClick={() => void reload(true)}>{t('workspaces.refresh')}</button>
     {current && <button type="button" role="menuitem" data-danger="true" disabled={busy} onClick={() => void deleteProject()}>{t('workspaces.deleteProject')}</button>}
@@ -470,6 +512,7 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
                   : <Button size="sm" className={styles.launch} data-row-primary loading={launching === repo.id} disabled={busy || !launchTool} aria-label={t('workspaces.launch')} title={launchTool ? undefined : t('workspaces.chooseTool')} icon={<Icon name="play" size={12} />} onClick={() => void pick(repo)}>{t('workspaces.launchShort')}</Button>}
                 <RowMenu className={styles.rowMenu} label={t('workspaces.repoActions', { name: repo.name })}>
                   {!broken && <button type="button" role="menuitem" disabled={busy} onClick={() => void relink(repo)}>{t('workspaces.relink')}</button>}
+                  {current.manifestPath && !broken && <button type="button" role="menuitem" disabled={busy} onClick={() => void openInTwiglane(repo)}>{t('workspaces.openInTwiglane')}</button>}
                   <button type="button" role="menuitem" data-danger="true" disabled={busy} onClick={() => void remove(repo)}>{t('workspaces.remove')}</button>
                 </RowMenu>
               </span>
@@ -521,7 +564,15 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
         {preview.conflict && <p className={styles.warning} role="alert">{t('workspaces.conflict')}</p>}
         <div className={styles.candidates} aria-label={t('workspaces.previewRepositories')}>{preview.manifest.repositories.map(repo => <div className={styles.candidate} key={repo.id}><span className={styles.candidateCopy}><strong>{repo.name}</strong>{repo.locations.map(location => <span className={styles.mono} key={`${location.hostId}:${location.path}`}>{location.path}</span>)}</span></div>)}</div>
         {error && <p className={styles.error} role="alert">{error}</p>}
-        <div className="dialog-footer"><Button variant="ghost" disabled={busy} onClick={() => setPreview(null)}>{t('workspaces.cancel')}</Button><Button variant="primary" loading={busy} onClick={() => void operate(async () => { const result = await native.attachWorkspaceManifest(preview.path, preview.digest, preview.conflict); setSelectedId(result.id); setPreview(null); })}>{t(preview.conflict ? 'workspaces.adopt' : 'workspaces.attach')}</Button></div>
+        <div className="dialog-footer"><Button variant="ghost" disabled={busy} onClick={() => setPreview(null)}>{t('workspaces.cancel')}</Button><Button variant="primary" loading={busy} onClick={() => void operate(async () => {
+          // Accepting the file also continues the sender's member: the intent belongs to this
+          // acceptance, so cancelling the preview leaves nothing to replay later.
+          const source = preview.sourceRepositoryId;
+          const result = await native.attachWorkspaceManifest(preview.path, preview.digest, preview.conflict);
+          setSelectedId(result.id);
+          setPreview(null);
+          if (source) { setQuery(''); setFilter('all'); setSourceIntent({ workspaceId: result.id, repositoryId: source }); }
+        })}>{t(preview.conflict ? 'workspaces.adopt' : 'workspaces.attach')}</Button></div>
       </div>}
     </GuideDialog>
   </section>;

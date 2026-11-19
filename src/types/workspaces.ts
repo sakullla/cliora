@@ -9,6 +9,6 @@ export type BusinessWorkspace = { id: string; name: string; revision: number; ma
 export type WorkspaceCandidate = { path: string; name: string; kind: 'repository' | 'directory' | 'duplicate' | 'unavailable'; reason: string | null; commonDirectory: string | null };
 export type WorkspaceScan = { candidates: WorkspaceCandidate[]; cancelled: boolean; partial: boolean };
 export type WorkspaceMemberResult = { path: string; repositoryId: string | null; error: string | null };
-export type WorkspaceManifestPreview = { manifest: WorkspaceManifest; path: string; digest: string; conflict: boolean };
+export type WorkspaceManifestPreview = { manifest: WorkspaceManifest; path: string; digest: string; conflict: boolean; sourceRepositoryId: string | null; attached: boolean };
 export type WorkspaceSessionContext = { sessionId: string; workspaceId: string; repositoryId: string; hostId: string; directory: string };
 export type WorkspaceSelection = { workspaceId: string; repositoryId: string; directory: string; projectId: string | null; label: string };

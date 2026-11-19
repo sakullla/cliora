@@ -304,16 +304,69 @@ fn contract_fixtures_and_deep_links_are_strict_and_preview_only() {
     } else {
         ("%2Ftmp%2Fproject.dev-workspace.json", "/tmp/project.dev-workspace.json")
     };
-    assert_eq!(manifest_link(&format!("cliora://workspace?v=1&file={encoded}")).unwrap(), path);
+    let repository = "6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8";
+    let link = format!("cliora://workspace?v=2&file={encoded}&repository={repository}");
+    assert_eq!(manifest_link(&link).unwrap(), (path.to_string(), repository.to_string()));
     for url in [
-        "cliora://workspace?v=1&file=relative.json",
-        "cliora://workspace?v=1&file=%2Ftmp%2Fone&file=%2Ftmp%2Ftwo",
-        "cliora://workspace?v=1&file=%2Ftmp%2Fone&command=delete",
-        "cliora://workspace?v=2&file=%2Ftmp%2Fone",
-        "cliora://user@workspace?v=1&file=%2Ftmp%2Fone",
+        // Old project links carry no source repository: refuse instead of narrowing to a file preview.
+        format!("cliora://workspace?v=1&file={encoded}"),
+        format!("cliora://workspace?v=1&file={encoded}&repository={repository}"),
+        format!("cliora://workspace?v=3&file={encoded}&repository={repository}"),
+        format!("cliora://workspace?v=2&file=relative.json&repository={repository}"),
+        format!("cliora://workspace?v=2&file=%2Ftmp%2Fone&file=%2Ftmp%2Ftwo&repository={repository}"),
+        format!("cliora://workspace?v=2&file={encoded}&repository={repository}&repository={repository}"),
+        format!("cliora://workspace?v=2&file={encoded}&command=delete&repository={repository}"),
+        format!("cliora://workspace?v=2&file={encoded}"),
+        format!("cliora://workspace?v=2&repository={repository}"),
+        format!("cliora://workspace?v=2&file={encoded}&repository=not-a-uuid"),
+        format!("cliora://workspace?v=2&file={encoded}&repository="),
+        format!("cliora://user@workspace?v=2&file={encoded}&repository={repository}"),
     ] {
-        assert!(manifest_link(url).is_err(), "{url}");
+        assert!(manifest_link(&url).is_err(), "{url}");
     }
+}
+#[test]
+fn workspace_links_preview_the_named_repository_without_attaching() {
+    let temp = tempfile::tempdir().unwrap();
+    let member = temp.path().join("member");
+    repository(&member);
+    let db = db();
+    let workspace = create(&db, HOST, "Linked").unwrap();
+    let added = add_paths(
+        &db,
+        HOST,
+        &workspace.id,
+        &[member.to_string_lossy().into()],
+        workspace.revision,
+    )
+    .unwrap();
+    let repository = added[0].repository_id.clone().unwrap();
+    let current = get(&db, HOST, &workspace.id).unwrap().revision;
+    let path = temp.path().join("shared.dev-workspace.json");
+    export_manifest(&db, HOST, &workspace.id, path.to_str().unwrap(), current).unwrap();
+    let encoded: String =
+        url::form_urlencoded::byte_serialize(path.to_str().unwrap().as_bytes()).collect();
+    let url = format!("cliora://workspace?v=2&file={encoded}&repository={repository}");
+    let preview = preview_link(&db, &url).unwrap();
+    assert_eq!(preview.source_repository_id.as_deref(), Some(repository.as_str()));
+    // The local copy already has this digest: continuing the repository needs no confirmation.
+    assert!(preview.attached);
+    assert!(!preview.conflict);
+    // An ordinary file preview has no source repository.
+    assert!(preview_manifest(&db, path.to_str().unwrap())
+        .unwrap()
+        .source_repository_id
+        .is_none());
+    // A repository outside the manifest is refused, and the local project stays untouched.
+    let outsider = Uuid::new_v4().to_string();
+    assert!(preview_link(
+        &db,
+        &format!("cliora://workspace?v=2&file={encoded}&repository={outsider}")
+    )
+    .is_err());
+    let view = get(&db, HOST, &workspace.id).unwrap();
+    assert_eq!(view.repositories.len(), 1);
+    assert_eq!(view.revision, workspace.revision + 1);
 }
 #[test]
 fn legacy_main_and_linked_checkouts_share_repository_but_keep_native_contexts() {

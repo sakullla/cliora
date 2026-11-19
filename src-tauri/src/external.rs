@@ -15,20 +15,26 @@ fn validated_twiglane_workspace_url(value: &str) -> Result<String, String> {
     }
     let mut version = None;
     let mut path = None;
+    let mut repository = None;
     for (key, val) in url::form_urlencoded::parse(query.as_bytes()) {
         match key.as_ref() {
             "v" if version.is_none() => version = Some(val.into_owned()),
             "file" if path.is_none() => path = Some(val.into_owned()),
+            "repository" if repository.is_none() => repository = Some(val.into_owned()),
             _ => return Err("项目清单链接含未知或重复字段".into()),
         }
     }
-    if version.as_deref() != Some("1") {
-        return Err("项目清单链接版本不受支持".into());
+    // The receiver needs both the file and the member repository it should continue.
+    if version.as_deref() != Some("2") {
+        return Err("仅支持 v=2 项目清单链接，旧版项目链接请重新发起".into());
     }
-    let path = path.ok_or_else(|| "项目清单链接缺少文件".to_string())?;
+    let path = path.ok_or_else(|| "项目清单链接缺少 file 参数".to_string())?;
     if !Path::new(&path).is_absolute() || path.chars().any(char::is_control) {
         return Err("项目清单链接需使用本机绝对路径".into());
     }
+    let repository = repository.ok_or_else(|| "项目清单链接缺少 repository 参数".to_string())?;
+    uuid::Uuid::parse_str(&repository)
+        .map_err(|_| "项目清单链接里的 repository 不是有效仓库 ID".to_string())?;
     Ok(value.to_owned())
 }
 
@@ -73,20 +79,34 @@ mod tests {
     }
     #[test]
     fn twiglane_workspace_handoff_url_is_validated() {
+        let repository = "6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8";
         #[cfg(unix)]
-        let valid = "twiglane://workspace?v=1&file=%2Fwork%2Fmy%20team%2Fshared.dev-workspace.json";
+        let valid = format!(
+            "twiglane://workspace?v=2&file=%2Fwork%2Fmy%20team%2Fshared.dev-workspace.json&repository={repository}"
+        );
         #[cfg(windows)]
-        let valid = "twiglane://workspace?v=1&file=C%3A%2Fwork%2Fmy%20team%2Fshared.dev-workspace.json";
-        assert_eq!(validated_url(valid).unwrap(), valid);
+        let valid = format!(
+            "twiglane://workspace?v=2&file=C%3A%2Fwork%2Fmy%20team%2Fshared.dev-workspace.json&repository={repository}"
+        );
+        assert_eq!(validated_url(&valid).unwrap(), valid);
 
         for invalid in [
-            "twiglane://workspace?v=2&file=%2Fwork%2Fa.json",
-            "twiglane://workspace?v=1&file=relative.json",
-            "twiglane://workspace?v=1&file=%2Fwork%2Fa+b.json",
-            "twiglane://workspace?v=1&file=%2Fwork%2Fa.json#frag",
-            "twiglane://other?v=1&file=%2Fwork%2Fa.json",
+            // Old project links carry no source repository: they are refused, not downgraded.
+            "twiglane://workspace?v=1&file=%2Fwork%2Fa.json".to_string(),
+            format!(
+                "twiglane://workspace?v=2&file=%2Fwork%2Fa.json&repository={repository}&repository={repository}"
+            ),
+            format!("twiglane://workspace?v=2&file=%2Fwork%2Fa.json&adopt=1&repository={repository}"),
+            "twiglane://workspace?v=2&file=%2Fwork%2Fa.json&repository=not-a-uuid".to_string(),
+            "twiglane://workspace?v=2&file=%2Fwork%2Fa.json".to_string(),
+            "twiglane://workspace?v=2&repository=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8".to_string(),
+            "twiglane://workspace?v=3&file=%2Fwork%2Fa.json&repository=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8".to_string(),
+            "twiglane://workspace?v=2&file=relative.json&repository=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8".to_string(),
+            "twiglane://workspace?v=2&file=%2Fwork%2Fa+b.json&repository=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8".to_string(),
+            "twiglane://workspace?v=2&file=%2Fwork%2Fa.json&repository=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8#frag".to_string(),
+            "twiglane://other?v=2&file=%2Fwork%2Fa.json&repository=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8".to_string(),
         ] {
-            assert!(validated_url(invalid).is_err(), "{invalid}");
+            assert!(validated_url(&invalid).is_err(), "{invalid}");
         }
     }
     #[test]

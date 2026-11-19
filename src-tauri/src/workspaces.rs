@@ -111,6 +111,10 @@ pub struct ManifestPreview {
     pub path: String,
     pub digest: String,
     pub conflict: bool,
+    /// 深链指定的来源仓库；普通「打开项目清单」没有来源，保持为空。
+    pub source_repository_id: Option<String>,
+    /// 本机名单已与这份内容一致：不必再确认关联，可以直接续接来源仓库。
+    pub attached: bool,
 }
 
 fn sql(error: rusqlite::Error) -> String {
@@ -860,12 +864,17 @@ pub fn preview_manifest(db: &Database, path: &str) -> Result<ManifestPreview, St
         .optional()
         .map_err(sql)
     })?;
-    let conflict = local.is_some_and(|(_, h)| h.as_deref() != Some(&hash));
+    let conflict = local.as_ref().is_some_and(|(_, h)| h.as_deref() != Some(&hash));
+    // Only a local copy of the same content is already linked: a different digest is either a
+    // conflict or an unlinked file and still needs the user's confirmation.
+    let attached = local.as_ref().is_some_and(|(_, h)| h.as_deref() == Some(&hash));
     Ok(ManifestPreview {
         manifest,
         path: text(&path)?,
         digest: hash,
         conflict,
+        source_repository_id: None,
+        attached,
     })
 }
 pub fn attach_manifest(
@@ -1248,7 +1257,10 @@ pub fn restore_session_context(db: &Database, old_id: &str, new_id: &str) -> Res
 mod tests;
 
 /// Deep links only request a preview; they never establish membership or execute Git.
-pub fn manifest_link(url: &str) -> Result<String, String> {
+///
+/// v2 links name both the shared manifest file and the member repository the sender starts from,
+/// so the receiver can continue the same repository instead of guessing by project name.
+pub fn manifest_link(url: &str) -> Result<(String, String), String> {
     if url.len() > 16_384 || url.chars().any(|c| c.is_control() || c == ' ') || url.contains('#') {
         return Err("项目清单链接无效".into());
     }
@@ -1256,21 +1268,47 @@ pub fn manifest_link(url: &str) -> Result<String, String> {
         .strip_prefix("cliora://workspace?")
         .or_else(|| url.strip_prefix("cliora://workspace/?"))
         .ok_or("项目清单链接无效")?;
+    if query.contains('+') {
+        return Err("项目清单链接无效".into());
+    }
     let mut version = None;
     let mut path = None;
+    let mut repository = None;
     for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
         match key.as_ref() {
             "v" if version.is_none() => version = Some(value.into_owned()),
             "file" if path.is_none() => path = Some(value.into_owned()),
+            "repository" if repository.is_none() => repository = Some(value.into_owned()),
             _ => return Err("项目清单链接含未知或重复字段".into()),
         }
     }
-    if version.as_deref() != Some("1") {
-        return Err("项目清单链接版本不受支持".into());
+    // Only v2 carries the source repository; old project links are refused instead of being
+    // silently narrowed to a file preview.
+    if version.as_deref() != Some("2") {
+        return Err("仅支持 v=2 项目清单链接，旧版项目链接请重新发起".into());
     }
-    let path = path.ok_or("项目清单链接缺少文件")?;
+    let path = path.ok_or("项目清单链接缺少 file 参数")?;
     if !Path::new(&path).is_absolute() || path.chars().any(char::is_control) {
         return Err("项目清单链接需使用本机绝对路径".into());
     }
-    Ok(path)
+    let repository = repository.ok_or("项目清单链接缺少 repository 参数")?;
+    Uuid::parse_str(&repository).map_err(|_| "项目清单链接里的 repository 不是有效仓库 ID")?;
+    Ok((path, repository))
+}
+/// Preview-only deep-link entry
+/// (`cliora://workspace?v=2&file=<abs-path>&repository=<member-uuid>`).
+/// Never attaches a manifest or executes Git; a repository outside that manifest is refused.
+pub fn preview_link(db: &Database, url: &str) -> Result<ManifestPreview, String> {
+    let (path, repository_id) = manifest_link(url)?;
+    let mut observed = preview_manifest(db, &path)?;
+    if !observed
+        .manifest
+        .repositories
+        .iter()
+        .any(|repo| repo.id == repository_id)
+    {
+        return Err("项目清单里没有链接指定的仓库，未打开任何项目".into());
+    }
+    observed.source_repository_id = Some(repository_id);
+    Ok(observed)
 }

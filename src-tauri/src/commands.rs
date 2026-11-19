@@ -7374,9 +7374,8 @@ pub async fn preview_workspace_link(
     url: String,
 ) -> Result<crate::workspaces::ManifestPreview, ApiError> {
     blocking(move || {
-        let path = crate::workspaces::manifest_link(&url).map_err(native_error)?;
         app.state::<AppState>().with_database(&app, |db| {
-            crate::workspaces::preview_manifest(db, &path).map_err(native_error)
+            crate::workspaces::preview_link(db, &url).map_err(native_error)
         })
     })
     .await

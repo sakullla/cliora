@@ -156,15 +156,73 @@ test('new workbench sessions carry the chosen business project without creating 
   expect(launched.request.worktreeIntent).toBe('given');
 });
 
+const LINK_FILE = '%2Fwork%2Fshared.dev-workspace.json';
+const LINK_MEMBER = 'shared-api';
+const VALID_LINK = `cliora://workspace?v=2&file=${LINK_FILE}&repository=${LINK_MEMBER}`;
+
+/** Opens a member row's own menu: the Twiglane handoff belongs to the repository, not the project. */
+async function memberAction(page: Page, repositoryId: string, name: string) {
+  const row = page.locator(`[data-business-workspaces] [data-repository-id="${repositoryId}"]`).first();
+  await row.getByRole('button', { name: /的更多操作$/ }).click();
+  await page.getByRole('menu', { name: /的更多操作$/ }).getByRole('menuitem', { name, exact: true }).click();
+}
+
+/** Seeds an already linked copy of the shared project, as a previous acceptance would leave it. */
+async function seedSharedProject(page: Page, options: { missing?: boolean; attached?: boolean } = {}) {
+  await page.evaluate(options => {
+    const fixture = (window as any).__workspaceFixture;
+    fixture.linkAttached = options.attached === true;
+    fixture.linkConflict = false;
+    fixture.workspaces.push({
+      id: 'shared-workspace', name: '共享研发项目', revision: 3,
+      manifestPath: '/work/shared.dev-workspace.json', manifestRevision: 3, error: null,
+      repositories: [{
+        id: 'shared-api', name: 'shared-api', favorite: false,
+        locations: [{ id: 'shared-location', hostId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', path: '/work/shared/api', projectId: null, targetId: null, available: options.missing !== true, kind: 'repository', reason: options.missing ? '目录不存在' : null, worktrees: options.missing ? [] : [{ name: 'main', branch: 'main', path: '/work/shared/api', current: true }] }],
+      }],
+    });
+    window.dispatchEvent(new CustomEvent('cliora:business-workspaces-changed', { detail: {} }));
+  }, options);
+}
+
+test('v1 and malformed workspace links are refused without writing a project or opening a repository', async ({ page }) => {
+  await install(page);
+  for (const [url, message] of [
+    // Old project links carry no source repository: refused instead of narrowed to a file preview.
+    ['cliora://workspace?v=1&file=%2Fwork%2Fshared.dev-workspace.json', '仅支持 v=2'],
+    [`cliora://workspace?v=1&file=${LINK_FILE}&repository=${LINK_MEMBER}`, '仅支持 v=2'],
+    [`cliora://workspace?v=2&file=${LINK_FILE}`, '缺少 repository'],
+    [`cliora://workspace?v=2&repository=${LINK_MEMBER}`, '缺少 file'],
+    [`cliora://workspace?v=2&file=${LINK_FILE}&repository=${LINK_MEMBER}&repository=${LINK_MEMBER}`, '未知或重复字段'],
+    [`cliora://workspace?v=2&file=${LINK_FILE}&file=${LINK_FILE}&repository=${LINK_MEMBER}`, '未知或重复字段'],
+    [`cliora://workspace?v=2&file=${LINK_FILE}&repository=${LINK_MEMBER}&adopt=1`, '未知或重复字段'],
+    [`cliora://workspace?v=2&file=relative.json&repository=${LINK_MEMBER}`, '绝对路径'],
+    [`cliora://workspace?v=2&file=${LINK_FILE}&repository=not-a-member`, '没有链接指定的仓库'],
+  ] as const) {
+    await expect.poll(() => page.evaluate(url => (window as any).__emitWorkspaceLink(url), url)).toBe(true);
+    await expect(page.locator('.error-banner')).toContainText(message);
+    await page.locator('.error-banner').getByRole('button', { name: '关闭错误提示' }).click();
+    await expect(page.locator('.error-banner')).toHaveCount(0);
+  }
+  await expect(page.getByRole('dialog', { name: '关联项目清单' })).toHaveCount(0);
+  const calls = await page.evaluate(() => (window as any).__workspaceFixture.calls.map((item: any) => item.command));
+  expect(calls.filter((command: string) => command === 'attach_workspace_manifest')).toHaveLength(0);
+  expect(calls.filter((command: string) => command === 'launch_workspace_cli')).toHaveLength(0);
+});
+
 for (const action of ['cancel', 'accept'] as const) {
   test(`a ${action === 'accept' ? 'accepted' : 'cancelled'} deep-link project preview stays consumed after leaving and returning home`, async ({ page }) => {
     await install(page);
-    await expect.poll(() => page.evaluate(() => (window as any).__emitWorkspaceLink('cliora://workspace?v=1&file=%2Fwork%2Fshared.dev-workspace.json'))).toBe(true);
+    await expect.poll(() => page.evaluate(url => (window as any).__emitWorkspaceLink(url), VALID_LINK)).toBe(true);
     const preview = page.getByRole('dialog', { name: '关联项目清单' });
     await expect(preview).toBeVisible();
     if (action === 'cancel') await preview.getByRole('button', { name: '关闭', exact: true }).click();
     else await preview.getByRole('button', { name: '关联项目', exact: true }).click();
     await expect(preview).not.toBeVisible();
+    // Accepting continues the sender's own member; cancelling leaves nothing to continue.
+    const row = page.locator('[data-business-workspaces] [data-repository-id="shared-api"]').first();
+    if (action === 'accept') await expect(row.getByRole('button', { name: '启动会话', exact: true })).toBeFocused();
+    else await expect(page.locator('[data-business-workspaces] [data-repository-id="shared-api"]')).toHaveCount(0);
     const nav = page.getByRole('navigation', { name: '页面' });
     await nav.getByRole('button', { name: '工作台', exact: true }).click();
     await nav.getByRole('button', { name: '首页', exact: true }).click();
@@ -173,6 +231,32 @@ for (const action of ['cancel', 'accept'] as const) {
     expect(await page.evaluate(() => (window as any).__workspaceFixture.calls.filter((item: any) => item.command === 'attach_workspace_manifest').length)).toBe(action === 'accept' ? 1 : 0);
   });
 }
+
+test('an already linked project continues its source member without a second confirmation', async ({ page }) => {
+  await install(page);
+  await seedSharedProject(page, { attached: true });
+  await expect.poll(() => page.evaluate(url => (window as any).__emitWorkspaceLink(url), VALID_LINK)).toBe(true);
+  // Linked with the same content: no preview dialog, the member row is focused instead.
+  await expect(page.getByRole('dialog', { name: '关联项目清单' })).toHaveCount(0);
+  const row = page.locator('[data-business-workspaces] [data-repository-id="shared-api"]').first();
+  await expect(row.getByRole('button', { name: '启动会话', exact: true })).toBeFocused();
+  expect(await page.evaluate(() => (window as any).__workspaceFixture.calls.filter((item: any) => item.command === 'attach_workspace_manifest').length)).toBe(0);
+  expect(await page.evaluate(() => (window as any).__workspaceFixture.launches.length)).toBe(0);
+});
+
+test('a source member without a local directory stays the repair context instead of another repository', async ({ page }) => {
+  await install(page);
+  await seedSharedProject(page, { attached: true, missing: true });
+  await expect.poll(() => page.evaluate(url => (window as any).__emitWorkspaceLink(url), VALID_LINK)).toBe(true);
+  const row = page.locator('[data-business-workspaces] [data-repository-id="shared-api"]').first();
+  // The row explains why, and its primary action is the relink entry the fix needs.
+  await expect(row).toContainText('目录失效');
+  await expect(row.getByRole('button', { name: '关联本机目录', exact: true })).toBeFocused();
+  await expect(page.locator('[data-business-workspaces]').first().getByRole('status')).toContainText('关联本机目录');
+  // Nothing else was opened or written on the way.
+  const calls = await page.evaluate(() => (window as any).__workspaceFixture.calls.map((item: any) => item.command));
+  expect(calls.filter((command: string) => command.startsWith('launch_') || command === 'attach_workspace_manifest')).toHaveLength(0);
+});
 
 test('missing repository directories are counted, filterable, and offer relinking without blocking the rest', async ({ page }) => {
   await install(page);
@@ -353,15 +437,15 @@ test('linked manifest opens in Twiglane with %20 encoding, Home slash focuses re
   await page.keyboard.press('Escape');
   await project.getByRole('textbox', { name: '搜索仓库名称或路径' }).blur();
 
-  // Linked manifest exposes 1-click Twiglane handoff with %20 (never '+') encoding.
-  await projectAction(page, '在 Twiglane 中打开');
+  // A linked manifest hands off the row's own repository: v2 names both the file and the member.
+  await memberAction(page, 'r-root', '在 Twiglane 中打开');
   await expect.poll(() => page.evaluate(() => (window as any).__openedUrls)).toEqual([
-    'twiglane://workspace?v=1&file=%2Fwork%2Fmy%20team%2Fcommerce.dev-workspace.json',
+    'twiglane://workspace?v=2&file=%2Fwork%2Fmy%20team%2Fcommerce.dev-workspace.json&repository=r-root',
   ]);
 
   // Failure surfaces cleanly in the project error banner.
   await page.evaluate(() => { (window as any).__failTwiglaneOpen = true; });
-  await projectAction(page, '在 Twiglane 中打开');
+  await memberAction(page, 'r-sub', '在 Twiglane 中打开');
   await expect(project.getByRole('alert')).toContainText('无法打开 Twiglane');
 
   // Tools scope picker folds Business Project repositories under their project heading.
