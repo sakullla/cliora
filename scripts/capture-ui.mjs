@@ -641,6 +641,9 @@ for(const width of widths)for(const theme of themes){
   await project.locator('[data-repository-id="repo-0"]').getByLabel('api 工作目录',{exact:true}).waitFor();await capture('projects-worktree-remembered');
   await page.evaluate(()=>window.__workspaceFixture.setWorktrees('workspace-commerce','repo-0',[{name:'main',branch:'main',path:'/work/commerce/team-0/api',current:true},{name:'hotfix',branch:'hotfix/urgent',path:'/work/commerce/team-0/api-hotfix',current:false}]));
   await project.locator('[data-repository-id="repo-0"]').getByText('上次的工作目录已不可用').waitFor();await capture('projects-worktree-fallback');
+  // Only one checkout left: the row offers no picker, so the note names the directory in use.
+  await page.evaluate(()=>window.__workspaceFixture.setWorktrees('workspace-commerce','repo-0',[{name:'main',branch:'main',path:'/work/commerce/team-0/api',current:true}]));
+  await project.locator('[data-repository-id="repo-0"]').getByText('已改用').waitFor();await capture('projects-worktree-fallback-single');
   await project.getByRole('button',{name:'添加仓库',exact:true}).click();
   await page.getByRole('dialog',{name:'选择要添加的仓库'}).getByText('Permission denied').waitFor();await capture('projects-batch-preview');
   await page.getByRole('dialog',{name:'选择要添加的仓库'}).getByRole('button',{name:'关闭',exact:true}).click();

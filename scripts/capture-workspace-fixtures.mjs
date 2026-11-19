@@ -3,16 +3,17 @@ export function installWorkspaceFixtures() {
   const original = window.__TAURI_INTERNALS__.invoke;
   const host = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   const repository = (id, name, path) => ({ id, name, favorite: false, locations: [{ id: `location-${id}`, hostId: host, path, projectId: null, targetId: null, available: true, kind: 'repository', reason: null, worktrees: [{ name: 'main', branch: 'main', path, current: true }, { name: 'feature', branch: 'feature/search', path: `${path}-feature`, current: false }] }] });
-  // `__workspaceRepositoryCount` sizes the first project (a large-project scenario sets it to hundreds).
+  // `__workspaceRepositoryCount` sizes the first project (a large-project scenario sets it to hundreds);
+  // `__workspaceEmptyProjects` starts a first-run app with no project at all.
   const count = Math.max(48, Number(window.__workspaceRepositoryCount) || 48);
-  const workspaces = [
+  const workspaces = window.__workspaceEmptyProjects ? [] : [
     { id: 'workspace-commerce', name: '电商平台', revision: 1, manifestPath: null, manifestRevision: null, error: null, repositories: Array.from({ length: count }, (_, i) => repository(`repo-${i}`, i < 2 ? 'api' : `service-${String(i).padStart(2, '0')}`, `/work/commerce/${i < 2 ? `team-${i}/api` : `service-${String(i).padStart(2, '0')}`}`)) },
     { id: 'workspace-payments', name: '支付系统', revision: 1, manifestPath: null, manifestRevision: null, error: null, repositories: [repository('pay-api', 'payment-api', '/work/payments/api')] },
   ];
   // One moved checkout: the entry stays visible as missing and other repositories keep working.
-  const moved = workspaces[0].repositories[46];
-  moved.locations = [{ ...moved.locations[0], available: false, reason: '目录不存在', worktrees: [] }];
-  const fixture = { workspaces, calls: [], launches: [], failBatch: false, scanDelayed: false, scanResolve: null, saved: [], dialogPath: null, contexts: [], sessions: [], preview: null };
+  const moved = workspaces[0]?.repositories[46];
+  if (moved) moved.locations = [{ ...moved.locations[0], available: false, reason: '目录不存在', worktrees: [] }];
+  const fixture = { workspaces, calls: [], launches: [], failBatch: false, failDelete: false, scanDelayed: false, scanResolve: null, saved: [], dialogPath: null, contexts: [], sessions: [], preview: null };
   window.__workspaceFixture = fixture;
   const copy = value => structuredClone(value);
   const find = id => workspaces.find(item => item.id === id);
@@ -33,7 +34,7 @@ export function installWorkspaceFixtures() {
     if (command === 'list_business_workspaces') return copy(workspaces);
     if (command === 'list_workspace_session_contexts') return copy(fixture.contexts);
     if (command === 'create_business_workspace') { const row = { id: `workspace-${workspaces.length}`, name: args.name, revision: 1, manifestPath: null, manifestRevision: null, error: null, repositories: [] }; workspaces.push(row); return copy(row); }
-    if (command === 'delete_business_workspace') { const at = workspaces.findIndex(item => item.id === args.workspaceId); if (at >= 0) workspaces.splice(at, 1); return null; }
+    if (command === 'delete_business_workspace') { if (fixture.failDelete) throw { message: '项目文件被其他窗口占用' }; const at = workspaces.findIndex(item => item.id === args.workspaceId); if (at >= 0) workspaces.splice(at, 1); return null; }
     if (command === 'rename_business_workspace') { const row = find(args.workspaceId); if (row.revision !== args.expectedVersion) throw { message: '项目已在其他窗口更新' }; row.name = args.name; row.revision++; return copy(row); }
     if (command === 'favorite_workspace_repository') { const row = find(args.workspaceId); row.repositories.find(repo => repo.id === args.repositoryId).favorite = args.favorite; return copy(row); }
     if (command === 'refresh_workspace_manifest') return copy(find(args.workspaceId));

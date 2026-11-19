@@ -281,6 +281,22 @@ test('a project can be deleted from its menu and only the grouping goes away', a
   await expect(project.locator('[data-repository-id]').first()).not.toHaveAttribute('data-repository-id', /^repo-/);
 });
 
+test('a failed project deletion keeps the checkout its members still resolve', async ({ page }) => {
+  await install(page);
+  const project = page.locator('[data-business-workspaces]').first();
+  const commerce = project.locator('[data-repository-id="repo-0"]');
+  await commerce.getByLabel('api 工作目录').selectOption('/work/commerce/team-0/api-feature');
+  await page.evaluate(() => { (window as any).__workspaceFixture.failDelete = true; });
+  await projectAction(page, '删除项目');
+  const confirm = page.getByRole('alertdialog').or(page.getByRole('dialog', { name: '删除项目' })).first();
+  await confirm.getByRole('button', { name: '删除项目', exact: true }).click();
+  await expect(project.getByRole('alert')).toContainText('项目文件被其他窗口占用');
+  // The project is still there, so the choice it still resolves stays put.
+  await expect(project.getByRole('button', { name: '选择业务项目' })).toContainText('电商平台');
+  await expect(commerce.getByLabel('api 工作目录')).toHaveValue('/work/commerce/team-0/api-feature');
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('cliora:workspace-paths') || '{}'))).toEqual({ 'workspace-commerce\u0000repo-0': '/work/commerce/team-0/api-feature' });
+});
+
 test('project errors can be dismissed and the workbench rail is not filtered by project', async ({ page }) => {
   await install(page);
   await page.evaluate(() => { (window as any).__workspaceFixture.failBatch = true; });
@@ -491,12 +507,125 @@ test('a vanished member checkout falls back to an available one and says why', a
   });
   await expect(commerce.getByLabel('api 工作目录')).toHaveValue('/work/commerce/team-0/api');
   await expect(commerce).toContainText('上次的工作目录已不可用');
+  // Another checkout is still offered, so the note may point at choosing it.
+  const fallback = commerce.locator('em').filter({ hasText: '上次的工作目录已不可用' });
+  await expect(fallback).toHaveText('上次的工作目录已不可用，已回退到可用目录');
+  await expect(fallback).toHaveAttribute('title', /选中其他目录即可替换这次回退/);
+  await expect(fallback).toHaveAttribute('title', /api-feature/);
   // Choosing again replaces the fallback; starting then uses that choice.
   await commerce.getByLabel('api 工作目录').selectOption('/work/commerce/team-0/api-hotfix');
   await expect(commerce).not.toContainText('上次的工作目录已不可用');
   await commerce.getByRole('button', { name: '启动会话', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__workspaceFixture.launches.length)).toBe(1);
   expect(await page.evaluate(() => (window as any).__workspaceFixture.launches[0].request.directory)).toBe('/work/commerce/team-0/api-hotfix');
+});
+
+test('two projects that claim the same repository id keep their own checkout', async ({ page }) => {
+  await install(page);
+  await page.evaluate(() => {
+    const fixture = (window as any).__workspaceFixture;
+    // A second project declares the same repository id over its own host directory.
+    fixture.workspaces.push({
+      id: 'workspace-twin', name: '镜像项目', revision: 1, manifestPath: null, manifestRevision: null, error: null,
+      repositories: [{
+        id: 'repo-0', name: 'api', favorite: false,
+        locations: [{
+          id: 'location-twin', hostId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', path: '/work/twin/team-0/api', projectId: null, targetId: null, available: true, kind: 'repository', reason: null,
+          worktrees: [{ name: 'main', branch: 'main', path: '/work/twin/team-0/api', current: true }, { name: 'feature', branch: 'feature/search', path: '/work/twin/team-0/api-feature', current: false }],
+        }],
+      }],
+    });
+    // No project in the detail: the page lists the projects again and picks the twin up.
+    window.dispatchEvent(new CustomEvent('cliora:business-workspaces-changed', { detail: {} }));
+  });
+  const project = page.locator('[data-business-workspaces]').first();
+  await project.getByRole('button', { name: '选择业务项目' }).click();
+  await expect(page.getByRole('option', { name: /^镜像项目/ })).toBeVisible();
+  await page.getByRole('option', { name: /^电商平台/ }).click();
+  await project.locator('[data-repository-id="repo-0"]').getByLabel('api 工作目录').selectOption('/work/commerce/team-0/api-feature');
+
+  // The same repository id in another project starts from its own main checkout.
+  await switchProject(page, /^镜像项目/);
+  const twin = project.locator('[data-repository-id="repo-0"]');
+  await expect(twin.getByLabel('api 工作目录')).toHaveValue('/work/twin/team-0/api');
+  await twin.getByLabel('api 工作目录').selectOption('/work/twin/team-0/api-feature');
+  // Both choices keep their project, also after the browser remounts on the next Home visit.
+  const nav = page.getByRole('navigation', { name: '页面' });
+  await nav.getByRole('button', { name: '工作台', exact: true }).click();
+  await nav.getByRole('button', { name: '首页', exact: true }).click();
+  const after = page.locator('[data-business-workspaces]').first();
+  await expect(after.locator('[data-repository-id="repo-0"]').getByLabel('api 工作目录')).toHaveValue('/work/twin/team-0/api-feature');
+  await switchProject(page, /^电商平台/);
+  await expect(after.locator('[data-repository-id="repo-0"]').getByLabel('api 工作目录')).toHaveValue('/work/commerce/team-0/api-feature');
+});
+
+test('a remembered member checkout comes back after leaving the page, and only while it still exists', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('cliora:workspace-paths', JSON.stringify({
+      'workspace-commerce\u0000repo-0': '/work/commerce/team-0/api-feature',
+      'workspace-payments\u0000pay-api': '/work/payments/api-feature',
+    }));
+  });
+  await install(page);
+  const project = page.locator('[data-business-workspaces]').first();
+  await expect(project.locator('[data-repository-id="repo-0"]').getByLabel('api 工作目录')).toHaveValue('/work/commerce/team-0/api-feature');
+  // Leaving Home unmounts the project browser; returning finds the stored choice again.
+  const nav = page.getByRole('navigation', { name: '页面' });
+  await nav.getByRole('button', { name: '工作台', exact: true }).click();
+  await nav.getByRole('button', { name: '首页', exact: true }).click();
+  const remembered = page.locator('[data-business-workspaces]').first();
+  await expect(remembered.locator('[data-repository-id="repo-0"]').getByLabel('api 工作目录')).toHaveValue('/work/commerce/team-0/api-feature');
+  // Every project reads back only its own members' choices.
+  await switchProject(page, /^支付系统/);
+  await expect(remembered.locator('[data-repository-id="pay-api"]').getByLabel('payment-api 工作目录')).toHaveValue('/work/payments/api-feature');
+});
+
+test('a remembered checkout that is no longer available falls back without borrowing another project', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('cliora:workspace-paths', JSON.stringify({
+      'workspace-commerce\u0000repo-0': '/work/commerce/team-0/api-removed',
+      'workspace-payments\u0000pay-api': '/work/payments/api-feature',
+    }));
+  });
+  await install(page);
+  const project = page.locator('[data-business-workspaces]').first();
+  const commerce = project.locator('[data-repository-id="repo-0"]');
+  // The stored checkout is gone, so the row starts in the main checkout and says why.
+  await expect(commerce.getByLabel('api 工作目录')).toHaveValue('/work/commerce/team-0/api');
+  await expect(commerce).toContainText('上次的工作目录已不可用');
+  await switchProject(page, /^支付系统/);
+  await expect(project.locator('[data-repository-id="pay-api"]').getByLabel('payment-api 工作目录')).toHaveValue('/work/payments/api-feature');
+  await switchProject(page, /^电商平台/);
+  await expect(commerce.getByLabel('api 工作目录')).toHaveValue('/work/commerce/team-0/api');
+});
+
+test('deleting a project trims only the checkouts it owned', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('cliora:workspace-paths', JSON.stringify({
+      'workspace-commerce\u0000repo-0': '/work/commerce/team-0/api-feature',
+      'workspace-payments\u0000pay-api': '/work/payments/api-feature',
+    }));
+  });
+  await install(page);
+  await projectAction(page, '删除项目');
+  const confirm = page.getByRole('alertdialog').or(page.getByRole('dialog', { name: '删除项目' })).first();
+  await confirm.getByRole('button', { name: '删除项目', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('cliora:workspace-paths') || '{}'))).toEqual({ 'workspace-payments\u0000pay-api': '/work/payments/api-feature' });
+});
+
+test('creating the first project keeps the keyboard in the new project', async ({ page }) => {
+  await page.addInitScript(() => { (window as any).__workspaceEmptyProjects = true; });
+  await install(page);
+  const block = page.locator('[data-business-workspaces]').first();
+  await block.getByRole('button', { name: '新建项目', exact: true }).click();
+  const create = page.getByRole('dialog', { name: '新建项目' });
+  await create.getByRole('textbox', { name: '项目名称' }).fill('发布平台');
+  await create.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(create).toHaveCount(0);
+  // The dialog's trigger belonged to the intro, which the first project replaced: the keyboard
+  // continues in the new project instead of falling back to the page.
+  const project = page.locator('[data-business-workspaces]').first();
+  await expect(project.getByRole('button', { name: '添加仓库', exact: true })).toBeFocused();
 });
 
 test('creating a project and adding its members report the result and keep the keyboard in place', async ({ page }) => {
@@ -591,6 +720,11 @@ test('the project fallback and its actions read in English too', async ({ page }
     (window as any).__workspaceFixture.setWorktrees('workspace-commerce', 'repo-0', [{ name: 'main', branch: 'main', path: '/work/commerce/team-0/api', current: true }]);
   });
   await expect(row).toContainText('The previous working directory is unavailable');
+  // One checkout left means no picker, so the note names the directory used instead.
+  const fallback = row.locator('em').filter({ hasText: 'The previous working directory is unavailable' });
+  await expect(fallback).toHaveText('The previous working directory is unavailable; /work/commerce/team-0/api is used instead');
+  await expect(fallback).toHaveAttribute('title', /api-feature/);
+  await expect(fallback).not.toHaveAttribute('title', /Choosing another directory/);
 });
 
 test('a missing checkout keeps its status readable at medium widths', async ({ page }) => {

@@ -24,11 +24,25 @@ export const WORKSPACE_MANIFEST_OPEN = 'cliora:workspace-manifest-open';
 export function isBusinessWorkspace(value: unknown): value is BusinessWorkspace {
   return !!value && typeof value === 'object' && typeof (value as BusinessWorkspace).id === 'string' && Array.isArray((value as BusinessWorkspace).repositories);
 }
-// Per-viewer conveniences: the project and CLI last used come back on the next visit.
+// Per-viewer conveniences: the project, CLI and checkouts last used come back on the next visit.
 const selectedKey = 'cliora:workspace-selected';
 const toolKey = 'cliora:workspace-tool';
+const pathsKey = 'cliora:workspace-paths';
 const stored = (key: string) => { try { return localStorage.getItem(key) ?? ''; } catch { return ''; } };
 const remember = (key: string, value: string) => { try { if (value) localStorage.setItem(key, value); else localStorage.removeItem(key); } catch { /* optional preference */ } };
+/** Member checkouts read back raw: whether each one still exists is only known beside the project. */
+const readPaths = (): Record<string, string> => {
+  try {
+    const value: unknown = JSON.parse(stored(pathsKey) || '{}');
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    const entries = Object.entries(value as Record<string, unknown>).filter(([key, path]) => key.includes('\u0000') && typeof path === 'string' && !!path);
+    return Object.fromEntries(entries) as Record<string, string>;
+  } catch { return {}; }
+};
+const writePaths = (value: Record<string, string>) => {
+  const entries = Object.entries(value).filter(([, path]) => !!path);
+  remember(pathsKey, entries.length ? JSON.stringify(Object.fromEntries(entries)) : '');
+};
 const failure = (value: unknown) => formatFailure(value, i18n.t('workspaces.failed'), i18n.t('workspaces.retry'));
 /** A worktree choice belongs to one project's member, so A → B → A returns to A's own checkout. */
 const placeKey = (workspaceId: string, repositoryId: string) => `${workspaceId}\u0000${repositoryId}`;
@@ -77,8 +91,9 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
   const listRef = useRef<HTMLDivElement>(null);
   const [toolId, setToolId] = useState(() => stored(toolKey));
   const [launching, setLaunching] = useState('');
-  // Keyed per project and repository: switching projects leaves every member's own choice alone.
-  const [paths, setPaths] = useState<Record<string, string>>({});
+  // Keyed per project and repository: switching projects leaves every member's own choice alone,
+  // and the remembered map survives this page (validity is re-checked beside each project below).
+  const [paths, setPaths] = useState<Record<string, string>>(readPaths);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -140,6 +155,9 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
     return () => { mounted.current = false; sequence.current++; window.removeEventListener(WORKSPACES_CHANGED, changed); window.removeEventListener('focus', focused); if (scanId.current) void native.cancelWorkspaceScan(scanId.current); };
   }, [reload, instance]);
   useEffect(() => { if (workspaces.length) remember(selectedKey, selectedId); }, [selectedId, workspaces.length]);
+  // The stored map follows every choice and every successful deletion, so a removed project never
+  // leaves its keys behind; a checkout that vanished meanwhile is ignored by its own row instead.
+  useEffect(() => { writePaths(paths); }, [paths]);
   useEffect(() => {
     if (!selectedId || !nativeAvailable) return;
     let live = true;
@@ -225,21 +243,29 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
     const name = (editName ?? '').trim();
     if (!name) return;
     const target = renaming ? current : null;
+    let saved = false;
     await operate(async () => {
       const value = target ? await native.renameBusinessWorkspace(target.id, name, target.revision) : await native.createBusinessWorkspace(name);
       setWorkspaces(previous => previous.some(item => item.id === value.id) ? previous.map(item => item.id === value.id ? value : item) : [...previous, value]);
       setSelectedId(value.id);
       setEditName(null);
+      saved = true;
       return value;
     });
+    // A first project replaces the intro that held the dialog's trigger: the dialog has nothing to
+    // return focus to. Only a focus really left on the page moves on, so the usual return stays.
+    if (saved && mounted.current) requestAnimationFrame(() => { if (document.activeElement === document.body) returnFocus(''); });
   }
   async function deleteProject() {
     if (!current || !await confirmAction(t('workspaces.deleteConfirm', { name: current.name }), () => mounted.current, { title: t('workspaces.deleteProject'), confirmLabel: t('workspaces.deleteProject') })) return;
     const id = current.id;
-    await operate(async () => { await native.deleteBusinessWorkspace(id); setSelectedId(previous => previous === id ? '' : previous); setQuery(''); setFilter('all'); });
+    let deleted = false;
+    await operate(async () => { await native.deleteBusinessWorkspace(id); setSelectedId(previous => previous === id ? '' : previous); setQuery(''); setFilter('all'); deleted = true; });
+    // A failed deletion leaves the project, and the choices its members still resolve, in place.
+    if (!deleted || !mounted.current) return;
     // The project's own choices leave with it; other projects keep theirs.
     setPaths(previous => Object.fromEntries(Object.entries(previous).filter(([key]) => !key.startsWith(`${id}\u0000`))));
-    if (mounted.current) returnFocus('');
+    returnFocus('');
   }
   async function remove(repository: WorkspaceRepository) {
     if (!current || !await confirmAction(t('workspaces.removeConfirm', { name: repository.name }), () => mounted.current, { title: t('workspaces.remove'), confirmLabel: t('workspaces.remove') })) return;
@@ -432,7 +458,10 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
             const missing = repo.locations[0];
             return <article key={repo.id} className={styles.row} data-repository-id={repo.id} data-state={broken ? 'unavailable' : undefined} data-favorite={repo.favorite || undefined}>
               <span className={styles.name}>{broken && <span className={styles.dot} aria-hidden="true" />}<strong title={repo.name}>{repo.name}</strong>{available?.kind === 'legacy' && <Badge>{t('workspaces.legacy')}</Badge>}</span>
-              <span className={styles.path} title={broken ? [missing?.path && displayPath(missing.path), t('workspaces.unavailable'), missing?.reason].filter(Boolean).join(' · ') : displayPath(selectedPath)}>{broken ? <>{missing?.path ? relativePath(missing.path, repo.name) && <span>{relativePath(missing.path, repo.name)}</span> : <span>{t('workspaces.invalid')}</span>}<em>{t('workspaces.unavailable')}{missing?.reason ? ` · ${missing.reason}` : ''}</em></> : <><span>{relativePath(selectedPath, repo.name)}</span>{fallback && <em className={styles.fallback} title={t('workspaces.worktreeFallbackHint', { path: displayPath(remembered ?? '') })}>{t('workspaces.worktreeFallback')}</em>}</>}</span>
+              <span className={styles.path} title={broken ? [missing?.path && displayPath(missing.path), t('workspaces.unavailable'), missing?.reason].filter(Boolean).join(' · ') : displayPath(selectedPath)}>{broken ? <>{missing?.path ? relativePath(missing.path, repo.name) && <span>{relativePath(missing.path, repo.name)}</span> : <span>{t('workspaces.invalid')}</span>}<em>{t('workspaces.unavailable')}{missing?.reason ? ` · ${missing.reason}` : ''}</em></> : <><span>{relativePath(selectedPath, repo.name)}</span>{fallback && (places.size > 1
+                // Only a row that shows the picker may promise that choosing replaces the fallback.
+                ? <em className={styles.fallback} title={t('workspaces.worktreeFallbackHint', { path: displayPath(remembered ?? '') })}>{t('workspaces.worktreeFallback')}</em>
+                : <em className={styles.fallback} title={t('workspaces.worktreeFallbackHintSingle', { path: displayPath(remembered ?? '') })}>{t('workspaces.worktreeFallbackSingle', { path: displayPath(selectedPath) })}</em>)}</>}</span>
               {places.size > 1 ? <select className={styles.place} aria-label={`${repo.name} ${t('workspaces.worktree')}`} title={selectedPath} value={selectedPath} onChange={event => setPaths(previous => ({ ...previous, [placeKey(current.id, repo.id)]: event.target.value }))}>{[...places].map(([path, place]) => <option key={path} value={path}>{place.label}</option>)}</select> : <span />}
               <span className={styles.rowActions}>
                 <Button size="sm" variant="ghost" className={styles.favorite} aria-label={t(repo.favorite ? 'workspaces.unfavorite' : 'workspaces.favorite')} title={t(repo.favorite ? 'workspaces.unfavorite' : 'workspaces.favorite')} aria-pressed={repo.favorite} icon={<Icon name="star" size={14} />} onClick={() => void toggleFavorite(repo)} />
