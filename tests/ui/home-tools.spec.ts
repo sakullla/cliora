@@ -1547,6 +1547,30 @@ test('recent sessions expose empty and failed reads, then recover to a resumable
   await expect(page.locator('[data-session-id="recent-2"][aria-current="true"]')).toBeVisible();
 });
 
+test('continuing a recent session follows the CLI default YOLO mode', async ({ page }) => {
+  await page.addInitScript(() => {
+    const resumes: unknown[] = [];
+    Object.assign(window, {
+      isTauri: true,
+      __recentResumes: resumes,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], launchForm: 'terminal', yoloAvailable: true, resume: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [], cliMode: 'yolo', projectMode: 'normal' };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'list_history_sessions') return [{ id: 'recent-1', nativeId: 'native-1', toolId: 'codex', title: '最近会话一', cwd: null, updatedAt: 2000000000000, projectId: null }];
+        if (command === 'resume_history_session') { resumes.push(args); return { status: 'terminal_requested', mode: args.mode }; }
+        if (command.startsWith('list_') || command.startsWith('plugin:event|')) return [];
+        return null;
+      } },
+    });
+  });
+  await page.goto('/');
+  const recent = page.getByRole('region', { name: '最近会话', exact: true });
+  await recent.getByRole('button', { name: /继续会话「最近会话一/ }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __recentResumes: unknown[] }).__recentResumes)).toEqual([{ id: 'recent-1', mode: 'yolo' }]);
+});
+
 
 /** One host with two projects that share a name and a tail directory, plus a long Chinese name. */
 async function installProjectDetails(page: Page) {

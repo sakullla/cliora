@@ -175,10 +175,12 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent
   // Resume follows the terminal chosen in Settings; the button names that place instead of
   // always promising an external terminal. Unknown settings keep the external wording.
   const [resumeTarget, setResumeTarget] = useState<'workbench' | 'external'>('external');
+  // Resuming starts from the CLI default mode, like 恢复指定会话 on the home page.
+  const [defaultMode, setDefaultMode] = useState<'normal' | 'yolo'>('normal');
   useEffect(() => {
     if (!active || !nativeAvailable || remoteTargetId !== 'local') return;
     let live = true;
-    const apply = (settings: { selected: string }) => { if (live) setResumeTarget(settings.selected === 'workbench' ? 'workbench' : 'external'); };
+    const apply = (settings: { selected: string; cliMode?: 'normal' | 'yolo' }) => { if (live) { setResumeTarget(settings.selected === 'workbench' ? 'workbench' : 'external'); setDefaultMode(settings.cliMode === 'yolo' ? 'yolo' : 'normal'); } };
     void localNative.getLaunchSettings().then(apply).catch(() => {});
     const off = onLaunchSettingsChange(apply);
     return () => { live = false; off(); };
@@ -435,6 +437,16 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent
   // Desktop-form CLIs never open in the workbench, matching failedInWorkbench().
   const resumeInWorkbench = resumeTarget === 'workbench' && !!selected && tools.find((item) => item.id === selected.session.toolId)?.launchForm !== 'desktop';
   const shownResumeError = resumeError?.key === resumeKey ? resumeError.text : selected?.resumeReason ?? '';
+  const selectedSessionId = selected?.session.id;
+  // Another session (or a changed default) starts from the default; returning to the same one keeps the user's pick.
+  const modeBasis = useRef('');
+  useEffect(() => {
+    if (!selectedSessionId) return;
+    const basis = JSON.stringify([selectedSessionId, defaultMode, yolo]);
+    if (modeBasis.current === basis) return;
+    modeBasis.current = basis;
+    setMode(defaultMode === 'yolo' && yolo ? 'yolo' : 'normal');
+  }, [selectedSessionId, defaultMode, yolo]);
   useEffect(() => { if (selected && !yolo && mode === 'yolo') setMode('normal'); }, [selected, yolo, mode]);
   useEffect(() => {
     setResumeCommand(null);

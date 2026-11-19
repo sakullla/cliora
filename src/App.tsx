@@ -56,6 +56,7 @@ import { browserBootstrap } from './types/domain';
 import type { ApiError, Bootstrap, Theme } from './types/domain';
 import type { HistorySession } from './types/history';
 import type { Project, TrayRepairTarget, TwiglaneReviewSignal, WorkbenchSession } from './types/launch';
+import { preferredLaunchMode } from './types/launch';
 import type { LibraryItem, LibraryKind } from './types/library';
 import type { AdapterCatalog } from './types/native';
 import type { RemoteTarget } from './types/remote';
@@ -733,8 +734,12 @@ export default function App() {
 
   /** Resume an indexed conversation; the palette and the home recents share this flow. */
   async function resumePaletteSession(id: string, knownToolId?: string): Promise<'workbench' | 'terminal' | 'failed'> {
+    // Like 恢复指定会话, a resume follows the CLI default mode when that CLI has one.
+    const resumeToolId = knownToolId ?? paletteSessions.find((item) => item.id === id)?.toolId;
+    const settings = await native.getLaunchSettings().catch(() => null);
+    const mode = preferredLaunchMode(settings, 'cli', !!(catalog?.registered ?? []).find((item) => item.id === resumeToolId)?.yoloAvailable);
     try {
-      const result = await native.resumeHistorySession(id, 'normal');
+      const result = await native.resumeHistorySession(id, mode);
       const opened = workbenchSessionId(result);
       if (opened) { openWorkbenchSession(opened); return 'workbench'; }
       return 'terminal';
@@ -742,7 +747,7 @@ export default function App() {
       const toolId = knownToolId ?? paletteSessions.find((item) => item.id === id)?.toolId;
       const desktop = (catalog?.registered ?? []).find((item) => item.id === toolId)?.launchForm === 'desktop';
       if (await failedInWorkbench(desktop)) {
-        openWorkbenchFailure({ detail: formatFailure(value, t('sessions.launchFailed'), t('sessions.failureHint')), retry: { kind: 'resume', id, mode: 'normal' } });
+        openWorkbenchFailure({ detail: formatFailure(value, t('sessions.launchFailed'), t('sessions.failureHint')), retry: { kind: 'resume', id, mode } });
         return 'failed';
       }
       const detail = launchFailureDetail(value);

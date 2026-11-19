@@ -611,6 +611,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [workspaceValue, setWorkspaceValue] = useState('__home');
   const [customFolderPath, setCustomFolderPath] = useState('');
   const [launchMode, setLaunchMode] = useState<LaunchMode>('normal');
+  // The dialog's mode follows the saved default until the user picks one for this launch.
+  const launchModeTouched = useRef(false);
+  const launchModeBasis = useRef<{ target: 'cli' | 'project'; toolId: string }>({ target: 'cli', toolId: '' });
   const [resumeLatest, setResumeLatest] = useState(false);
   const [initialPrompt, setInitialPrompt] = useState('');
   const [launchingNew, setLaunchingNew] = useState(false);
@@ -1939,6 +1942,16 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     } finally { setRetrying(false); }
   }
 
+  /** Projects, remote projects and business repositories use the project default; anything else the CLI default. */
+  function dialogModeTarget(value: string): 'cli' | 'project' {
+    return value.startsWith('project:') || value.startsWith('remote:') || businessRepositoryOptions.some((option) => option.value === value) ? 'project' : 'cli';
+  }
+  function applyPreferredMode(settings: LaunchSettings | null, target: 'cli' | 'project', toolId: string) {
+    launchModeBasis.current = { target, toolId };
+    const tool = terminalTools.find((item) => item.id === toolId);
+    setLaunchMode(preferredLaunchMode(settings, target, !!tool?.yoloAvailable));
+  }
+
   function openNewSessionDialog(prefill?: { toolId?: string; projectId?: string; directory?: string; place?: 'worktree' }, targetOverride?: string) {
     setDialogError('');
     setBusinessSelection(null);
@@ -1952,6 +1965,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       if (!settings) return;
       setLaunchSettings(settings);
       if (!dialogPlaceTouched.current) setDialogPlace(placeOf(settings));
+      if (!launchModeTouched.current) applyPreferredMode(settings, launchModeBasis.current.target, launchModeBasis.current.toolId);
     }).catch(() => {});
     setBaseChoice(null);
     setBaseRef('');
@@ -1983,11 +1997,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       setWorkspaceValue('custom:' + prefill.directory);
     }
     if (prefill?.toolId && terminalTools.some((item) => item.id === prefill.toolId)) nextToolId = prefill.toolId;
-    if (prefill) {
-      setLaunchToolId(nextToolId);
-      const nextTool = terminalTools.find((item) => item.id === nextToolId);
-      setLaunchMode(preferredLaunchMode(launchSettings, prefill.projectId ? 'project' : 'cli', !!nextTool?.yoloAvailable));
-    }
+    if (prefill) setLaunchToolId(nextToolId);
+    // Each opening starts from the saved default mode, not the previous dialog's choice.
+    launchModeTouched.current = false;
+    applyPreferredMode(launchSettings, prefill ? (prefill.projectId ? 'project' : 'cli') : dialogModeTarget(workspaceValue), nextToolId);
     setNewDialogOpen(true);
   }
 
@@ -3199,8 +3212,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   function pickLaunchTool(value: string) {
     setLaunchToolId(value);
-    const nextTool = terminalTools.find((item) => item.id === value);
-    setLaunchMode(preferredLaunchMode(launchSettings, workspaceValue.startsWith('project:') || workspaceValue.startsWith('remote:') ? 'project' : 'cli', !!nextTool?.yoloAvailable));
+    applyPreferredMode(launchSettings, dialogModeTarget(workspaceValue), value);
   }
   const businessRepositoryOptions = useMemo(() => {
     const options: Array<{ value: string; label: string; detail: string; worktree: boolean; workspaceId: string; workspaceName: string; selection: WorkspaceSelection }> = [];
@@ -3797,13 +3809,15 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
             const repository = activeRemoteTarget ? undefined : businessRepositoryOptions.find(option => option.value === value);
             setBusinessSelection(repository?.selection ?? null);
             if (repository) { setDialogPlace('direct'); dialogPlaceTouched.current = true; setDialogError(''); }
+            let nextToolId = effectiveLaunchToolId;
             if (value.startsWith('project:')) {
               const project = availableProjects.find((item) => 'project:' + item.id === value);
-              if (project?.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)) setLaunchToolId(project.preferredTool);
+              if (project?.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)) { setLaunchToolId(project.preferredTool); nextToolId = project.preferredTool; }
             } else if (value.startsWith('remote:')) {
               const project = availableRemoteProjects.find((item) => 'remote:' + item.id === value);
-              if (project?.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)) setLaunchToolId(project.preferredTool);
+              if (project?.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)) { setLaunchToolId(project.preferredTool); nextToolId = project.preferredTool; }
             }
+            if (!launchModeTouched.current) applyPreferredMode(launchSettings, dialogModeTarget(value), nextToolId);
           }} /></div>
         </div>
         {!activeRemoteTarget && !resumeLatest && (() => {
@@ -3875,8 +3889,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           </div>;
         })()}
         <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.launchModeLabel')}</span><div className={styles.modeCards} role="radiogroup" aria-label={t('sessions.launchModeLabel')}>
-          <button type="button" role="radio" aria-checked={launchMode === 'normal'} className={styles.modeCard} onClick={() => setLaunchMode('normal')}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="shield" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeNormal')}</strong><small>{t('sessions.modeNormalDesc')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
-          <button type="button" role="radio" aria-checked={launchMode === 'yolo'} disabled={!selectedLaunchTool?.yoloAvailable} title={!selectedLaunchTool?.yoloAvailable ? t('sessions.yoloUnsupported') : undefined} className={styles.modeCard} onClick={() => setLaunchMode('yolo')}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="sparkle" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeYolo')}</strong><small>{selectedLaunchTool?.yoloAvailable ? t('sessions.modeYoloDesc') : t('sessions.yoloUnsupported')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
+          <button type="button" role="radio" aria-checked={launchMode === 'normal'} className={styles.modeCard} onClick={() => { launchModeTouched.current = true; setLaunchMode('normal'); }}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="shield" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeNormal')}</strong><small>{t('sessions.modeNormalDesc')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
+          <button type="button" role="radio" aria-checked={launchMode === 'yolo'} disabled={!selectedLaunchTool?.yoloAvailable} title={!selectedLaunchTool?.yoloAvailable ? t('sessions.yoloUnsupported') : undefined} className={styles.modeCard} onClick={() => { launchModeTouched.current = true; setLaunchMode('yolo'); }}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="sparkle" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeYolo')}</strong><small>{selectedLaunchTool?.yoloAvailable ? t('sessions.modeYoloDesc') : t('sessions.yoloUnsupported')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
         </div>{selectedLaunchTool?.resumeLatestAvailable && !activeRemoteTarget && <label className={styles.checkboxRow}><input type="checkbox" checked={resumeLatest} onChange={(event) => setResumeLatest(event.target.checked)} /><span>{t('sessions.resumeLatest')}</span></label>}</div>
         <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.initialPromptLabel')}</span><textarea rows={3} className={styles.dialogTextarea} value={initialPrompt} placeholder={t('sessions.initialPromptPlaceholder')} aria-label={t('sessions.initialPromptLabel')} onChange={(event) => setInitialPrompt(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing && !launchingNew && effectiveLaunchToolId) { event.preventDefault(); void launchFromDialog(); } }} /><PromptPicker active={active && newDialogOpen} className={styles.dialogPrompts} labelClassName={styles.dialogPromptLabel} context={dialogPromptContext} sourceKey={`new:${workspaceValue}:${activeTargetId}`} workspaces={businessWorkspaces} onPick={(prompt) => setInitialPrompt(previous => previous ? `${previous}\n${prompt.body}` : prompt.body)} /></div>
         <div className={styles.dialogSummary}>{effectiveLaunchToolId && <span className={styles.dialogSummaryIcon}><ToolIcon toolId={effectiveLaunchToolId} size={20} /></span>}<span>{(() => {

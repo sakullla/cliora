@@ -13,6 +13,7 @@ import { FilterSelect } from '../../components/FilterSelect';
 import { SearchField } from '../../components/SearchField';
 import { GuideDialog } from '../../components/GuideDialog';
 import type { AdapterDescriptor } from '../../types/native';
+import { preferredLaunchMode, type LaunchSettings } from '../../types/launch';
 import type { BusinessWorkspace, WorkspaceCandidate, WorkspaceManifestPreview, WorkspaceRepository } from '../../types/workspaces';
 import i18n from '../../i18n';
 import styles from './WorkspaceBrowser.module.css';
@@ -61,7 +62,7 @@ export function commonRoot(paths: string[]): string | null {
   return shared.join(separator);
 }
 
-export function WorkspaceBrowser({ tools = [], enablePageSearch = false, spotlightProject = null, onSession, incomingManifest, onManifestConsumed }: { tools?: AdapterDescriptor[]; enablePageSearch?: boolean; spotlightProject?: { id: string; token: number } | null; incomingManifest?: WorkspaceManifestPreview | null; onManifestConsumed?: (preview: WorkspaceManifestPreview) => void; onSession?: (id: string) => void }) {
+export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePageSearch = false, spotlightProject = null, onSession, incomingManifest, onManifestConsumed }: { tools?: AdapterDescriptor[]; launchSettings?: LaunchSettings | null; enablePageSearch?: boolean; spotlightProject?: { id: string; token: number } | null; incomingManifest?: WorkspaceManifestPreview | null; onManifestConsumed?: (preview: WorkspaceManifestPreview) => void; onSession?: (id: string) => void }) {
   const { t } = useTranslation();
   const [workspaces, setWorkspaces] = useState<BusinessWorkspace[]>([]);
   const [selectedId, setSelectedId] = useState(() => stored(selectedKey));
@@ -246,7 +247,7 @@ export function WorkspaceBrowser({ tools = [], enablePageSearch = false, spotlig
     const selection = { workspaceId: current.id, repositoryId: repository.id, directory, projectId: available.projectId, label: `${current.name} / ${repository.name}` };
     setLaunching(repository.id);
     await operate(async () => {
-      const result = await native.launchCli({ ...selection, toolId: launchTool, projectId: available.projectId, sessionId: null, mode: 'normal', worktreeIntent: 'given' });
+      const result = await native.launchCli({ ...selection, toolId: launchTool, projectId: available.projectId, sessionId: null, mode: preferredLaunchMode(launchSettings, 'project', !!enabledTools.find(tool => tool.id === launchTool)?.yoloAvailable), worktreeIntent: 'given' });
       if (result.sessionId) onSession?.(result.sessionId);
       else setNotice(t('workspaces.external'));
       if (result.warnings?.length) setNotice(result.warnings.join('\n'));

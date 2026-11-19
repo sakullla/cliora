@@ -1169,6 +1169,30 @@ test('hidden records release message DOM, ignore late detail reads and restore t
   await expect(page.getByRole('combobox', { name: '恢复模式' })).toHaveValue('yolo');
 });
 
+test('the resume mode starts from the CLI default mode', async ({ page }) => {
+  await page.addInitScript(() => {
+    const session = { id: 'saved', toolId: 'codex', nativeId: null, title: 'Default mode', cwd: null, model: null, projectId: null, startedAt: 1, updatedAt: 1, favorite: false, partial: false, stale: false, messageCount: 1, usageCount: 0 };
+    Object.assign(window, { isTauri: true, __TAURI_INTERNALS__: { invoke: async (command: string) => {
+      if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+      if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: true, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+      if (command === 'get_launch_settings') return { selected: 'auto', terminals: [], cliMode: 'yolo', projectMode: 'normal' };
+      if (command === 'list_history_sessions') return [session];
+      if (command === 'list_history_scans') return [{ toolId: 'codex', scannedAt: Date.now(), sourceCount: 1, failedCount: 0, incomplete: false, detail: '' }];
+      if (command === 'get_history_session') return { session, messages: [{ id: 'm', role: 'user', text: 'DEFAULT_MODE_TRANSCRIPT', timestamp: 1 }], usage: [], resumeReason: null };
+      if (command === 'copy_history_resume_command') return 'codex resume saved';
+      if (command === 'list_projects' || command === 'list_history_prices') return [];
+      if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+      if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+      return null;
+    } } });
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
+  await expect(page.getByText('DEFAULT_MODE_TRANSCRIPT')).toBeVisible();
+  await page.getByText('会话选项', { exact: true }).click();
+  await expect(page.getByRole('combobox', { name: '恢复模式' })).toHaveValue('yolo');
+});
+
 type ReadingMock = { failDetail: boolean; reads: number; sessions: Array<Record<string, unknown>>; messages: Record<string, Array<Record<string, unknown>>> };
 /** Two local sessions; `long` is a conversation tall enough to scroll and find in. */
 async function installReading(page: import('@playwright/test').Page) {

@@ -13,8 +13,9 @@ async function chooseRepository(page: Page, search: string, option: RegExp) {
   await page.getByRole('option', { name: option }).first().click();
 }
 
-async function install(page: Page, repositories = 48) {
+async function install(page: Page, repositories = 48, projectMode: 'normal' | 'yolo' = 'normal', cliMode: 'normal' | 'yolo' = 'normal') {
   await page.addInitScript(count => { (window as any).__workspaceRepositoryCount = count; }, repositories);
+  await page.addInitScript(modes => { (window as any).__workspaceProjectMode = modes[0]; (window as any).__workspaceCliMode = modes[1]; }, [projectMode, cliMode]);
   await page.addInitScript(() => {
     const callbacks: Array<(value: unknown) => void> = [];
     const handlers: Record<string, number> = {};
@@ -31,8 +32,8 @@ async function install(page: Page, repositories = 48) {
         transformCallback: (callback: (value: unknown) => void) => { callbacks.push(callback); return callbacks.length - 1; },
         invoke: async (command: string, args: Record<string, any> = {}) => {
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex' }] };
-          if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], launchForm: 'terminal', launch: { state: 'supported', reason: '' }, nativeConfig: { state: 'supported', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
-          if (command === 'get_launch_settings' || command === 'set_preferred_terminal') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], worktreeLaunch: 'direct' };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true, launchForm: 'terminal', launch: { state: 'supported', reason: '' }, nativeConfig: { state: 'supported', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+          if (command === 'get_launch_settings' || command === 'set_preferred_terminal') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], worktreeLaunch: 'direct', cliMode: (window as any).__workspaceCliMode, projectMode: (window as any).__workspaceProjectMode };
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'plugin:event|listen') { handlers[args.event] = args.handler; return args.handler; }
           if (command === 'plugin:event|unlisten') return null;
@@ -66,9 +67,41 @@ test('multi-repository projects search same-name paths, favorite, and launch the
   expect(request.repositoryId).toBe('repo-1');
   expect(request.request.directory).toBe('/work/commerce/team-1/api-feature');
   expect(request.request.worktreeIntent).toBe('given');
+  expect(request.request.mode).toBe('normal');
   // The session is named by its directory; the business project is not part of its label.
   await expect(page.getByText(/api-feature/).first()).toBeVisible();
   await expect(page.getByText('电商平台 / api', { exact: true })).toHaveCount(0);
+});
+
+test('repository launch follows the project default YOLO mode', async ({ page }) => {
+  await install(page, 48, 'yolo');
+  const row = page.locator('[data-business-workspaces]').first().locator('[data-repository-id]').first();
+  await row.getByRole('button', { name: '启动会话', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__workspaceFixture.launches.length)).toBe(1);
+  const request = await page.evaluate(() => (window as any).__workspaceFixture.launches[0]);
+  expect(request.request.mode).toBe('yolo');
+});
+
+test('the new-session dialog starts from the saved default mode and follows the chosen place', async ({ page }) => {
+  await install(page, 48, 'yolo', 'normal');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: '新建会话', exact: true }).first().click();
+  const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
+  const modes = dialog.getByRole('radiogroup', { name: '启动模式' });
+  await expect(modes.getByRole('radio', { name: /普通/ })).toHaveAttribute('aria-checked', 'true');
+  await chooseRepository(page, 'team-0/api', /^api 电商平台/);
+  await expect(modes.getByRole('radio', { name: /YOLO/ })).toHaveAttribute('aria-checked', 'true');
+  await dialog.getByRole('button', { name: '启动会话', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__workspaceFixture.launches.length)).toBe(1);
+  expect(await page.evaluate(() => (window as any).__workspaceFixture.launches[0].request.mode)).toBe('yolo');
+});
+
+test('the new-session dialog uses the CLI default mode for a plain opening', async ({ page }) => {
+  await install(page, 48, 'normal', 'yolo');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: '新建会话', exact: true }).first().click();
+  const modes = page.getByRole('dialog', { name: '新建工作台会话' }).getByRole('radiogroup', { name: '启动模式' });
+  await expect(modes.getByRole('radio', { name: /YOLO/ })).toHaveAttribute('aria-checked', 'true');
 });
 
 test('a partial repository batch keeps the failure and retries only the failed selection', async ({ page }) => {
