@@ -23,6 +23,11 @@ export const WORKSPACE_MANIFEST_OPEN = 'cliora:workspace-manifest-open';
 export function isBusinessWorkspace(value: unknown): value is BusinessWorkspace {
   return !!value && typeof value === 'object' && typeof (value as BusinessWorkspace).id === 'string' && Array.isArray((value as BusinessWorkspace).repositories);
 }
+// Per-viewer conveniences: the project and CLI last used come back on the next visit.
+const selectedKey = 'cliora:workspace-selected';
+const toolKey = 'cliora:workspace-tool';
+const stored = (key: string) => { try { return localStorage.getItem(key) ?? ''; } catch { return ''; } };
+const remember = (key: string, value: string) => { try { if (value) localStorage.setItem(key, value); else localStorage.removeItem(key); } catch { /* optional preference */ } };
 const failure = (value: unknown) => formatFailure(value, i18n.t('workspaces.failed'), i18n.t('workspaces.retry'));
 
 /** Worktree choices of one repository: its main checkout first, then attached worktrees. */
@@ -59,7 +64,7 @@ export function commonRoot(paths: string[]): string | null {
 export function WorkspaceBrowser({ tools = [], enablePageSearch = false, spotlightProject = null, onSession, incomingManifest, onManifestConsumed }: { tools?: AdapterDescriptor[]; enablePageSearch?: boolean; spotlightProject?: { id: string; token: number } | null; incomingManifest?: WorkspaceManifestPreview | null; onManifestConsumed?: (preview: WorkspaceManifestPreview) => void; onSession?: (id: string) => void }) {
   const { t } = useTranslation();
   const [workspaces, setWorkspaces] = useState<BusinessWorkspace[]>([]);
-  const [selectedId, setSelectedId] = useState('');
+  const [selectedId, setSelectedId] = useState(() => stored(selectedKey));
   const [query, setQuery] = useState('');
   // Typing stays responsive while hundreds of rows are filtered behind it.
   const deferredQuery = useDeferredValue(query);
@@ -67,7 +72,8 @@ export function WorkspaceBrowser({ tools = [], enablePageSearch = false, spotlig
   const loadedAt = useRef(0);
   const [filter, setFilter] = useState<'all' | 'favorites' | 'attention'>('all');
   const listRef = useRef<HTMLDivElement>(null);
-  const [toolId, setToolId] = useState('');
+  const [toolId, setToolId] = useState(() => stored(toolKey));
+  const [launching, setLaunching] = useState('');
   const [paths, setPaths] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -108,7 +114,7 @@ export function WorkspaceBrowser({ tools = [], enablePageSearch = false, spotlig
       if (!mounted.current || seq !== sequence.current) return;
       const rows = Array.isArray(result) ? result : [];
       setWorkspaces(rows);
-      setSelectedId(previous => rows.some(item => item.id === previous) ? previous : rows[0]?.id ?? '');
+      setSelectedId(previous => rows.some(item => item.id === previous) ? previous : rows.find(item => item.id === stored(selectedKey))?.id ?? rows[0]?.id ?? '');
       setLoadError('');
       loadedAt.current = Date.now();
     } catch (value) { if (mounted.current && seq === sequence.current) setLoadError(failure(value)); }
@@ -129,6 +135,7 @@ export function WorkspaceBrowser({ tools = [], enablePageSearch = false, spotlig
     window.addEventListener('focus', focused);
     return () => { mounted.current = false; sequence.current++; window.removeEventListener(WORKSPACES_CHANGED, changed); window.removeEventListener('focus', focused); if (scanId.current) void native.cancelWorkspaceScan(scanId.current); };
   }, [reload, instance]);
+  useEffect(() => { if (workspaces.length) remember(selectedKey, selectedId); }, [selectedId, workspaces.length]);
   useEffect(() => {
     if (!selectedId || !nativeAvailable) return;
     let live = true;
@@ -214,6 +221,22 @@ export function WorkspaceBrowser({ tools = [], enablePageSearch = false, spotlig
     if (!current || !await confirmAction(t('workspaces.removeConfirm', { name: repository.name }), () => mounted.current, { title: t('workspaces.remove'), confirmLabel: t('workspaces.remove') })) return;
     await operate(() => native.removeWorkspaceRepository(current.id, repository.id, current.revision));
   }
+  /** A star flips at once; the whole list never waits on (or is disabled by) a favorite. */
+  async function toggleFavorite(repository: WorkspaceRepository) {
+    if (!current) return;
+    const workspaceId = current.id;
+    const favorite = !repository.favorite;
+    const flip = (value: boolean) => setWorkspaces(previous => previous.map(item => item.id !== workspaceId ? item : { ...item, repositories: item.repositories.map(repo => repo.id === repository.id ? { ...repo, favorite: value } : repo) }));
+    flip(favorite);
+    try {
+      const value = await native.favoriteWorkspaceRepository(workspaceId, repository.id, favorite);
+      if (!mounted.current) return;
+      if (isBusinessWorkspace(value)) {
+        setWorkspaces(previous => previous.map(item => item.id === value.id ? value : item));
+        notifyWorkspacesChanged({ source: instance, workspace: value });
+      } else { await reload(); notifyWorkspacesChanged({ source: instance }); }
+    } catch (value) { if (mounted.current) { flip(!favorite); setError(failure(value)); } }
+  }
   async function pick(repository: WorkspaceRepository) {
     if (!current) return;
     const available = repository.locations.find(location => location.available);
@@ -221,12 +244,14 @@ export function WorkspaceBrowser({ tools = [], enablePageSearch = false, spotlig
     if (!directory || !available) return;
     if (!launchTool) { setError(t('workspaces.chooseTool')); return; }
     const selection = { workspaceId: current.id, repositoryId: repository.id, directory, projectId: available.projectId, label: `${current.name} / ${repository.name}` };
+    setLaunching(repository.id);
     await operate(async () => {
       const result = await native.launchCli({ ...selection, toolId: launchTool, projectId: available.projectId, sessionId: null, mode: 'normal', worktreeIntent: 'given' });
       if (result.sessionId) onSession?.(result.sessionId);
       else setNotice(t('workspaces.external'));
       if (result.warnings?.length) setNotice(result.warnings.join('\n'));
     });
+    if (mounted.current) setLaunching('');
   }
   const allRepositories = current?.repositories ?? [];
   const root = useMemo(() => commonRoot(allRepositories.flatMap(repo => repo.locations.filter(location => location.path && !location.targetId).map(location => location.path!))), [allRepositories]);
@@ -269,6 +294,12 @@ export function WorkspaceBrowser({ tools = [], enablePageSearch = false, spotlig
   const kindLabel = { repository: 'workspaces.kindRepository', directory: 'workspaces.kindDirectory', duplicate: 'workspaces.kindDuplicate', unavailable: 'workspaces.kindUnavailable' } as const;
   const startCreate = () => { setRenaming(false); setEditName(''); };
   function moveFocus(event: KeyboardEvent<HTMLElement>, fromSearch = false) {
+    // Search narrowed to one ready repository: Enter starts it, so "type, Enter" is the whole trip.
+    if (fromSearch && event.key === 'Enter' && !event.nativeEvent.isComposing && needle && needle === query.trim().toLowerCase() && shown.length === 1 && !isBroken(shown[0]) && launchTool && !busy) {
+      event.preventDefault();
+      void pick(shown[0]);
+      return;
+    }
     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
     const buttons = Array.from(listRef.current?.querySelectorAll<HTMLButtonElement>('[data-row-primary]:not(:disabled)') ?? []);
     if (!buttons.length) return;
@@ -347,7 +378,7 @@ export function WorkspaceBrowser({ tools = [], enablePageSearch = false, spotlig
           {favoriteCount > 0 && <button type="button" className={styles.chip} aria-pressed={activeFilter === 'favorites'} onClick={() => setFilter(activeFilter === 'favorites' ? 'all' : 'favorites')}><Icon name="star" size={12} />{t('workspaces.filterFavorites', { count: favoriteCount })}</button>}
           {brokenCount > 0 && <button type="button" className={styles.chip} data-tone="danger" aria-pressed={activeFilter === 'attention'} title={t('workspaces.attentionHint', { count: brokenCount })} onClick={() => setFilter(activeFilter === 'attention' ? 'all' : 'attention')}><span className={styles.dot} aria-hidden="true" />{t('workspaces.filterAttention', { count: brokenCount })}</button>}
           {filtered && <span className={styles.matchCount} role="status">{t('workspaces.matchCount', { shown: shown.length, total: allRepositories.length })}</span>}
-          {enabledTools.length > 0 && <FilterSelect className={styles.toolPick} label={t('workspaces.tool')} value={launchTool} options={enabledTools.map(tool => ({ value: tool.id, label: tool.name, icon: <ToolIcon toolId={tool.id} size={14} /> }))} onChange={setToolId} />}
+          {enabledTools.length > 0 && <FilterSelect className={styles.toolPick} label={t('workspaces.tool')} title={t('workspaces.tool')} value={launchTool} options={enabledTools.map(tool => ({ value: tool.id, label: tool.name, icon: <ToolIcon toolId={tool.id} size={14} /> }))} onChange={id => { setToolId(id); remember(toolKey, id); }} />}
         </div>
         {shown.length > 0 ? <div className={styles.list} ref={listRef} aria-label={t('workspaces.previewRepositories')} onKeyDown={event => moveFocus(event)}>
           {shown.map(repo => {
@@ -358,13 +389,13 @@ export function WorkspaceBrowser({ tools = [], enablePageSearch = false, spotlig
             const missing = repo.locations[0];
             return <article key={repo.id} className={styles.row} data-repository-id={repo.id} data-state={broken ? 'unavailable' : undefined} data-favorite={repo.favorite || undefined}>
               <span className={styles.name}>{broken && <span className={styles.dot} aria-hidden="true" />}<strong title={repo.name}>{repo.name}</strong>{available?.kind === 'legacy' && <Badge>{t('workspaces.legacy')}</Badge>}</span>
-              <span className={styles.path} title={broken ? missing?.path ?? '' : displayPath(selectedPath)}>{broken ? <><span>{missing?.path || t('workspaces.invalid')}</span><em>{t('workspaces.unavailable')}{missing?.reason ? ` · ${missing.reason}` : ''}</em></> : <span>{relativePath(selectedPath, repo.name)}</span>}</span>
+              <span className={styles.path} title={broken ? [missing?.path && displayPath(missing.path), t('workspaces.unavailable'), missing?.reason].filter(Boolean).join(' · ') : displayPath(selectedPath)}>{broken ? <>{missing?.path ? relativePath(missing.path, repo.name) && <span>{relativePath(missing.path, repo.name)}</span> : <span>{t('workspaces.invalid')}</span>}<em>{t('workspaces.unavailable')}{missing?.reason ? ` · ${missing.reason}` : ''}</em></> : <span>{relativePath(selectedPath, repo.name)}</span>}</span>
               {places.size > 1 ? <select className={styles.place} aria-label={`${repo.name} ${t('workspaces.worktree')}`} title={selectedPath} value={selectedPath} onChange={event => setPaths(previous => ({ ...previous, [repo.id]: event.target.value }))}>{[...places].map(([path, place]) => <option key={path} value={path}>{place.label}</option>)}</select> : <span />}
               <span className={styles.rowActions}>
-                <Button size="sm" variant="ghost" className={styles.favorite} disabled={busy} aria-label={t(repo.favorite ? 'workspaces.unfavorite' : 'workspaces.favorite')} title={t(repo.favorite ? 'workspaces.unfavorite' : 'workspaces.favorite')} aria-pressed={repo.favorite} icon={<Icon name="star" size={14} />} onClick={() => void operate(() => native.favoriteWorkspaceRepository(current.id, repo.id, !repo.favorite))} />
+                <Button size="sm" variant="ghost" className={styles.favorite} aria-label={t(repo.favorite ? 'workspaces.unfavorite' : 'workspaces.favorite')} title={t(repo.favorite ? 'workspaces.unfavorite' : 'workspaces.favorite')} aria-pressed={repo.favorite} icon={<Icon name="star" size={14} />} onClick={() => void toggleFavorite(repo)} />
                 {broken
                   ? <Button size="sm" data-row-primary disabled={busy} icon={<Icon name="link" size={13} />} onClick={() => void relink(repo)}>{t('workspaces.relink')}</Button>
-                  : <Button size="sm" className={styles.launch} data-row-primary disabled={busy || !launchTool} aria-label={t('workspaces.launch')} icon={<Icon name="play" size={12} />} onClick={() => void pick(repo)}>{t('workspaces.launchShort')}</Button>}
+                  : <Button size="sm" className={styles.launch} data-row-primary loading={launching === repo.id} disabled={busy || !launchTool} aria-label={t('workspaces.launch')} title={launchTool ? undefined : t('workspaces.chooseTool')} icon={<Icon name="play" size={12} />} onClick={() => void pick(repo)}>{t('workspaces.launchShort')}</Button>}
                 <RowMenu className={styles.rowMenu} label={t('workspaces.repoActions', { name: repo.name })}>
                   {!broken && <button type="button" role="menuitem" disabled={busy} onClick={() => void relink(repo)}>{t('workspaces.relink')}</button>}
                   <button type="button" role="menuitem" data-danger="true" disabled={busy} onClick={() => void remove(repo)}>{t('workspaces.remove')}</button>
@@ -406,6 +437,7 @@ export function WorkspaceBrowser({ tools = [], enablePageSearch = false, spotlig
         </label>)}</div>}
         {error && <p className={styles.error} role="alert">{error}</p>}
         <div className="dialog-footer">
+          <Button variant="ghost" disabled={busy} onClick={() => { if (scanId.current) void native.cancelWorkspaceScan(scanId.current); scanId.current = null; setCandidates(null); }}>{t('workspaces.cancel')}</Button>
           <Button variant="primary" loading={busy} disabled={scanBusy || !checked.size || !current} onClick={() => current && void operate(async () => { const results = await native.addWorkspaceRepositories(current.id, [...checked], current.revision); const failed = results.filter(item => item.error); if (results.length > failed.length) setNotice(t('workspaces.added', { count: results.length - failed.length })); if (failed.length) { setChecked(new Set(failed.map(item => item.path))); throw new Error(failed.map(item => `${item.path}: ${item.error}`).join('\n')); } setCandidates(null); })}>{t('workspaces.selected', { count: checked.size })}</Button>
         </div>
       </div>

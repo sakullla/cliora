@@ -358,3 +358,70 @@ test('a single-checkout project is one choice and folding a project keeps the li
   await expect(dialog.getByRole('button', { name: '工作目录 / 项目', exact: true })).toContainText('payment-api');
   await expect(dialog.getByRole('button', { name: '工作目录 / 项目', exact: true })).toHaveAttribute('title', /支付系统 \/ payment-api/);
 });
+
+test('a favorite flips at once without disabling the list and reverts when saving fails', async ({ page }) => {
+  await install(page);
+  await page.evaluate(() => {
+    const win = window as any;
+    const orig = win.__TAURI_INTERNALS__.invoke;
+    win.__favoriteGate = null;
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: Record<string, any> = {}) => {
+      if (command === 'favorite_workspace_repository') {
+        await new Promise(resolve => { win.__favoriteGate = resolve; });
+        if (win.__failFavorite) throw { message: '收藏未保存' };
+      }
+      return orig(command, args);
+    };
+  });
+  const project = page.locator('[data-business-workspaces]').first();
+  const row = project.locator('[data-repository-id="repo-5"]');
+  await row.getByRole('button', { name: '收藏仓库', exact: true }).click();
+  // Pressed before the save returns, and other rows can still launch meanwhile.
+  await expect(row.getByRole('button', { name: '取消收藏', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(project.locator('[data-repository-id="repo-6"]').getByRole('button', { name: '启动会话', exact: true })).toBeEnabled();
+  await page.evaluate(() => (window as any).__favoriteGate());
+  await expect(project.locator('[data-repository-id]').first()).toHaveAttribute('data-repository-id', 'repo-5');
+
+  await page.evaluate(() => { (window as any).__failFavorite = true; });
+  const other = project.locator('[data-repository-id="repo-7"]');
+  await other.getByRole('button', { name: '收藏仓库', exact: true }).click();
+  await expect(other.getByRole('button', { name: '取消收藏', exact: true })).toBeVisible();
+  await page.evaluate(() => (window as any).__favoriteGate());
+  await expect(other.getByRole('button', { name: '收藏仓库', exact: true })).toBeVisible();
+  await expect(project.getByRole('alert')).toContainText('收藏未保存');
+});
+
+test('Enter in the search starts the one remaining repository with the chosen CLI', async ({ page }) => {
+  await install(page);
+  const project = page.locator('[data-business-workspaces]').first();
+  const search = project.getByRole('textbox', { name: '搜索仓库名称或路径' });
+  // Several matches: Enter does nothing.
+  await search.fill('service-1');
+  await search.press('Enter');
+  await search.fill('service-12');
+  await expect(project.locator('[data-repository-id]')).toHaveCount(1);
+  await search.press('Enter');
+  await expect.poll(() => page.evaluate(() => (window as any).__workspaceFixture.launches.map((call: any) => call.repositoryId))).toEqual(['repo-12']);
+});
+
+test('the chosen project comes back on the next visit', async ({ page }) => {
+  await install(page);
+  const project = page.locator('[data-business-workspaces]').first();
+  await project.getByRole('button', { name: '选择业务项目' }).click();
+  await page.getByRole('option', { name: /^支付系统/ }).click();
+  await expect(project.locator('[data-repository-id="pay-api"]')).toBeVisible();
+  await page.reload();
+  await expect(page.locator('[data-business-workspaces]').first().locator('[data-repository-id="pay-api"]')).toBeVisible();
+});
+
+test('a missing checkout keeps its status readable at medium widths', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 900 });
+  await install(page);
+  const project = page.locator('[data-business-workspaces]').first();
+  await project.getByRole('button', { name: '需处理 1', exact: true }).click();
+  const status = project.locator('[data-repository-id="repo-46"] em');
+  await expect(status).toHaveText('目录失效 · 目录不存在');
+  // Neither the status nor any path text beside it is clipped to a stray "/".
+  const clipped = await status.evaluate(node => [node, ...Array.from(node.parentElement!.querySelectorAll('span'))].filter(item => item.scrollWidth > item.clientWidth + 1).map(item => item.textContent));
+  expect(clipped).toEqual([]);
+});
