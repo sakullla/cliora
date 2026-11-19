@@ -1626,10 +1626,12 @@ test('remote project details are keyboard readable and copyable, and the same ho
   await expect(more).toBeFocused();
   expect((await details(page)).launches).toBe(0);
 
-  // A long Chinese name keeps its own title line and the full name is in its details.
+  // A long Chinese name stays on one ellipsized line with real room, its tooltip and details carry it in full.
   const long = projects.locator('[data-project-id="remote:c"]');
-  const title = await long.locator('strong').first().evaluate((node) => ({ width: node.getBoundingClientRect().width, card: node.closest('[data-project-id]')!.getBoundingClientRect().width }));
-  expect(title.width).toBeGreaterThan(title.card * 0.6);
+  const title = await long.locator('strong').first().evaluate((node) => ({ width: node.getBoundingClientRect().width, card: node.closest('[data-project-id]')!.getBoundingClientRect().width, lines: Math.round(node.getBoundingClientRect().height / parseFloat(getComputedStyle(node).lineHeight)), full: node.getAttribute('title') }));
+  expect(title.width).toBeGreaterThan(title.card * 0.25);
+  expect(title.lines).toBe(1);
+  expect(title.full).toBe('栖点桌面工具远程开发环境主仓库与发布脚本');
   await long.getByRole('button', { name: /的更多操作$/ }).click();
   await page.getByRole('menuitem', { name: '项目信息', exact: true }).click();
   await expect(page.getByRole('dialog')).toContainText('栖点桌面工具远程开发环境主仓库与发布脚本');

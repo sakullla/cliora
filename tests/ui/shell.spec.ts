@@ -603,14 +603,15 @@ test('command palette scrolls a filtered project into view', async ({ page }) =>
   await installDesktop(page, projects);
   await page.setViewportSize({ width: 1100, height: 640 });
   await page.goto('/');
-  const target = page.locator('[data-project-id="p7"]');
+  // Most recent first: p0 (least recently opened) is the last row, below the fold.
+  const target = page.locator('[data-project-id="p0"]');
   const search = page.getByRole('textbox', { name: '搜索项目' });
-  await search.fill('项目0');
+  await search.fill('项目7');
   await expect(target).toHaveCount(0);
 
   await page.keyboard.press('Control+K');
   const dialog = page.getByRole('dialog', { name: '快速前往' });
-  await dialog.getByRole('combobox', { name: '搜索页面、工具或项目' }).fill('项目7');
+  await dialog.getByRole('combobox', { name: '搜索页面、工具或项目' }).fill('项目0');
   await page.keyboard.press('Enter');
   await expect(page.locator('dialog')).toHaveCount(0);
   await expect(search).toHaveValue('');
@@ -623,9 +624,9 @@ test('command palette scrolls a filtered project into view', async ({ page }) =>
   })).toBe(true);
   await expect.poll(() => page.locator('main.content').evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
   await expect(target).toBeFocused();
-  await search.fill('项目0');
+  await search.fill('项目7');
   await expect(target).toHaveCount(0);
-  await expect(page.locator('[data-project-id="p0"]')).toHaveCount(1);
+  await expect(page.locator('[data-project-id="p7"]')).toHaveCount(1);
 });
 
 /** Native mock with indexed sessions and library items; records every IPC call. */

@@ -19,43 +19,66 @@
 .quickContent .actions { justify-content: flex-start; gap: var(--space-2); }
 .heading { min-height: var(--control-h-sm); }
 .sectionHint { display: none; }
-.projectSearch { max-width: 380px; }
-.projectSearch > input { width: 100%; }
 .noMatch { margin: 0; padding: var(--space-5) var(--space-1); color: var(--text-3); font-size: var(--fs-body); text-align: center; }
+.noMatch > p { margin: 0 0 var(--space-2); }
 
-/* Identity and current context lead; launch is the only primary action. Every card stacks the same
-   three parts at any width: name (own line), status/context and directory, then one action row.
-   The card is its own container so narrow cards adapt to their width, not the page width. */
-.projectGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr)); gap: var(--space-3); }
-.project { position: relative; align-content: space-between; gap: var(--space-3); padding: var(--space-4); border-radius: var(--radius-xl); container: project-card / inline-size; animation: reveal var(--medium) var(--ease) both; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--medium) var(--ease); }
-.project:hover { border-color: var(--line-strong); box-shadow: var(--shadow-card-hover); }
-.project:focus-visible { outline: var(--focus-ring); outline-offset: -1px; border-color: var(--accent); }
-.repair, .spotlight, .repair:hover, .spotlight:hover { border-color: var(--accent); outline: var(--focus-ring); outline-offset: -1px; box-shadow: 0 0 0 3px var(--accent-ring); }
-.identity { display: grid; gap: var(--space-1_5); min-width: 0; }
-.projectTitle { display: flex; align-items: center; gap: var(--space-2_5); min-width: 0; }
-.projectTitle > svg, .projectTitle > :first-child { flex: none; }
-.projectTitle > svg { color: var(--accent); }
-.projectTitle strong { min-width: 0; overflow: hidden; font-size: var(--fs-title); font-weight: var(--fw-semibold); letter-spacing: -.015em; text-overflow: ellipsis; white-space: nowrap; }
-.contextLine, .metaLine { display: flex; align-items: center; gap: var(--space-2); min-width: 0; padding-left: calc(var(--space-6) + var(--space-2_5)); }
-.contextLine { color: var(--text-2); font-size: var(--fs-caption); }
+/* Find and arrange: one quiet row above the list. */
+.listTools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.projectSearch { flex: 1 1 260px; max-width: 420px; min-width: 0; }
+.projectSearch > input { width: 100%; }
+.sortSwitch { flex: none; margin-left: auto; }
+.filterChip { display: inline-flex; flex: none; align-items: center; gap: var(--space-1_5); min-height: var(--control-h-sm); padding: 0 var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface); box-shadow: none; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-medium); white-space: nowrap; }
+.filterChip:hover:not(:disabled) { background: var(--row-hover); color: var(--text); }
+.filterChip[aria-pressed="true"], .filterChip[aria-pressed="true"]:hover:not(:disabled) { border-color: var(--warning-line); background: var(--warning-soft); color: var(--text); }
+.attentionDot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--warning); }
+
+/* Directories are one compact list on one surface: a row is the name over a single muted line
+   (tool · profile · directory · last used) with pin, launch and more at the end. Hundreds of
+   directories stay scannable, and only a page of rows is rendered at a time. */
+.projectList { display: grid; gap: 0; min-width: 0; padding: var(--space-1); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-card); container: project-list / inline-size; }
+.project { position: relative; display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3); border-radius: var(--radius-lg); transition: background-color var(--fast) var(--ease); }
+.project + .project::before { content: ''; position: absolute; top: 0; right: var(--space-3); left: var(--space-3); height: 1px; background: var(--line); pointer-events: none; }
+.project:hover, .project:focus-within { background: var(--surface-2); }
+.project:hover::before, .project:focus-within::before, .project:hover + .project::before, .project:focus-within + .project::before { opacity: 0; }
+.project:focus-visible { outline: var(--focus-ring); outline-offset: -2px; }
+.repair, .spotlight, .repair:hover, .spotlight:hover { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px var(--accent-ring); }
+.main { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); min-width: 0; min-height: 40px; }
+.identity { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "title title" "context meta"; align-items: center; gap: var(--space-0_5) var(--space-2); min-width: 0; }
+/* Whole-pixel line boxes keep every row the same integer height, so scroll positions restore exactly. */
+.projectTitle { grid-area: title; display: flex; align-items: center; gap: var(--space-2); min-width: 0; height: 22px; line-height: 22px; }
+.projectIcon { display: grid; flex: none; place-items: center; width: 22px; height: 22px; color: var(--accent); }
+.projectTitle strong { min-width: 0; overflow: hidden; font-size: var(--fs-body); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.stateBadge { flex: none; }
+.contextLine, .metaLine { display: flex; align-items: center; gap: var(--space-2); min-width: 0; height: 18px; line-height: 18px; }
+.contextLine { grid-area: context; max-width: 46ch; padding-left: calc(var(--space-5) + var(--space-0_5) + var(--space-2)); color: var(--text-2); font-size: var(--fs-caption); }
+.contextLine:empty { display: none; }
 .contextLine > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Status badges never shrink; the host address gives way first, then the tool name. */
 .contextLine > .badges { display: inline-flex; flex: none; gap: var(--space-1); overflow: visible; }
 .contextTool { flex: 0 1 auto; }
+.contextTool[data-missing] { color: var(--warning); font-weight: var(--fw-medium); }
 .contextHost { flex: 0 100 auto; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); }
 .contextProfile { color: var(--text-2); font-size: var(--fs-caption); }
 .contextProfile[data-profile-name="unavailable"] { color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); }
-.noMatch > p { margin: 0 0 var(--space-2); }
+.metaLine { grid-area: meta; color: var(--text-3); }
+.metaLine::before { content: '·'; flex: none; color: var(--text-3); }
 .cardPath { min-width: 0; overflow: hidden; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
-.lastUsed { flex: none; color: var(--text-3); font-size: var(--fs-micro); white-space: nowrap; }
-.remoteProject { border-color: var(--accent-line); }
-/* One action row: the tool picker (or an empty lead) takes the flexible start, launch and more
-   always end the row, so equal-width cards line their buttons up regardless of tool names. */
-.controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-2); min-width: 0; }
-.controls .toolSelect { justify-self: start; width: 100%; max-width: 260px; min-width: 0; }
+.lastUsed { flex: none; margin-left: auto; padding-left: var(--space-2); color: var(--text-3); font-size: var(--fs-micro); white-space: nowrap; }
+.remoteProject .projectIcon { color: var(--info, var(--accent)); }
+.controls { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.controls .toolSelect { width: 168px; min-width: 0; }
 .controls .toolSelect > button { min-height: var(--control-h-sm); font-size: var(--fs-caption); }
 .controls .actions { flex-wrap: nowrap; justify-content: flex-end; }
-.controlsLead { min-width: 0; }
+/* The pin is quiet until it matters: always visible once pinned, otherwise on row hover/focus. */
+.pin { color: var(--text-3); }
+.pin[data-pinned], .pin[data-pinned]:hover:not(:disabled) { color: var(--warning); }
+.pin[data-pinned] svg { fill: currentColor; }
+@media (hover: hover) {
+  .pin:not([data-pinned]) { opacity: 0; transition: opacity var(--fast) var(--ease); }
+  .project:hover .pin, .project:focus-within .pin { opacity: 1; }
+}
+.moreRow { display: flex; justify-content: center; margin-top: calc(var(--space-1) * -1); }
+.moreButton { color: var(--text-2); }
 .cardError { display: flex; align-items: flex-start; gap: var(--space-2); padding: var(--space-2) var(--space-2_5); border: 1px solid var(--danger-line); border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--danger); font-size: var(--fs-caption); line-height: 1.5; }
 .cardError > span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .cardErrorClose { display: grid; flex: none; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit; cursor: pointer; }
@@ -125,25 +148,18 @@
 @container launcher (max-width: 420px) {
   .quick > summary small { display: none; }
 }
-@container project-card (max-width: 420px) {
-  .contextLine, .metaLine { padding-left: 0; }
-}
-/* Very narrow cards give the tool picker its own row; launch and more stay together at the end. */
-@container project-card (max-width: 330px) {
-  .controls { grid-template-columns: minmax(0, 1fr); }
-  .controls .toolSelect { max-width: none; }
-  .controlsLead { display: none; }
-  .controls .actions { justify-self: end; }
-}
 @container launcher (min-width: 620px) {
   .quickContent { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .quickContent > div:first-child, .quickContent .actions { grid-column: 1 / -1; }
 }
-/* Local directory cards: identity and the launch row share one grid. A wide card puts launch
-   beside the name so the card is two lines shorter; a narrow card stacks them as before. */
-.main { display: grid; gap: var(--space-3); min-width: 0; }
-@container project-card (min-width: 460px) {
-  .main { grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-3) var(--space-4); }
-  .main > .controls { grid-template-columns: auto; }
-  .main .controlsLead { display: none; }
+/* Narrow lists drop the muted line's directory below the context and give the actions their own row. */
+@container project-list (max-width: 560px) {
+  .identity { grid-template-columns: minmax(0, 1fr); grid-template-areas: "title" "context" "meta"; }
+  .metaLine { padding-left: calc(var(--space-5) + var(--space-0_5) + var(--space-2)); }
+  .metaLine::before { content: none; }
+  .lastUsed { margin-left: 0; }
+}
+@container project-list (max-width: 420px) {
+  .main { grid-template-columns: minmax(0, 1fr); }
+  .controls { justify-content: flex-end; }
 }

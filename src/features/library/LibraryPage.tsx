@@ -381,8 +381,6 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   ])).sort(), [items, categoryFilter]);
   const shown = items.filter((item) => (projectFilter === '*' || (projectFilter === 'global' ? !item.projectId : item.projectId === projectFilter))
     && (categoryFilter === '*' || tagsOf(item.category).includes(categoryFilter)));
-  // The unfiltered count loads separately; clamp it so a fresh filtered batch never shows x > y.
-  const listTotal = Math.max(counts[kind] ?? items.length, shown.length);
 
   async function canReplace() {
     if (busyRef.current) return false;
@@ -758,7 +756,6 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     ['mcp', 'connections', 'MCP'],
     ['skill', 'package', 'Skill'],
   ];
-  const activeSection = sectionTabs.find(([id]) => id === section)!;
   const listSection = section === 'rule';
   // A failed refresh of rows already on screen: the rows stay, marked stale, with a retry here.
   const listStale = listSection && listLoaded && !!listError;
@@ -792,7 +789,6 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
         </button>)}
       </div>
     </Toolbar>
-    <div className={styles.sectionContext} data-library-context><span className={styles.sectionContextIcon} aria-hidden="true"><Icon name={activeSection[1]} size={16} /></span><span className={styles.sectionContextCopy}><strong>{activeSection[2]}</strong><small>{t(`library.page.sectionHint.${section}`)}</small></span></div>
     {section === 'mcp' && <div id="library-mcp-panel" role="tabpanel" aria-labelledby="library-mcp-tab" className={styles.tabPanel}><LibraryMcp active={active} tools={scopedTools} projects={projects} remoteTargetId={remoteTargetId === 'local' ? null : remoteTargetId} spotlight={section === 'mcp' ? mcpSpotlight : null} onOpenConnections={mcpSpotlight?.source === 'connections' ? onOpenConnections : undefined} createSignal={createSignal} onCountChange={(count) => childCount('mcp', count)} /></div>}
     {section === 'skill' && <div id="library-skill-panel" role="tabpanel" aria-labelledby="library-skill-tab" className={styles.tabPanel}><LibraryResources active={active} tools={scopedTools} projects={projects} remoteTargetId={remoteTargetId === 'local' ? null : remoteTargetId} createSignal={createSignal} onCountChange={(count) => childCount('skill', count)} /></div>}
     {section === 'prompt' && <div id="library-prompt-panel" role="tabpanel" aria-labelledby="library-prompt-tab" className={styles.tabPanel} ><PromptLibrary context={{ targetId: remoteTargetId === 'local' ? null : remoteTargetId }} active={active && section === 'prompt'} createSignal={createSignal} discardSignal={promptDiscard} spotlight={spotlight?.kind === 'prompt' ? spotlight : null} onDirtyChange={setPromptDirty} onCountChange={count => childCount('prompt', count)} onRetryCounts={() => setCountStamp(value => value + 1)} onLaunch={openLaunch} /></div>}
@@ -818,15 +814,13 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     </div>
     <div className={styles.layout}>
       {listStale && <StatusBanner tone="warning" action={<Button size="sm" icon={<Icon name="refresh" size={14} />} disabled={listLoading} onClick={retryList}>{t('library.page.retryList')}</Button>}>{t('library.page.listStale', { kind: kindName(kind) })}</StatusBanner>}
-      {listLoaded && <div className={styles.resultBar}>
-        {/* Stale rows belong to the last successful query, which may not be the current search: no hit count for them. */}
-        {!listStale && <Badge tone={shown.length < listTotal ? 'accent' : 'neutral'}>{t('library.page.countFiltered', { filtered: shown.length, total: listTotal })}</Badge>}
+      {/* Only actionable chips: quick tags and active filters. Counts and the source are already in the tab and the host switcher. */}
+      {listLoaded && ((!listStale && categoryFilter === '*' && categories.length > 1) || filtering) && <div className={styles.resultBar} data-library-filters>
         {!listStale && categoryFilter === '*' && categories.length > 1 && categories.slice(0, 5).map((tag) => <button type="button" key={tag} className={styles.quickTag} aria-label={t('library.page.filterByTag', { tag })} title={t('library.page.filterByTag', { tag })} onClick={() => setCategoryFilter(tag)}>#{tag}</button>)}
         {search.trim() && <button type="button" className={styles.filterChip} title={t('library.page.removeFilter')} onClick={() => setSearch('')}><span>{t('library.page.activeSearchChip', { query: search.trim() })}</span><Icon name="close" size={12} /></button>}
         {projectFilter !== '*' && <button type="button" className={styles.filterChip} title={t('library.page.removeFilter')} onClick={() => setProjectFilter('*')}><span>{t('library.page.activeProjectChip', { name: projectFilter === 'global' ? t('library.page.globalItems') : projects.find((project) => project.id === projectFilter)?.name ?? projectFilter })}</span><Icon name="close" size={12} /></button>}
         {categoryFilter !== '*' && <button type="button" className={styles.filterChip} title={t('library.page.removeFilter')} onClick={() => setCategoryFilter('*')}><span>{t('library.page.activeTagChip', { tag: categoryFilter })}</span><Icon name="close" size={12} /></button>}
         {filtering && shown.length > 0 && <Button variant="ghost" size="sm" className={styles.clearFiltersInline} onClick={clearFilters}>{t('library.page.clearFilters')}</Button>}
-        <span className={styles.resultNote}>{t(remoteTargetId === 'local' ? 'library.page.sourceLocal' : 'library.page.sourceRemote')}</span>
       </div>}
       <div className={styles.list} aria-label={t('library.page.listAria', { kind: kindName(kind) })}>
         {listBody() ?? shown.map((item) => <Card className={styles.card} interactive key={item.id} data-library-id={item.id} data-source={item.projectId ? 'project' : 'global'}>

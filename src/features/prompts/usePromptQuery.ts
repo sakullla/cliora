@@ -12,10 +12,13 @@ const empty: PromptPage = { items: [], total: 0, nextOffset: null, tags: [] };
 // to the caller's sourceKey/sequence. Never reuse a different host, scope, or query.
 const snapshots = new Map<string, PromptPage>();
 export function promptContextKey(context: PromptContext) { return JSON.stringify([context.targetId || 'local', context.workspaceId || '', context.repositoryId || '']); }
-export function usePromptQuery(context: PromptContext, query: PromptQuery, active = true, identity = '') {
+/** `keepPrevious` keeps the last settled page of the same source on screen while a changed
+ * scope/filter loads (`placeholder`), so a list never collapses and regrows between two reads. */
+export function usePromptQuery(context: PromptContext, query: PromptQuery, active = true, identity = '', options: { keepPrevious?: boolean } = {}) {
   const { t } = useTranslation();
   const contextKey = promptContextKey({ ...context, workspaceId: context.workspaceId ?? query.workspaceId ?? null, repositoryId: context.repositoryId ?? query.repositoryId ?? null });
   const remoteIdentity = useRemoteIdentity(context.targetId ?? 'local');
+  const familyKey = JSON.stringify([contextKey, remoteIdentity, identity]);
   const scopeKey = JSON.stringify([contextKey, remoteIdentity, identity, query.scopeFilter ?? null, !!query.includeOtherScopes]);
   const key = JSON.stringify([scopeKey, query]);
   const snapshotKey = JSON.stringify([contextKey, remoteIdentity, {
@@ -23,7 +26,7 @@ export function usePromptQuery(context: PromptContext, query: PromptQuery, activ
     includeOtherScopes: !!query.includeOtherScopes, favoritesOnly: !!query.favoritesOnly,
     recentOnly: !!query.recentOnly, offset: query.offset ?? 0, limit: query.limit || 40,
   }]);
-  const [result, setResult] = useState<{ key: string; scopeKey: string; page: PromptPage } | null>(null);
+  const [result, setResult] = useState<{ key: string; scopeKey: string; familyKey: string; page: PromptPage } | null>(null);
   const [error, setError] = useState<{ key: string; text: string } | null>(null);
   const [pending, setPending] = useState('');
   const [generation, setGeneration] = useState(0);
@@ -43,11 +46,11 @@ export function usePromptQuery(context: PromptContext, query: PromptQuery, activ
         if (!page || !Array.isArray(page.items) || typeof page.total !== 'number') throw new Error(t('prompts.readFailed'));
         snapshots.delete(snapshotKey); snapshots.set(snapshotKey, page);
         while (snapshots.size > 64) snapshots.delete(snapshots.keys().next().value!);
-        setResult({ key, scopeKey, page }); setError(stale ? { key, text: t('prompts.stale') } : null);
+        setResult({ key, scopeKey, familyKey, page }); setError(stale ? { key, text: t('prompts.stale') } : null);
       }).catch(value => {
         if (!controller.signal.aborted && sequence.current === request) {
           const cached = snapshots.get(snapshotKey);
-          if (cached) setResult({ key, scopeKey, page: cached });
+          if (cached) setResult({ key, scopeKey, familyKey, page: cached });
           setError({ key, text: formatFailure(value, t('prompts.readFailed'), t('prompts.retry')) });
         }
       }).finally(() => { if (!controller.signal.aborted && sequence.current === request) setPending(''); });
@@ -58,5 +61,8 @@ export function usePromptQuery(context: PromptContext, query: PromptQuery, activ
   // Failed filters may retain a clearly stale snapshot of this same source/scope, never
   // another host or project. Its total is not a hit count for the unsuccessful new query.
   const stale = !!currentError && result?.scopeKey === scopeKey;
-  return { loaded: result?.key === key, stale, page: result?.key === key || stale ? result!.page : empty, error: currentError, loading: active && (pending === key || (result?.key !== key && error?.key !== key)), reload: () => setGeneration(value => value + 1), key };
+  const loading = active && (pending === key || (result?.key !== key && error?.key !== key));
+  // Never another host, project or caller identity: only the same source's previous query.
+  const placeholder = !!options.keepPrevious && loading && !currentError && !!result && result.key !== key && result.familyKey === familyKey;
+  return { loaded: result?.key === key, stale, placeholder, page: result?.key === key || stale || placeholder ? result!.page : empty, error: currentError, loading, reload: () => setGeneration(value => value + 1), key };
 }

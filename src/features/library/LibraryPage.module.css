@@ -25,7 +25,6 @@
 .skillToolbar .searchBox { width: 100%; }
 /* The result line holds the page's one count plus active filter chips and where these items live. */
 .resultBar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5) var(--space-2); min-width: 0; }
-.resultNote { margin-left: auto; min-width: 0; color: var(--text-3); font-size: var(--fs-caption); }
 .quickTag,
 .quickTag:hover:not(:disabled) {
   display: inline-flex;
@@ -74,11 +73,6 @@
 
 /* Resource rows: one column, like the MCP list, so a long title keeps its line and
    tags wrap underneath instead of squeezing the card. */
-.sectionContext { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; margin-top: calc(var(--space-2) * -1); padding: 0 var(--space-0_5); border: 0; background: transparent; }
-.sectionContextIcon { display: grid; place-items: center; flex: none; width: 22px; height: 22px; border-radius: var(--radius-xs); background: var(--accent-soft); color: var(--accent); }
-.sectionContextCopy { display: flex; flex: 1 1 240px; flex-wrap: wrap; align-items: baseline; gap: var(--space-0_5) var(--space-2); min-width: 0; }
-.sectionContextCopy strong { color: var(--text); font-size: var(--fs-control); font-weight: var(--fw-semibold); }
-.sectionContextCopy small { color: var(--text-3); font-size: var(--fs-caption); line-height: 1.45; overflow-wrap: anywhere; }
 .layout { display: grid; align-content: start; gap: var(--space-3); min-width: 0; }
 .list { display: grid; align-content: start; gap: 0; min-width: 0; padding: var(--space-1); overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-card); }
 .list > .card {

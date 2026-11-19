@@ -238,3 +238,42 @@ test('an empty scoped search offers the all-scope search and double-click insert
   await expect(draft).toHaveValue('B-only-secret-scope');
   expect(await page.evaluate(() => (window as any).__promptBaseCalls.filter((call: any) => call.command === 'write_workbench_session').length)).toBe(0);
 });
+
+test('switching the picker scope keeps the dialog still and the rows in place while the new scope loads', async ({ page }) => {
+  await install(page);
+  const pane = await composer(page);
+  await pane.getByRole('button', { name: '查找提示词', exact: true }).click();
+  const picker = page.getByRole('dialog', { name: '查找提示词' });
+  const results = picker.locator('[data-prompt-results]');
+  const rows = picker.locator('[data-prompt-pick]');
+  await expect(rows.first()).toBeVisible();
+  await expect(results).not.toHaveAttribute('aria-busy', 'true');
+  const frame = async () => ({ dialog: await picker.boundingBox(), results: await results.boundingBox() });
+  const before = await frame();
+  const count = await rows.count();
+  // Hold the next prompt queries so the loading state of the other scope can be inspected.
+  await page.evaluate(() => {
+    const app = window as any; const internals = app.__TAURI_INTERNALS__; const original = internals.invoke;
+    app.__heldQueries = [];
+    internals.invoke = (command: string, args: unknown) => command === 'query_prompts' && app.__heldQueries
+      ? new Promise(resolve => app.__heldQueries.push(() => resolve(original(command, args))))
+      : original(command, args);
+  });
+  await picker.getByRole('radio', { name: '全部提示词', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__heldQueries.length)).toBeGreaterThan(0);
+  // While the other scope loads, the previous rows stay (disabled) instead of collapsing to a loading line.
+  await expect(results).toHaveAttribute('aria-busy', 'true');
+  await expect(rows).toHaveCount(count);
+  await expect(rows.first()).toBeDisabled();
+  await expect(picker.getByText('正在读取提示词…')).toHaveCount(0);
+  expect(await frame()).toEqual(before);
+  await page.evaluate(() => { const app = window as any; const held = app.__heldQueries; app.__heldQueries = null; held.forEach((release: () => void) => release()); });
+  await expect(results).not.toHaveAttribute('aria-busy', 'true');
+  await expect(rows.first()).toBeEnabled();
+  // The dialog and the list frame keep one size across both scopes and their tag filter stays in place.
+  expect(await frame()).toEqual(before);
+  await expect(picker.getByRole('button', { name: '按标签筛选' })).toBeVisible();
+  await picker.getByRole('radio', { name: '电商平台 / api', exact: true }).click();
+  await expect(results).not.toHaveAttribute('aria-busy', 'true');
+  expect(await frame()).toEqual(before);
+});

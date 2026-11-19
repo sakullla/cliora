@@ -55,6 +55,7 @@ export default {
     pickFolder: '选择文件夹…',
     expand: '展开 {{count}} 项',
     collapse: '收起 {{count}} 项',
+    matchCount: '{{count}} 项',
   },
   dialog: {
     back: '返回列表',

@@ -19,7 +19,7 @@ import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { GuideDialog } from '../../components/GuideDialog';
 import { RowMenu } from '../../components/RowMenu';
 import { SkeletonRows } from '../../components/Skeleton';
-import { Badge, Button, Card, SplitButton, Toolbar } from '../../components/ui';
+import { Badge, Button, Segmented, SplitButton, Toolbar } from '../../components/ui';
 import { ensureRemoteProject, useRemoteFolderPicker } from '../remote/remoteLaunch';
 import { formatFailure } from '../../lib/feedback';
 import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/workbenchLaunch';
@@ -56,10 +56,26 @@ function distinctPaths(paths: string[]): Map<string, string> {
   return labels;
 }
 
-/** The home search's rule for local projects; an empty query keeps every project. */
+/** The home search's rule for local projects; an empty query keeps every project. Every word must
+ *  match the name or the path, so `team api` narrows hundreds of directories in one step. */
 function projectMatches(project: Project, query: string): boolean {
-  const needle = query.trim().toLowerCase();
-  return !needle || `${project.name} ${project.path ?? ''}`.toLowerCase().includes(needle);
+  const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const text = `${project.name} ${project.path ?? ''}`.toLowerCase();
+  return tokens.every((token) => text.includes(token));
+}
+
+/** Rows shown before 显示更多: enough for the recent working set, never hundreds of rows at once. */
+const PAGE_SIZE = 12;
+const PAGE_STEP = 48;
+const pinnedKey = 'cliora:home-pinned-projects';
+const sortKey = 'cliora:home-project-sort';
+type ProjectSort = 'recent' | 'name';
+/** Pins and sort are a view preference of this device, like the folded tool list; nothing is written to projects. */
+function readPinned(): string[] {
+  try { const value: unknown = JSON.parse(localStorage.getItem(pinnedKey) ?? '[]'); return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []; } catch { return []; }
+}
+function readSort(): ProjectSort {
+  try { return localStorage.getItem(sortKey) === 'name' ? 'name' : 'recent'; } catch { return 'recent'; }
 }
 
 export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQueryChange: setProjectQuery, remoteSshEnabled = false, remoteTargetId = 'local', onWorkbenchSession, onWorkbenchFailure, incomingManifest, onManifestConsumed }: { onManifestConsumed?: (preview: WorkspaceManifestPreview) => void; incomingManifest?: WorkspaceManifestPreview | null; tools: AdapterDescriptor[]; projectQuery: string; onQueryChange: (query: string) => void; repair?: TrayRepairTarget | null; spotlight?: { id: string; token: number } | null; remoteSshEnabled?: boolean; remoteTargetId?: string; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
@@ -107,6 +123,23 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
   const [sessionOptionEdits, setSessionOptionEdits] = useState<Record<string, Record<string, string>>>({});
   const [toolVersions, setToolVersions] = useState<Record<string, string | null>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [pinned, setPinned] = useState<string[]>(readPinned);
+  const [sortMode, setSortMode] = useState<ProjectSort>(readSort);
+  const [attentionOnly, setAttentionOnly] = useState(false);
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  function togglePin(id: string) {
+    setPinned((current) => {
+      const next = current.includes(id) ? current.filter((item) => item !== id) : [id, ...current];
+      try { localStorage.setItem(pinnedKey, JSON.stringify(next)); } catch { /* Pins still apply for this session. */ }
+      return next;
+    });
+  }
+  function changeSort(next: ProjectSort) {
+    setSortMode(next);
+    try { localStorage.setItem(sortKey, next); } catch { /* Sorting works without storage. */ }
+  }
+  // A new query, order or filter starts again from the first page of rows.
+  useEffect(() => { setLimit(PAGE_SIZE); }, [projectQuery, sortMode, attentionOnly, remoteTargetId]);
   const [copiedPath, setCopiedPath] = useState('');
   const copiedTimer = useRef(0);
   const launchPending = useRef(false);
@@ -143,6 +176,7 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
       setProjectQuery('');
       return;
     }
+    setAttentionOnly(false);
     // Opened once per request; later searches and closes belong to the user again.
     revealedRepair.current = repair.sequence;
     // Repair now lands in the project editor, where tool, directory and model share one context.
@@ -166,8 +200,9 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
       document.querySelector<HTMLElement>('[data-business-workspaces]')?.scrollIntoView({ block: 'start', behavior: 'auto' });
       return;
     }
-    if (projectQuery) {
+    if (projectQuery || attentionOnly) {
       setProjectQuery('');
+      setAttentionOnly(false);
       return;
     }
     const card = document.querySelector<HTMLElement>(`[data-project-id="${CSS.escape(spotlight.id)}"]`);
@@ -180,7 +215,7 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
       card.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
-  }, [spotlight?.id, spotlight?.token, projects, projectQuery, repair?.projectId]);
+  }, [spotlight?.id, spotlight?.token, projects, projectQuery, attentionOnly, repair?.projectId]);
 
   async function refresh() {
     if (!nativeAvailable) return;
@@ -549,6 +584,36 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
   const scopeLoading = (listLoading && !totalProjects) || (remoteUnread && remoteLoading && !scopedRemoteProjects.length) || (remoteScope && remoteRead.state === 'idle' && remoteSshEnabled);
   const remoteHostLabel = scopeTarget?.name || t('home.remote.currentHost');
   const pathLabels = distinctPaths(remoteScope ? scopedRemoteProjects.map((project) => project.path) : scopedProjects.flatMap((project) => project.path ? [project.path] : []));
+  const toolOf = (project: Project) => managed.some((tool) => tool.id === project.preferredTool) ? project.preferredTool! : '';
+  // A directory needs a look when it cannot launch as is: moved, no tool, or a chosen profile not yet applied.
+  const needsAttention = (project: Project) => {
+    const id = toolOf(project);
+    return !project.available || !id || (!!project.selectedProfiles[id] && project.selectedProfiles[id] !== project.appliedProfiles[id]);
+  };
+  const attentionCount = remoteScope ? 0 : scopedProjects.filter(needsAttention).length;
+  const attentionActive = attentionOnly && attentionCount > 0;
+  const collator = new Intl.Collator(i18n.language || 'zh-CN', { numeric: true, sensitivity: 'base' });
+  /** Pinned first, then the chosen order; equal rows keep the order the list was read in. */
+  function arrange<T>(items: T[], key: (item: T) => string, name: (item: T) => string, recency: (item: T) => number): T[] {
+    return items.map((item, index) => ({ item, index }))
+      .sort((a, b) => Number(pinned.includes(key(b.item))) - Number(pinned.includes(key(a.item)))
+        || (sortMode === 'name' ? collator.compare(name(a.item), name(b.item)) : recency(b.item) - recency(a.item))
+        || a.index - b.index)
+      .map(({ item }) => item);
+  }
+  const orderedProjects = arrange(attentionActive ? visibleProjects.filter(needsAttention) : visibleProjects, (project) => project.id, (project) => project.name, (project) => project.lastOpened || 0);
+  // Remote hosts return their own recent order; only the name order and pins rearrange it.
+  const orderedRemote = arrange(visibleRemoteProjects, (project) => `remote:${project.id}`, (project) => project.name, () => 0);
+  // Only a page of rows is rendered; a repair or palette target is always among them.
+  const forced = new Set([repair?.projectId, spotlight?.id].filter(Boolean));
+  const pageProjects = orderedProjects.filter((project, index) => index < limit || forced.has(project.id));
+  const pageRemote = orderedRemote.slice(0, limit);
+  const hiddenCount = orderedProjects.length - pageProjects.length + orderedRemote.length - pageRemote.length;
+  const listTools = totalProjects > 4 || !!projectQuery;
+  const pinButton = (id: string, name: string) => {
+    const on = pinned.includes(id);
+    return <Button size="sm" variant="ghost" className={styles.pin} data-pinned={on || undefined} aria-pressed={on} aria-label={t(on ? 'home.launcher.unpin' : 'home.launcher.pin', { name })} title={t(on ? 'home.launcher.unpin' : 'home.launcher.pin', { name })} icon={<Icon name="star" size={14} />} onClick={() => togglePin(id)} />;
+  };
   return <section className={`${styles.workspace} home-launcher`} aria-label={t('home.launcher.label')}>
     <Toolbar className={styles.heading} title={t(remoteScope ? 'home.continue.title' : 'workspaces.directoryTitle')} count={totalProjects ? <Badge>{totalProjects}</Badge> : undefined} actions={totalProjects ? <Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t(remoteScope ? 'home.launcher.add' : 'workspaces.directoryAdd')}</Button> : undefined} />
     {error && <div className={styles.error} role="alert" aria-busy={listLoading || undefined}><span className={styles.errorText}>{error}</span>{listFailed && reloadFailures > 0 && !listLoading && <span className={styles.errorHint}>{t('home.launcher.reloadFailed')}</span>}{listFailed && <Button size="sm" variant="ghost" className={styles.errorAction} loading={listLoading} disabled={listLoading || !!busy} onClick={() => void refresh()}>{t('home.launcher.reload')}</Button>}</div>}
@@ -556,11 +621,15 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
     {remoteFailed && <div className={styles.error} role="alert" aria-busy={remoteLoading || undefined} data-remote-read={remoteRead.loaded ? 'stale' : 'failed'}><span className={styles.errorText}><strong className={styles.errorTitle}>{remoteRead.loaded ? t('home.remote.refreshFailed', { host: remoteHostLabel }) : t('home.remote.readFailed', { host: remoteHostLabel })}</strong> {remoteRead.error}</span>{remoteRead.failures > 0 && !remoteLoading && <span className={styles.errorHint}>{t('home.launcher.reloadFailed')}</span>}<Button size="sm" variant="ghost" className={styles.errorAction} loading={remoteLoading} disabled={remoteLoading} onClick={() => void loadRemote(true)}>{t('home.remote.retry')}</Button></div>}
     {!managed.length && <p className={styles.note}>{t('home.launcher.enableFirst')}</p>}
     {totalProjects > 0 && <p className={styles.sectionHint}>{t(remoteScope ? 'home.continue.hint' : 'workspaces.directoryHint')}</p>}
-    {(totalProjects > 4 || projectQuery) && <SearchField className={styles.projectSearch} pageSearch label={t('home.launcher.searchLabel')} value={projectQuery} placeholder={t('home.launcher.searchPlaceholder')} onChange={setProjectQuery} />}
-    {scopeLoading ? <SkeletonRows count={2} /> : (visibleProjects.length || visibleRemoteProjects.length) ? <>
-    {visibleProjects.length > 0 && <div className={styles.projectGrid}>
-    {visibleProjects.map((project) => {
-      const toolId = managed.some((tool) => tool.id === project.preferredTool) ? project.preferredTool! : '';
+    {listTools && <div className={styles.listTools} role="group" aria-label={t('home.launcher.listToolsAria')}>
+      <SearchField className={styles.projectSearch} pageSearch label={t('home.launcher.searchLabel')} value={projectQuery} placeholder={t('home.launcher.searchPlaceholder')} onChange={setProjectQuery} />
+      {attentionCount > 0 && <button type="button" className={styles.filterChip} aria-pressed={attentionActive} title={t('home.launcher.attentionHint')} onClick={() => setAttentionOnly(!attentionActive)}><span className={styles.attentionDot} aria-hidden="true" />{t('home.launcher.attention', { count: attentionCount })}</button>}
+      <Segmented size="sm" className={styles.sortSwitch} label={t('home.launcher.sortLabel')} value={sortMode} onChange={changeSort} options={[{ value: 'recent', label: t('home.launcher.sortRecent') }, { value: 'name', label: t('home.launcher.sortName') }]} />
+    </div>}
+    {scopeLoading ? <SkeletonRows count={2} /> : (orderedProjects.length || orderedRemote.length) ? <>
+    {pageProjects.length > 0 && <div className={styles.projectList}>
+    {pageProjects.map((project) => {
+      const toolId = toolOf(project);
       const descriptor = managed.find((tool) => tool.id === toolId);
       const modelKey = `${project.id}:${toolId}`;
       const toolVersion = toolVersions[toolId];
@@ -579,16 +648,16 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
       const profileName = profileId ? profileNames[toolId]?.[profileId] : undefined;
       const profileHint = profileName ? t('home.launcher.profileIdentity', { name: profileName, id: profileId })
         : t(profileNames[toolId] === undefined ? 'home.launcher.profileNameLoading' : 'home.launcher.profileNameUnavailable', { id: profileId });
-      return <Card padding="compact" ref={repair?.projectId === project.id ? repairCard : undefined} tabIndex={marked ? -1 : undefined} data-project-id={project.id} className={`${styles.project}${repair?.projectId === project.id ? ` ${styles.repair}` : ''}${spotlight?.id === project.id ? ` ${styles.spotlight}` : ''}`} key={project.id}>
+      return <article ref={repair?.projectId === project.id ? repairCard : undefined} tabIndex={marked ? -1 : undefined} data-project-id={project.id} data-pinned={pinned.includes(project.id) || undefined} data-unavailable={!project.available || undefined} className={`${styles.project}${repair?.projectId === project.id ? ` ${styles.repair}` : ''}${spotlight?.id === project.id ? ` ${styles.spotlight}` : ''}`} key={project.id}>
         <div className={styles.main}>
         <div className={styles.identity}>
-          <div className={styles.projectTitle}><ToolIcon toolId={toolId} size={24} /><strong title={project.name}>{project.name}</strong></div>
-          <div className={styles.contextLine}>{projectMode === 'yolo' && descriptor?.yoloAvailable && <span className={styles.badges}><Badge tone="warning">YOLO</Badge></span>}<span className={styles.contextTool}>{descriptor?.name ?? t('home.launcher.pickTool')}</span>{profileId && <span className={styles.contextProfile} title={profileHint} aria-label={profileHint} data-profile-name={profileName ? 'resolved' : 'unavailable'}>{profileName ? t('home.launcher.currentProfile', { id: profileName }) : t('home.launcher.profileNameFallback', { id: profileId })}</span>}</div>
+          <div className={styles.projectTitle}><span className={styles.projectIcon}><ToolIcon toolId={toolId} size={20} /></span><strong title={project.name}>{project.name}</strong>{!project.available && <Badge tone="warning" className={styles.stateBadge} title={t('home.launcher.dirUnavailable')}>{t('home.launcher.dirMissing')}</Badge>}</div>
+          <div className={styles.contextLine}>{projectMode === 'yolo' && descriptor?.yoloAvailable && <span className={styles.badges}><Badge tone="warning">YOLO</Badge></span>}<span className={styles.contextTool} data-missing={!toolId || undefined} title={toolId ? undefined : t(project.preferredTool ? 'home.launcher.toolUnmanaged' : 'home.launcher.toolMissing')}>{descriptor?.name ?? t('home.launcher.pickTool')}</span>{profileId && <span className={styles.contextProfile} title={profileHint} aria-label={profileHint} data-profile-name={profileName ? 'resolved' : 'unavailable'}>{profileName ? t('home.launcher.currentProfile', { id: profileName }) : t('home.launcher.profileNameFallback', { id: profileId })}</span>}</div>
           <div className={styles.metaLine}><span className={styles.cardPath} title={project.path ? displayPath(project.path) : ''}>{project.path ? pathLabels.get(project.path) ?? shortPath(project.path) : t('home.launcher.noDirectory')}</span>{used && <span className={styles.lastUsed}>{t('home.continue.lastUsed', { when: used })}</span>}</div>
         </div>
         <div className={styles.controls}>
-          <span className={styles.controlsLead} aria-hidden="true" />
           <div className={styles.actions}>
+            {pinButton(project.id, project.name)}
             {descriptor?.resumeLatestAvailable && <Button size="sm" variant="ghost" disabled={!!busy || !project.available || !toolId} onClick={() => void launch(toolId, project.id, 'normal', undefined, 'page', true)}>{t('home.launcher.resumeLatest')}</Button>}
             <SplitButton size="sm" icon={<Icon name="play" size={14} />} disabled={!!busy || !project.available || !toolId} title={!project.available ? t('home.launcher.dirUnavailable') : projectMode === 'yolo' ? t('home.tools.launchYolo') : launchSettings?.projectMode === 'yolo' ? t('home.tools.launchYoloFallback') : undefined} menuLabel={t('home.launcher.launchMenu', { name: project.name })} menuDisabled={!!busy || !project.available || !managed.length} menu={launchMenu(toolId, (next) => void launchWith(project, toolId, next))} onClick={() => void launch(toolId, project.id, projectMode)}>{t('home.tools.launch')}</SplitButton>
             <RowMenu label={t('home.launcher.moreActions', { name: project.name })}>
@@ -601,7 +670,6 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
         </div>
         {cardError?.id === project.id && <div className={styles.cardError} role="alert"><span>{cardError.message}</span><button type="button" className={styles.cardErrorClose} aria-label={t('home.launcher.dismissError')} title={t('home.launcher.dismissError')} onClick={() => setCardError(null)}><Icon name="close" size={13} /></button></div>}
         {descriptor?.resume?.state === 'available' && descriptor.history?.state === 'unsupported' && <div className={styles.extra}><label>{t('home.launcher.projectSessionLabel')}<input aria-label={t('home.launcher.projectSessionAria', { name: project.name })} value={projectSessions[project.id] ?? ''} placeholder={t('home.launcher.resumeIdPlaceholder')} disabled={!!busy || !project.available} onChange={(event) => setProjectSessions((old) => ({ ...old, [project.id]: event.target.value }))} onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing && !busy && project.available && toolId && (projectSessions[project.id] ?? '').trim()) { event.preventDefault(); void launch(toolId, project.id, 'normal', projectSessions[project.id], 'page', false); } }} /></label><Button size="sm" disabled={!!busy || !project.available || !toolId || !(projectSessions[project.id] ?? '').trim()} title={!project.available ? t('home.launcher.dirUnavailable') : descriptor.history.reason} onClick={() => void launch(toolId, project.id, 'normal', projectSessions[project.id], 'page', false)}>{t('home.launcher.resumeById')}</Button><span>{t('home.launcher.projectSessionHint', { reason: descriptor.history.reason })}</span></div>}
-        {!toolId && <div className={styles.hint}>{t(project.preferredTool ? 'home.launcher.toolUnmanaged' : 'home.launcher.toolMissing')}</div>}
         {pendingProfile && <div className={styles.extra} data-tone="pending"><span>{project.reapplyProfiles?.[toolId] ? t('home.launcher.reapplyRelinked') : t('home.launcher.pendingProfile')}</span><Button size="sm" disabled={!!busy || !project.available} onClick={() => void applySelected(project, toolId)}>{t('home.launcher.apply')}</Button></div>}
         <GuideDialog open={editingId === project.id} title={t('home.launcher.editTitle', { name: project.name })} hint={t('home.launcher.editHint')} onClose={() => { setEditingId(null); setDialogError(''); setDialogFeedback(''); }}>
           {dialogError && <div className={styles.error} role="alert">{dialogError}</div>}
@@ -637,24 +705,26 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
           </div>
         </GuideDialog>
         <ProjectInfoDialog open={infoId === project.id} title={t('home.launcher.infoTitle', { name: project.name })} rows={localInfo(project, descriptor?.name)} onClose={() => setInfoId(null)} />
-      </Card>;
+      </article>;
     })}
     </div>}
-    {visibleRemoteProjects.length > 0 && <div className={styles.projectGrid}>
-      {visibleRemoteProjects.map((project) => {
+    {pageRemote.length > 0 && <div className={styles.projectList}>
+      {pageRemote.map((project) => {
         const target = remoteTargets.find((item) => item.id === project.targetId);
         const toolId = managed.some((tool) => tool.id === project.preferredTool) ? project.preferredTool! : defaultTool;
         const descriptor = managed.find((tool) => tool.id === toolId);
         const projectMode = preferredLaunchMode(launchSettings, 'project', !!descriptor?.yoloAvailable);
-        return <Card padding="compact" className={`${styles.project} ${styles.remoteProject}`} key={`remote:${project.id}`} data-project-id={`remote:${project.id}`}>
+        return <article className={`${styles.project} ${styles.remoteProject}`} key={`remote:${project.id}`} data-project-id={`remote:${project.id}`} data-pinned={pinned.includes(`remote:${project.id}`) || undefined}>
+          <div className={styles.main}>
           <div className={styles.identity}>
-            <div className={styles.projectTitle}><Icon name="globe" size={22} /><strong title={project.name}>{project.name}</strong></div>
+            <div className={styles.projectTitle}><span className={styles.projectIcon}><Icon name="globe" size={18} /></span><strong title={project.name}>{project.name}</strong></div>
             <div className={styles.contextLine}><span className={styles.badges}><Badge tone="accent">{t('home.remote.badge')}</Badge>{projectMode === 'yolo' && descriptor?.yoloAvailable && <Badge tone="warning">YOLO</Badge>}</span><span className={styles.contextTool}>{descriptor?.name ?? t('home.launcher.pickTool')}</span>{target && <span className={styles.contextHost} title={remoteAddress(target)}>{remoteAddress(target)}</span>}</div>
             <div className={styles.metaLine}><span className={styles.cardPath} title={project.path}>{pathLabels.get(project.path) ?? shortPath(project.path)}</span></div>
           </div>
           <div className={styles.controls}>
             <FilterSelect className={styles.toolSelect} label={t('home.launcher.toolFor', { name: project.name })} value={toolId} options={[{ value: '', label: t('home.launcher.pickTool') }, ...toolOptions(managed)]} placeholder={t('home.launcher.pickTool')} disabled={!!busy || !managed.length} searchLabel={t('home.launcher.searchTool')} onChange={(value) => setRemoteProjects((items) => items.map((item) => item.id === project.id ? { ...item, preferredTool: value || null } : item))} />
             <div className={styles.actions}>
+              {pinButton(`remote:${project.id}`, project.name)}
               <SplitButton size="sm" icon={<Icon name="play" size={14} />} disabled={!!busy || !toolId} title={projectMode === 'yolo' ? t('home.tools.launchYolo') : undefined} menuLabel={t('home.launcher.launchMenu', { name: project.name })} menuDisabled={!!busy || !managed.length} menu={launchMenu(toolId, (next) => void launchRemoteWith(project, next))} onClick={() => void launch(toolId, `remote:${project.id}`, projectMode)}>{t('home.tools.launch')}</SplitButton>
               <RowMenu label={t('home.launcher.moreActions', { name: project.name })}>
                 <button type="button" role="menuitem" onClick={() => setInfoId(`remote:${project.id}`)}><Icon name="info" size={14} /><span>{t('home.launcher.info')}</span></button>
@@ -662,12 +732,15 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
               </RowMenu>
             </div>
           </div>
+          </div>
           <ProjectInfoDialog open={infoId === `remote:${project.id}`} title={t('home.launcher.infoTitle', { name: project.name })} rows={remoteInfo(project, target)} onClose={() => setInfoId(null)} />
-        </Card>;
+        </article>;
       })}
     </div>}
+    {hiddenCount > 0 && <div className={styles.moreRow}><Button size="sm" variant="ghost" className={styles.moreButton} icon={<Icon name="chevronDown" size={14} />} onClick={() => setLimit((value) => value + PAGE_STEP)}>{t('home.launcher.showMore', { count: hiddenCount })}</Button></div>}
+    {limit > PAGE_SIZE && hiddenCount === 0 && (orderedProjects.length + orderedRemote.length) > PAGE_SIZE && <div className={styles.moreRow}><Button size="sm" variant="ghost" className={styles.moreButton} icon={<Icon name="arrowUp" size={14} />} onClick={() => setLimit(PAGE_SIZE)}>{t('home.launcher.showLess')}</Button></div>}
     {/* A failed read keeps its own error band above; only a successful empty read offers the empty state. */}
-    </> : projectQuery.trim() ? <div className={styles.noMatch}><p>{t('home.launcher.noMatch', { query: projectQuery.trim() })}</p><Button size="sm" variant="ghost" onClick={() => setProjectQuery('')}>{t('common.search.clear')}</Button></div>
+    </> : projectQuery.trim() || attentionActive ? <div className={styles.noMatch}><p>{t('home.launcher.noMatch', { query: projectQuery.trim() })}</p><Button size="sm" variant="ghost" onClick={() => setProjectQuery('')}>{t('common.search.clear')}</Button></div>
     : scopeReadFailed ? null
     : <div className={styles.emptyProjects}><span className={styles.emptyIcon} aria-hidden="true"><Icon name="folder" size={18} /></span><span className={styles.emptyCopy}><strong>{t(remoteScope ? 'home.launcher.emptyTitle' : 'workspaces.directoryEmpty')}</strong><span>{t(remoteScope ? 'home.launcher.emptyDetail' : 'workspaces.directoryEmptyDetail')}</span></span><Button size="sm" icon={<Icon name="plus" size={14} />} disabled={!!busy} onClick={() => void chooseDirectory()}>{t(remoteScope ? 'home.launcher.addProject' : 'workspaces.directoryAdd')}</Button></div>}
     {!!managed.length && <details className={styles.quick}><summary><span>{t('home.launcher.resumeTitle')}</span><small>{t('home.launcher.resumeHint')}</small></summary><div className={styles.quickContent}>

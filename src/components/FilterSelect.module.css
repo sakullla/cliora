@@ -84,7 +84,7 @@
 .panel:focus, .panel:focus-visible { outline: none; }
 .panel > input { width: 100%; border-radius: var(--radius-sm); background-color: var(--surface); }
 .panel > input:focus { box-shadow: none; }
-.searchRow { display: flex; align-items: center; gap: var(--space-2); min-height: 34px; padding: 0 var(--space-1) 0 var(--space-2_5); border: 1px solid var(--control-line); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-3); transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease); }
+.searchRow { display: flex; align-items: center; gap: var(--space-2); min-height: 34px; padding: 0 var(--space-1) 0 var(--space-2_5); border: 1px solid var(--control-line); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-3); }
 .searchRow:focus-within { border-color: var(--accent); background: var(--surface); outline: 2px solid var(--accent); outline-offset: -1px; }
 .searchRow > svg { flex: none; }
 .searchRow > input { flex: 1; width: 0; min-width: 0; min-height: 30px; padding: 0; border: 0; background: transparent; box-shadow: none; }
@@ -93,63 +93,62 @@
 .searchClear:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 
 /* Rows never paint past the list's box (no press nudge, no focus ring), so folding a branch can never
-   leave a sub-pixel overflow that flashes a scrollbar for one frame. */
-.list { display: grid; align-content: start; gap: var(--space-0_5); min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
-.list > button {
+   leave a sub-pixel overflow that flashes a scrollbar for one frame. The list is a plain column of
+   fixed-height rows (heights come from FilterSelect.tsx): nothing is sized by a grid track or a
+   button's intrinsic size, so the first painted frame is already the final layout. */
+.list { display: flex; flex-direction: column; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.list > [role="option"] {
+  position: relative;
   display: flex;
+  flex: none;
+  box-sizing: border-box;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-2_5);
   width: 100%;
-  min-height: 40px;
-  padding: var(--space-1_5) var(--space-2);
-  border: 0;
+  padding: 0 var(--space-2_5);
   border-radius: var(--radius);
-  background: transparent;
-  box-shadow: none;
   color: var(--text);
   font-size: var(--fs-body);
   font-weight: var(--fw-regular);
   text-align: left;
+  cursor: pointer;
+  user-select: none;
 }
-.optionIcon { display: grid; place-items: center; flex: none; }
-.optionCopy { display: grid; flex: 1; min-width: 0; }
+.optionIcon { display: grid; place-items: center; flex: none; color: var(--text-2); }
+.optionCopy { display: flex; flex: 1; flex-direction: column; justify-content: center; gap: 1px; min-width: 0; }
 .optionMarks { display: inline-flex; flex: none; align-items: center; gap: var(--space-1_5); }
 .optionCopy > strong,
-.optionCopy > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.optionCopy > strong { font-weight: var(--fw-semibold); }
+.optionCopy > small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.35; }
+.optionCopy > strong { font-weight: var(--fw-medium); }
 .optionCopy > strong mark { padding: 0; border-radius: var(--radius-xs); background: transparent; color: var(--accent); font-weight: var(--fw-semibold); text-decoration: underline; text-decoration-color: var(--accent-line); text-decoration-thickness: 2px; text-underline-offset: 2px; }
-.optionCopy > small { color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-regular); }
-.optionMarks { display: inline-flex; align-items: center; gap: var(--space-1_5); }
-.optionMarks > em { color: var(--text); font-size: var(--fs-body); font-style: normal; font-weight: var(--fw-medium); }
+.optionCopy > small { color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); font-weight: var(--fw-regular); }
+.optionMarks > em { color: var(--text-3); font-size: var(--fs-caption); font-style: normal; font-weight: var(--fw-medium); }
 .optionMarks svg { flex: none; color: var(--accent); }
-.list > button:focus, .list > button:focus-visible { outline: none; }
-.list > button:active:not(:disabled), .folderPick:active:not(:disabled) { transform: none; }
-.list > button:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
-.list > button[data-active="true"] { background: var(--surface-3); box-shadow: inset 2px 0 0 var(--accent); }
-.list > button[aria-selected="true"] { background: var(--accent-soft); color: var(--text); font-weight: var(--fw-semibold); box-shadow: inset 2px 0 0 var(--accent); }
-.list > button[aria-selected="true"]:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
-.list > button[aria-selected="true"] small { color: var(--text-2); }
-.list > button:disabled { opacity: .5; }
+.list > [role="option"]:focus, .list > [role="option"]:focus-visible { outline: none; }
+/* The cursor (keyboard or pointer) is one quiet tint; the chosen value adds the accent bar and check. */
+.list > [role="option"][data-active="true"] { background: var(--surface-3); }
+.list > [role="option"][aria-selected="true"] { background: var(--accent-soft); }
+.list > [role="option"][aria-selected="true"]::before { content: ''; position: absolute; top: 8px; bottom: 8px; left: 0; width: 3px; border-radius: var(--radius-2xs); background: var(--accent); }
+.list > [role="option"][aria-selected="true"][data-active="true"] { background: color-mix(in srgb, var(--accent-soft) 70%, var(--surface-3)); }
+.list > [role="option"][aria-selected="true"] .optionCopy > strong { font-weight: var(--fw-semibold); }
+.list > [role="option"][aria-selected="true"] small { color: var(--text-2); }
+.list > [role="option"][aria-disabled="true"] { cursor: default; opacity: .5; }
 /* A nested option (a repository under its project) is a shorter row behind a quiet guide line. */
-.list > button[data-indent] { position: relative; min-height: 32px; padding-left: calc(var(--space-2) + var(--space-5)); }
-.list > button[data-indent]::before { content: ''; position: absolute; top: 4px; bottom: 4px; left: calc(var(--space-2) + var(--space-1_75)); width: 1px; background: var(--line); }
-.list > button[data-indent] .optionCopy > strong { font-weight: var(--fw-medium); }
-.list > button[data-indent][aria-selected="true"] .optionCopy > strong { font-weight: var(--fw-semibold); }
+.list > [role="option"][data-indent] { padding-left: calc(var(--space-2_5) + var(--space-5)); }
+.list > [role="option"][data-indent]::after { content: ''; position: absolute; top: 4px; bottom: 4px; left: calc(var(--space-2_5) + var(--space-1_75)); width: 1px; background: var(--line); }
 /* A heading-only parent reads as a section label, not a choice. */
-.list > button[data-group] { min-height: 32px; color: var(--text-2); }
-/* A heading is not a choice: the cursor shows as a plain row tint, never the selection bar. */
-.list > button[data-group][data-active="true"] { background: var(--surface-2); box-shadow: none; }
-/* A project heading after a plain row opens a new section. */
-.list > button:not([data-group]):not([data-indent]) + button[data-group] { margin-top: var(--space-1); }
-.list > button[data-group] .optionCopy > strong { font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
+.list > [role="option"][data-group] { color: var(--text-3); }
+.list > [role="option"][data-group][data-active="true"] { background: var(--surface-2); }
+.list > [role="option"][data-group] .optionCopy > strong { font-size: var(--fs-caption); font-weight: var(--fw-semibold); letter-spacing: .02em; }
 /* The fold control: the child count and a chevron that turns when the branch is open. */
-.disclosure { display: inline-flex; align-items: center; gap: var(--space-0_5); min-height: 22px; padding: 0 var(--space-1) 0 var(--space-1_5); border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface-2); color: var(--text-2); transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), color var(--fast) var(--ease); cursor: pointer; }
+.disclosure { display: inline-flex; align-items: center; gap: var(--space-0_5); min-height: 22px; padding: 0 var(--space-1) 0 var(--space-1_5); border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface-2); color: var(--text-2); cursor: pointer; }
 .disclosure:hover { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
 .disclosure[data-open] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
 .disclosure > small { font-size: var(--fs-micro); font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
-.disclosure > svg { color: inherit !important; transition: transform var(--fast) var(--ease); }
+.disclosure > svg { color: inherit !important; }
 .disclosure[data-open] > svg { transform: rotate(90deg); }
-.list > p { margin: 0; padding: var(--space-2); color: var(--text-3); font-size: var(--fs-body); }
+.list > p { margin: 0; padding: var(--space-3) var(--space-2_5); color: var(--text-3); font-size: var(--fs-body); }
+.searchCount { flex: none; color: var(--text-3); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .footerActions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0 calc(var(--space-1_5) * -1) calc(var(--space-1_5) * -1); border-top: 1px solid var(--line); }
 .footerActions:has(:only-child) { grid-template-columns: 1fr; }
@@ -172,5 +171,6 @@
   text-align: left;
 }
 .folderPick:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+.folderPick:active:not(:disabled) { transform: none; }
 .folderPick > svg { flex: none; color: var(--text-3); }
 .folderPick:hover:not(:disabled) > svg { color: var(--accent); }

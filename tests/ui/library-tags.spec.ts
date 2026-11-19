@@ -62,7 +62,9 @@ test('library category is edited and filtered as tags', async ({ page }) => {
   await expect(savedCard.getByText('文档', { exact: true })).toBeVisible();
   await expect(savedCard.getByRole('group', { name: '发布检查 的 CLI · 全局', exact: true })).toBeVisible();
   await expect(savedCard.getByRole('group', { name: '发布检查 的复用操作', exact: true })).toBeVisible();
-  await expect(page.locator('[data-library-context]')).toContainText('长期规则');
+  // The selected tab already names the section: no repeated description line under the tabs.
+  await expect(page.getByRole('tab', { name: /长期规则/ })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByText('保存长期约定，并按全局或项目范围写入当前 CLI。')).toHaveCount(0);
   await page.getByRole('button', { name: '标签筛选' }).click();
   await page.getByRole('option', { name: '写作' }).click();
   await expect(page.getByRole('button', { name: '已有规则' })).toBeVisible();
@@ -77,7 +79,7 @@ test('library category is edited and filtered as tags', async ({ page }) => {
   await expect(page.getByRole('button', { name: '发布检查' })).toHaveCount(0);
 });
 
-test('library search debounces native queries, clears instantly and counts hits', async ({ page }) => {
+test('library search debounces native queries, clears instantly and narrows rows', async ({ page }) => {
   await page.addInitScript(() => {
     const library = [
       { id: 'prompt-a', kind: 'prompt', title: 'release note', body: 'body', category: '', projectId: null, version: 1, updatedAt: 1 },
@@ -109,7 +111,7 @@ test('library search debounces native queries, clears instantly and counts hits'
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
   await expect(page.getByRole('button', { name: 'release note', exact: true })).toBeVisible();
-  await expect(page.getByText('命中 3 / 共 3')).toBeVisible();
+  await expect(page.locator('[data-library-id]')).toHaveCount(3);
   const countQueries = (value: string) => page.evaluate((needle) => {
     const queries = (window as typeof window & { __librarySearches: string[] }).__librarySearches;
     return queries.filter((item) => item === needle).length;
@@ -132,7 +134,7 @@ test('library search debounces native queries, clears instantly and counts hits'
   expect(await countQueries('rev')).toBe(1);
   await expect(page.getByRole('button', { name: 'release note', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'code review', exact: true })).toBeVisible();
-  await expect(page.getByText('命中 1 / 共 3')).toBeVisible();
+  await expect(page.locator('[data-library-id]')).toHaveCount(1);
   // Re-freeze at the page's (already fast-forwarded) virtual time instead of wall time,
   // which may now be behind the fake clock; the small margin covers the round trip.
   await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
@@ -142,7 +144,7 @@ test('library search debounces native queries, clears instantly and counts hits'
   expect(await countQueries('rev')).toBe(1);
   expect(await lastQuery()).toBe('');
   await expect(page.getByRole('button', { name: 'release note', exact: true })).toBeVisible();
-  await expect(page.getByText('命中 3 / 共 3')).toBeVisible();
+  await expect(page.locator('[data-library-id]')).toHaveCount(3);
 });
 
 test('library keeps four tabs, one primary action, and every prompt card in the first screen', async ({ page }) => {
@@ -236,8 +238,9 @@ test('library rows lead with the title, name their source, and stay inside 640',
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
   const card = page.getByRole('article').filter({ hasText: '超长提示词标题' }).first();
   await expect(card).toHaveAttribute('data-source', 'global');
-  // The card names where these items live, next to the result count.
-  await expect(page.locator('[class*="resultNote"]').filter({ hasText: '本机资料库' })).toBeVisible();
+  // No hit-count or source line above the rows: the tab badge counts and the host switcher names the source.
+  await expect(page.getByText(/命中 \d+ \/ 共/)).toHaveCount(0);
+  await expect(page.getByText('本机资料库', { exact: true })).toHaveCount(0);
   // Title and its actions share the first line; the summary and metadata follow it.
   expect(await card.evaluate((node) => {
     const head = node.firstElementChild as HTMLElement;
@@ -323,7 +326,7 @@ test('library lists keep first failure, confirmed empty, no match and failed ref
   await page.keyboard.press('Enter');
   await expect(library.getByText('提示词列表刷新失败，当前显示上次成功读取的内容，可能已过期。')).toHaveCount(0);
   await expect(library.getByRole('button', { name: 'release note', exact: true })).toBeVisible();
-  await expect(library.getByText('命中 1 / 共 1')).toBeVisible();
+  await expect(library.locator('[data-library-id]')).toHaveCount(1);
   // Rows of one kind never stand in for another kind while it loads or fails.
   await page.evaluate(() => { (window as any).__libraryControl.fail = true; });
   await library.getByRole('tab', { name: /长期规则/ }).click();
@@ -387,7 +390,7 @@ test('one failed count read marks only its own tab and a successful list read se
 
 test('rows kept after a failed search refresh carry no hit count for the new term', async ({ page }) => {
   const { library } = await openCountLibrary(page);
-  await expect(library.getByText('命中 1 / 共 1')).toBeVisible();
+  await expect(library.locator('[data-library-id]')).toHaveCount(1);
   await page.evaluate(() => { (window as any).__libraryControl.fail = true; });
   await library.getByLabel('搜索资料').fill('zzz-no-such-row');
   await expect(library.getByText('提示词列表刷新失败，当前显示上次成功读取的内容，可能已过期。')).toBeVisible();
@@ -398,7 +401,7 @@ test('rows kept after a failed search refresh carry no hit count for the new ter
   await library.getByRole('button', { name: '重试读取' }).click();
   await expect(library.getByText('提示词列表刷新失败，当前显示上次成功读取的内容，可能已过期。')).toHaveCount(0);
   await expect(library.getByRole('button', { name: 'release note', exact: true })).toHaveCount(0);
-  await expect(library.getByText('命中 0 / 共 1')).toBeVisible();
+  await expect(library.locator('[data-library-id]')).toHaveCount(0);
   await expect(library.getByLabel('搜索资料')).toHaveValue('zzz-no-such-row');
 });
 
@@ -507,28 +510,28 @@ async function openFilterLibrary(page: Page) {
 test('library keyword matches titles and bodies and combines with the project and tag filters', async ({ page }) => {
   const library = await openFilterLibrary(page);
   const card = (title: string) => library.getByRole('button', { name: title, exact: true });
-  await expect(library.getByText('命中 3 / 共 3')).toBeVisible();
+  await expect(library.locator('[data-library-id]')).toHaveCount(3);
   // A keyword only the body carries still matches: 「发布检查」 has no "release" in its title.
   await library.getByLabel('搜索资料').fill('release');
-  await expect(library.getByText('命中 2 / 共 3')).toBeVisible();
+  await expect(library.locator('[data-library-id]')).toHaveCount(2);
   await expect(card('发布检查')).toBeVisible();
   await expect(card('回归测试')).toBeVisible();
   await expect(card('发布回归')).toHaveCount(0);
   // Tag on top of the keyword: only the row that carries both stays.
   await library.getByRole('button', { name: '标签筛选' }).click();
   await page.getByRole('option', { name: '测试' }).click();
-  await expect(library.getByText('命中 1 / 共 3')).toBeVisible();
+  await expect(library.locator('[data-library-id]')).toHaveCount(1);
   await expect(card('回归测试')).toBeVisible();
   await expect(card('发布检查')).toHaveCount(0);
   // Project on top of both: no row carries the keyword, the tag and this project.
   await library.getByRole('button', { name: '项目筛选' }).click();
   await page.getByRole('option', { name: /^cliora\b/ }).first().click();
-  await expect(library.getByText('命中 0 / 共 3')).toBeVisible();
+  await expect(library.locator('[data-library-id]')).toHaveCount(0);
   await expect(library.getByText(/筛选结果为空/)).toBeVisible();
   // One clear returns the whole list with every condition gone.
   await library.getByRole('button', { name: '清除筛选' }).click();
   await expect(library.getByLabel('搜索资料')).toHaveValue('');
-  await expect(library.getByText('命中 3 / 共 3')).toBeVisible();
+  await expect(library.locator('[data-library-id]')).toHaveCount(3);
   await expect(card('发布回归')).toBeVisible();
   await expect(library.getByRole('button', { name: '标签筛选' })).toContainText('所有标签');
   await expect(library.getByRole('button', { name: '项目筛选' })).toContainText('所有项目');
@@ -536,19 +539,19 @@ test('library keyword matches titles and bodies and combines with the project an
   // never looks unset; the no-match state offers the same single clear.
   await library.getByRole('button', { name: '标签筛选' }).click();
   await page.getByRole('option', { name: '测试' }).click();
-  await expect(library.getByText('命中 2 / 共 3')).toBeVisible();
+  await expect(library.locator('[data-library-id]')).toHaveCount(2);
   await library.getByLabel('搜索资料').fill('notes draft');
-  await expect(library.getByText('命中 0 / 共 3')).toBeVisible();
+  await expect(library.locator('[data-library-id]')).toHaveCount(0);
   await expect(library.getByRole('button', { name: '标签筛选' })).toContainText('测试');
   await library.getByRole('button', { name: '清除筛选' }).click();
-  await expect(library.getByText('命中 3 / 共 3')).toBeVisible();
+  await expect(library.locator('[data-library-id]')).toHaveCount(3);
   await expect(card('发布检查')).toBeVisible();
   // Quick tag chips in the result bar filter in one click and expose a removable active filter chip.
   await library.getByRole('button', { name: '按标签「测试」筛选' }).click();
-  await expect(library.getByText('命中 2 / 共 3')).toBeVisible();
+  await expect(library.locator('[data-library-id]')).toHaveCount(2);
   await expect(library.getByRole('button', { name: '标签：测试' })).toBeVisible();
   await library.getByRole('button', { name: '标签：测试' }).click();
-  await expect(library.getByText('命中 3 / 共 3')).toBeVisible();
+  await expect(library.locator('[data-library-id]')).toHaveCount(3);
 });
 
 test('library filters and the search clear work from the keyboard alone', async ({ page }) => {
@@ -563,7 +566,7 @@ test('library filters and the search clear work from the keyboard alone', async 
   await page.keyboard.press('Enter');
   await expect(projectPick).toContainText('cliora');
   await expect(projectPick).toBeFocused();
-  await expect(library.getByText('命中 2 / 共 3')).toBeVisible();
+  await expect(library.locator('[data-library-id]')).toHaveCount(2);
   await expect(library.getByRole('button', { name: '回归测试', exact: true })).toHaveCount(0);
   // The tag pick is the next stop: the same keys add the second condition. The tags come from
   // the rows the project filter left, so 测试 is the second option after 发布.
@@ -574,22 +577,22 @@ test('library filters and the search clear work from the keyboard alone', async 
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
   await expect(tagPick).toContainText('测试');
-  await expect(library.getByText('命中 1 / 共 3')).toBeVisible();
+  await expect(library.locator('[data-library-id]')).toHaveCount(1);
   // Escape in the search field clears the term and leaves the focus there.
   await library.getByLabel('搜索资料').focus();
   await page.keyboard.type('每周');
-  await expect(library.getByText('命中 1 / 共 3')).toBeVisible();
+  await expect(library.locator('[data-library-id]')).toHaveCount(1);
   await page.keyboard.press('Escape');
   await expect(library.getByLabel('搜索资料')).toHaveValue('');
   await expect(library.getByLabel('搜索资料')).toBeFocused();
-  await expect(library.getByText('命中 1 / 共 3')).toBeVisible();
+  await expect(library.locator('[data-library-id]')).toHaveCount(1);
   // Keyboard-only clear of every condition.
   await library.getByLabel('搜索资料').fill('release notes');
-  await expect(library.getByText('命中 0 / 共 3')).toBeVisible();
+  await expect(library.locator('[data-library-id]')).toHaveCount(0);
   const clear = library.getByRole('button', { name: '清除筛选' });
   await clear.focus();
   await page.keyboard.press('Enter');
-  await expect(library.getByText('命中 3 / 共 3')).toBeVisible();
+  await expect(library.locator('[data-library-id]')).toHaveCount(3);
   await expect(projectPick).toContainText('所有项目');
   await expect(tagPick).toContainText('所有标签');
 });
@@ -635,9 +638,11 @@ test('every library section keeps its own create entry and fits 1360, 900 and 64
       const list = panel.locator(`[aria-label="${section.list}"]`).first();
       await expect(list).toBeVisible();
       expect(await list.evaluate((node) => node.scrollWidth - node.clientWidth), `${section.tab} ${width} list`).toBeLessThanOrEqual(1);
-      const bar = panel.locator('[class*="resultBar"]').first();
-      await expect(bar).toBeVisible();
-      expect(await bar.evaluate((node) => node.scrollWidth - node.clientWidth), `${section.tab} ${width} count`).toBeLessThanOrEqual(1);
+      // No count/source bar in any section; a chip bar (quick tags, active filters) appears only with chips and never overflows.
+      await expect(panel.getByText(/命中 \d+ \/ 共|本机资料库|远程主机资料库/)).toHaveCount(0);
+      for (const bar of await panel.locator('[class*="resultBar"]').all()) {
+        if (await bar.isVisible()) expect(await bar.evaluate((node) => node.scrollWidth - node.clientWidth), `${section.tab} ${width} chips`).toBeLessThanOrEqual(1);
+      }
       const toolbar = library.locator('[data-toolbar]').first();
       expect(await toolbar.evaluate((node) => node.scrollWidth - node.clientWidth), `${section.tab} ${width} toolbar`).toBeLessThanOrEqual(1);
       expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), `${section.tab} ${width} page`).toBeLessThanOrEqual(0);

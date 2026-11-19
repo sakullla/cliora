@@ -55,6 +55,7 @@ export default {
     pickFolder: 'Choose folder…',
     expand: 'Show {{count}}',
     collapse: 'Hide {{count}}',
+    matchCount: '{{count}} found',
   },
   dialog: {
     back: 'Back to list',

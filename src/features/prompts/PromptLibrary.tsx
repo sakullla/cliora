@@ -239,9 +239,7 @@ export function PromptLibrary({ context, active, createSignal, discardSignal, sp
       <button type="button" className={styles.chip} aria-pressed={mode === 'recent'} onClick={() => toggleMode('recent')}><Icon name="clock" size={12} />{t('prompts.recent')}</button>
       {!tagFilter && tagOptions.slice(0, 6).map(tag => <button type="button" key={tag} className={styles.tagChip} aria-label={t('library.page.filterByTag', { tag })} onClick={() => filters(() => setTagFilter(tag))}>#{tag}</button>)}
       {tagFilter && <button type="button" className={styles.tagChip} data-active="true" aria-label={t('library.page.activeTagChip', { tag: tagFilter })} onClick={() => filters(() => setTagFilter(''))}>#{tagFilter}<Icon name="close" size={11} /></button>}
-      {query.loaded && !query.error && <span className={styles.count}>{t('library.page.countFiltered', { filtered: query.page.total, total: Math.max(query.page.total, all.page.total) })}</span>}
       {filtering && <Button variant="ghost" size="sm" onClick={clearFilters}>{t('library.page.clearFilters')}</Button>}
-      <span className={styles.resultNote}>{t(context.targetId ? 'library.page.sourceRemote' : 'library.page.sourceLocal')}</span>
     </div>
     {scopeError && <p className={styles.error} role="alert">{scopeError}</p>}
     {error && !draft && !assignOpen && <p className={styles.error} role="alert">{error}</p>}

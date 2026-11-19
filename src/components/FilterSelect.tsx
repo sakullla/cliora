@@ -20,6 +20,11 @@ export type FilterSelectOption = { value: string; label: string; detail?: string
 const unfoldAllUpTo = 12;
 
 const searchThreshold = 4;
+/** Fixed row heights (px). Rows never grow after opening and long lists can be windowed. */
+const rowHeight = { plain: 36, detail: 48, nested: 32, nestedDetail: 44, group: 30 };
+/** Past this many visible rows only the rows in view (plus overscan) are rendered. */
+const virtualAbove = 60;
+const overscan = 8;
 // Strip the leading verb so the search input label stays concise in both languages.
 const stripLabelVerb = (label: string) => label.replace(/^(筛选|切换|Filter\s+|Switch\s+)/, '');
 const wordCharacter = /[a-z0-9]/;
@@ -72,6 +77,8 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
   const setTriggerNode = (node: HTMLButtonElement | null) => {
     buttonRef.current = node;
     if (triggerRef) (triggerRef as { current: HTMLButtonElement | null }).current = node;
@@ -108,25 +115,28 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   }
 
   const hasTree = childCount.size > 0;
+  const hasDetail = options.some((item) => !!item.detail);
   useLayoutEffect(() => {
     if (!open || !anchor.current) return;
     const place = () => {
       const rect = anchor.current?.getBoundingClientRect();
       if (!rect) return;
-      const minWidth = hasTree ? 280 : 240;
+      const minWidth = hasTree || hasDetail ? 300 : 240;
       const maxCap = hasTree ? 420 : 360;
       const width = Math.min(Math.max(rect.width, minWidth), window.innerWidth - 16);
       const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
       const below = window.innerHeight - rect.bottom - 12;
       const above = rect.top - 12;
       const upward = below < 220 && above > below;
-      setBox({ left, width, maxHeight: Math.max(180, Math.min(maxCap, upward ? above : below)), top: upward ? undefined : rect.bottom + 4, bottom: upward ? window.innerHeight - rect.top + 4 : undefined });
+      const next = { left, width, maxHeight: Math.max(180, Math.min(maxCap, upward ? above : below)), top: upward ? undefined : rect.bottom + 4, bottom: upward ? window.innerHeight - rect.top + 4 : undefined };
+      // Scrolling the list itself also reaches this capture listener; an unchanged box must not re-render.
+      setBox((current) => current && current.left === next.left && current.width === next.width && current.maxHeight === next.maxHeight && current.top === next.top && current.bottom === next.bottom ? current : next);
     };
     place();
     window.addEventListener('resize', place);
     window.addEventListener('scroll', place, true);
     return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
-  }, [open, hasTree]);
+  }, [open, hasTree, hasDetail]);
 
   useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
   useLayoutEffect(() => {
@@ -138,6 +148,7 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   }, [open]);
   useLayoutEffect(() => {
     if (!open) return;
+    setScrollTop(0);
     const index = Math.max(0, matches.findIndex((item) => item.value === value));
     revealIndex.current = index;
     setActive(index);
@@ -147,6 +158,8 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   function changeQuery(next: string) {
     revealIndex.current = 0;
     setActive(0);
+    setScrollTop(0);
+    if (listRef.current) listRef.current.scrollTop = 0;
     setQuery(next);
   }
   useEffect(() => {
@@ -164,16 +177,46 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
     if (!open || showSearch) return;
     panel.current?.focus();
   }, [open, showSearch, box]);
+
+  // Every row has a fixed height, so the list is laid out by arithmetic, not by measuring: the panel
+  // paints in its final shape on the first frame (no row resizing after open, which WebKit did for
+  // two-line rows), and long lists render only the rows in view.
+  const rows = matches.map((option) => {
+    const alone = !needle && standsAlone(option);
+    const heading = option.parent ? labels.get(option.parent) : undefined;
+    const context = option.parent && (needle || (alone && heading !== option.label)) ? [heading, option.detail].filter(Boolean).join(' · ') : option.detail;
+    const nested = !!option.parent && !needle && !alone;
+    const height = option.group && !context ? rowHeight.group : nested ? (context ? rowHeight.nestedDetail : rowHeight.nested) : context ? rowHeight.detail : rowHeight.plain;
+    return { option, alone, heading, context, nested, height };
+  });
+  const offsets: number[] = [];
+  let contentHeight = 0;
+  for (const row of rows) { offsets.push(contentHeight); contentHeight += row.height; }
+  const listMax = box ? Math.max(140, box.maxHeight - (showSearch ? 52 : 8) - (onPickFolder || onPickRemote ? 40 : 0)) : 0;
+  const virtual = rows.length > virtualAbove;
+  let first = 0;
+  let last = rows.length;
+  if (virtual) {
+    while (first < rows.length - 1 && offsets[first] + rows[first].height <= scrollTop) first++;
+    last = first;
+    while (last < rows.length && offsets[last] < scrollTop + listMax) last++;
+    first = Math.max(0, first - overscan);
+    last = Math.min(rows.length, last + overscan);
+  }
   useLayoutEffect(() => {
-    if (!open || revealIndex.current == null || !panel.current) return;
-    const node = panel.current.querySelector<HTMLElement>(`[data-option-index="${revealIndex.current}"]`);
-    const list = node?.parentElement;
-    if (!node || !list) return;
+    const list = listRef.current;
+    if (!open || revealIndex.current == null || !list || !rows.length) return;
+    const index = Math.min(revealIndex.current, rows.length - 1);
     revealIndex.current = null;
-    const listRect = list.getBoundingClientRect();
-    const nodeRect = node.getBoundingClientRect();
-    if (nodeRect.top < listRect.top - 1) list.scrollTop -= listRect.top - nodeRect.top;
-    else if (nodeRect.bottom > listRect.bottom + 1) list.scrollTop += nodeRect.bottom - listRect.bottom;
+    const top = offsets[index];
+    const bottom = top + rows[index].height;
+    const view = list.clientHeight || listMax;
+    let next = list.scrollTop;
+    if (top < next) next = top;
+    else if (bottom > next + view) next = bottom - view;
+    if (next !== list.scrollTop) list.scrollTop = next;
+    // Same frame: the rendered window follows the scroll before anything paints.
+    setScrollTop(list.scrollTop);
   }, [open, active, query, box]);
 
   function choose(option: FilterSelectOption) {
@@ -229,26 +272,29 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
       {showSearch && <div className={styles.searchRow} data-field-frame="">
         <Icon name="search" size={14} />
         <input ref={searchInputRef} aria-label={searchLabel ?? t('common.filterSelect.search', { label: stripLabelVerb(label) })} placeholder={searchPlaceholder ?? t('common.filterSelect.searchPlaceholder')} value={query} aria-controls={listId} aria-activedescendant={activeId} autoFocus onChange={(event) => changeQuery(event.target.value)} />
+        {needle && options.length > 20 && <span className={styles.searchCount} aria-live="polite">{t('common.filterSelect.matchCount', { count: matches.length })}</span>}
         {query && <button type="button" className={styles.searchClear} aria-label={t('common.search.clear')} title={t('common.search.clear')} onClick={() => { changeQuery(''); searchInputRef.current?.focus(); }}><Icon name="close" size={14} /></button>}
       </div>}
-      <div className={styles.list} id={listId} role="listbox" aria-label={label} style={{ maxHeight: Math.max(140, box.maxHeight - (showSearch ? 52 : 8) - (onPickFolder || onPickRemote ? 40 : 0)) }}>
-        {matches.length ? matches.map((option, index) => {
-          const children = childCount.get(option.value) ?? 0;
-          const open = expanded.has(option.value);
-          const alone = !needle && standsAlone(option);
-          const heading = option.parent ? labels.get(option.parent) : undefined;
-          const context = option.parent && (needle || (alone && heading !== option.label)) ? [heading, option.detail].filter(Boolean).join(' · ') : option.detail;
-          const icon = alone && heading === option.label ? headings.get(option.parent!)?.icon ?? option.icon : option.icon;
-          // Under its heading a child drops the heading's name it repeats ("app · feature" under "app").
-          const nested = !!option.parent && !needle && !alone;
-          const shown = nested && heading && option.label.startsWith(`${heading} · `) ? option.label.slice(heading.length + 3) : option.label;
-          // Rows never take focus: it stays in the search field (or the panel), so a fold or a hover
-          // keeps typing and arrow keys where they were and no focus ring lands inside the scroller.
-          return <button key={option.value || '__all'} id={`${listId}-${index}`} type="button" role="option" tabIndex={-1} aria-selected={option.value === value} aria-disabled={option.disabled || undefined} aria-expanded={children ? open : undefined} data-value={option.value} data-indent={nested || undefined} data-group={option.group || undefined} data-option-index={index} data-active={index === active || undefined} disabled={option.disabled} onMouseDown={(event) => event.preventDefault()} onMouseMove={() => { if (active !== index) setActive(index); }} onClick={() => { setActive(index); choose(option); }}>
-            {icon && <span className={styles.optionIcon}>{icon}</span>}<span className={styles.optionCopy}><strong title={shown === option.label ? undefined : option.label}>{needle ? highlightRuns(option.label, query).map((run, runIndex) => run.hit ? <mark key={runIndex}>{run.text}</mark> : run.text) : shown}</strong>{context && <small>{context}</small>}</span>
-            <span className={styles.optionMarks}>{option.note && <em>{option.note}</em>}{option.value === value && <Icon name="check" size={14} />}{children > 0 && !needle && <span className={styles.disclosure} role="presentation" title={t(open ? 'common.filterSelect.collapse' : 'common.filterSelect.expand', { count: children })} data-open={open || undefined} onClick={(event) => { event.stopPropagation(); toggle(option.value); }}><small>{children}</small><Icon name="chevronRight" size={13} /></span>}</span>
-          </button>;
-        }) : <p>{emptyText ?? t('common.filterSelect.empty')}</p>}
+      <div ref={listRef} className={styles.list} id={listId} role="listbox" aria-label={label} data-virtual={virtual || undefined} style={{ maxHeight: listMax }} onScroll={(event) => { if (virtual) setScrollTop(event.currentTarget.scrollTop); }}>
+        {rows.length ? <>
+          {virtual && first > 0 && <div aria-hidden="true" style={{ height: offsets[first], flex: 'none' }} />}
+          {rows.slice(first, last).map(({ option, alone, heading, context, nested, height }, slot) => {
+            const index = first + slot;
+            const children = childCount.get(option.value) ?? 0;
+            const open = expanded.has(option.value);
+            const icon = alone && heading === option.label ? headings.get(option.parent!)?.icon ?? option.icon : option.icon;
+            // Under its heading a child drops the heading's name it repeats ("app · feature" under "app").
+            const shown = nested && heading && option.label.startsWith(`${heading} · `) ? option.label.slice(heading.length + 3) : option.label;
+            const full = [option.triggerLabel ?? option.label, context].filter(Boolean).join(' · ');
+            // Rows never take focus: it stays in the search field (or the panel), so a fold or a hover
+            // keeps typing and arrow keys where they were and no focus ring lands inside the scroller.
+            return <div key={option.value || '__all'} id={`${listId}-${index}`} role="option" tabIndex={-1} title={full.length > 40 ? full : undefined} style={{ height }} aria-selected={option.value === value} aria-disabled={option.disabled || undefined} aria-expanded={children ? open : undefined} data-value={option.value} data-indent={nested || undefined} data-group={option.group || undefined} data-option-index={index} data-active={index === active || undefined} onMouseDown={(event) => event.preventDefault()} onMouseMove={() => { if (active !== index && !option.disabled) setActive(index); }} onClick={() => { if (option.disabled) return; setActive(index); choose(option); }}>
+              {icon && <span className={styles.optionIcon}>{icon}</span>}<span className={styles.optionCopy}><strong>{needle ? highlightRuns(option.label, query).map((run, runIndex) => run.hit ? <mark key={runIndex}>{run.text}</mark> : run.text) : shown}</strong>{context && <small>{context}</small>}</span>
+              <span className={styles.optionMarks}>{option.note && <em>{option.note}</em>}{option.value === value && <Icon name="check" size={14} />}{children > 0 && !needle && <span className={styles.disclosure} role="presentation" title={t(open ? 'common.filterSelect.collapse' : 'common.filterSelect.expand', { count: children })} data-open={open || undefined} onClick={(event) => { event.stopPropagation(); toggle(option.value); }}><small>{children}</small><Icon name="chevronRight" size={13} /></span>}</span>
+            </div>;
+          })}
+          {virtual && last < rows.length && <div aria-hidden="true" style={{ height: contentHeight - (offsets[last] ?? contentHeight), flex: 'none' }} />}
+        </> : <p>{emptyText ?? t('common.filterSelect.empty')}</p>}
       </div>
       {(onPickFolder || onPickRemote) && <div className={styles.footerActions}>{onPickFolder && <button type="button" className={styles.folderPick} onClick={() => { setOpen(false); setQuery(''); onPickFolder(); }}><Icon name="folder" size={14} />{pickFolderLabel ?? t('common.filterSelect.pickFolder')}</button>}{onPickRemote && <button type="button" className={styles.folderPick} onClick={() => { setOpen(false); setQuery(''); onPickRemote(); }}><Icon name="globe" size={14} />{pickRemoteLabel ?? t('home.remote.add')}</button>}</div>}
     </div>, portalTarget)}

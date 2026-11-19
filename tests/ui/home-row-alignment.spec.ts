@@ -283,7 +283,8 @@ test('five remote projects with mixed tools and both badges keep names and actio
           launchTop: Math.round(split.top - card.top),
           launchEnd: Math.round(card.right - split.right),
           moreEnd: Math.round(card.right - more.right),
-          noOverlap: select.right <= split.left + 0.5 && split.right <= more.left + 0.5 && split.top >= titleBox.bottom,
+          // Launch sits beside the identity on a wide row and below it on a narrow one; never over the name.
+          noOverlap: select.right <= split.left + 0.5 && split.right <= more.left + 0.5 && (split.top >= titleBox.bottom - 0.5 || split.left >= titleBox.right - 0.5),
           inside,
         };
       }));

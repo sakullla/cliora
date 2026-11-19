@@ -409,10 +409,6 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
     <div className={styles.skillToolbar}><SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchSkillPlaceholder')} /></div>
     {stale && <StatusBanner tone="warning" action={<Button size="sm" icon={<Icon name="refresh" size={14} />} disabled={loading} onClick={retryLoad}>{t('library.resources.retry')}</Button>}>{t('library.resources.skillStale')}</StatusBanner>}
     {installsUnknown && <StatusBanner tone="warning" action={<Button size="sm" icon={<Icon name="refresh" size={14} />} onClick={retryLoad}>{t('library.resources.retryInstalls')}</Button>}>{installsError ? `${t('library.resources.installsFailed')} ${installsError}` : t('library.resources.installsFailed')}</StatusBanner>}
-    {loaded && <div className={styles.resultBar}>
-      <Badge tone={needle ? 'accent' : 'neutral'}>{t('library.page.countFiltered', { filtered: libraryPackages.length, total: packages.filter((entry) => entry.inLibrary !== false).length })}</Badge>
-      <span className={styles.resultNote}>{t(remoteTargetId ? 'library.page.sourceRemote' : 'library.page.sourceLocal')}</span>
-    </div>}
     {reportRows && <section className={styles.result} data-tone={allOk ? undefined : 'warning'} role="status" aria-label={t('library.resources.resultAria')}>
       <div className={styles.resultHead}><Icon name={allOk ? 'check' : 'alert'} size={16} /><span>{resultHeadline()}</span><Button variant="ghost" size="sm" onClick={() => setOutcomes(null)}>{t('common.dialog.close')}</Button></div>
       <ul className={styles.resultList}>{reportRows.map((row, index) => <li key={`${row.name}:${index}`} data-state={row.state}><Icon name={settled(row) ? 'check' : 'alert'} size={14} /><strong>{row.name}</strong><small>{row.detail}</small></li>)}</ul>

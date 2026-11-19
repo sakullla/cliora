@@ -244,9 +244,9 @@ test('library MCP rows stay in name order through writes, removals and saves', a
   await expect.poll(order).toEqual(expected);
 });
 
-// The MCP list carries the same search, hit count, source note and clear action as the
-// prompt, rule and Skill lists, so finding one of the four types reads the same way.
-test('library MCP search counts hits and clears like the other library lists', async ({ page }) => {
+// The MCP list carries the same search and clear action as the prompt, rule and Skill lists,
+// without a hit-count/source line, so finding one of the four types reads the same way.
+test('library MCP search narrows rows and clears like the other library lists', async ({ page }) => {
   await installLibrary(page, [
     mcpDefinition('mcp-chrome', shortName, summary),
     mcpDefinition('mcp-long', longName, summary),
@@ -257,24 +257,25 @@ test('library MCP search counts hits and clears like the other library lists', a
   const workspace = page.getByRole('region', { name: '资料库 MCP' });
   const list = page.getByRole('list', { name: 'MCP 列表' });
   const search = page.getByRole('textbox', { name: '搜索资料' });
-  await expect(workspace.getByText('命中 3 / 共 3')).toBeVisible();
-  await expect(workspace.getByText('本机资料库')).toBeVisible();
+  await expect(workspace.locator('[data-mcp-id]')).toHaveCount(3);
+  // No hit-count, source or usage-explanation line: the rows and their marks say it.
+  await expect(workspace.getByText(/命中 \d+ \/ 共|本机资料库|亮着的图标/)).toHaveCount(0);
   // The command is part of what MCP search covers, not only the name.
   await search.fill('playwright');
-  await expect(workspace.getByText('命中 1 / 共 3')).toBeVisible();
+  await expect(workspace.locator('[data-mcp-id]')).toHaveCount(1);
   await expect(list.locator(':scope > li')).toHaveCount(1);
   await expect(list.locator('li[data-mcp-id="mcp-playwright"]')).toBeVisible();
   await workspace.getByRole('button', { name: '清空搜索' }).click();
   await expect(search).toHaveValue('');
-  await expect(workspace.getByText('命中 3 / 共 3')).toBeVisible();
+  await expect(workspace.locator('[data-mcp-id]')).toHaveCount(3);
   await expect(list.locator(':scope > li')).toHaveCount(3);
-  // A keyword that matches nothing keeps its own count and its own clear action.
+  // A keyword that matches nothing keeps its own clear action.
   await search.fill('zzz-no-such-mcp');
-  await expect(workspace.getByText('命中 0 / 共 3')).toBeVisible();
+  await expect(workspace.locator('[data-mcp-id]')).toHaveCount(0);
   await expect(workspace.getByText('没有匹配「zzz-no-such-mcp」的 MCP。')).toBeVisible();
   await workspace.getByRole('button', { name: '清除搜索' }).click();
-  await expect(workspace.getByText('命中 3 / 共 3')).toBeVisible();
-  // The added count line never pushes the row sideways in the narrow window.
+  await expect(workspace.locator('[data-mcp-id]')).toHaveCount(3);
+  // The rows never scroll sideways in the narrow window.
   for (const width of [900, 720, 640]) {
     await page.setViewportSize({ width, height: 900 });
     expect(await workspace.evaluate(node => node.scrollWidth - node.clientWidth), String(width)).toBeLessThanOrEqual(1);
