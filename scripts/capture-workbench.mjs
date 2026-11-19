@@ -313,7 +313,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
       },
     });
   }, { theme: initialTheme, transcripts: {
-    s1: b64(Array.from({ length: 70 }, (_, index) => '  \u001b[2m历史输出 ' + String(index + 1).padStart(2, '0') + ' · session replay preserved\u001b[0m').join('\r\n') + '\r\n\u001b]0;⠋ 重构终端工作区与多会话交互体验\u0007' + transcript),
+    s1: b64((process.env.CLIORA_CAPTURE_CLEAN === '1' ? [] : Array.from({ length: 70 }, (_, index) => '  \u001b[2m历史输出 ' + String(index + 1).padStart(2, '0') + ' · session replay preserved\u001b[0m')).join('\r\n') + '\r\n\u001b]0;⠋ 重构终端工作区与多会话交互体验\u0007' + transcript),
     s2: b64('\u001b]0;实现文章目录与移动端折叠\u0007' + claudeTranscript),
     s3: b64(finished),
     s4: b64(openCodeTranscript),
@@ -336,7 +336,7 @@ async function shot(name, theme, width, run, empty = false, remoteState = null, 
   let page = null;
   let resourceObservation = null;
   try {
-    page = await browser.newPage({ viewport: { width, height: Math.max(720, Math.round(width * 0.66)) }, deviceScaleFactor: 1, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme === 'dark' ? 'dark' : 'light', reducedMotion: 'reduce', ...(chrome ? { userAgent: chromeAgents[chrome] } : {}) });
+    page = await browser.newPage({ viewport: { width, height: Math.max(720, Math.round(width * 0.66)) }, deviceScaleFactor: Number(process.env.CLIORA_CAPTURE_SCALE ?? 1), locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme === 'dark' ? 'dark' : 'light', reducedMotion: 'reduce', ...(chrome ? { userAgent: chromeAgents[chrome] } : {}) });
     page.on('pageerror', (error) => errors.push(String(error)));
     await install(page, theme, empty, remoteState, promptFailure, directoryMode, writeRecovery);
     if (chrome) await installWindowChrome(page, chrome);

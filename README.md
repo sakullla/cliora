@@ -1,294 +1,113 @@
-# Cliora · 栖点
+<div align="center">
 
-Cliora is a local desktop manager for AI command line tools. The current desktop shell has five pages, persistent managed-tool and theme settings, SQLite storage, and a system credential-store boundary. The native tool service now probes the installed Codex, Claude Code, Grok Build, Pi, and OpenCode CLIs with bounded `--version` commands; stores multiple named profiles and per-tool common configuration; parses TOML, JSON, JSONC, and YAML; and applies recognized native file changes through an encrypted backup/recovery journal. A provider model directory uses real `GET /models` requests, caches results, and keeps manual model entry available when the directory fails. It never calls a paid inference endpoint for discovery. Five further CLIs — ZCode, Qoder CN, Kimi Code, DeepSeek Harness (`dsh`), and CodeBuddy — register as default-off additions (see the delivery matrix below); none of them is enabled until explicitly checked in managed tools.
+<img src="src-tauri/icons/128x128@2x.png" width="96" alt="Cliora" />
 
-## Accounts, subscription quotas and native extensions
+# 栖点 Cliora
 
-Tools tabs follow the backend adapter's `management` capabilities. Unsupported accounts, MCP, Skills, agents and plugins are hidden; switching to a tool or scope without the current capability returns to configuration. Supported operations that fail keep their error and recovery controls. Adapter authors declare MCP/Skills support alongside their native mappings; account/agent/plugin flags come from the corresponding capability ports.
+**一个桌面应用，管好你所有的 AI 编程 CLI。**
 
-Saved GLM Coding Plan, Kimi Code and MiniMax official API connections automatically receive a profile-linked quota query when first viewed. Supplier adapters recognize verified HTTPS origins and API paths, not profile names. The first lookup runs once; subsequent visits reuse the cache and manual/automatic refresh policy. The parent reads the existing profile key from the local credential store without copying it into another entry or exposing it to frontend IPC. Profile changes invalidate old results and refresh the binding. Existing independent queries take precedence. A missing key, absent plan or rejected query is shown as an error, not zero usage; third-party gateways still use configured queries.
+在同一个窗口里启动、配置、切换和回看 Codex、Claude Code、OpenCode、Kimi Code 等 19 款 AI 编程命令行工具。
 
-The Tools workspace manages native OAuth accounts, profile bindings, quota queries, plugins and agent definitions. OAuth authorization and token refresh belong to the native CLI. Cliora creates separate native contexts, verifies identity before accepting login, and passes the chosen context through configuration, launch, resources, history and resume. Cancelling login stops acceptance of late results; an already opened terminal remains under user control. Reauthentication preserves the previous context for its history. Encrypted portable bundles use snapshot schema 5 to retain account credentials, active configuration, directory associations, business projects, repository location hints, and prompt scopes/tags. WebDAV has a narrower scope: directory projects, project bindings/deployments, business organization and non-global prompts stay local, with an explicit local-only status. Neither transfer carries sessions, usage, history files, in-progress logins or the WebDAV connection password.
+[下载最新版](https://github.com/sakullla/cliora/releases/latest) · [English](README.en.md) · [技术参考](docs/reference.md) · 搭档：[Twiglane 枝序](https://github.com/sakullla/Twiglane)
 
-| CLI / checked version (2026-10-03) | Managed OAuth | Official subscription quota |
-| --- | --- | --- |
-| Codex 0.160.0 | Browser/device login; explicit adoption of the existing native context | App Server `account/rateLimits/read`, bracketed by native identity checks in the selected context |
-| Claude Code 2.1.287 | Native Claude.ai login on Windows/Linux; managed macOS login disabled pending Keychain isolation evidence | No verified non-interactive native quota adapter in this release. The preset explains the limitation and directs users to native `/usage`; `auth status` is not quota |
-| Grok 1.0.46 | Managed login unavailable pending identity/storage isolation evidence | No verified subscription source. `grok usage SESSION_ID` reports local session token/cost history; TUI `/usage` offers credits/billing |
-| Pi 0.99.2 | Native `/login` for `openai-codex` in an isolated agent directory | No official quota adapter |
-| OpenCode 1.18.34 | Built-in OpenAI ChatGPT browser/device flow in isolated XDG directories | No official quota adapter |
-| ZCode 3.14.4 (desktop) | 否——product-owned encrypted `credentials.json` is never read or written | 无；local session token statistics only |
-| Qoder CN 1.1.74 | 否——the product login token is never read, copied or refreshed | 本地 Credits（保留原始值与计费标记）；占位 token 未知，不查询余额 |
-| Kimi Code 0.31.1 / 2.1.1 | 否——`api_key` moves to the local credential store; no OAuth management | 无；per-session token totals come from local wire records |
-| DeepSeek Harness 0.2.0-rc.2 (desktop) | 否——`.credentials.yaml` belongs to the official plugin and is never read or written | 无 |
-| CodeBuddy 2.161.1 | 否——`env` keys (`CODEBUDDY_API_KEY`/`CODEBUDDY_AUTH_TOKEN`) move to the local credential store; the OAuth user level is not managed | 无 |
+![Cliora 工作台：多个 AI CLI 会话并排运行](docs/screenshots/workbench.png)
 
-To configure Codex quotas, bind the named profile to a Codex OAuth account, choose **添加额度查询 → Codex 官方订阅**, then select that same account. Reauthentication creates a new context: update the quota selection explicitly. A changed profile/account/context hides the previous success rather than reusing its data. Native OAuth material is never supplied to user scripts. The adapter only calls account APIs, does not send inference, and does not independently rotate tokens. The [official App Server contract](https://developers.openai.com/codex/app-server/) and the schema generated by the checked CLI are recorded in [official quota sources](tests/fixtures/usage/official-sources.json).
+</div>
 
-Quota cards use the same result semantics for official subscriptions, five bundled provider families and custom scripts:
+## 为什么用 Cliora
 
-| Provider | Bundled modes and boundaries |
+同时用好几个 AI CLI 时，常见的麻烦有这些：每个工具一套配置文件，换供应商要手改 JSON/TOML，几个终端窗口来回找，额度用到哪儿不知道，上周那段对话也翻不到。Cliora 把这些集中到一个本地桌面应用里：
+
+- **一个工作台跑所有会话**：内置终端，可同时运行多个 CLI 会话，在侧栏切换、分屏、查找、快捷输入；会话结束后还能一键继续。
+- **改配置不用手写文件**：为每个 CLI 保存多套命名配置（供应商、模型、密钥），切换前预览改动，写入前自动备份，随时撤回。
+- **额度和花费心里有数**：查看官方订阅额度，以及 GLM、Kimi、MiniMax、Sub2API、New API 等供应商余额；按工具、模型、项目统计 Token 与估算费用。
+- **历史会话随时找回**：自动索引本机的 CLI 会话记录，支持全文搜索、收藏、导出，并能回到原目录继续对话。
+- **资源统一管理**：MCP、Skill、Agents、插件、记忆和提示词集中维护，可分发到多个 CLI。
+
+## 截图
+
+| 首页：常用目录、最近会话与受管理工具 | 记录：搜索和阅读历史会话 |
 | --- | --- |
-| GLM / Z.ai | Regional Coding Plan windows and additional resource pools; correct regional subscription API key required |
-| Kimi For Coding | Regional Code usages; old count and new percentage pools; a Moonshot API key is not interchangeable |
-| MiniMax | Regional Token/M Plan and older Coding Plan presets; subscription keys are distinct from ordinary pay-as-you-go keys |
-| Sub2API | Separate site Key, account, plan and account-plus-plans modes; active subscriptions/progress preserve daily, weekly and monthly windows. `/v1/sub2api/billing` is not a balance endpoint |
-| New API | Separate site token, account and subscription modes; quota units remain raw unless the user explicitly configures a conversion and currency |
+| ![首页](docs/screenshots/home.png) | ![会话记录](docs/screenshots/sessions.png) |
 
-Missing data remains unknown, unlimited is explicit, overages may exceed 100%, and reset time is separate from entitlement expiry. Codex preserves each native quota bucket and window, uses source percentages without inventing token totals, and shows optional workspace credits/individual limits/reset counts only when supplied. It does not infer permission to send requests from a percentage or a reset time. Local history estimates remain separate. Manual refresh is the default; optional automatic refresh starts at 60 seconds, coalesces repeated requests, backs off after failures, and pauses on authentication errors. A refresh failure preserves the last successful result as stale; a changed official identity invalidates it. Unrecognized optional fields can remain unavailable, and fixture compatibility does not establish live provider compatibility.
+![用量统计：Token、估算费用、调用次数与趋势](docs/screenshots/usage.png)
 
-Users can edit and test **embedded JavaScript** in Cliora without installing Node or Python. Choose the multi-request balance/plan example, or copy a third-party preset into an independent script. Configure ordinary JSON parameters, explicit allowed origins, and named credentials stored in the local credential store. `async query(ctx)` receives `ctx.parameters`, opaque `ctx.credentials` references and controlled `ctx.http`; bind a reference through `auth: { credential: ctx.credentials.user_token, header: 'Authorization', prefix: 'Bearer ' }`. Return the versioned `schemaVersion/status/metrics/errors` contract. The [editable example](src-tauri/src/adapters/providers/example.js) demonstrates independent balance and plan requests. Draft testing supports cancellation and redacted diagnostics without saving or replacing the profile card's successful result.
+> 截图使用合成的模拟数据，不包含真实账号、密钥或会话。
 
-The embedded QuickJS 0.14.0 helper runs outside the UI, with no shell, filesystem, environment, Node, browser or module-loading APIs. It limits scripts to 256 KiB, heap to 32 MiB, stack to 1 MiB, compute to 5 seconds, wall time to 30 seconds, HTTP to 10 seconds/request, requests to 8 with at most 2 concurrent, responses to 2 MiB and results to 256 KiB. At most four draft/saved executions run together. Credentials stay restricted to declared origins; expanding a saved credential's targets requires entering the credential again. Official native account queries cannot be copied into scripts to expose OAuth credentials.
+## 功能一览
 
-| CLI | Native plugin management | Native agent definitions |
-| --- | --- | --- |
-| Codex | Native install/remove, configuration enable/disable; no separate native update command verified | TOML in `agents/**/*.toml`; legacy config-file roles read-only |
-| Claude Code | Native install/update/enable/disable/uninstall; managed policy restrictions retained | Markdown frontmatter, user/project scopes; plugin namespaces retained and owned definitions read-only |
-| Grok | Native install/update/enable/disable/uninstall in selected `GROK_HOME` | Direct Markdown files in `.grok/agents` (not recursive) |
-| OpenCode | Plugin declaration management; native CLI owns dependency installation/loading; auto-discovered directories read-only | Markdown directories and JSON definitions; duplicate identities shown as conflicts |
-| Pi | Native packages install/update/remove and resource configuration disable/restore; cross-scope updates restricted | No verified unified native agent-definition format; explicit limitation |
+### 工作台
+- 在应用内直接启动 CLI，多会话并行，侧栏显示运行状态、时长和所在目录
+- 新建会话时可选工具、项目目录、普通或 YOLO 模式、初始提示词；可直接在新的 Git 工作树中开始
+- 终端支持查找、分屏、快捷输入、粘贴图片/文件；可以连接远程主机，在服务器上运行 CLI
 
-Agent management creates, edits, imports, disables/enables and deletes supported native definitions while preserving unknown fields. Disabled file definitions move outside native scanner roots. Plugin/organization-owned definitions cannot be edited independently. Native changes use baseline checks and encrypted recovery; agent undo rejects intervening external changes. A saved plugin declaration is not reported as dependency installation or session loading. Some uninstall operations retain native package/cache files. Package sources and fixed-format evidence live in [plugin fixtures](tests/fixtures/plugins/sources.json) and [agent fixtures](tests/fixtures/agents/sources.json).
+### 配置与账号
+- 每个 CLI 保存多套命名配置，常用设置写一次，多套配置共享
+- 从供应商接口拉取模型列表，填写地址与密钥即可完成配置；可以先做连通性检查，不会产生调用费用
+- 管理多个 OAuth 账号（例如 Codex、OpenCode、Pi），按配置绑定账号
+- 每次写入原生配置文件前都会加密备份，检测到外部改动会先停下，让你确认
 
-### Default-off CLI additions: per-dimension delivery matrix
+### 额度与用量
+- 官方订阅额度（如 Codex）和第三方套餐余额显示在同一张卡片上，可手动或定时刷新
+- 内置 JavaScript 脚本编辑器，不装 Node 或 Python 也能为自建中转站写额度查询
+- 用量统计按天显示趋势，并按工具、模型和项目拆分 Token、缓存命中率与估算费用
 
-The five additions registered by the 2026-10 workflow deliver each dimension only where official evidence or a locally verified install confirmed it; undelivered cells stay hidden in the UI with a recorded reason. All five register through the open string-ID registry and default to off.
+### 资料库与扩展资源
+- 提示词、长期规则统一保存，可按项目和标签筛选，一键带入新会话
+- MCP、Skill、Agents、插件、记忆：读取各 CLI 原生格式，启用、停用、导入、分发都在一个界面完成
 
-| Dimension | ZCode 3.14.4 | Qoder CN 1.1.74 | Kimi Code 0.31.1 / 2.1.1 | DeepSeek Harness 0.2.0-rc.2 | CodeBuddy 2.161.1 |
-| --- | --- | --- | --- | --- | --- |
-| Native config | `setting.json` + `provider_config.json` | `~/.qoder-cn/settings.json` + project `.qoder/settings.json` / `settings.local.json`; common settings editor | user-level `config.toml` + `tui.toml` (TOML) | desktop profile `cordis.patch.yml` (YAML) | supported native file formats |
-| Launch | desktop app with workspace | external terminal, `--dangerously-skip-permissions` | external terminal, `--yolo` = Ask When Needed | bare desktop launch (no project-arg contract) | external terminal |
-| Resume | ✗ no desktop contract | ✅ `qoderclicn -r <id>` | ✅ `-S <session>` | ✗ no desktop contract | ✅ `-r <id>` |
-| MCP | `~/.zcode/cli/config.json` `mcp.servers` | `settings.json` `mcpServers` | `mcp.json` | `cordis.patch.yml` `insert` patch items | native MCP map |
-| Skills | ✅ `~/.zcode/skills` | ✅ `~/.qoder-cn/skills` | ✅ skills root | ✅ ranked `.dsh/skills` | ✅ native skills directory |
-| Agents | ✅ shared resource root | ✅ `~/.qoder-cn/agents` | ✅ native agents directory | ✗ no declarative definition contract | ✅ sub-agent definitions |
-| Sessions (read-only index) | ✅ internal session db (rollouts/snapshots as fallback and transcript carriers) | ✅ `projects/<slug>/<uuid>.jsonl`; subagents contribute usage only | ✅ `state.json` + `agents/*/wire.jsonl` | ✅ `sessions/*/session.v4.jsonl.zstd` | ✅ `projects/*.jsonl` + `subagents/agent-*.jsonl` usage |
-| Token usage | ✅ internal db `model_usage` (input incl. cache; cancelled/error rows are all-zero) | Credits + original/billable metadata; placeholder token zeros stay unknown | ✅ per-call `usage.record` split buckets incl. subagent streams | ✅ `TokenUsage` per turn (input excludes cache) | ✅ assistant `providerData.usage` incl. subagent wires (input incl. cache) |
-| Plugins | native plugin commands from the desktop-bundled CLI | ✅ full verbs incl. project scope (`qoderclicn plugins`) | read-only listing (managed directory) | user-installed profile bundles: enable/disable | project-level enable/disable only |
-| Managed credentials | ✗ | ✗ | ✅ `api_key` → local credential store | ✗ | ✅ frozen `env` key set → local credential store |
+### 项目与协作
+- 业务项目：把多个相关仓库放在一起，从项目里直接启动会话
+- 与 [Twiglane](https://github.com/sakullla/Twiglane) 联动：一键把 AI 改动交给 Twiglane 审阅、提交，结果会带回 Cliora
+- 加密导出/导入配置包，或通过 WebDAV 在多台设备间同步
 
-DeepSeek Harness product versions are not allowlisted: installation evidence and native configuration/session shapes decide compatibility. The desktop MCP profile is a YAML patch sequence; token logs use the exact v4 schema and streaming zstd framing. Read-only checks on local 0.2.0-rc.2 sessions supplement the sanitized fixture tests. Qoder CN 1.1.74 native logs were checked read-only on Windows: main sessions, request IDs, subagent usage and Credits are indexed; ordinary 1.x updates remain eligible. Its `-r <id>` argument is verified without launching inference. Native-unit totals are independent of tokens and money, and preserve billable, not-billable and unknown billing groups. ZCode delegates install/update/uninstall/enable/disable to its bundled native CLI. Kimi Code plugin listing remains read-only. DSH supports enable/disable for installed user bundles; package installation, update and removal remain in its native plugin manager. CodeBuddy's plugin install/uninstall stays with the native `/plugin` interface; only project-level `enabledPlugins` transactions are managed. Evidence sources for the added dimensions live in the [agent](tests/fixtures/agents/sources.json), [plugin](tests/fixtures/plugins/sources.json) and [skills](tests/fixtures/skills/sources.json) fixture records.
+### 体验细节
+- 浅色、深色和跟随系统三种外观，界面有中文和英文
+- 关闭窗口后常驻托盘，可从托盘快速启动常用配置或最近项目
+- 应用内自动更新
 
-Qoder CN 1.1.74 is independently registered and default-off. It uses `.qoder-cn`, `qoderclicn`, `--dangerously-skip-permissions`, and its v2 native plugin ledger. Configuration, MCP, Skills and Agents follow the selected CN adapter; international Qoder binaries, settings and authentication are never substituted. It supports local session history and native Credits. Managed accounts and balance queries remain unavailable. User memory (`memory/`) and project memory (`projects/<slug>/memory/`) support read/create/edit/delete and separate native switches; absent switches remain native-default/unknown. Memory batches are bounded to 32 entries and two concurrent frontend requests, with fingerprint reuse on refresh. Configuration paths honor native CN environment overrides; project files default to `.qoder`, while user data defaults to `.qoder-cn`. Configuration and memory mutations were verified in isolated fixtures; live CLI memory consumption and macOS/Linux acceptance remain unverified. International Qoder support has been removed; stored qoder data is preserved as unsupported and never adopted by CN.
+## 支持的 CLI
 
-### Default-off CLI additions (2026-10-07): per-dimension delivery matrix
+| 默认启用 | 可在设置中按需开启 |
+| --- | --- |
+| Codex · Claude Code · Grok · Pi · OpenCode | oh-my-pi (OMP) · Cursor · Kimi Code · Qoder CN · ZCode · DeepSeek Harness · CodeBuddy · MiMo Code · MiniMax Code · Cline · Devin · Command Code · Antigravity · Kiro |
 
-Six further clients register default-off through the same open string-ID registry. Each cell is delivered only where its evidence class confirmed it — `[src]` official open-source repo, `[RE]` third-party reverse-engineered (codeburn/agentsview), official docs, or a locally verified install — and undelivered cells stay hidden with a recorded reason.
+不同 CLI 支持的能力（账号、额度、MCP、插件等）不完全一样；某项能力不支持时，对应入口会隐藏，不会用其他方式代替。逐项能力对照见[技术参考](docs/reference.md)。
 
-| Dimension | MiMo Code 0.1.15 | Cline 3.0.69 | Devin 3000.11.3 | Command Code 1.73.4 (npm `command-code`) | Antigravity 1.3.1 | Kiro (`kiro-cli`) |
-| --- | --- | --- | --- | --- | --- | --- |
-| Native config | ✅ `mimocode.jsonc` (JSONC) + `tui.json` | ✅ `~/.cline/global-settings.json` | ✅ `%APPDATA%\devin\config.json` (JSONC) + project `.devin/config.json` | ✅ `~/.commandcode/config.json` + `settings.json` | ✅ `~/.gemini/antigravity-cli/settings.json` | ✅ `~/.kiro/settings/cli.json` |
-| Launch | ✅ `mimo`; `--yolo` | ✅ `cline` (no verified skip-permissions flag) | ✅ `devin`; `--permission-mode dangerous` = Yolo | ✅ `cmdc` (Windows alias); `--permission-mode yolo` | ✅ `agy`; `--dangerously-skip-permissions` | ✅ `kiro-cli chat`; `--trust-all-tools` |
-| Resume | ✅ `--session/-s <id>`, `-c`, `--fork` `[src]` | ✅ `--id <session-id>` | ✅ `--resume <slug>` / `-c` | ✅ `--session <id\|path>` | ✅ `--conversation <id>` | ✅ `--resume-id <id>` |
-| MCP | ✅ `mimocode.jsonc` `mcp` key (Local/Remote) `[src]` | ✅ `cline_mcp_settings.json` `mcpServers` `[src]`, entries conservative | ✅ `%APPDATA%\devin\mcp_config.json` `mcpServers` | ✅ `~/.commandcode/mcp.json` `mcpServers` | ✅ `~/.gemini/config/mcp_config.json` (stdio/remote; legacy `url` entries read-only) | ✅ user `~/.kiro/settings/mcp.json` + workspace `.kiro/settings/mcp.json` |
-| Skills | ✅ project `.mimocode/skills` + personal skills root `[src]` | ✅ `~/.cline/skills` + `.agents/skills` `[src]` | ✅ `%APPDATA%\devin\skills` + project `.devin/skills` (`SKILL.md`) | ✅ `~/.commandcode/skills` + project root (`SKILL.md`) | ✅ `antigravity-cli/skills` + `.agents/skills` | ✗ directory name without evidence |
-| Agents | ✅ config `agent` key + `{agent,agents}/**/*.md` `[src]` | ✗ no custom sub-agent contract | ✗ undocumented | ✗ `mods` layout unverified | ✗ format not obtained | ✗ directory name without evidence |
-| Sessions (read-only index) | ✅ data-root `mimocode.db` (session/message/part, subagent attribution) `[src]` | ✅ `sessions/<id>/` (manifest + `messages.json` + compaction) + `sessions.db` `[src]` | ✅ `cli/transcripts` ATIF-v1.7; cwd from `cli/sessions.db` `working_directory` only | ✅ `projects/<slug>/<uuid>.jsonl` (v3 header, reconciled against 4 real local sessions) | ✅ `[RE]` `conversation_summaries.db` + `brain/<id>/transcript_full.jsonl` | ✅ `[RE]` legacy `sessions/cli/*.jsonl` + `sess_<id>/messages.jsonl`; Windows data root `%LOCALAPPDATA%\kiro-cli` locally verified |
-| Token usage | ✅ per-message token splits + cost `[src]` | ✅ per-message `metrics` + `sessions.db` aggregates (input excludes cache) `[src]` | ✅ per-agent-step `metrics` (inclusive: `prompt_tokens` includes `cached_tokens`; `extra.cache_creation_input_tokens` = cache write), Σ reconciled against `final_metrics` on all 8 real local transcripts | ✅ per-message `usage` four-way split + `costUsd` | ✅ `[RE]` `gen_metadata` protobuf `ModelUsageStats`, strict degrade | ✗ three session formats carry no token fields |
-| Plugins | ✗ `plug` command layout unverified | ✗ no plugin contract | ✗ no plugin surface documented | ✗ no plugin layout evidence | ✗ `agy plugin` storage undocumented | ✗ no plugin contract |
-| Managed credentials | ✅ provider `apiKey` → local credential store (apply writes the native field) | ✗ keys live in plaintext `providers.json` — read-only discovery boundary, never adopted or echoed | ✗ `credentials.toml` never read or written | ✅ frozen `COMMAND_CODE_API_KEY` → local credential store; the shared launch service injects it into the child environment at spawn (adapter-driven credential port) | ✅ headless `GEMINI_API_KEY` → local credential store; injected into the child environment at spawn (adapter-driven credential port) | ✅ `KIRO_API_KEY` → local credential store; injected into the child environment at spawn (adapter-driven credential port) |
+## 安装
 
-Devin's usage cell is delivered (devin-usage 2026-10-08): the per-agent-step `metrics` semantics were determined against all 8 real local transcripts — `prompt_tokens` is the full step context and includes `cached_tokens`, `metrics.extra.cache_creation_input_tokens` (3/8 files) maps to cache write, and every session's step sums equal the `final_metrics` totals exactly; the transcript fingerprint moved to `devin-transcript-v3` so previously indexed sessions rescan, backfill usage events, and pick up `sessions.working_directory`. MiMo/Cline shapes come from the official open-source repos (neither CLI is installed locally); Command Code/Devin were verified on this machine; Antigravity combines local 1.3.1 probes with codeburn reverse engineering and Kiro combines official docs, community reverse engineering and a real local `kiro-cli` data root. `[RE]` parsers degrade to partial/hidden on field drift instead of guessing. Product-owned credential files (`auth.json`, `credentials.toml`, `providers.json`, keyring state) are never adopted, copied or echoed for any of the six. The R4 usage audit of the existing clients is recorded in [usage audit](docs/verification/usage-audit-2026-10.md) (OpenCode included: the local machine does carry `opencode.db` data, superseding the earlier "no local data" exploration note).
+前往 [Releases](https://github.com/sakullla/cliora/releases/latest) 下载对应系统的安装包：
 
-Acceptance is limited: Windows isolated local plugin lifecycle checks and Grok/OpenCode agent scanner checks were performed; parser/protocol and browser tests use synthetic fixtures. No real OAuth authorization or real subscription/provider quota response was accepted in this pass. Codex/Claude agent session loading, private marketplaces and macOS/Linux on-device behavior remain unverified. The older platform matrix below records a separate historical candidate and does not upgrade these features to accepted status.
+| 系统 | 安装包 |
+| --- | --- |
+| Windows x64 | `Cliora_x.y.z_x64-setup.exe` |
+| macOS（Apple 芯片） | `Cliora_x.y.z_aarch64.dmg` |
+| Linux x64 | `.AppImage` 或 `.deb` |
 
-The desktop shell now mounts the tool workspace, project launcher, records, migration/sync settings, and terminal settings. A project keeps a stable local ID when its directory moves; relinking preserves its chosen tool and profile, while the old directory's applied native binding is marked for reapplication. Home can open a project's folder or start a managed CLI in an external terminal. Normal mode is the default; YOLO is offered only when the adapter has an identified native flag. The tray offers managed profiles and recent projects, with the same apply path as the window. A confirmed CLI identity permits native editing and guarded transactional writes for its recognized file roles; a minor or patch version change does not disable them. An adapter can block a specific version/operation only with concrete incompatibility evidence. A version probe alone does not prove every generated provider setting is accepted by the CLI.
+Cliora 不附带 AI CLI 本身，请先按各工具的官方说明安装它们。Cliora 会自动检测本机已安装的版本，并给出安装或升级命令。
 
-## History and memory loading
+> **macOS 提示**：应用没有经过 Apple 公证，首次打开时请在“访达”中按住 Control 点按图标，选择“打开”；或者运行 `xattr -dr com.apple.quarantine /Applications/Cliora.app`。
 
-Remote records reuse the current list snapshot when searching or filtering. Refresh keeps the current transcript readable, supports cancellation, and reports slow reads and source failures. Remote usage and local-only favorite/project actions are hidden. No remote helper is installed. The backend shares immutable parsed history between list and detail reads, copies only the selected transcript, counts cache admission size without allocating a JSON buffer, and borrows archive payloads before releasing the transfer buffer ahead of parsing. Cold reads still transfer bounded native files over SSH; this is not a remote index or a measured live-host speed guarantee.
+## 隐私
 
-Parent/child session cards share a transcript summary cached by immutable message snapshot; returning through nested sessions reuses that summary, while refreshed transcripts compute it again. Timeline merging uses a cursor instead of repeatedly removing array heads. Memory wiki links use an index of entry ids and frontmatter names, retaining same-store preference and source-order fallback; refreshed, renamed or deleted entries rebuild the index.
+- 所有数据都保存在本机：配置、会话索引和用量统计存于本地数据库；会话内容和用量不会上传给 Cliora。
+- 密钥交给系统凭据存储（Windows 和 Linux 上是系统凭据存储，macOS 上是仅当前用户可读的本地文件），不写进普通配置记录。
+- 只有你明确选择 WebDAV 同步时，数据才会加密后上传到你自己的服务器。
 
-Usage records display the saved index before starting automatic native discovery. The usage dashboard reuses a completed report for up to 60 seconds when its filters and data revision match. Scans, favorites, project associations and saved prices invalidate that reuse.
+## 从源码构建
 
-Memory aggregates may include optional `previewText` on each entry: the complete UTF-8 body already read to calculate its content fingerprint. The shared service limits these previews to 1 MiB per entry and 4 MiB across all stores in one response. Entries outside that budget use the existing bounded `read_memories` queue; bodies are never truncated. The frontend accepts aggregates without previews, and explicit open/save operations retain fresh native reads and conflict checks. Adapter authors can implement `history_exclusion_paths` to enumerate protected session paths without fingerprinting transcripts or loading display-title catalogs, as Codex and Claude do.
-
-## Run
-
-Windows settings offer CMD (Command Prompt), PowerShell and Windows Terminal as the preferred launch terminal. CMD opens an interactive console and keeps its prompt after the CLI exits; CLI launches, account login, installation and upgrades use the saved choice. Windows package manager commands use `npm.cmd` / `npx.cmd`, and extensionless CLI paths resolve an existing Windows sibling entry instead of the Unix shim. CMD uses the system PowerShell to prepare the CLI environment; commands exceeding CMD's length limit return an error with a terminal-switch recovery option.
-
-Install Node.js and Rust plus the [Tauri desktop prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS.
+需要 Node.js、Rust 1.90+，以及 [Tauri 的系统依赖](https://v2.tauri.app/start/prerequisites/)。
 
 ```sh
 npm ci
-npm run tauri dev
-```
-
-For the frontend only, use `npm run dev`. Browser mode explicitly reports that native storage and credentials are unavailable; its settings controls cannot claim to save to the desktop database.
-
-Checks:
-
-```sh
-npx playwright install chromium-headless-shell
-npm run verify
-npm run test:unit:all
+npm run tauri dev                         # 开发运行
+npm run tauri build                       # 打包安装包
+npm run verify                            # 前端测试与构建
 cargo test --manifest-path src-tauri/Cargo.toml
-npm run tauri build -- --no-bundle
 ```
 
-`npm run test:unit:all` runs Rust library tests with eight workers, then the Node unit tests. Browser interaction tests remain separate in `npm run test:e2e`. The measured warm unit runs and the limits of those timings are recorded in [unit performance](docs/verification/unit-performance-a6/README.md); compilation is reported separately.
+README 截图由 `node scripts/capture-readme.mjs` 用模拟数据生成（需先运行 `npm run dev -- --port 14736`）。架构约定、适配器扩展方式与平台验证记录见 [技术参考](docs/reference.md) 和 [AGENTS.md](AGENTS.md)。
 
-The desktop database lives in Tauri's per-user application data directory as `cliora.db`. Managed tool IDs, theme, named profiles, common inheritance, model cache, project IDs and paths, terminal choice, application bindings, and encrypted native transaction journals are stored there. Named profiles and ordinary workspace snapshots do not contain native API key values; the keyring holds profile secrets and application bindings hold keyed digests. Saving a named configuration stores an entered key in that system store. Fetching models first stores a newly entered key and uses its current reference for the request. An explicit adjacent display button reveals only the selected configuration's managed API key. Applying a profile writes its selected secret into the CLI's own native authentication field through the backed-up transaction. Secret-bearing replacements use user-restricted permissions (Unix 0600; on Windows, a restricted ACL). The CLI can then run directly after Cliora exits. The separate current-file editor saves the actual native text without creating a named profile or unused keyring references; ordinary workspace snapshots do not return that text.
+## 参与贡献
 
-Project launch resolves the installed CLI and actual version before building argv. Adding a project starts with a native folder picker and derives its initial name from the folder. Removing it deletes the Cliora project record, preserving the directory. Direct launch can also select a working folder. Resume uses the indexed session's original directory even if another directory or project was selected. Windows Terminal receives an encoded PowerShell command, keeping spaces, apostrophes, Chinese characters and semicolons out of its command parser. The standalone PowerShell path creates a real console with console standard handles. Interactive launch clears inherited `NO_COLOR`, `TERM=dumb`, and `FORCE_COLOR=0` so the new terminal can use color. Cliora reports that a terminal was requested, not that the CLI logged in successfully. Grok's project model is passed through its native `-m` argument at launch, not written into `.grok/config.toml`. Closing the window keeps the app in the tray when a tray icon is available; explicit Quit ends Cliora without terminating previously opened terminals. If the tray is unavailable, the window remains accessible. A second instance wakes the existing window. Actual Windows UI and harmless terminal-shim checks are partial evidence; real CLI, complete tray and macOS/Linux behavior remain unaccepted.
-
-The tools component distinguishes local format validation, HTTP directory connectivity, and an optional minimal model request. Only the last stage invokes inference and requires an explicit confirmation because it may incur usage charges. Installer sources are shown only when the CLI shim or known native location provides evidence; an unknown installation gets official instructions instead of an assumed upgrade method. Install/upgrade commands are copied for the user to run in their terminal, with a separate recheck action; this task does not perform package-manager installs or track installer progress.
-
-Named configurations use a single ordered editing session. Codex, Claude Code, Pi, OpenCode and Kimi Code mount their own registered editor; other registered tools retain generic connection/model entry and native text. Connection and model lists stay compact, one model detail opens at a time, and required Token limits remain visible. Account selection and login run inside the editor, preserve unfinished field/raw/key input, and return only a user-selected verified account. Native login observation remains read-only.
-
-“Save configuration” and “Save common configuration” update the database only, including profiles already in use. “Use new version” and “Save and use” explicitly apply saved content. Lists distinguish saved settings from the last successful applied version and source. Common configuration shows inherited active scopes and individual apply failures. Current-file editing uses “Save to current file”; external changes and history restoration require a fresh guarded, sanitized comparison. Form fields and native text share the session, and invalid text stays editable while submission is blocked.
-
-Model directory search/multi-select and non-inference checks can use an unfinished draft connection. New keys stay in isolated draft leases until a successful save adopts them; replacing, removing or cancelling releases unreferenced temporary values and preserves saved keys. Source changes retain independent input without authorizing inactive credentials. A potentially billable model request remains a separate explicit confirmation. Extension points are documented in [configuration adapters](docs/architecture/configuration-adapters.md); actual isolated CLI observations and synthetic UI screenshots are recorded in [configuration verification](docs/verification/configuration-redesign.md). Browser mocks are not native acceptance.
-
-CLI adapters own model translation. Claude exposes its default, Sonnet, Opus, Fable, Haiku and subagent mappings, display names where supported, and explicit long-context suffixes. Pi preserves existing model records and metadata; Grok retains native aliases separately from request IDs. Supplier-specific model-directory routes live beside their supplier adapters; the model service owns generic requests, parsing and caching.
-
-The desensitized native fixtures in `tests/fixtures/native` cover the Windows development host versions listed there. An ignored Rust test can probe the actual local CLI shims without reading private config: `cargo test --manifest-path src-tauri/Cargo.toml live_windows_probe_reports_real_versions --lib -- --ignored`. macOS now recovers the login shell PATH for CLI/Node probes and Terminal launches, with Homebrew and user install-directory fallbacks. The [macOS verification record](docs/verification/macos-compatibility.md) separates local discovery evidence and MCP/Skills/history regression checks from pending desktop acceptance. Linux native behavior and real CLI acceptance of every provider combination remain unverified.
-
-The Library page stores prompts and long-lived rules in SQLite, with title/body search, category and project filters, full-text copy, and drafts that remain mounted while navigating. Native rules can also be selected by tool/project, read, edited and saved directly. Disabling a native rule preserves an encrypted backup for restoration and checks for intervening external edits. The Tools page has MCP and Skills tabs beside native configuration. Saving an MCP entry normally saves its library definition and applies it to the current CLI in one action; saving only to the library and multi-target distribution remain available. Ordinary writes perform preview/CAS internally. Genuine same-name or external-edit conflicts expose the current and proposed contents for explicit replacement. Unrelated entries are preserved, and disabled entries retain their management state when reselected. Codex and Grok use TOML, Claude Code uses its JSON MCP maps and removes a native entry when disabled, OpenCode uses the probed v1 or v2 JSON shape, and Pi's unsupported native MCP state is shown rather than inventing a format. An unconfirmed OpenCode major version needs an identifiable existing MCP shape before writing.
-
-Skills import a complete directory, a local ZIP selected through the native file picker, or an explicitly supplied HTTPS ZIP archive. A single valid package is selected automatically; archives with several packages offer a short selection list. Resources beside `SKILL.md` are retained. ZIP downloads and unpacked files are bounded; path traversal and links are rejected. If a new package has the same name as a stored package, Cliora shows changed text side by side and binary file sizes and SHA-256 digests before an explicit update. Ordinary installation applies its preview internally. Installation, update, and removal use each CLI adapter's native discovery directory and refuse to overwrite unmanaged or externally edited content. Enable/disable uses native policy declarations for Codex, Claude and OpenCode; adapters without a verified native switch archive the complete installed package outside the scan directory and restore it only if unchanged. Imports remain local snapshots; re-import the source to fetch changes. Arbitrary runtime dependencies cannot be verified or installed automatically.
-
-Records indexes local Codex, Claude Code, Grok, Pi, and OpenCode sessions — plus ZCode, Kimi Code, DeepSeek Harness and CodeBuddy sessions once those tools are enabled in managed tools — into Cliora's database without changing native history. Cached sessions and usage load immediately while a separate, cancellable incremental scan runs in the background. Length, modification time and native change time provide the unchanged-file fast path; platforms without reliable metadata fall back to content hashing. Search, project and model filters, favorites, details, and Markdown/JSON export use the local index. A failed source is isolated, and the page shows incomplete or stale coverage. Resume uses each adapter's native command in an external terminal, with a copyable normal or supported YOLO form. Exact OpenCode resume is supported for verified v1 releases; unknown major versions are not treated as compatible. Usage tables group actual events by tool and model, including model changes within one session and unknown model/token values. Prices explicitly select a tool/model. Costs appear only with a sourced price and complete selected usage; they are estimates rather than billing data. No session content or usage is uploaded for indexing or estimation.
-
-History adapters declare the native call count on each usage record (`requestCount`); `null` means the count is unknown, including legacy cumulative snapshots. Reports count usage records separately from known calls and suppress per-call averages whenever counts are incomplete. Grok retains `modelCalls`, reconciles monotonic turn/session subtotals, and keeps unattributable model/time remainders unknown. Fresh input, cache reads, cache writes and output are disjoint; reasoning already included in output is not counted again. Detail totals reuse the report aggregator. Search and favorites apply to reports and their prior-period comparisons; dated reports exclude and identify untimed records. Native message clocks are distinguished from inferred turn clocks (`timestampSource`), which the reader labels “约”. Adapters must provide any justified model association themselves; shared storage never fills unknown usage models from a session's current model. Database version 18 invalidates old parsing fingerprints while retaining session IDs, favorites and project associations, so unchanged native sources refresh on the next scan.
-
-Settings → Migration & Sync exports migratable items to a schema 5 `.cliora` file encrypted with Argon2id and XChaCha20-Poly1305. One password of at least 12 characters seals the package; a shorter password writes no file. Schema 1–4 packages remain readable. Unknown schemas and unsupported fields are rejected before receipt. A same-item difference keeps the current local row and records both versions; unrelated items restore immediately. Preferences retain the interface language, and credentials stay bound to their original account/profile identities through the shared local credential boundary. Auth-file contents are restored to adapter-owned local paths; history roots, sessions and in-progress logins stay out. Business project/repository IDs, memberships, favorites, provenance-scoped location hints, exact legacy directory mappings and independent prompt scope/tag metadata are retained. Missing or orphaned scope references remain visible and never become global. Organization-only receipt does not apply native configuration or consume an unrelated native apply queue; locations still require local host/Git verification. A restored project snapshot is local until its shared project manifest is explicitly reassociated. Prompt usage and batch retry receipts stay on this device; remote `prompts-v1.json` data stays with its original remote host.
-
-WebDAV uses a schema 5 manifest so older clients reject unsupported capabilities before writing; existing schema 1–4 manifests can be read and are upgraded when changed. Global prompt metadata is preserved, but project/repository/unresolved prompts and business organization are explicitly kept local. They are not uploaded as global substitutes or published as deletions, including a previously synced global prompt changed to a local scope and then removed. The panel and result report this unsupported subset, and complete sync success is recorded only after local-only items, conflicts, native blockers and pending changes are absent. Use an encrypted bundle to migrate these items, or open the same `*.dev-workspace.json` file in the other product to reuse project membership. Supported active configurations still use the existing guarded native apply path; missing installs/directories or per-item write failures retain their recovery controls. An empty remote uploads supported local data without clearing it. Connection failures keep local data intact.
-
-Optional WebDAV sync uses a dedicated existing server directory and HTTPS (localhost HTTP is allowed for tests). One account/application password normally both authenticates and unlocks a randomly generated sync-space key; an advanced field permits a separate encryption password. Changing the default connection password stages a new wrapping key while retaining the old wrapper until the local credential update succeeds, then removes the old wrapper. If final cleanup is interrupted, sync status retains a pending rotation message until the connection is verified and saved again. This keeps setup to one password, but a server operator who knows that password may decrypt the data, so this is not end-to-end secrecy against that operator. Each encrypted immutable entity version has a random object key, and a conditionally updated encrypted manifest retains authenticated ancestry and deletion markers. Independent entities and unedited offline descendants merge automatically; concurrent same-item edits and edit/delete conflicts preserve both versions for explicit resolution. Initial connection tests read, list, conditional write, and cleanup; unsupported conditional writes are rejected. The app retries enabled sync in the background with capped backoff and shows failures and conflicts. A received active configuration is written to an installed CLI; a per-item failure stays on that item. A live third-party WebDAV service and cross-platform system credential backends have not yet been verified; the automated WebDAV tests use a local protocol server.
-
-## Module boundaries
-
-- `src/types/domain.ts` and `src-tauri/src/domain.rs`: stable tool IDs and bootstrap types. Add feature DTOs on both sides before exposing a command.
-- `src/lib/native.ts` and `src-tauri/src/commands.rs`: named typed IPC wrappers and command registration. Do not expose arbitrary filesystem paths or shell command strings as general IPC.
-- `src-tauri/src/database.rs`: SQLite ownership and migrations. Future modules add versioned migrations and their own repositories rather than opening separate databases from UI commands.
-- `src-tauri/src/credentials.rs`: protected system secret storage. Store only opaque credential IDs in SQLite; do not return secrets through settings bootstrap.
-
-## CLI adapter contract
-
-The same adapter also owns MCP wire-format mapping and discovery paths for Skills and rule files. Shared resource services perform storage, preview, per-target transaction, conflict detection, and installation without branching on a CLI ID.
-
-Adapter implementations have two package roots: **`src-tauri/src/adapters/`** and **`src/adapters/`**. Each CLI has its own directory; Rust keeps native configuration, accounts, plugins, agents, official quotas and history parsers together. Supplier templates and routes live in `adapters/providers/{glm,kimi,minimax,sub2api,newapi}`. `contract.rs` and the capability ports declare behavior; `registry.rs` assembles implementations. Shared account/resource/usage services own state, isolation, safe process/filesystem access, encrypted transactions/backups and scheduling. Native IO remains in `native/registered.rs`, with compatibility reexports at the adapter facade.
-
-The registry uses open string IDs. To add a CLI, create its backend directory, implement `CliAdapter` and only the optional account/plugin/agent/official-quota traits it supports, then register one instance in `Registry::builtins`. Put authentication/session environment policies, including `remove_environment`, in its adapter. Add its frontend directory and register `ToolUiAdapter` in `src/adapters/index.ts` when custom controls or icons are needed. Shared services and UI must use those ports instead of tool-ID branches. A synthetic sixth CLI exercises account contexts, environment isolation, plugin parsing and agent validation through shared consumers, alongside existing configuration/launch tests.
-
-To add a bundled quota supplier, create a directory under the same backend package, implement `UsageProvider`, and register it in `ProviderRegistry::builtins`. That adapter owns presets, routing, non-secret credential scopes and its versioned JavaScript source; the shared VM/broker owns execution limits, credential values and HTTP policy. The extension regression runs an additional supplier through the real embedded VM. User-written JavaScript stays independently editable and does not require Node or Python.
-
-A displayed CLI release such as `2.1.287` records the version checked during research. It is **not an exact version lock**. Account/plugin adapters accept recognized stable releases in their declared major family, including patch and minor updates; adapters can narrow a range or exclude known breaking releases. For `0.x`, this is an empirical contract policy rather than a SemVer guarantee. Native identity/status/list/config responses are still validated; malformed versions, previews and unreviewed major families stop those operations explicitly. Protocol, schema and bundled-template versions remain exact because they version persisted contracts, not installed CLI releases. Existing IDs and database/IPC payloads remain compatible, and unknown IDs stay preserved read-only.
-
-These choices follow [Cockburn's ports and adapters](https://alistair.cockburn.us/hexagonal-architecture/) (application behavior behind purposeful capability ports), [Rust traits](https://doc.rust-lang.org/book/ch10-02-traits.html) and [dyn compatibility](https://doc.rust-lang.org/reference/items/traits.html#dyn-compatibility) (optional object-safe interfaces), and [Fowler's separation of configuration from use](https://martinfowler.com/articles/injection.html) (composition roots separate from consumers). Desktop documentation links use the [Tauri opener plugin](https://v2.tauri.app/plugin/opener/) and a validated HTTP/HTTPS IPC command to open the OS default browser on macOS, Windows and Linux; launch failures remain visible. Sources checked 2026-10-03.
-
-Grok's latest official sources were checked on 2026-10-03: [getting started](https://docs.x.ai/build/overview), [CLI reference](https://docs.x.ai/build/cli/reference), [environment/settings reference](https://docs.x.ai/build/settings/reference), [plugins](https://docs.x.ai/build/features/skills-plugins-marketplaces), [subagents](https://docs.x.ai/build/features/subagents) and [TUI commands](https://docs.x.ai/build/modes-and-commands). The npm latest tag was `@xai-official/grok@1.0.46`; isolated Windows help checks verified browser/device OAuth, logout, plugin list/install and local usage semantics ([sanitized evidence](tests/fixtures/grok/cli-1.0.46-help.json)). `GROK_HOME` covers config/auth/sessions. **TUI `/usage`** shows credits/billing, while **CLI `grok usage SESSION_ID`** shows persisted session token/cost; the latter is not subscription quota. Managed Grok multi-account OAuth and automatic quota querying remain unavailable until identity and credential isolation plus a non-interactive quota source are verified. This is a capability limitation, not an exact-release restriction.
-
-To add a new CLI, first collect official install, version, native configuration, credential, launch/resume, and platform references for the exact supported releases. Add a sanitized versioned native fixture and a separate `adapters/<cli>/` implementation; register its stable ID in `Registry::builtins`. The string-ID `RegisteredProfile` and `RegisteredCommon` storage, `registered_*` IPC commands, descriptor catalog, managed-ID setting, and apply services accept that registration without changing the built-in adapters or shared backend orchestration. The current tool and home components consume the descriptor catalog, so a newly registered tool appears in management and tool navigation without a shared page-level tool-ID branch. The test-only sixth adapter at `tests/adapter/sixth.rs` demonstrates shared probe, native read/import, inherited common and named profile storage, connection overlay, transactional application/binding, and launch-argument planning through that open registry path. The default-off additions of 2026-10 (ZCode, Qoder CN, Kimi Code, DeepSeek Harness, CodeBuddy) shipped through exactly this path; see the delivery matrix above.
-
-Design reference: [interactive preview](docs/design/cliora-preview.html). The preview contains example data. The application deliberately starts with no example sessions, projects, profiles, or usage figures.
-
-
-## Integrated UI and tool appearance
-
-The five pages use the confirmed sage theme and shared SVG navigation. The shell fills the desktop window and only its content area scrolls. Home exposes direct normal launch, folder selection and applied configuration selection; project options and explicit YOLO use small disclosures. Current native files and named configurations have distinct views: current files save to disk, while named configurations save to the list and offer a separate apply action. Named drafts survive normal page navigation. Library browsing uses copyable cards and an inline editor; records keep search, tool and favorites first, with advanced filters, export and project mapping inline. Migration starts with an overview and reveals one export/import operation; WebDAV configuration remains reachable from its summary.
-
-The configuration list compares the last successful profile and common revisions against the saved configuration; a missing applied snapshot remains pending until an explicit use action. Saved and last used model summaries come from adapter inspection, including native and OAuth configurations without an HTTP connection. Cancelling a directory or diagnostic request invalidates its server request generation while preserving the draft and temporary key. API key buffers retain the provider, protocol and address where their reference was confirmed or created; editing a connection while staying in API mode cannot move that reference to another connection. Unfinished key input keeps its own target, and changing a connection requires its own key. Current-file key replacement or removal is available only when the server declares a writable credential target; managed contexts keep their existing restrictions, and native key targets do not imply HTTP diagnostics support.
-
-Destructive actions, discarding edits, and potentially billed diagnostics use one styled application confirmation. Cancel receives initial focus; Escape cancels and returns focus. Each action waits for an explicit accepted answer and rechecks the original draft/context. Ordinary saves do not add a confirmation step. System dialogs are used only for selecting files, folders, and export destinations.
-
-Default tool icons are declared by each independent frontend adapter and rendered by one shared `ToolIcon`. Official Codex product and Claude vector symbols are included; [asset sources and content hashes](src/assets/tools/SOURCES.md) identify each bundled asset. Settings → General → Custom tool icons accepts PNG, JPEG or WebP up to 128 KB and can restore defaults. Image content, rather than its original device path, is stored in SQLite preferences and travels with the encrypted preference entity and WebDAV sync. Theme and managed-tool changes retain overrides; older preference snapshots with no icon field still import and retain their canonical digest. Unregistered tool icon entries are preserved, and tools without an icon declaration show a neutral symbol.
-
-Populated visual captures use synthetic native-IPC fixtures; they do not represent local projects or platform acceptance. `docs/verification/ui/` retains the five-page and operation captures in light/dark at 1360, 900 and 640 px, regenerated after the shortcut, copy-feedback and theme-choice refinements. Set `CLIORA_CAPTURE_OUT` to write captures elsewhere. Candidate-bound actual Windows checks are documented separately in [Windows evidence](docs/verification/windows-native-a6/README.md) and the [requirements audit](docs/verification/requirements-audit-a6.md). The mock capture entry point is:
-
-```powershell
-npm run dev -- --port 14736
-# In another terminal:
-node scripts/capture-ui.mjs --features
-# Optional alternative preview server:
-$env:CLIORA_PREVIEW_URL = 'http://127.0.0.1:1420'
-node scripts/capture-ui.mjs --features
-```
-
-`--features` captures the current configuration and account flows for Pi, OpenCode, Kimi Code, Codex and Claude Code, including native parameters, model directories, credential sources, login return, save/apply separation and current-file comparison. The gallery filters by scene, theme, width and keyword. Use `--list` to list scenes, or `--only 'kimi-*' --theme light --size 1360` for a subset. `--workflows` remains an alias for this functional capture mode.
-
-## Windows desktop candidate and installation
-
-The full `node scripts/capture-ui.mjs` run includes compact quota results and expanded details, linked-query settings, JavaScript editor/test preview, native CLI logins, managed accounts and account creation, plugin list/install state, agent list/editor, library rule/MCP/Skill lists with their add/edit dialogs, and Grok/Pi capability visibility at 1360/900/640 px in light/dark. It writes `capture-ui-manifest.json` with captured states and overflow/page-error checks. These are synthetic UI fixtures.
-
-For a native application already launched with an accessible local WebView2 CDP endpoint, `node scripts/drive-records.mjs tools` captures configuration/quotas (including expanded details) and supported account/native-login, MCP, agent and plugin panels without invoking login or extension/file mutations. Unsupported tabs are skipped. `CLIORA_CDP_URL` defaults to `http://localhost:9222`; `CLIORA_NATIVE_CAPTURE_OUT` defaults to `docs/verification/native-ui`. This script also retains its existing `sessions` and `usage` modes. Native UI captures alone do not establish full CLI or platform acceptance.
-
-The account panel shows existing default CLI logins separately from Cliora-managed accounts. Account adapters resolve each CLI's native directory and environment overrides; discovery returns sanitized local status and identity, without adopting or copying credentials. OpenCode/Pi can show multiple providers and distinguish OAuth from API Key records, even when the CLI supplies no account ID. Native login discovery runs when the account panel opens or when the user checks it, rather than on the managed-account polling interval. Credentials remain owned by the original CLI. A terminal with different directory overrides must launch Cliora from the same environment for discovery to see that context.
-
-The current development host is Windows 11 Pro 10.0.26200, AMD64. Install the repository's Node/Rust dependencies and Tauri Windows prerequisites (Microsoft C++ Build Tools and WebView2), then build the standalone candidate:
-
-```powershell
-npm ci
-npm run tauri build -- --no-bundle
-.\src-tauri\target\release\cliora.exe
-```
-
-The executable is a production, unsigned candidate using the installed WebView2 runtime. `docs/verification/windows-candidate.json` records a stable content-addressed copy, PE architecture, size, SHA-256, exact build command and exit code; `build-windows-output.txt` contains the captured output. Later release builds cannot overwrite that verification copy. Startup and partial Windows UI checks retain the exact observed candidate hash and, for isolated test shells, the different application identifier. They do not accept complete CLI or tray behavior.
-
-To produce a Windows installer on the Windows build host, select its platform target explicitly:
-
-```powershell
-npm run tauri build -- --bundles nsis
-# Installer output: src-tauri/target/release/bundle/nsis/
-```
-
-The NSIS installer has not been built or installed in this development pass. Run it from that output folder when produced. Cliora stores application data in Tauri's per-user data directory; moving the executable does not move or erase that data. Use Settings → Migration & Sync to transfer the encrypted snapshot. Project paths travel with it; a directory that is not on the destination stays recorded without blocking the other restored items.
-
-## Platform acceptance evidence
-
-Managed accounts support deletion after pending operations are cancelled and named-profile, quota-query and active-context references are removed. Deletion removes Cliora's management record only: native credentials, plugin files and history remain on disk; it does not log out or revoke server authorization. OpenCode's Windows browser flow captures its printed authorization URL in the private attempt directory, opens the system browser once, and provides an “打开授权页面” retry while that attempt is active. Native authorization still owns the callback and credential exchange.
-
-Pi adapters reference the tested 1.0.0 release and accept the verified `>=0.99.2, <2.0.0` protocol family for accounts, packages and history resume, with response validation retained. Prereleases and 2.x remain outside that evidence. Agent definitions remain unavailable for Pi because no unified native definition contract has been verified.
-
-Quota summaries show up to three metrics with exact values and additional windows in expandable details. Agent/plugin lists provide search, status filters and compact actions. `scripts/capture-ui.mjs` covers deletion confirmation, authorization retry, search empty states and read-only filters across light/dark themes and three widths. Native capture accepts `CLIORA_CAPTURE_TOOL` (the displayed CLI name) and `CLIORA_CANDIDATE_SHA256`, for example `node scripts/drive-records.mjs tools`; it navigates the actual app without executing login or extension operations.
-
-`node scripts/collect-cli-discovery.mjs` records bounded, actual Windows `--version` output and system architecture without touching native configs. The discovery currently records Codex 0.159.2, Claude Code 2.1.284, Grok 1.0.44, Pi 0.99.1 and OpenCode 1.18.33. These are discovery results, not behavioral acceptance. Re-running discovery updates its content hash; update the matrix reference deliberately when adopting that new observation.
-
-`node scripts/verify-platform-evidence.mjs` is a read-only release gate over `docs/verification/platform-evidence.json`. Exit 0 means all 15 tool/platform combinations have complete accepted cases; exit 2 means structurally valid evidence still has unaccepted combinations; exit 1 means invalid/missing/changed evidence. At present it reports **0/15 accepted**. Partial Windows UI, configuration and harmless terminal-pipeline checks are recorded separately; the six complete native cases per tool remain unaccepted. macOS and Linux have no on-device evidence.
-
-Each passed case requires repository-relative evidence with a matching SHA-256 and an observation JSON containing `kind: native-platform-observation`, `method: on-device`, matching platform/tool/system/architecture/CLI version, the case name, observation time, candidate SHA-256, reproduction steps, observed behavior and hashed actual log/screenshot/trace attachments. The six case names are `native_config`, `launch_resume`, `tray`, `resources_rules`, `history_usage` and `migration_sync`. Each unverified/failed case carries a reason. Version/help output, mocked browser screenshots and cross-compilation do not meet that contract. Keep absent evidence unverified; do not replace it with a success placeholder.
-
-
-### Cached test commands
-
-Run `npm run test:prepare` after changing build inputs to prepare the frontend and Rust test artifacts. Test commands also rebuild changed inputs instead of silently using stale output. Preparation/first compilation is excluded from the local speed targets.
-
-- `npm run test:unit`: fast Node contract checks.
-- `npm run test:quick` / `npm run test:unit:all`: all non-ignored Rust library and Node tests, run concurrently; neither command filters out costly regressions.
-- `npm run test:integration`: five tagged browser integration flows covering launch failure/recovery, plugin lifecycle, Agent conflicts, a 1000-session list and storage recovery.
-- `npm run test:e2e` (also `npm test`): the complete browser regression suite, including the tagged flows. This broader suite is retained separately and does not carry the 10-second smoke-suite target.
-
-Playwright serves the built frontend and uses reduced motion. Browser mocks verify UI/IPC behavior; they do not establish native platform acceptance. Windows private file/directory ACLs are applied through the shared native API, with existing ACL regression checks retained. Session adapters prefer CLI-saved titles; Codex also consumes its title catalog/database and updates the affected session fingerprint on rename.
-
-
-Plugin adapters may declare a native configuration location, additional baseline files, and a bundled command program/argument prefix. Shared services retain process timeouts, output limits, context checks, native package/config comparison and encrypted transactional backups. File-backed discovery avoids CLI startup; the plugin UI caches snapshots for 30 seconds per CLI/scope/project/account and explicit rescan bypasses it. Agent adapters can expose read-only builtin reference catalogs through `builtin_definitions`; catalog entries never become editable files, and custom same-name definitions can override them. Long-term-rule scope availability comes from registry `management.rules`. Native file tabs use each adapter's declared roles; switching documents reuses the editor view and clears cross-file undo history.
-
-Plugin adapters can also provide a fast, partial inventory through `preview`. `preview_native_plugins` returns a non-operable snapshot with an empty baseline, no management actions and unknown enablement; the authoritative scan replaces it. ZCode uses its version-1 bundled marketplace catalog, respects suppressed builtins, and delegates final state, user-plugin discovery and operations to the native CLI. The UI shares in-flight scans per CLI/scope/project/account and never caches inventory as a verified snapshot.
-
-Homepage summary discovery runs at most three initial probes at once. Transient version failures retry at most twice; missing tools and failed probes expose a manual recheck that bypasses the summary cache. Successful home snapshots expire after 60 seconds, and failure snapshots are not remembered across navigation.
-
-The navigation sidebar can collapse into an icon rail and remembers that local layout choice. Records use the available window width; the session list stays bounded while the reader gains space on large displays. CI test execution and HTTP test fixtures have finite waits so a failed connection cannot keep validation running indefinitely.
-
-History extensions may provide `UsageEvent.nativeUsage` (`unit`, finite nonnegative `value`, nullable `originalValue`, nullable `billable`) independently of token buckets. The shared version-23 database, reports, detail and exports preserve native units and billing groups; unknown token records contribute no token total or monetary estimate. Event IDs must identify requests across the tool's sources; uncertain request counts remain null. Register history through the existing adapter capability ports, keeping paths, schemas, request IDs and resume arguments inside that adapter. Shared UI consumes native-unit metadata without CLI-ID branches.
-
-### Credential persistence on macOS
-
-Managed secrets are stored as plaintext files under `~/Library/Application Support/com.cliora.desktop/credentials/`, with directory mode `0700` and file mode `0600`. This deliberately prioritizes persistence across application updates over Keychain access control: another process running as the same user can read these files. Signing identity, app location, and binary updates do not affect access. Keep this directory when updating or reinstalling Cliora; a complete local data backup must include it. Windows and Linux continue to use the system credential store.
-
-Existing `com.cliora.desktop` login Keychain items are read only when a local record is absent. A successful read atomically copies the original value, including native integrity and backup keys; subsequent reads use the local copy. An inaccessible old item requires a one-time authorization before migration, or re-saving a replaceable connection secret. Integrity/backup keys must be recovered unchanged, not reset. Migration never deletes old Keychain items or changes global Keychain settings. Local deletions leave a tombstone so legacy secrets cannot reappear. Do not downgrade to a pre-migration build: older versions still use the stale Keychain copies. Portable export and WebDAV retain their existing encrypted transfer format.
-
-
-Cross-platform synchronization restores accounts, common settings, profiles and active bindings in dependency order, then applies native files after all received dependencies are saved. An interrupted receive keeps a durable apply queue. MCP and managed Skill placements and enable/disable state travel with their definitions; updates and removals use the existing native transaction services. Only installed CLIs are applied; sync never installs a CLI or copies project source code. Missing installations/directories and rejected OAuth material remain explicit blockers, while unrelated items continue. Home-relative paths use a platform-neutral representation, and package runners such as Windows `npx.cmd` resolve through the receiver PATH. Auth-file destinations come from the receiving account adapter. Repeating a successful sync does not republish these local path changes.
-
-An unreadable profile credential holds that profile and its binding rather than failing the whole transfer or uploading a missing key/deletion. Orphaned active references are omitted without changing native files. Re-entering a valid WebDAV connection password can repair the connection without reading the obsolete local credential first. A sync only records complete success after conflicts, native blockers and pending changes are resolved; writes caused by receiving an already-synchronized item are acknowledged using a digest check under the database transaction.
-
-Resources created independently on different devices may share a name but have different IDs. Sync and bundle restore coalesce equal MCP/Skill resources under a stable ID, preserving placements, disabled state and pending recovery references. Aliases keep older deployment references readable while obsolete remote IDs converge to deletions. Different contents become an item-level conflict with both keep-local and adopt-remote choices; unrelated transfers continue. Name-collision previews recheck the local resource inside the import transaction before any ID or ownership change.
-
-
-Cliora can open the current local session's main or linked Git worktree in Twiglane with the [v3 review protocol](docs/integrations/twiglane-review-v3.md). Each review carries that session's business project and repository identity; the URL never contains the project membership list or prompt bodies. Twiglane keeps up to eight review sources during one run, restores accepted sources and their native Git results after a webview reload, and provides explicit selection for shared checkouts and explicit release at capacity. Returning selects the original session and rechecks its real HEAD and dirty state; a repository result does not mark the whole project complete. Legal v2 sources keep their original return version. Failed or unconfirmed v3 opens do not silently downgrade, remote sessions remain unsupported, and restarted or closed sources must be started again from Cliora.
-
-Development evidence and exact native platform limits are recorded in [multi-repository project verification](docs/verification/multi-repository-project-workspaces.md). `scripts/capture-review-roundtrip.mjs` captures both frontends through synthetic IPC and link delivery; those screenshots do not establish native scheme acceptance.
+欢迎提交 Issue 和 Pull Request。提交信息沿用 `feat:` / `fix:` 前缀；涉及界面的改动请附截图。
