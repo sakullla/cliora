@@ -222,7 +222,11 @@ export default function App() {
   const [workbenchFailure, setWorkbenchFailure] = useState<WorkbenchFailure | null>(null);
   const [workbenchToken, setWorkbenchToken] = useState(0);
   const [incomingManifest, setIncomingManifest] = useState<WorkspaceManifestPreview | null>(null);
+  /** The v2 link whose handoff is still pending: only an identical link that has not settled is a duplicate. */
+  const pendingWorkspaceLink = useRef<string | null>(null);
   const consumeIncomingManifest = useCallback((preview: WorkspaceManifestPreview) => {
+    // Once the project page owns the handoff, opening the same link again is a new request.
+    pendingWorkspaceLink.current = null;
     setIncomingManifest(current => current === preview ? null : current);
   }, []);
   const [reviewSignal, setReviewSignal] = useState<TwiglaneReviewSignal | null>(null);
@@ -393,13 +397,17 @@ export default function App() {
     return () => { active = false; stops.forEach((stop) => stop()); };
   }, [canLeave]);
 
-  // cliora://review 的接收回执与返回事件走同一条路径：先交给 native 校验并更新内存态
-  // 注册表，再决定定位会话还是让工作台重读。冷启动链接与运行中链接行为一致。
+  // 入站深链走同一条路径：cliora://workspace 先读取清单预览，cliora://review 的接收回执与返回
+  // 事件则交给 native 校验并更新内存态注册表，再决定定位会话还是让工作台重读。冷启动链接与运行中
+  // 链接行为一致。
   useEffect(() => {
     if (!nativeAvailable) return;
     let active = true;
     let stop: (() => void) | null = null;
-    const seen = new Set<string>();
+    // review 链接带一次审查唯一的 reviewId，同一串重复到达就是同一事件的重复投递；native 注册表
+    // 已经按 reviewId 与结果版本拒绝重放，所以这里继续按串去重。v2 workspace 链接不是这样：它对同一
+    // 成员是字节相同的固定输出，去重只能覆盖“这次意图尚未结算”的窗口（见 handle 内的说明）。
+    const handledReviews = new Set<string>();
     // 原审查关联失效时明确说明无法返回：不创建替代会话，不改动任何会话或仓库。
     const showReviewExpired = () => {
       setError({
@@ -415,15 +423,24 @@ export default function App() {
       // 读不到列表不是"会话已失效"的证据，保持原行为。
       .catch(() => true);
     const handle = (url: unknown) => {
-      if (!active || typeof url !== 'string' || seen.has(url)) return;
-      seen.add(url);
+      if (!active || typeof url !== 'string') return;
       if (url.startsWith('cliora://workspace')) {
+        // 同一链接还在等待处理（读取中、预览未消费）时它是重复投递；消费、取消、跳转被拒或读取
+        // 失败后同一链接再次被显式打开，是新的意图，必须重新出预览而不是被静默吞掉。
+        if (pendingWorkspaceLink.current === url) return;
+        pendingWorkspaceLink.current = url;
+        const settle = () => { if (pendingWorkspaceLink.current === url) pendingWorkspaceLink.current = null; };
         void native.previewWorkspaceLink(url).then(async preview => {
-          if (!active || !await transitionRef.current('home', 'local')) return;
+          if (!active || !await transitionRef.current('home', 'local')) { settle(); return; }
           setIncomingManifest(preview);
-        }).catch(value => { if (active) setError({ code: 'workspace_link_failed', message: formatFailure(value, t('workspaces.failed'), t('workspaces.retry')), action: t('workspaces.openManifest') }); });
+        }).catch(value => {
+          settle();
+          if (active) setError({ code: 'workspace_link_failed', message: formatFailure(value, t('workspaces.failed'), t('workspaces.retry')), action: t('workspaces.openManifest') });
+        });
         return;
       }
+      if (handledReviews.has(url)) return;
+      handledReviews.add(url);
       void native.twiglaneReviewLink(url).then(async (outcome) => {
         if (!active) return;
         if (outcome.kind === 'ignored') {
@@ -443,7 +460,8 @@ export default function App() {
           return;
         }
         setReviewSignal((current) => ({ sessionId, token: (current?.token ?? 0) + 1 }));
-      }).catch(() => {});
+        // 只有传输失败没有结论：放开这一串，命令本身被拒绝时仍可重试同一事件。
+      }).catch(() => { handledReviews.delete(url); });
     };
     // 浏览器 mock 或插件缺失时 unlisten 可能是拒绝的 promise；释放失败不打断任何事。
     const release = (fn: (() => void) | null) => {

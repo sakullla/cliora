@@ -27,6 +27,7 @@ async function install(page: Page, repositories = 48, projectMode: 'normal' | 'y
         callbacks[id]?.({ payload: [url] });
         return true;
       },
+      __workspaceLinkReady: () => handlers['deep-link://new-url'] !== undefined,
       __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
       __TAURI_INTERNALS__: {
         transformCallback: (callback: (value: unknown) => void) => { callbacks.push(callback); return callbacks.length - 1; },
@@ -231,6 +232,41 @@ for (const action of ['cancel', 'accept'] as const) {
     expect(await page.evaluate(() => (window as any).__workspaceFixture.calls.filter((item: any) => item.command === 'attach_workspace_manifest').length)).toBe(action === 'accept' ? 1 : 0);
   });
 }
+
+/** How many inbound v2 links the preview path actually read. */
+async function linkPreviews(page: Page) {
+  return page.evaluate(() => (window as any).__workspaceFixture.calls.filter((item: any) => item.command === 'preview_workspace_link').length);
+}
+
+for (const action of ['cancel', 'accept'] as const) {
+  test(`a ${action === 'accept' ? 'finished' : 'cancelled'} v2 link creates a new intent when the same link is opened again`, async ({ page }) => {
+    await install(page);
+    const preview = page.getByRole('dialog', { name: '关联项目清单' });
+    await expect.poll(() => page.evaluate(url => (window as any).__emitWorkspaceLink(url), VALID_LINK)).toBe(true);
+    await expect(preview).toBeVisible();
+    if (action === 'cancel') await preview.getByRole('button', { name: '关闭', exact: true }).click();
+    else await preview.getByRole('button', { name: '关联项目', exact: true }).click();
+    await expect(preview).toHaveCount(0);
+    // Twiglane builds a byte-identical link per member, so reopening the same project sends this
+    // exact string again and it must be a fresh intent rather than a swallowed duplicate.
+    await expect.poll(() => page.evaluate(url => (window as any).__emitWorkspaceLink(url), VALID_LINK)).toBe(true);
+    await expect(preview).toBeVisible();
+    await expect.poll(() => linkPreviews(page)).toBe(2);
+  });
+}
+
+test('one delivery of the same v2 link reads it once and shows one preview', async ({ page }) => {
+  await install(page);
+  // A cold start can surface one URL through get_current and the running event: one handoff.
+  await expect.poll(() => page.evaluate(() => (window as any).__workspaceLinkReady())).toBe(true);
+  expect(await page.evaluate(url => {
+    const emit = (window as any).__emitWorkspaceLink;
+    return emit(url) && emit(url);
+  }, VALID_LINK)).toBe(true);
+  await expect(page.getByRole('dialog', { name: '关联项目清单' })).toBeVisible();
+  await expect.poll(() => linkPreviews(page)).toBe(1);
+  await expect(page.getByRole('dialog', { name: '关联项目清单' })).toHaveCount(1);
+});
 
 test('an already linked project continues its source member without a second confirmation', async ({ page }) => {
   await install(page);
