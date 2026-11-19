@@ -608,7 +608,7 @@ for(const width of widths)for(const theme of themes){
   const search=panel.getByRole('textbox',{name:'搜索资料'});
   await search.fill('全文后段命中-119');await panel.getByRole('button',{name:'模板 119',exact:true}).waitFor();await capture('prompts-fulltext-search');
   await search.fill('');await panel.getByRole('button',{name:'项目筛选',exact:true}).click();
-  await page.getByRole('option',{name:/^电商平台 项目专用/}).click();await panel.getByRole('button',{name:'项目 A 发布',exact:true}).waitFor();await capture('prompts-project-scope');
+  await page.getByRole('option',{name:/^电商平台/}).click();await panel.getByRole('button',{name:'项目 A 发布',exact:true}).waitFor();await capture('prompts-project-scope');
   await panel.getByRole('button',{name:'项目 A 发布',exact:true}).click();
   await page.getByRole('dialog',{name:'编辑提示词'}).getByRole('textbox',{name:'资料正文',exact:true}).waitFor();await capture('prompts-edit');
   await page.getByRole('dialog',{name:'编辑提示词'}).getByRole('button',{name:'关闭',exact:true}).click();
