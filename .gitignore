@@ -26,6 +26,9 @@ test-results/
 # Keep requirements and design tracked; workflow runtime files are local.
 docs/*
 docs/requirements/*
+# README material: user-facing screenshots and the migrated technical reference.
+!docs/screenshots/
+!docs/reference.md
 docs/verification/ui/
 
 # Track only the configuration adapter extension contract.
