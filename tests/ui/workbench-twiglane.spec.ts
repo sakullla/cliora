@@ -15,6 +15,9 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
       reviewId: string;
       sessionId: string;
       worktreePath: string;
+      protocolVersion?: number;
+      remoteCheck?: Record<string, unknown>;
+      resultRevision?: number;
       baseline: string | null;
       status: string;
       reason: string | null;
@@ -92,7 +95,7 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
             if (args.sessionId !== 's1' && args.sessionId !== 's2') throw { code: 'session_unknown', message: '找不到这个会话' };
             return {
               sessionId: args.sessionId,
-              worktreePath: args.sessionId === 's1' ? 'C:/work/alpha' : 'C:/work/beta',
+              worktreePath: pairingRemote ? '/srv/alpha' : args.sessionId === 's1' ? 'C:/work/alpha' : 'C:/work/beta',
               branch: args.sessionId === 's1' ? 'feature/twiglane' : 'feature/beta',
               headOid: harness.headOid,
               uncommittedFiles: harness.files,
@@ -106,8 +109,9 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
             const review: Review = {
               reviewId,
               sessionId: args.sessionId,
-              worktreePath: args.sessionId === 's1' ? 'C:/work/alpha' : 'C:/work/beta',
-              baseline: harness.headOid,
+              worktreePath: pairingRemote ? '/srv/alpha' : args.sessionId === 's1' ? 'C:/work/alpha' : 'C:/work/beta',
+              protocolVersion: pairingRemote ? 1 : 2,
+              baseline: pairingRemote ? null : harness.headOid,
               status: 'opening',
               reason: null,
               outcome: null,
@@ -131,7 +135,8 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
             const query = new URLSearchParams(url.split('?')[1] ?? '');
             const ignored = (reason: string) => ({ kind: 'ignored', sessionId: null, reviewId: null, outcome: null, headOid: null, worktreeState: null, reason });
             // 同原生解析：只接受 v2，v1 与其他版本在查注册表之前就被丢弃。
-            if (query.get('v') !== '2') return ignored('unsupported_version');
+            const remote = pairingRemote && url.startsWith('cliora://remote-review?') && query.get('v') === '1';
+            if (!remote && query.get('v') !== '2') return ignored('unsupported_version');
             const meta: Record<string, string> = {};
             for (const [key, value] of query) {
               if (!key.startsWith('meta.')) continue;
@@ -150,6 +155,10 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
               return { kind: 'ignored', sessionId: null, reviewId: null, outcome: null, headOid: null, reason: 'superseded_review' };
             }
             const event = query.get('event');
+            if (remote && event === 'opening') {
+              review.status = 'preparing';
+              return { kind:'opening',sessionId:review.sessionId,reviewId,remoteTargetId:'r1' };
+            }
             if (event === 'accepted') {
               review.status = 'accepted';
               return { kind: 'accepted', sessionId: review.sessionId, reviewId, outcome: null, headOid: null, reason: null };
@@ -159,12 +168,16 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
               review.reason = query.get('reason');
               return { kind: 'rejected', sessionId: review.sessionId, reviewId, outcome: null, headOid: null, reason: review.reason };
             }
+            if (remote) {
+              review.resultRevision = Number(query.get('resultRevision'));
+              review.remoteCheck = {sessionId:review.sessionId, worktreePath:review.worktreePath, headOid:harness.headOid, uncommittedFiles:harness.files, state:'ready'};
+            }
             review.status = 'returned';
             review.outcome = query.get('outcome');
             review.headOid = query.get('headOid');
             review.worktreeState = worktreeState;
             review.meta = meta;
-            return { kind: 'returned', sessionId: review.sessionId, reviewId, outcome: review.outcome, headOid: review.headOid, worktreeState, reason: null };
+            return { kind: 'returned', remoteTargetId: remote ? 'r1' : undefined, sessionId: review.sessionId, reviewId, outcome: review.outcome, headOid: review.headOid, worktreeState, reason: null };
           }
           if (command === 'plugin:deep-link|get_current') return null;
           if (['write_workbench_session', 'resize_workbench_session'].includes(command)) return null;
@@ -531,14 +544,21 @@ test('reviewing again after a return uses a new reviewId and the current HEAD, a
   await expect(first.group.getByRole('status')).toHaveText('正在等待 Twiglane 确认…');
 });
 
-test('a remote session has no local review entry', async ({ page }) => {
+test('a remote session reviews its own worktree, stays pending during installation, and verifies a remote return', async ({ page }) => {
   await installDesktop(page, { sessions: 'remote' });
   await openWorkbench(page);
-  // 远程会话在 native 层就被拒绝，界面上也不给可误打开本地同名仓库的入口。
-  await expect(page.getByRole('tablist', { name: '会话列表' }).getByRole('tab', { name: /Claude Code/ })).toHaveAttribute('aria-selected', 'true');
-  await expect(page.getByRole('button', { name: /在 Twiglane 中审查/ })).toHaveCount(0);
-  const starts = await page.evaluate(() => (window as unknown as { __harness: { starts: unknown[] } }).__harness.starts);
-  expect(starts).toHaveLength(0);
+  await page.getByRole('button', { name: '在 Twiglane 中审查', exact: true }).click();
+  const group = page.getByRole('menu', {name:'在 Twiglane 中审查'}).getByRole('group', {name:'在 Twiglane 中审查'});
+  await expect(group).toContainText('Build box · /srv/alpha');
+  await expect(page.getByRole('menuitem', {name:'新建工作树'})).toHaveCount(0);
+  await group.getByRole('menuitem',{name:'在 Twiglane 中审查'}).click();
+  await expect(group).toContainText('此会话没有可用的起始基线');
+  const id=await page.evaluate(() => (window as unknown as {__harness:{starts:{reviewId:string}[]}}).__harness.starts[0].reviewId);
+  const send=(tail:string)=>page.evaluate(url => (window as unknown as {__emitDeepLink:(url:string)=>void}).__emitDeepLink(url), 'cliora://remote-review?v=1&reviewId='+id+'&sessionId=s1&'+tail);
+  await send('event=opening');
+  await expect(group.getByRole('status')).toHaveText('Twiglane 正在连接远端，或等待确认安装 agent。');
+  await send('event=returned&outcome=reviewed&worktreeState=clean&resultRevision=1');
+  await expect(page.getByText(/Twiglane 声明的工作区状态与当前真实状态不一致/).first()).toBeVisible();
 });
 
 /** A review link may only read: it never starts a session and never writes Git. */

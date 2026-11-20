@@ -24,6 +24,7 @@ use crate::database::Database;
 use crate::native::profile::{RegisteredCommon, RegisteredProfile};
 
 pub mod twiglane;
+pub(crate) mod twiglane_review;
 mod twiglane_config;
 mod twiglane_peer;
 mod twiglane_trust;

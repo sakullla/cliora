@@ -90,12 +90,7 @@ fn verify_artifact(digest: &str, signature: &str) -> Result<()> {
     signed_digest(PUBLISHER, digest, signature)
 }
 
-fn configure_transport(
-    command: &mut Command,
-    target: &RemoteTarget,
-    op: &str,
-    artifact: Option<(&str, &str)>,
-) -> Result<()> {
+pub(super) fn configure_ssh(command: &mut Command, target: &RemoteTarget) -> Result<()> {
     let saved_auth = password::askpass_environment(target);
     let ephemeral = std::env::var_os("SSH_ASKPASS")
         .map(PathBuf::from)
@@ -113,6 +108,16 @@ fn configure_transport(
     command
         .arg("--")
         .arg(format!("{}@{}", target.user, target.host));
+    Ok(())
+}
+
+fn configure_transport(
+    command: &mut Command,
+    target: &RemoteTarget,
+    op: &str,
+    artifact: Option<(&str, &str)>,
+) -> Result<()> {
+    configure_ssh(command, target)?;
     // The action comes from the exact match below; the optional digest is lowercase hex only.
     let mut packed = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
     packed

@@ -463,7 +463,7 @@ fn remote_persistent_command(path: &str, executable: &str, args: &[String], sess
     let mut cli = format!("exec {}", remote_shell_quote(executable));
     for arg in args { cli.push(' '); cli.push_str(&remote_shell_quote(arg)); }
     let prefix = remote_launch_environment_shell(environment);
-    let command = format!("{prefix}{}; if ! command -v {} >/dev/null 2>&1; then echo {}; exit 127; fi; cd -- {} && {cli}", crate::remote::REMOTE_USER_PATH, remote_shell_quote(executable), remote_shell_quote(&format!("Cliora: remote CLI '{}' is not installed or not on PATH", executable)), remote_shell_quote(path));
+    let command = format!("{prefix}{}; if ! command -v {} >/dev/null 2>&1; then echo {}; exit 127; fi; cd -- {} && {{ {}; {cli}; }}", crate::remote::REMOTE_USER_PATH, remote_shell_quote(executable), remote_shell_quote(&format!("Cliora: remote CLI '{}' is not installed or not on PATH", executable)), remote_shell_quote(path), crate::remote::twiglane_review::record_command(session));
     // OpenSSH on Windows may allocate a `dumb` terminal. tmux then exports
     // its own TERM value, which is not sufficient for full-screen CLIs.
     // Run the payload through a shell that advertises the PTY we provide.

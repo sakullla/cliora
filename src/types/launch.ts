@@ -166,14 +166,15 @@ export type TrayRepairTarget = {
 export type RemoteSessionIndexEntry = { remoteSessionId: string; projectId: string; targetId: string; toolId: string; directory: string; mode: LaunchMode; startedAt: number; lastSeenAt: number };
 
 /** One review cliora asked Twiglane to open; only the native registry owns this state. */
-export type TwiglaneReviewStatus = 'opening' | 'accepted' | 'rejected' | 'returned';
+export type TwiglaneReviewStatus = 'opening' | 'preparing' | 'accepted' | 'rejected' | 'returned';
 /** Git work actually done in Twiglane; `reviewed` means no commit or merge, not "only looked". */
 export type TwiglaneReviewOutcome = 'reviewed' | 'committed' | 'merged';
 /** Twiglane's claim about the worktree when it returned; always re-checked against real Git. */
 export type TwiglaneWorktreeState = 'clean' | 'dirty' | 'unknown';
 export type TwiglaneReviewState = {
   resultRevision: number;
-  protocolVersion: 2 | 3;
+  protocolVersion: 1 | 2 | 3;
+  remoteCheck?: WorkbenchCodeStatus;
   workspaceId: string | null;
   repositoryId: string | null;
   workspaceName: string | null;
@@ -195,7 +196,8 @@ export type TwiglaneReviewState = {
 };
 /** The native result of one inbound cliora://review link. */
 export type TwiglaneLinkOutcome = {
-  kind: 'accepted' | 'rejected' | 'returned' | 'ignored';
+  kind: 'opening' | 'accepted' | 'rejected' | 'returned' | 'ignored';
+  remoteTargetId?: string;
   sessionId: string | null;
   reviewId: string | null;
   outcome: TwiglaneReviewOutcome | null;

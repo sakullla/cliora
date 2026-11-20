@@ -427,11 +427,11 @@ export default function App() {
       });
     };
     // 只有该 session 仍在工作台里且是本地会话时才跳转；否则停在当前页并说明原因。
-    const sessionAvailable = async (sessionId: string) => native.listWorkbenchSessions()
-      .then((list) => !Array.isArray(list)
-        || list.some((item) => item.id === sessionId && !item.projectId?.startsWith('remote:')))
+    const sessionAvailable = async (sessionId: string, remote: boolean) => native.listWorkbenchSessions()
+      .then((list) => Array.isArray(list) ? list.some((item) => item.id === sessionId && !!item.projectId?.startsWith('remote:') === remote) : !remote)
       // 读不到列表不是"会话已失效"的证据，保持原行为。
-      .catch(() => true);
+      .catch(() => !remote);
+    let returnIntent = 0;
     const handle = (url: unknown) => {
       if (!active || typeof url !== 'string') return;
       if (url.startsWith('cliora://workspace')) {
@@ -462,11 +462,15 @@ export default function App() {
         const sessionId = outcome.sessionId;
         if (!sessionId) return;
         if (outcome.kind === 'returned') {
-          if (!await sessionAvailable(sessionId) || !active) {
+          const intent = ++returnIntent;
+          const available = await sessionAvailable(sessionId, !!outcome.remoteTargetId);
+          if (intent !== returnIntent) return;
+          if (!available || !active) {
             if (active) showReviewExpired();
             return;
           }
-          openWorkbenchSession(sessionId);
+          if (!await transitionRef.current('sessions', outcome.remoteTargetId ?? 'local')) return;
+          if (active && intent === returnIntent) openWorkbenchSession(sessionId);
           return;
         }
         setReviewSignal((current) => ({ sessionId, token: (current?.token ?? 0) + 1 }));

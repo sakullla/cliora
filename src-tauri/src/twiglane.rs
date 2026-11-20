@@ -9,6 +9,8 @@
 //! returned 的 Git outcome 与工作区声明正交，两者都只是待复核声明；有界的 `meta.*`
 //! 只被保存，不执行、不影响核心解析与复核。
 
+mod remote_review;
+
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -65,6 +67,10 @@ pub(crate) const STATUS_RETURNED: &str = "returned";
 pub struct ReviewState {
     #[serde(skip)]
     pub(crate) verified_head: Option<String>,
+    #[serde(skip)]
+    pub(crate) remote_binding: Option<crate::remote::twiglane_review::Binding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_check: Option<CodeStatus>,
     pub result_revision: u64,
     pub protocol_version: u8,
     pub workspace_id: Option<String>,
@@ -91,6 +97,8 @@ pub struct ReviewState {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LinkOutcome {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_target_id: Option<String>,
     pub kind: String,
     pub session_id: Option<String>,
     pub review_id: Option<String>,
@@ -103,6 +111,7 @@ pub struct LinkOutcome {
 impl LinkOutcome {
     pub(crate) fn ignored(reason: &str) -> Self {
         LinkOutcome {
+            remote_target_id: None,
             kind: "ignored".into(),
             session_id: None,
             review_id: None,
@@ -117,6 +126,8 @@ impl LinkOutcome {
 /// 入站链接的三种合法语义。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum LinkEvent {
+    Remote { event: Box<LinkEvent>, result_revision: Option<u64> },
+    Opening { review_id: String, session_id: String },
     V3 { event: Box<LinkEvent>, result_revision: Option<u64> },
     Accepted { review_id: String, session_id: String },
     Rejected { review_id: String, session_id: String, reason: String },
@@ -149,7 +160,7 @@ pub struct CodeStatus {
 }
 
 impl CodeStatus {
-    fn unknown(session_id: &str, path: Option<String>, reason: &str) -> Self {
+    pub(crate) fn unknown(session_id: &str, path: Option<String>, reason: &str) -> Self {
         CodeStatus {
             session_id: session_id.into(),
             worktree_path: path,
@@ -294,6 +305,8 @@ pub(crate) fn checked_review_url(
 
 /// v3 source data is display-only and bounded; never include project membership or prompt content.
 pub(crate) fn source_review_url(state: &ReviewState) -> Result<String, &'static str> {
+    if state.remote_binding.is_some() { return remote_review::request(state); }
+
     let mut url = checked_review_url(&state.review_id, &state.session_id, &state.worktree_path, state.baseline.as_deref())?;
     for (key, value) in [("workspaceId", state.workspace_id.as_deref()), ("repositoryId", state.repository_id.as_deref()), ("workspaceName", state.workspace_name.as_deref())] {
         if let Some(value) = value {
@@ -310,6 +323,8 @@ pub(crate) fn source_review_url(state: &ReviewState) -> Result<String, &'static 
 
 /// 校验并解析回送的 cliora://review 事件。失败返回协议里的稳定错误码。
 pub(crate) fn parse_event_url(url: &str) -> Result<LinkEvent, &'static str> {
+    if url.starts_with("cliora://remote-review?") { return remote_review::event(url); }
+
     if url.len() > MAX_URL_BYTES || has_raw_whitespace_or_control(url) {
         return Err("malformed_request");
     }
@@ -521,11 +536,28 @@ impl ReviewRegistry {
         data.entries.get(review_id).cloned()
     }
 
+    /// Record only the result that requested this remote read. A newer return can finish first.
+    pub(crate) fn checked_remote_return(&self, source: &ReviewState, status: CodeStatus) -> bool {
+        let mut current = false;
+        self.update(&source.review_id, &source.session_id, |entry| {
+            if entry.remote_binding.is_some() && entry.status == STATUS_RETURNED && entry.result_revision == source.result_revision {
+                let confirmed_commit = entry.outcome.as_deref() == Some("committed") && status.state == "ready" &&
+                    entry.head_oid.is_some() && entry.head_oid == status.head_oid && entry.head_oid != entry.baseline &&
+                    status.uncommitted_files.is_some_and(|files| !matches!((entry.worktree_state.as_deref(), files), (Some("clean"), 1..) | (Some("dirty"), 0)));
+                entry.verified_head = if confirmed_commit { entry.head_oid.clone() } else { None };
+                entry.remote_check = Some(status);
+                current = true;
+            }
+        });
+        current
+    }
+
     /// Record a baseline advance only after native HEAD and dirty-state verification.
     /// The UI still refreshes on every return; this protects the next review's baseline as well.
     pub(crate) fn recheck_return(&self, session_id: &str) {
         let Some(source) = self.latest_for_session(session_id) else { return; };
         if source.status != STATUS_RETURNED || !matches!(source.outcome.as_deref(), Some("committed" | "merged")) { return; }
+        if source.remote_binding.is_some() { return; }
         let status = code_status(session_id, Path::new(&source.worktree_path));
         let valid = status.state == "ready" && status.head_oid == source.head_oid && source.head_oid != source.baseline
             && status.uncommitted_files.is_some_and(|files| !matches!((source.worktree_state.as_deref(), files), (Some("clean"), 1..) | (Some("dirty"), 0)));
@@ -539,11 +571,11 @@ impl ReviewRegistry {
     /// 应用一条入站事件：未知或被取代的 reviewId 一律丢弃，不覆盖新结果。
     /// 未知来源回 `unknown_review`，迟到事件回 `superseded_review`，两者由调用方分别提示。
     pub(crate) fn apply(&self, event: LinkEvent) -> LinkOutcome {
-        let (version, revision, event) = match event { LinkEvent::V3 { event, result_revision } => (3, result_revision, *event), event => (2, None, event) };
+        let (version, revision, event) = match event { LinkEvent::Remote { event, result_revision } => (1, result_revision, *event), LinkEvent::V3 { event, result_revision } => (3, result_revision, *event), event => (2, None, event) };
         let (review_id, session_id) = match &event {
-            LinkEvent::Accepted { review_id, session_id } | LinkEvent::Rejected { review_id, session_id, .. }
+            LinkEvent::Opening { review_id, session_id } | LinkEvent::Accepted { review_id, session_id } | LinkEvent::Rejected { review_id, session_id, .. }
             | LinkEvent::Returned { review_id, session_id, .. } => (review_id.clone(), session_id.clone()),
-            LinkEvent::V3 { .. } => return LinkOutcome::ignored("malformed_request"),
+            LinkEvent::Remote { .. } | LinkEvent::V3 { .. } => return LinkOutcome::ignored("malformed_request"),
         };
         // Identity, ordering and mutation share one critical section. Concurrent IPC handlers
         // must not both pass a stale revision check and then overwrite each other.
@@ -553,19 +585,21 @@ impl ReviewRegistry {
         if data.latest.get(&session_id) != Some(&review_id) { return LinkOutcome::ignored("superseded_review"); }
         let source = data.entries.get_mut(&review_id).expect("source was checked above");
         if source.protocol_version != version { return LinkOutcome::ignored("source_version_mismatch"); }
-        if version == 3 && source.status == STATUS_RETURNED && !matches!(event, LinkEvent::Returned { .. }) {
+        if version == 1 && (source.status == STATUS_REJECTED || (source.status == STATUS_ACCEPTED && !matches!(event, LinkEvent::Returned { .. })) || (matches!(event, LinkEvent::Opening { .. }) && source.status != STATUS_OPENING)) { return LinkOutcome::ignored("late_receipt"); }
+        if version != 2 && source.status == STATUS_RETURNED && !matches!(event, LinkEvent::Returned { .. }) {
             return LinkOutcome::ignored("late_receipt");
         }
-        if version == 3 && revision.is_some_and(|revision| revision <= source.result_revision) {
+        if version != 2 && revision.is_some_and(|revision| revision <= source.result_revision) {
             return LinkOutcome::ignored("duplicate_result");
         }
-        let mut result = LinkOutcome { kind: String::new(), session_id: Some(session_id), review_id: Some(review_id), outcome: None, head_oid: None, worktree_state: None, reason: None };
+        let mut result = LinkOutcome { remote_target_id: source.remote_binding.as_ref().map(|b| b.target_id.clone()), kind: String::new(), session_id: Some(session_id), review_id: Some(review_id), outcome: None, head_oid: None, worktree_state: None, reason: None };
         match event {
-            LinkEvent::V3 { .. } => return LinkOutcome::ignored("malformed_request"),
+            LinkEvent::Remote { .. } | LinkEvent::V3 { .. } => return LinkOutcome::ignored("malformed_request"),
+            LinkEvent::Opening { .. } => { source.status = "preparing".into(); result.kind = "opening".into(); }
             LinkEvent::Accepted { .. } => { source.status = STATUS_ACCEPTED.into(); result.kind = "accepted".into(); }
             LinkEvent::Rejected { reason, .. } => { source.status = STATUS_REJECTED.into(); source.reason = Some(reason.clone()); result.kind = "rejected".into(); result.reason = Some(reason); }
             LinkEvent::Returned { outcome, head_oid, worktree_state, meta, .. } => {
-                source.status = STATUS_RETURNED.into(); source.result_revision = revision.unwrap_or(0); source.verified_head = None;
+                source.status = STATUS_RETURNED.into(); source.result_revision = revision.unwrap_or(0); source.verified_head = None; source.remote_check = None;
                 source.outcome = Some(outcome.clone()); source.head_oid = head_oid.clone(); source.worktree_state = Some(worktree_state.clone()); source.meta = meta;
                 result.kind = "returned".into(); result.outcome = Some(outcome); result.head_oid = head_oid; result.worktree_state = Some(worktree_state);
             }
@@ -584,6 +618,8 @@ fn now_millis() -> u64 {
 pub(crate) fn new_review(session_id: &str, worktree_path: &str, baseline: Option<String>) -> ReviewState {
     ReviewState {
         verified_head: None,
+        remote_binding: None,
+        remote_check: None,
         result_revision: 0,
         protocol_version: 3,
         workspace_id: None,
@@ -696,7 +732,8 @@ pub(crate) fn url_path(root: &Path) -> Result<String, &'static str> {
 pub(crate) fn api_error(code: &'static str) -> ApiError {
     let (message, action) = match code {
         "session_unknown" => ("找不到这个会话，无法发起审查。", "重新选择一个进行中的本地会话后重试。"),
-        "remote_session" => ("远程 SSH 会话不支持在 Twiglane 中审查。", "首期只支持本机可访问的本地会话。"),
+        "target_changed" => ("远端会话、SSH 主机或工作树的身份已变化。", "重新选择原远端会话并核对配置。"),
+        "remote_session" => ("会话没有本机工作树。", "从原远端会话重新发起审查。"),
         "invalid_path" => ("会话目录已经失效或无法读取。", "确认目录仍然存在后重试。"),
         "not_a_worktree" => ("这个目录不是 Git 工作树根目录。", "在会话所在的工作树根目录中重新发起。"),
         "git_missing" => ("找不到 Git，无法读取工作树状态。", "安装 Git 后重试。"),
