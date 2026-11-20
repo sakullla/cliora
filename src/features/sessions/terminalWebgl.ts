@@ -88,10 +88,9 @@ export class TerminalWebglLifecycle {
         contextLoss?.dispose();
       } finally {
         try {
-          if (addon) {
-            try { this.terminal.clearTextureAtlas(); } catch { /* Atlas may already be released. */ }
-            addon.dispose();
-          }
+          // xterm shares glyph atlases across matching renderers. Disposal
+          // releases this owner's reference and frees the atlas on the last one.
+          addon?.dispose();
         } finally {
           if (restoreBlink && !this.closed) {
             this.terminal.options.cursorBlink = blink;
