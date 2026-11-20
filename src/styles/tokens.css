@@ -15,7 +15,7 @@
   --font-display: "Inter", "Segoe UI Variable Display", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
 
   /* Crisp alabaster-stone frame, pure paper surfaces and one emerald-pine identity color. */
-  --bg: #f5f7f4;
+  --bg: #f7f8f7;
   --sidebar: #f1f3f1;
   --surface: #ffffff;
   --surface-2: #f3f5f3;
@@ -138,12 +138,12 @@
   --shadow-thumb: 0 1px 3px rgb(22 34 27 / 22%);
   --focus-ring: 2px solid var(--accent);
 
-  --theme-preview-light-bg: #f5f7f4;
+  --theme-preview-light-bg: #f7f8f7;
   --theme-preview-light-rail: #eef2ed;
   --theme-preview-light-line: #d5dcd3;
   --theme-preview-light-ink: #364139;
   --theme-preview-light-muted: #cfd7cc;
-  --theme-preview-dark-bg: #121614;
+  --theme-preview-dark-bg: #111513;
   --theme-preview-dark-rail: #0d100e;
   --theme-preview-dark-line: #2c352f;
   --theme-preview-dark-ink: #c5cec7;

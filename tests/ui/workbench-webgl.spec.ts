@@ -110,6 +110,37 @@ test('inactive renderer release preserves content and restores the user blinking
   await assertClosedCollected(page);
 });
 
+test('releasing a second renderer preserves the visible terminal glyphs on its next redraw', async ({ page }) => {
+  await installRenderer(page);
+  expect(await page.evaluate(async () => {
+    const w = window as any;
+    if (!w.__open(false, false)) return false;
+    const visible = w.__current.terminal;
+    await new Promise<void>(resolve => visible.write('\x1b[?25l\x1b[31m查询委派失败 · Working 0123456789\x1b[0m', resolve));
+    const host = document.createElement('div');
+    document.body.append(host);
+    const peer = new w.Terminal({ cols: 60, rows: 8 });
+    peer.open(host);
+    const lifecycle = new w.TerminalWebglLifecycle(peer, () => new w.WebglAddon.WebglAddon());
+    w.__peer = { peer, lifecycle };
+    return lifecycle.activate();
+  })).toBe(true);
+  const screen = page.locator('#host .xterm-screen');
+  const box = (await screen.boundingBox())!;
+  // Sample the unchanged first row. New ink on row two forces a GPU texture upload.
+  const clip = { x: box.x, y: box.y, width: box.width, height: Math.floor(box.height / 8) };
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  const before = await page.screenshot({ clip });
+  await page.evaluate(async () => {
+    const w = window as any;
+    w.__peer.lifecycle.dispose();
+    w.__peer.peer.dispose();
+    await new Promise<void>(resolve => w.__current.terminal.write('\r\n\x1b[34m下一帧\x1b[0m', resolve));
+    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  });
+  expect((await page.screenshot({ clip })).equals(before)).toBe(true);
+});
+
 test('actual WebGL context loss falls back to DOM without retaining cursor timers', async ({ page }) => {
   await installRenderer(page);
   const errors: string[] = [];
