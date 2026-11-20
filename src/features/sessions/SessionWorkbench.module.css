@@ -882,7 +882,7 @@
   top: 50%;
   left: 0;
   width: 1px;
-  height: 14px;
+  height: 16px;
   transform: translateY(-50%);
   background: var(--term-line);
   pointer-events: none;
