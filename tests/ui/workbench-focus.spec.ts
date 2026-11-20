@@ -320,3 +320,115 @@ test('tabbing through the session rail reaches the row menu and remove buttons',
   await expect(remove).toBeFocused();
   await expect.poll(() => remove.evaluate((node) => getComputedStyle(node.parentElement!).opacity)).toBe('1');
 });
+
+test('selected rail row keeps metadata visible at rest, docked live keeps accent, and pending differs from ended', async ({ page }) => {
+  await page.addInitScript(() => {
+    const host = {
+      id: 'host-1', name: '远端主机', host: '203.0.113.10', port: 22, user: 'root', authMethod: 'key', identityFile: '',
+      sshConfig: null, defaultPath: '/srv/project', enabled: true, createdAt: 1, updatedAt: 1,
+    };
+    const project = { id: 'proj-1', targetId: host.id, name: 'project', path: '/srv/project', preferredTool: 'codex', updatedAt: 1 };
+    localStorage.setItem('cliora:remote-target', host.id);
+    const startedAt = Date.now() - 8 * 60_000;
+    const sessions = [
+      { id: 'r-live', toolId: 'codex', projectId: `remote:${project.id}`, directory: project.path, mode: 'normal', running: true, exitCode: null, startedAt, remoteSessionId: 'cliora-live1111', connectionState: 'connected', reattachable: false, stateRevision: 0, remoteEndResult: null },
+      { id: 'r-pending', toolId: 'claude_code', projectId: `remote:${project.id}`, directory: project.path, mode: 'normal', running: false, exitCode: 255, startedAt, remoteSessionId: 'cliora-pend2222', connectionState: 'unknown', reattachable: true, stateRevision: 0, remoteEndResult: null },
+      { id: 'r-ended', toolId: 'codex', projectId: `remote:${project.id}`, directory: project.path, mode: 'normal', running: false, exitCode: 0, startedAt, remoteSessionId: 'cliora-end3333', connectionState: 'remote_ended', reattachable: false, stateRevision: 0, remoteEndResult: { outcome: 'confirmed_absent', exitCode: 0 } },
+    ];
+    const names: Record<string, string> = { codex: 'Codex', claude_code: 'Claude Code' };
+    const bridge: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } = { handlers: [], listens: {} };
+    Object.assign(window, {
+      isTauri: true,
+      __emit: (event: string, payload: unknown) => bridge.handlers[bridge.listens[event]]?.({ payload }),
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
+      __TAURI_INTERNALS__: {
+        transformCallback: (callback: (event: { payload: unknown }) => void) => { bridge.handlers.push(callback); return bridge.handlers.length - 1; },
+        invoke: async (command: string, args: Record<string, any> = {}) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: 'light', remote_ssh_enabled: true }, tools: Object.entries(names).map(([id, name]) => ({ id, name, installation: 'not_checked', configuration: 'not_checked' })) };
+          if (command === 'list_cli_adapters') return { registered: Object.entries(names).map(([id, name]) => ({ id, name, interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } })), managedIds: Object.keys(names), preservedUnknown: [] };
+          if (command === 'list_remote_targets') return [host];
+          if (command === 'list_remote_projects') return [project];
+          if (command === 'list_remote_directories') return { parent: args.parent, items: [], truncated: false };
+          if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
+          if (command === 'replay_workbench_session') return btoa('ready');
+          if (command === 'workbench_git_context') return null;
+          if (command === 'git_worktrees') return [];
+          if (['write_workbench_session', 'resize_workbench_session'].includes(command)) return null;
+          if (command === 'plugin:event|listen') { bridge.listens[args.event] = args.handler; return args.handler; }
+          if (command === 'plugin:event|unlisten') return null;
+          return [];
+        },
+      },
+    });
+  });
+
+  await page.setViewportSize({ width: 1360, height: 800 });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const rail = page.getByRole('tablist', { name: '会话列表' });
+  await expect(rail).toBeVisible();
+
+  // Trigger live output on selected session so it enters live tone.
+  await page.evaluate(() => (window as unknown as { __emit: (event: string, payload: unknown) => void }).__emit('cliora:session-output', { sessionId: 'r-live', dataBase64: btoa('working...\r\n') }));
+
+  const liveRow = rail.locator('[data-drag-id="r-live"]');
+  const pendingRow = rail.locator('[data-drag-id="r-pending"]');
+  const endedRow = rail.locator('[data-drag-id="r-ended"]');
+
+  // Selected row keeps .sessionMeta visible at rest when focus is not inside the row.
+  await page.mouse.move(10, 10);
+  await expect.poll(() => liveRow.locator('[class*="sessionMeta"]').evaluate((el) => getComputedStyle(el).visibility)).toBe('visible');
+
+  // Docked rail preserves live accent ring on .sessionIconWrap[data-tone="live"].
+  const liveIcon = liveRow.locator('[data-rail-icon]');
+  await expect(liveIcon).toHaveAttribute('data-tone', 'live');
+  await expect.poll(() => liveIcon.evaluate((el) => getComputedStyle(el).boxShadow)).not.toBe('none');
+
+  // Remote-unknown (pending) session has distinct warning indicator compared to confirmed ended.
+  await expect(pendingRow).toHaveAttribute('data-pending', 'true');
+  const pendingIcon = pendingRow.locator('[data-rail-icon]');
+  const endedIcon = endedRow.locator('[data-rail-icon]');
+  await expect(pendingIcon).toHaveAttribute('data-tone', 'pending');
+  await expect(endedIcon).toHaveAttribute('data-tone', 'ended');
+  const pendingDotColor = await pendingIcon.locator('[data-activity-slot="rail"]').evaluate((el) => getComputedStyle(el).color);
+  const endedDotColor = await endedIcon.locator('[data-activity-slot="rail"]').evaluate((el) => getComputedStyle(el).color);
+  expect(pendingDotColor).not.toBe(endedDotColor);
+
+  // Even in narrow strip mode, pending icon retains its distinct warning tone and non-grayscale styling.
+  await page.setViewportSize({ width: 720, height: 800 });
+  await expect(pendingIcon).toHaveAttribute('data-tone', 'pending');
+  const stripPendingColor = await pendingIcon.locator('[data-activity-slot="rail"]').evaluate((el) => getComputedStyle(el).color);
+  const stripEndedColor = await endedIcon.locator('[data-activity-slot="rail"]').evaluate((el) => getComputedStyle(el).color);
+  expect(stripPendingColor).not.toBe(stripEndedColor);
+});
+
+test('empty workbench tool chips reserve right padding for the hover arrow', async ({ page }) => {
+  await page.addInitScript(() => {
+    const names: Record<string, string> = { codex: 'Codex', claude_code: 'Claude Code' };
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
+      __TAURI_INTERNALS__: {
+        transformCallback: () => 0,
+        invoke: async (command: string) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: 'light' }, tools: Object.entries(names).map(([id, name]) => ({ id, name, installation: 'not_checked', configuration: 'not_checked' })) };
+          if (command === 'list_cli_adapters') return { registered: Object.entries(names).map(([id, name]) => ({ id, name, interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } })), managedIds: Object.keys(names), preservedUnknown: [] };
+          if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'list_workbench_sessions') return [];
+          if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 0;
+          return [];
+        },
+      },
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const chip = page.getByRole('button', { name: 'Claude Code' });
+  await expect(chip).toBeVisible();
+  const paddingRight = await chip.evaluate((el) => parseFloat(getComputedStyle(el).paddingRight));
+  expect(paddingRight).toBeGreaterThanOrEqual(40);
+});

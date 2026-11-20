@@ -165,3 +165,48 @@ test('remote sessions that would read the same keep their id suffix', async ({ p
   await expect(page.getByRole('tab', { name: /aaaa1111/ })).toBeVisible();
   await expect(page.getByRole('tab', { name: /bbbb2222/ })).toBeVisible();
 });
+
+test('non-running toolbar collapses, narrow/compact stage and status bars do not clip, and reduced motion disables screen sweep', async ({ page }) => {
+  await installDesktop(page, 'local');
+  const stage = await openWorkbench(page);
+  const bar = stage.locator('header').first();
+  const footer = stage.locator('footer');
+
+  // Under prefers-reduced-motion: reduce, live streaming output must not animate .screen::after.
+  await page.evaluate(() => (window as unknown as { __emit: (event: string, payload: unknown) => void }).__emit('cliora:session-output', { sessionId: 'local-1', dataBase64: btoa('streaming...\r\n') }));
+  await expect(stage.locator('[data-tone="live"]').first()).toBeVisible();
+  await expect.poll(() => stage.locator('[class*="window"] > [class*="screen"]').evaluate((el) => getComputedStyle(el, '::after').animationName)).toBe('none');
+
+  // Running session at 1000px, 860px, 720px, and 600px: no clipped buttons and statusBar never overflows.
+  for (const width of [1000, 860, 720, 600]) {
+    await page.setViewportSize({ width, height: 800 });
+    const clipped = () => bar.evaluate((header) => {
+      const frame = header.getBoundingClientRect();
+      return [...header.querySelectorAll('button')].filter((button) => {
+        const box = button.getBoundingClientRect();
+        return box.width > 0 && box.height > 0 && (box.right > frame.right + 1 || box.left < frame.left - 1);
+      }).map((button) => button.getAttribute('aria-label') || button.textContent);
+    });
+    await expect.poll(clipped, `clipped toolbar buttons at ${width}`).toEqual([]);
+
+    // Interrupt button label collapses in tight/narrow/compact widths.
+    const interruptLabelDisplay = await bar.locator('[class*="interruptBtn"] [class*="toolLabel"]').evaluate((el) => getComputedStyle(el).display);
+    expect(interruptLabelDisplay).toBe('none');
+
+    // Narrow/tight status bar collapses display/shortcuts buttons to compact icon triggers without overflow.
+    const displayBtn = footer.getByRole('button', { name: '终端显示', exact: true });
+    const shortcutsBtn = footer.getByRole('button', { name: '键盘快捷键', exact: true });
+    await expect(displayBtn).toBeVisible();
+    await expect(shortcutsBtn).toBeVisible();
+    await expect.poll(() => displayBtn.evaluate((el) => el.getBoundingClientRect().width)).toBeLessThanOrEqual(28);
+    await expect.poll(() => shortcutsBtn.evaluate((el) => el.getBoundingClientRect().width)).toBeLessThanOrEqual(28);
+    await expect.poll(() => footer.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+  }
+
+  // Switching to an ended session collapses .runningActions with display:none.
+  await page.setViewportSize({ width: 1360, height: 800 });
+  await page.getByRole('tab', { name: /Claude Code/ }).click();
+  const runningActions = bar.locator('[class*="runningActions"]');
+  await expect.poll(() => runningActions.evaluate((el) => getComputedStyle(el).display)).toBe('none');
+  await expect.poll(() => runningActions.evaluate((el) => el.getBoundingClientRect().width)).toBe(0);
+});

@@ -1081,10 +1081,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     const update = () => {
       const width = node.clientWidth + (sidebar ? Math.max(0, sidebar.getBoundingClientRect().width - 60) : 0);
       const stageWidth = stageRef.current?.clientWidth ?? width;
+      const captionReserve = windowChrome === 'windows' ? 146 : windowChrome === 'linux' ? 120 : 0;
+      const barWidth = Math.max(0, stageWidth - captionReserve);
       setNarrowFrame((current) => current === width <= 720 ? current : width <= 720);
       setCompactFrame((current) => current === width <= 620 ? current : width <= 620);
-      // The header lives in the stage column, so its room depends on the stage, not the window.
-      setTightFrame((current) => current === stageWidth <= 700 ? current : stageWidth <= 700);
+      // The header lives in the stage column, so its room depends on the usable stage bar width
+      // after subtracting desktop caption buttons, not the outer window width.
+      setTightFrame((current) => current === barWidth <= 760 ? current : barWidth <= 760);
       setSplitRoom((current) => current === width >= 860 ? current : width >= 860);
     };
     update();
@@ -1093,7 +1096,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     if (stageRef.current) observer.observe(stageRef.current);
     if (sidebar) observer.observe(sidebar);
     return () => observer.disconnect();
-  }, [railHost]);
+  }, [railHost, windowChrome]);
 
   const terminalTools = useMemo(
     // The host switch changes where a CLI runs. It does not change which CLI

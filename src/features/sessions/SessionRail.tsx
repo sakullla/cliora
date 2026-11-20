@@ -221,7 +221,7 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
     const quietState = !pending && item.tone === 'idle';
     const dragging = drag?.id === session.id;
     const dropMark = drag && !dragging && drag.group === group && drag.target === session.id ? (drag.after ? 'after' : 'before') : undefined;
-    return <div key={session.id} className={styles.row} data-running={session.running || undefined} data-attention={item.attention || undefined} data-selected={selected || undefined} data-on-screen={item.pane != null || undefined}
+    return <div key={session.id} className={styles.row} data-running={session.running || undefined} data-pending={pending || undefined} data-attention={item.attention || undefined} data-selected={selected || undefined} data-on-screen={item.pane != null || undefined}
       data-drag-group={group} data-drag-id={session.id} data-dragging={dragging || undefined} data-drop={dropMark}
       style={dragging ? { transform: `translateY(${drag.offset}px)` } : undefined}>
       <button type="button" role="tab" data-session-id={session.id} className={styles.session} aria-selected={selected} aria-haspopup="menu" title={tooltip}
@@ -244,7 +244,7 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
             onOpenMenu(session, rect.left + 24, rect.bottom - 6);
           }
         }}>
-        <span className={styles.sessionIconWrap} data-rail-icon="" data-tone={item.tone}>
+        <span className={styles.sessionIconWrap} data-rail-icon="" data-tone={pending ? 'pending' : item.tone}>
           <ToolIcon toolId={session.toolId} size={compact ? 20 : 18} />
           <SessionActivityIcon tone={item.tone} slot="rail" className={styles.sessionStateDot} />
           {compact && (item.unread || item.attention) && <span className={styles.slimNotice} data-attention={item.attention || undefined} aria-hidden="true" />}

@@ -469,10 +469,9 @@
 }
 .session[aria-selected='true']::before { content: ''; position: absolute; top: 14px; bottom: 14px; left: -5px; width: 3px; border-radius: var(--radius-pill); background: var(--accent); }
 .row:not([data-running]):hover .session,
-.row:not([data-running]):focus-within .session,
-.row:not([data-running])[data-selected] .session { padding-right: var(--space-10); }
-.row:not([data-running]) .session:not([aria-selected='true']) .sessionTop strong { color: var(--text-2); }
-.row:not([data-running]) .session:not([aria-selected='true']) .sessionIconWrap { filter: grayscale(.5); opacity: .8; }
+.row:not([data-running]):focus-within .session { padding-right: var(--space-10); }
+.row:not([data-running]):not([data-pending]) .session:not([aria-selected='true']) .sessionTop strong { color: var(--text-2); }
+.row:not([data-running]):not([data-pending]) .session:not([aria-selected='true']) .sessionIconWrap { filter: grayscale(.5); opacity: .8; }
 .row[data-attention] .session:not([aria-selected='true']) { background: color-mix(in srgb, var(--warning-soft) 75%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning-line) 70%, transparent); }
 .row[data-on-screen] .session:not([aria-selected='true']) { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-line) 80%, transparent); }
 .sessionIconWrap {
@@ -489,6 +488,7 @@
 .session[aria-selected='true'] .sessionIconWrap { background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line); }
 .sessionIconWrap[data-tone='live'] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--success) 45%, var(--line)); }
 .sessionIconWrap[data-tone='bell'] { box-shadow: inset 0 0 0 1px var(--warning-line), 0 0 0 3px color-mix(in srgb, var(--warning) 14%, transparent); }
+.sessionIconWrap[data-tone='pending'] { background: color-mix(in srgb, var(--warning-soft) 55%, var(--surface)); box-shadow: inset 0 0 0 1px var(--warning-line); }
 .sessionStateDot { position: absolute; right: -4px; bottom: -4px; width: 14px; height: 14px; border: 2px solid var(--wb-rail-bg); border-radius: 50%; background: var(--wb-rail-bg); }
 .session[aria-selected='true'] .sessionStateDot { border-color: var(--wb-row-selected); background: var(--wb-row-selected); }
 /* Streaming is live; a session that is merely waiting keeps a muted dot. */
@@ -497,6 +497,7 @@
 .sessionStateDot[data-tone='ended'] { color: var(--line-strong); }
 .sessionStateDot[data-tone='error'] { color: var(--danger); }
 .sessionStateDot[data-tone='bell'] { color: var(--warning); }
+.sessionIconWrap[data-tone='pending'] .sessionStateDot { color: var(--warning); }
 .sessionBody { display: grid; gap: 1px; min-width: 0; }
 .sessionTop,
 .sessionSub { display: flex; align-items: center; gap: var(--space-1_5); min-width: 0; }
@@ -515,8 +516,7 @@
 .sessionMeta[data-tone='error'] .sessionState { color: var(--danger); }
 .sessionMeta[data-tone='pending'] .sessionState { color: var(--warning); }
 .row:hover .sessionMeta,
-.row:focus-within .sessionMeta,
-.row[data-selected] .sessionMeta { visibility: hidden; }
+.row:focus-within .sessionMeta { visibility: hidden; }
 .slimNotice { position: absolute; top: -3px; right: -3px; width: 8px; height: 8px; border: 2px solid var(--wb-rail-bg); border-radius: 50%; background: var(--accent); box-sizing: content-box; }
 .slimNotice[data-attention] { background: var(--warning); }
 .unreadDot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
@@ -532,8 +532,7 @@
 .pinBadge { display: inline-flex; flex: none; color: var(--accent); }
 .rowActions { position: absolute; top: 50%; right: 6px; display: flex; align-items: center; gap: 1px; opacity: 0; transform: translateY(-50%); transition: opacity var(--fast) var(--ease); pointer-events: none; }
 .row:hover .rowActions,
-.row:focus-within .rowActions,
-.row[data-selected] .rowActions { opacity: 1; pointer-events: auto; }
+.row:focus-within .rowActions { opacity: 1; pointer-events: auto; }
 .rowActions .rowMenuBtn[data-size],
 .rowActions .rowRemove[data-size] { width: var(--row-h-compact); min-height: 0; height: var(--row-h-compact); color: var(--text-3); }
 .rowActions .rowRemove[data-variant]:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
@@ -562,7 +561,12 @@
 .rail[data-docked] .session { min-height: 48px; border-radius: var(--radius); }
 .rail[data-docked] .sessionIconWrap { width: 30px; height: 30px; background: transparent; box-shadow: none; }
 .rail[data-docked] .session[aria-selected='true'] .sessionIconWrap { background: transparent; box-shadow: none; }
-.rail[data-docked] .sessionIconWrap[data-tone='bell'] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 14%, transparent); }
+.rail[data-docked] .sessionIconWrap[data-tone='live'],
+.rail[data-docked] .session[aria-selected='true'] .sessionIconWrap[data-tone='live'] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--success) 48%, transparent); }
+.rail[data-docked] .sessionIconWrap[data-tone='bell'],
+.rail[data-docked] .session[aria-selected='true'] .sessionIconWrap[data-tone='bell'] { box-shadow: inset 0 0 0 1px var(--warning-line), 0 0 0 3px color-mix(in srgb, var(--warning) 14%, transparent); }
+.rail[data-docked] .sessionIconWrap[data-tone='pending'],
+.rail[data-docked] .session[aria-selected='true'] .sessionIconWrap[data-tone='pending'] { background: color-mix(in srgb, var(--warning-soft) 45%, transparent); box-shadow: inset 0 0 0 1px var(--warning-line); }
 .rail[data-docked] .groupLabel { padding-left: var(--space-2); letter-spacing: .04em; }
 
 /* Slim rail: icons, status and attention only. */
@@ -602,6 +606,7 @@
 .rail[data-slim] .session:not([aria-selected='true']) .sessionIconWrap[data-tone='live'] { box-shadow: none; }
 .rail[data-slim] .sessionIconWrap[data-tone='live']::after { content: ''; position: absolute; inset: -3px; border: 1px solid var(--success); border-radius: inherit; opacity: .2; pointer-events: none; animation: wbTileRing 2.4s var(--ease) infinite; }
 .rail[data-slim] .sessionIconWrap[data-tone='bell'] { box-shadow: inset 0 0 0 1.5px var(--warning); }
+.rail[data-slim] .sessionIconWrap[data-tone='pending'] { background: color-mix(in srgb, var(--warning-soft) 55%, transparent); box-shadow: inset 0 0 0 1.5px var(--warning-line); }
 .rail[data-slim] .row[data-attention] .session:not([aria-selected='true']) { background: transparent; box-shadow: none; }
 .rail[data-slim] .row[data-attention] .sessionIconWrap { background: color-mix(in srgb, var(--warning-soft) 80%, transparent); }
 .rail[data-slim] .row[data-on-screen] .session:not([aria-selected='true']) { box-shadow: none; }
@@ -893,11 +898,9 @@
 .terminalActions .toolButton[data-variant]:active:not(:disabled) { background: var(--term-press); }
 .terminalActions .toolButton[aria-pressed='true'][data-variant],
 .terminalActions .toolButton[aria-expanded='true'][data-variant] { background: color-mix(in srgb, var(--term-accent) 14%, transparent); color: var(--term-accent); }
-.runningActions:not([data-running]) { visibility: hidden; }
-.runningActions:not([data-running]) + .actionGroup::before { visibility: hidden; }
-/* The hidden group keeps its width so the tools never jump, but the well only frames what is visible. */
-.terminalActions:has(> .runningActions:not([data-running])) { background: transparent; box-shadow: none; }
-.terminalActions:has(> .runningActions:not([data-running])) > .actionGroup:last-child { margin-block: -3px; margin-right: -3px; padding: 3px; border-radius: var(--radius-lg); background: color-mix(in srgb, var(--term-raise) 78%, var(--term-chrome)); box-shadow: inset 0 0 0 1px var(--term-line), 0 1px 2px color-mix(in srgb, var(--term-shadow) 45%, transparent); }
+.runningActions:not([data-running]) { display: none; }
+.runningActions:not([data-running]):first-child + .actionGroup { margin-left: 0; padding-left: 0; }
+.runningActions:not([data-running]):first-child + .actionGroup::before { display: none; }
 /* Quick input is the everyday action: crisp accent-tinted pill integrated cleanly inside the tray. */
 .terminalActions .composerTrigger[data-variant] { gap: var(--space-1_5); padding: 0 var(--space-2_5); background: color-mix(in srgb, var(--term-accent) 11%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--term-accent) 22%, transparent); color: var(--term-accent); }
 .terminalActions .composerTrigger[data-variant]:hover:not(:disabled) { background: color-mix(in srgb, var(--term-accent) 17%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--term-accent) 32%, transparent); color: var(--term-accent); }
@@ -1412,7 +1415,7 @@
 .statusItem[data-host] { height: 20px; padding: 0 var(--space-1_5); border-radius: var(--radius-pill); background: var(--term-well); color: var(--term-text-2); font-weight: var(--fw-medium); }
 .statusItem[data-host='remote'] { background: color-mix(in srgb, var(--term-accent-2) 14%, transparent); color: var(--term-accent-2); }
 .statusItem[data-tone='accent'] { color: var(--term-accent); }
-.statusBar .statusBadge { flex: none; font-size: var(--fs-micro); }
+.statusBar .statusBadge { flex: 0 1 auto; min-width: 0; overflow: hidden; font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
 .statusItem[data-mono] { font-variant-numeric: tabular-nums; }
 
 .statusPath { flex: 0 1 auto; overflow: hidden; }
@@ -1480,6 +1483,7 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .floatItem:disabled { opacity: .5; }
 .statusSpacer { flex: 1 1 auto; min-width: 0; }
 .statusBar .statusButton[data-size] { flex: none; min-height: 0; height: 24px; padding: 0 var(--space-2); border-radius: var(--radius-sm); color: var(--term-text-3); font-size: var(--fs-micro); }
+.statusButtonLabel { white-space: nowrap; }
 .statusBar .statusButton[data-variant]:hover:not(:disabled) { background: var(--term-hover); color: var(--term-fg); }
 .statusBar .statusButton[aria-expanded='true'][data-variant] { background: var(--term-hover); color: var(--term-fg); }
 
@@ -1646,7 +1650,7 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
   gap: var(--space-2_5);
   min-width: 0;
   min-height: 58px;
-  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-2);
+  padding: var(--space-2) calc(var(--space-10) + var(--space-1)) var(--space-2) var(--space-2);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface);
@@ -1665,7 +1669,7 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .toolChip:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
 .toolChip:hover:not(:disabled) .toolChipAction,
 .toolChip:focus-visible .toolChipAction { background: var(--accent); color: var(--on-accent); opacity: 1; transform: none; }
-.toolChip[data-more] { border-style: dashed; background: transparent; box-shadow: none; color: var(--text-2); }
+.toolChip[data-more] { padding-right: var(--space-3); border-style: dashed; background: transparent; box-shadow: none; color: var(--text-2); }
 .toolChip[data-more] .launchToolIcon { background: transparent; box-shadow: none; }
 .toolChip[data-more] .toolChipAction { display: none; }
 .recentsGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2_5); }
@@ -1899,7 +1903,7 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
   .sessionMeta .sessionState::before,
   .slimNotice,
   .emptyGlyph,
-  .window[data-tone='live'] .stageBar::after,
+  .window[data-tone='live'] .screen::after,
   .emptyGlyphCursor { animation: none; }
   .toolChip,
   .toolChipAction,
@@ -1936,10 +1940,15 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .rail[data-strip] .session[aria-selected='true']::before { top: auto; right: 12px; bottom: -1px; left: 12px; width: auto; height: 2px; border-radius: var(--radius-pill); }
 .rail[data-strip] .rowActions { display: none; }
 .root[data-narrow] .toolButton[data-tool='split'] { display: none; }
-.root[data-narrow] .composerTrigger[data-size] { width: 30px; padding: 0; }
+.root[data-narrow] .composerTrigger[data-size] { width: 28px; padding: 0; }
 .root[data-narrow] .composerTrigger .toolLabel { display: none; }
-.root[data-narrow] .interruptBtn[data-size] { width: 30px; padding: 0; }
+.root[data-narrow] .interruptBtn[data-size] { width: 28px; padding: 0; }
 .root[data-narrow] .interruptBtn .toolLabel { display: none; }
+.root[data-narrow] .reattachBtn[data-size] { width: 28px; padding: 0; }
+.root[data-narrow] .reattachBtn .toolLabel { display: none; }
+.root[data-narrow] .statusBar { gap: var(--space-1_5); padding: 0 var(--space-1_5) 0 var(--space-2); }
+.root[data-narrow] .statusBar .statusButton[data-size] { width: 24px; padding: 0; justify-content: center; }
+.root[data-narrow] .statusButtonLabel { display: none; }
 
 .root[data-narrow] .empty { padding: var(--space-6) var(--space-5) var(--space-8); }
 .root[data-narrow] .recentsGrid { grid-template-columns: minmax(0, 1fr); }
@@ -1948,20 +1957,24 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .root[data-tight] .stageBar { gap: var(--space-2); padding: var(--space-1) var(--space-2) var(--space-1) var(--space-2_5); }
 .root[data-tight] .stageLead { gap: var(--space-2); }
 .root[data-tight] .identityText { gap: var(--space-2); }
+.root[data-tight] .identityTitleRow { min-width: min(110px, 100%); }
 .root[data-tight] .identitySub { padding-left: var(--space-2); }
 .root[data-tight] .stageTail { gap: var(--space-1_5); }
-.root[data-tight] .actionGroup + .actionGroup { margin-left: var(--space-1_5); padding-left: var(--space-1_5); }
-.root[data-tight] .stageTail .endBtn[data-variant] { margin-left: var(--space-1_5); }
-.root[data-tight] .composerTrigger[data-size] { width: 30px; padding: 0; }
+.root[data-tight] .actionGroup + .actionGroup { margin-left: var(--space-1); padding-left: var(--space-1); }
+.root[data-tight] .stageTail .endBtn[data-variant] { margin-left: var(--space-1); padding-inline: var(--space-2); }
+.root[data-tight] .composerTrigger[data-size] { width: 28px; padding: 0; }
 .root[data-tight] .composerTrigger .toolLabel { display: none; }
-.root[data-tight] .interruptBtn[data-size] { width: 30px; padding: 0; }
+.root[data-tight] .interruptBtn[data-size] { width: 28px; padding: 0; }
 .root[data-tight] .interruptBtn .toolLabel { display: none; }
-.root[data-tight] .reattachBtn[data-size] { padding: 0; }
+.root[data-tight] .reattachBtn[data-size] { width: 28px; padding: 0; }
 .root[data-tight] .reattachBtn .toolLabel { display: none; }
 .root[data-tight] .statusChip { padding: 0 var(--space-1_5); }
 .root[data-tight] .statusChip .statusLabel { display: none; }
 .root[data-tight] .terminalActions .toolButton[data-size] { width: 28px; }
 .root[data-tight] .sessionElapsed { padding-left: var(--space-2); }
+.root[data-tight] .statusBar { gap: var(--space-1_5); padding: 0 var(--space-1_5) 0 var(--space-2); }
+.root[data-tight] .statusBar .statusButton[data-size] { width: 24px; padding: 0; justify-content: center; }
+.root[data-tight] .statusButtonLabel { display: none; }
 
 .root[data-compact] .stageBar { min-height: 44px; gap: var(--space-1_5); padding: var(--space-1) var(--space-2); }
 .root[data-compact] .stageLead { gap: var(--space-1_5); }
@@ -1977,6 +1990,7 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .root[data-compact] .statusPath,
 .root[data-compact] .statusItem:not([data-tone]):not([data-host]),
 .root[data-compact] .statusBadge:not([data-tone='danger']):not([data-tone='warning']) { display: none; }
+.root[data-compact] .reattachBtn[data-size] { width: 26px; padding: 0; }
 .root[data-compact] .reattachBtn .toolLabel { display: none; }
 .root[data-compact] .pathChip { max-width: 120px; }
 .root[data-compact] .gitChip { max-width: 150px; }
@@ -1984,10 +1998,14 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .root[data-compact] .terminalActions { padding: 0; }
 .root[data-compact] .actionGroup { gap: 0; }
 .root[data-compact] .actionGroup + .actionGroup { margin-left: var(--space-1); padding-left: var(--space-1); }
+.root[data-tight] .runningActions:not([data-running]):first-child + .actionGroup,
+.root[data-compact] .runningActions:not([data-running]):first-child + .actionGroup { margin-left: 0; padding-left: 0; }
 .root[data-compact] .stageTail .endBtn[data-variant] { margin-left: var(--space-1_5); }
 .root[data-compact] .terminalActions .toolButton[data-size] { width: 26px; }
 .root[data-compact] .composerTrigger[data-size] { width: 26px; padding: 0; }
 .root[data-compact] .composerTrigger .toolLabel { display: none; }
+.root[data-compact] .interruptBtn[data-size] { width: 26px; padding: 0; }
+.root[data-compact] .interruptBtn .toolLabel { display: none; }
 .root[data-compact] .stageTail .endBtn[data-size] { width: 30px; padding: 0; justify-content: center; }
 .root[data-compact] .endBtn > .statusLabel { display: none; }
 .root[data-compact] .terminalBody { padding: var(--space-2_5) var(--space-1_5) var(--space-1) var(--space-2_5); }
@@ -2000,7 +2018,9 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .root[data-compact] .composerDock { padding: var(--space-1_5); }
 .root[data-compact] .sendBtn[data-size] { width: 34px; padding: 0; }
 .root[data-compact] .sendLabel { display: none; }
-.root[data-compact] .statusBar { gap: var(--space-2); padding: 0 var(--space-1_5) 0 var(--space-2); }
+.root[data-compact] .statusBar { gap: var(--space-1_5); padding: 0 var(--space-1_5) 0 var(--space-2); }
+.root[data-compact] .statusBar .statusButton[data-size] { width: 24px; padding: 0; justify-content: center; }
+.root[data-compact] .statusButtonLabel { display: none; }
 .root[data-compact] .empty { padding: var(--space-5) var(--space-4) var(--space-6); }
 .root[data-compact] .emptyShell { gap: var(--space-5); }
 .root[data-compact] .emptyHero h2 { font-size: 24px; }

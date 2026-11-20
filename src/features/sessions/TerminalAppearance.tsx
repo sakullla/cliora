@@ -64,7 +64,7 @@ export function TerminalAppearance({ open, theme, fontSize, defaultFontSize, min
   ];
 
   return <div className={styles.appearance} ref={root}>
-    <Button ref={trigger} variant="ghost" size="sm" className={styles.statusButton} aria-label={t('sessions.displaySettings')} title={t('sessions.displaySettings')} aria-expanded={open} aria-controls="terminal-appearance-panel" onClick={onToggle} icon={<Icon name="sliders" size={14} />}>{t('sessions.displayShort')}</Button>
+    <Button ref={trigger} variant="ghost" size="sm" className={styles.statusButton} aria-label={t('sessions.displaySettings')} title={t('sessions.displaySettings')} aria-expanded={open} aria-controls="terminal-appearance-panel" onClick={onToggle} icon={<Icon name="sliders" size={14} />}><span className={styles.statusButtonLabel}>{t('sessions.displayShort')}</span></Button>
     {open && <div className={styles.appearancePanel} id="terminal-appearance-panel" role="dialog" aria-label={t('sessions.displaySettings')}>
       <div className={styles.appearanceHead}><span><Icon name="sliders" size={14} />{t('sessions.displaySettings')}</span><IconButton size="sm" className={styles.iconBtn} aria-label={t('common.dialog.close')} onClick={onClose} icon={<Icon name="close" size={14} />} /></div>
       <div className={styles.appearanceSection}>
