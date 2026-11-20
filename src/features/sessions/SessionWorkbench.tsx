@@ -323,6 +323,7 @@ const REVIEW_UNKNOWN_MS = 10_000;
 const REVIEW_REASON_KEYS: Record<string, string> = {
   session_unknown: 'sessions.reviewCodeSessionUnknown',
   target_changed: 'sessions.reviewTargetChanged',
+  remote_review_restart: 'sessions.reviewRemoteRestart',
   cancelled: 'sessions.reviewCancelled',
   busy: 'sessions.reviewRemoteBusy',
   invalid_baseline: 'sessions.reviewInvalidBaseline',

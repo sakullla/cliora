@@ -375,6 +375,7 @@ export default {
   reviewRemoteChecking: '正在核对远端会话的工作树与 Git 状态…',
   reviewRemoteIdle: '在此远端工作树审查改动或提交。',
   reviewRemoteWaiting: '仍在等待 Twiglane 接收请求。可以检查安装或重新发起。',
+  reviewRemoteRestart: '无法核实旧远端会话的工作树。请在目标工作树重新开启远端会话。',
   reviewTargetChanged: '原远端主机、会话或工作树已变化。',
   reviewCancelled: '已取消本次远端审查。',
   reviewRemoteBusy: 'Twiglane 正在处理另一项操作。',

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, mkdtempSync, mkdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
@@ -38,9 +38,79 @@ test('captures a remote launch baseline in the actual linked worktree and refuse
   assert.equal(info.worktreeIdentity,createHash('sha256').update(wire).digest('hex'));
   assert.equal(info.baseline,base);assert.equal(info.headOid,git(tree,'rev-parse','HEAD'));assert.equal(info.uncommitted,2);
   assert.equal(inspect(id,repo).status,2);
-  writeFileSync(path.join(tools,'tmux'),'#!/bin/sh\ntest "$1" = has-session && test "$3" = =cliora-old\n');
-  chmodSync(path.join(tools,'tmux'),0o700);
-  const older=inspect('cliora-old',tree);assert.equal(older.status,0);assert.equal(JSON.parse(older.stdout.trim().split('\n')[1]).baseline,null);
-  assert.equal(inspect('cliora-absent',tree).status,2);
-  renameSync(tree,tree+'.moved');git(repo,'clone','-q',repo,tree);assert.equal(inspect(id,tree).status,2);
+  const live = spawn('sleep',['90'],{cwd:tree,stdio:'ignore'});
+  t.after(() => live.kill());
+  const panePath = path.join(dir,'pane-cwd');
+  env.TEST_PANE_PATH = panePath;
+  writeFileSync(panePath,tree);
+  const legacyRow = (name='cliora-old', pane='%19') => `printf '%s\\t%s\\t%s\\t0\\t%s\\n' '${name}' '${pane}' '${live.pid}' "$(cat "$TEST_PANE_PATH")"`;
+  const mockPane = script => {
+    writeFileSync(path.join(tools,'tmux'), '#!/bin/sh\n[ "$1" = list-panes ] && [ "$2" = -s ] && [ "$3" = -t ] && [ "$4" = =cliora-old: ] || exit 1\n'+script+'\n');
+    chmodSync(path.join(tools,'tmux'),0o700);
+  };
+  const restart = () => {
+    const refused = inspect('cliora-old',tree);
+    assert.equal(refused.status,2);
+    assert.equal(JSON.parse(refused.stdout.trim().split('\n')[1]).error,'remote_review_restart');
+  };
+  mockPane(legacyRow());
+  const older=inspect('cliora-old',tree);assert.equal(older.status,0,older.stdout);assert.equal(JSON.parse(older.stdout.trim().split('\n')[1]).baseline,null);
+  writeFileSync(panePath,repo);restart(); // same Git object store, another checkout
+  writeFileSync(panePath,tree);
+  mockPane(legacyRow('cliora-older'));restart();
+  mockPane(legacyRow()+'\n'+legacyRow('cliora-old','%20'));restart();
+  mockPane('exit 1');
+  writeFileSync(path.join(tools,'screen'),'#!/bin/sh\necho "   123.cliora-old (Attached)"\n');chmodSync(path.join(tools,'screen'),0o700);
+  restart();
+  renameSync(tree,tree+'.moved');git(repo,'clone','-q',repo,tree);
+  mockPane(legacyRow());
+  writeFileSync(panePath,tree+'.moved');restart();
+  if (process.platform === 'linux') {
+    writeFileSync(panePath,tree);restart(); // stale tmux pathname vs kernel cwd of the original live pane
+  }
+  assert.equal(inspect(id,tree).status,2);
+
+});
+
+test('reads dirty submodules despite repository ignore settings and omits a rewritten start commit', {skip: process.platform === 'win32'}, t => {
+  const dir = mkdtempSync(path.join(tmpdir(),'cliora-review-history-'));
+  t.after(() => rmSync(dir,{recursive:true,force:true}));
+  const repo = path.join(dir,'repo'), sub = path.join(dir,'sub');
+  const env = {...process.env,HOME:dir,LC_ALL:'C'};
+  const run = (bin,args,cwd,input='') => {
+    const r=spawnSync(bin,args,{cwd,env,input,encoding:'utf8',timeout:15000});
+    assert.equal(r.status,0,r.stderr || r.stdout); return r.stdout.trim();
+  };
+  const git = (cwd,...args) => run('git',args,cwd);
+  for (const folder of [repo,sub]) {
+    mkdirSync(folder);git(folder,'init','-qb','main');git(folder,'config','user.name','Fixture');
+    git(folder,'config','user.email','test@example.invalid');
+    writeFileSync(path.join(folder,'base'),'base\n');git(folder,'add','.');git(folder,'commit','-qm','base');
+  }
+  const parent = git(repo,'rev-parse','HEAD');
+  git(repo,'-c','protocol.file.allow=always','submodule','add','-q',sub,'mod');
+  git(repo,'commit','-qm','add submodule');
+  const original = git(repo,'rev-parse','HEAD');
+  const id = 'cliora-rewrite';
+  run('python3',['-I',helper,'record',id],repo);
+  const read = () => JSON.parse(run('python3',['-I',helper,'inspect'],repo,JSON.stringify({session:id,directory:repo})+'\n').split('\n')[1]);
+  git(repo,'config','submodule.mod.ignore','all');
+  writeFileSync(path.join(repo,'mod','base'),'uncommitted\n');
+  assert.equal(git(repo,'status','--porcelain'),'');
+  assert.notEqual(git(repo,'status','--porcelain','--ignore-submodules=none'),'');
+  assert.equal(read().uncommitted,1);
+  git(path.join(repo,'mod'),'restore','base');
+  git(repo,'commit','--amend','-qm','rewritten baseline');
+  assert.equal(git(repo,'merge-base',original,'HEAD'),parent);
+  assert.equal(read().baseline,null);
+  git(repo,'switch','--detach',original);
+  assert.equal(read().baseline,original); // receipt is still the exact start, not the common ancestor
+  git(repo,'switch','-qc','topic',original);
+  git(repo,'commit','--allow-empty','-qm','later');
+  assert.equal(read().baseline,original);
+  git(repo,'switch','-qc','upstream',parent);
+  git(repo,'commit','--allow-empty','-qm','upstream');
+  git(repo,'rebase','--onto','upstream',parent,'topic');
+  assert.equal(git(repo,'merge-base',original,'HEAD'),parent);
+  assert.equal(read().baseline,null);
 });

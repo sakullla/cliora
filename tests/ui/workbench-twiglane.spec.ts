@@ -104,7 +104,7 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
             };
           }
           if (command === 'twiglane_start_review') {
-            if (harness.startFails) throw { code: 'open_failed', message: '系统没有接受打开 Twiglane 的请求。' };
+            if (harness.startFails) throw { code: pairingRemote ? 'remote_review_restart' : 'open_failed', message: '审查请求失败' };
             const reviewId = 'aaaaaaaa-bbbb-4ccc-8ddd-' + String(harness.starts.length + 1).padStart(12, '0');
             const review: Review = {
               reviewId,
@@ -559,6 +559,10 @@ test('a remote session reviews its own worktree, stays pending during installati
   await expect(group.getByRole('status')).toHaveText('Twiglane 正在连接远端，或等待确认安装 agent。');
   await send('event=returned&outcome=reviewed&worktreeState=clean&resultRevision=1');
   await expect(page.getByText(/Twiglane 声明的工作区状态与当前真实状态不一致/).first()).toBeVisible();
+  await page.evaluate(() => { (window as unknown as {__harness:{startFails:boolean}}).__harness.startFails = true; });
+  if (!await group.isVisible()) await page.getByRole('button', {name:'在 Twiglane 中审查', exact:true}).click();
+  await group.getByRole('menuitem',{name:'在 Twiglane 中审查'}).click();
+  await expect(group.getByRole('alert')).toContainText('请在目标工作树重新开启远端会话');
 });
 
 /** A review link may only read: it never starts a session and never writes Git. */

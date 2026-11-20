@@ -55,6 +55,13 @@ struct Metadata {
     baseline: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ReadReply {
+    Metadata(Metadata),
+    Error { error: String },
+}
+
 pub(crate) fn read(
     target: &RemoteTarget,
     origin: &crate::launch::RemoteSessionIndexEntry,
@@ -108,7 +115,17 @@ pub(crate) fn read(
         if bytes.len() > 16384 {
             return Err("read_failed");
         }
-        let data: Metadata = serde_json::from_slice(&bytes).map_err(|_| "read_failed")?;
+        let data = match serde_json::from_slice::<ReadReply>(&bytes).map_err(|_| "read_failed")? {
+            ReadReply::Metadata(data) => data,
+            ReadReply::Error { error } => {
+                return Err(match error.as_str() {
+                    "remote_review_restart" => "remote_review_restart",
+                    "worktree_changed" => "target_changed",
+                    "not_a_worktree" => "not_a_worktree",
+                    _ => "read_failed",
+                })
+            }
+        };
         if expected.is_some_and(|b| {
             b.worktree_key != data.key || b.worktree_identity != data.worktree_identity
         }) {

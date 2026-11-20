@@ -375,6 +375,7 @@ export default {
   reviewRemoteChecking: 'Checking the remote session worktree and Git status…',
   reviewRemoteIdle: 'Review changes or commit in this remote worktree.',
   reviewRemoteWaiting: 'Still waiting for Twiglane. Check the installation or open a new review.',
+  reviewRemoteRestart: 'The worktree of this older remote session could not be verified. Start a new remote session in the intended worktree.',
   reviewTargetChanged: 'The original remote host, session, or worktree has changed.',
   reviewCancelled: 'The remote review was cancelled.',
   reviewRemoteBusy: 'Twiglane is busy with another operation.',

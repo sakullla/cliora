@@ -732,6 +732,7 @@ pub(crate) fn url_path(root: &Path) -> Result<String, &'static str> {
 pub(crate) fn api_error(code: &'static str) -> ApiError {
     let (message, action) = match code {
         "session_unknown" => ("找不到这个会话，无法发起审查。", "重新选择一个进行中的本地会话后重试。"),
+        "remote_review_restart" => ("无法确认旧远端会话正在使用的工作树。", "请在目标工作树重新开启远端会话，再发起审查。"),
         "target_changed" => ("远端会话、SSH 主机或工作树的身份已变化。", "重新选择原远端会话并核对配置。"),
         "remote_session" => ("会话没有本机工作树。", "从原远端会话重新发起审查。"),
         "invalid_path" => ("会话目录已经失效或无法读取。", "确认目录仍然存在后重试。"),
