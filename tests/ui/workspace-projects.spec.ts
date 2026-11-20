@@ -841,4 +841,20 @@ test('a worktree fallback keeps the checkout path readable at medium widths', as
   const path = row.getByText('team-0/api', { exact: true });
   await expect(path).toBeVisible();
   expect(await path.evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+  // The status itself is never cut to an ellipsis either.
+  const note = row.locator('em').filter({ hasText: '上次的工作目录已不可用' });
+  expect(await note.evaluate(node => node.scrollWidth <= node.clientWidth + 1 && getComputedStyle(node).textOverflow !== 'ellipsis')).toBe(true);
+});
+
+test('a uniquely named repository reads as one line and lines up with its neighbours', async ({ page }) => {
+  await install(page);
+  const project = page.locator('[data-business-workspaces]').first();
+  const unique = project.locator('[data-repository-id="repo-2"]');
+  await expect(unique).toBeVisible();
+  // Nothing tells a unique name apart, so no empty path track is reserved for it.
+  await expect(unique.locator('em')).toHaveCount(0);
+  const height = async (id: string) => (await project.locator(`[data-repository-id="${id}"]`).boundingBox())!.height;
+  expect(await height('repo-2')).toBeLessThan(await height('repo-0'));
+  const launch = async (id: string) => (await project.locator(`[data-repository-id="${id}"] [data-row-primary]`).boundingBox())!.x;
+  expect(Math.abs(await launch('repo-0') - await launch('repo-2'))).toBeLessThanOrEqual(1);
 });

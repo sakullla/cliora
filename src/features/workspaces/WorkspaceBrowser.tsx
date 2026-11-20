@@ -528,13 +528,17 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
             const { places, available, remembered, path: selectedPath, fallback } = placeOf(current.id, repo);
             const broken = !available;
             const missing = repo.locations[0];
-            return <article key={repo.id} className={styles.row} data-repository-id={repo.id} data-state={broken ? 'unavailable' : undefined} data-favorite={repo.favorite || undefined}>
+            const shownPath = broken ? (missing?.path ? relativePath(missing.path, repo.name) : '') : relativePath(selectedPath, repo.name);
+            // Identity reads as one block: the name, and below it only what tells this row apart
+            // (a distinguishing path, a missing directory or a fallback). Unique rows stay one line.
+            const hasDetail = broken || fallback || !!shownPath;
+            return <article key={repo.id} className={styles.row} data-repository-id={repo.id} data-state={broken ? 'unavailable' : undefined} data-detail={hasDetail || undefined} data-favorite={repo.favorite || undefined}>
               <span className={styles.name}>{broken && <span className={styles.dot} aria-hidden="true" />}<strong title={repo.name}>{repo.name}</strong>{available?.kind === 'legacy' && <Badge>{t('workspaces.legacy')}</Badge>}</span>
-              <span className={styles.path} title={broken ? [missing?.path && displayPath(missing.path), t('workspaces.unavailable'), missing?.reason].filter(Boolean).join(' · ') : displayPath(selectedPath)}>{broken ? <>{missing?.path ? relativePath(missing.path, repo.name) && <span>{relativePath(missing.path, repo.name)}</span> : <span>{t('workspaces.invalid')}</span>}<em>{t('workspaces.unavailable')}{missing?.reason ? ` · ${missing.reason}` : ''}</em></> : <><span>{relativePath(selectedPath, repo.name)}</span>{fallback && (places.size > 1
+              {hasDetail && <span className={styles.path} title={broken ? [missing?.path && displayPath(missing.path), t('workspaces.unavailable'), missing?.reason].filter(Boolean).join(' · ') : displayPath(selectedPath)}>{broken ? <>{missing?.path ? shownPath && <span>{shownPath}</span> : <span>{t('workspaces.invalid')}</span>}<em>{t('workspaces.unavailable')}{missing?.reason ? ` · ${missing.reason}` : ''}</em></> : <>{shownPath && <span>{shownPath}</span>}{fallback && (places.size > 1
                 // Only a row that shows the picker may promise that choosing replaces the fallback.
                 ? <em className={styles.fallback} title={t('workspaces.worktreeFallbackHint', { path: displayPath(remembered ?? '') })}>{t('workspaces.worktreeFallback')}</em>
-                : <em className={styles.fallback} title={t('workspaces.worktreeFallbackHintSingle', { path: displayPath(remembered ?? '') })}>{t('workspaces.worktreeFallbackSingle', { path: displayPath(selectedPath) })}</em>)}</>}</span>
-              {places.size > 1 ? <select className={styles.place} aria-label={`${repo.name} ${worktreeLabel}`} title={selectedPath} value={selectedPath} onChange={event => setPaths(previous => ({ ...previous, [placeKey(current.id, repo.id)]: event.target.value }))}>{[...places].map(([path, place]) => <option key={path} value={path}>{place.label}</option>)}</select> : <span />}
+                : <em className={styles.fallback} title={t('workspaces.worktreeFallbackHintSingle', { path: displayPath(remembered ?? '') })}>{t('workspaces.worktreeFallbackSingle', { path: displayPath(selectedPath) })}</em>)}</>}</span>}
+              {places.size > 1 ? <select className={styles.place} aria-label={`${repo.name} ${worktreeLabel}`} title={selectedPath} value={selectedPath} onChange={event => setPaths(previous => ({ ...previous, [placeKey(current.id, repo.id)]: event.target.value }))}>{[...places].map(([path, place]) => <option key={path} value={path}>{place.label}</option>)}</select> : <span className={styles.placeholder} />}
               <span className={styles.rowActions}>
                 <Button size="sm" variant="ghost" className={styles.favorite} aria-label={repo.favorite ? unfavoriteLabel : favoriteLabel} title={repo.favorite ? unfavoriteLabel : favoriteLabel} aria-pressed={repo.favorite} icon={<Icon name="star" size={14} />} onClick={() => void toggleFavorite(repo)} />
                 {broken
@@ -576,6 +580,8 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
           {candidates.length > 6 && <div className={styles.scanSearch}><SearchField label={t('workspaces.search')} value={scanQuery} onChange={setScanQuery} placeholder={t('workspaces.search')} /></div>}
         </div>}
         {!scanBusy && candidates?.length === 0 && <p className={styles.empty}>{t('workspaces.scanEmpty')}</p>}
+        {/* A search that hides every candidate keeps the selection; say so and offer the way back. */}
+        {!scanBusy && !!candidates?.length && !visibleCandidates.length && <div className={styles.empty} role="status"><span>{t('workspaces.noMatches')}</span><Button size="sm" variant="ghost" onClick={() => setScanQuery('')}>{t('workspaces.clearFilters')}</Button></div>}
         {visibleCandidates.length > 0 && <div className={styles.candidates}>{visibleCandidates.map((item, index) => <label key={`${item.path}:${index}`} className={styles.candidate} data-kind={item.kind}>
           <input type="checkbox" disabled={item.kind !== 'repository' || busy} checked={checked.has(item.path)} onChange={event => setChecked(previous => { const next = new Set(previous); if (event.target.checked) next.add(item.path); else next.delete(item.path); return next; })} />
           <span className={styles.candidateCopy}><span className={styles.candidateName}><strong>{item.name}</strong>{item.kind !== 'repository' && <Badge tone={kindTone[item.kind]}>{t(kindLabel[item.kind])}</Badge>}</span><span className={styles.mono}>{item.path}</span>{item.reason && <small>{item.reason}</small>}</span>

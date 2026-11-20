@@ -29,7 +29,14 @@
 
 /* Repository rows: one line each, quiet until hovered. */
 .list { display: grid; grid-auto-rows: max-content; max-height: 440px; overflow: auto; overscroll-behavior: contain; margin: 0 calc(var(--space-2) * -1); }
-.row { display: grid; grid-template-columns: minmax(120px, 220px) minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-3); min-height: 44px; padding: var(--space-1) var(--space-2); border-radius: var(--radius); transition: background-color var(--fast) var(--ease); }
+/* Identity (name, and only the detail that tells a row apart) on the left; the worktree picker and
+   actions stay in fixed tracks on the right so every row lines up at every width. */
+.row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; align-content: center; column-gap: var(--space-3); row-gap: 0; min-height: 44px; padding: var(--space-1_5) var(--space-2); border-radius: var(--radius); transition: background-color var(--fast) var(--ease); }
+.row > .name { grid-column: 1; grid-row: 1; }
+.row > .path { grid-column: 1; grid-row: 2; }
+.row:not([data-detail]) > .name { grid-row: 1 / span 2; }
+.row > .place, .row > .placeholder { grid-column: 2; grid-row: 1 / span 2; }
+.row > .rowActions { grid-column: 3; grid-row: 1 / span 2; }
 /* Hundreds of repositories: rows outside the scroll viewport skip layout and paint.
    Row menus render in a portal, so the containment never clips them. */
 .list > .row, .candidates > .candidate { content-visibility: auto; contain-intrinsic-size: auto 44px; }
@@ -38,14 +45,15 @@
 .name strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-body); font-weight: var(--fw-semibold); }
 /* The checkout path keeps the first line; the fallback note wraps to its own line when the
    track is narrow instead of shrinking the identity to a single character. */
-.path { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--space-2); min-width: 0; overflow: hidden; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-caption); white-space: nowrap; }
-.path > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.path em { flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--danger); font-family: var(--font-sans); font-style: normal; }
+.path { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--space-2); min-width: 0; margin-top: var(--space-0_5); overflow: hidden; line-height: 1.45; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-caption); white-space: nowrap; }
+.path > span { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* A status is never cut to an ellipsis: it wraps below the path when the row is narrow. */
+.path em { flex: 0 1 auto; min-width: 0; max-width: 100%; color: var(--danger); font-family: var(--font-sans); font-style: normal; white-space: normal; overflow-wrap: anywhere; }
 /* A vanished worktree choice falls back to an available checkout and says so beside the path. */
 .path em.fallback { color: var(--warning); }
 /* A missing checkout keeps a readable tail of its path next to the reason. */
 .row[data-state="unavailable"] .path > span { flex: 0 1 auto; min-width: 4em; }
-.place { field-sizing: content; width: auto; min-width: 96px; max-width: 200px; min-height: 28px; padding-block: 0; border-color: transparent; background-color: var(--surface-2); color: var(--text-2); font-size: var(--fs-caption) !important; }
+.place { field-sizing: content; width: auto; min-width: 96px; max-width: min(200px, 28vw); min-height: 28px; padding-block: 0; border-color: transparent; background-color: var(--surface-2); color: var(--text-2); font-size: var(--fs-caption) !important; }
 .place:hover { border-color: var(--control-line); }
 .rowActions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-1); }
 .favorite { color: var(--text-3); opacity: 0; }
@@ -109,9 +117,6 @@ div.empty { display: flex; align-items: center; justify-content: center; gap: va
 .mono { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); }
 
 @media (max-width: 860px) {
-  .row { grid-template-columns: minmax(0, 1fr) auto auto; column-gap: var(--space-2); row-gap: 0; padding-block: var(--space-1_5); }
-  .path { grid-column: 1; grid-row: 2; }
-  .place, .row > span:empty { grid-column: 2; grid-row: 1 / span 2; }
-  .rowActions { grid-column: 3; grid-row: 1 / span 2; }
+  .row { column-gap: var(--space-2); }
   .header { flex-wrap: wrap; }
 }
