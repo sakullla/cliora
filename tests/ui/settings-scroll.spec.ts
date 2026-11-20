@@ -94,11 +94,19 @@ test('settings modal keeps wheel inside the active category, searches across cat
   await expect(search).toHaveValue('');
   await expect(modal).toBeVisible();
 
-  // Selecting a search hit jumps straight to its category and clears the query.
+  // Selecting a search hit jumps straight to its category, clears the query, and highlights the target anchor.
   await search.fill('YOLO');
   await search.press('Enter');
   await expect(categories.getByRole('tab', { name: '终端与启动', exact: true })).toHaveAttribute('aria-selected', 'true');
-  await expect(modal.locator('#settings-terminal')).toBeVisible();
+  const terminalGroup = modal.locator('#settings-terminal');
+  await expect(terminalGroup).toBeVisible();
+  await expect(terminalGroup).toHaveAttribute('data-flash-anchor', 'true');
+  const flashStyle = await terminalGroup.evaluate((el) => {
+    const cs = getComputedStyle(el);
+    return { boxShadow: cs.boxShadow, animationName: cs.animationName };
+  });
+  expect(flashStyle.boxShadow).not.toBe('none');
+  expect(flashStyle.animationName).toBe('none');
 
   // Unified CLI tools list: enable switch + inline custom icon upload/validation/restore, no second <details>.
   await categories.getByRole('tab', { name: 'CLI 工具', exact: true }).click();
@@ -138,8 +146,15 @@ test('settings modal keeps wheel inside the active category, searches across cat
   await expect(page.getByRole('dialog', { name: '完全退出栖点？' })).toHaveCount(0);
   await expect(modal).toBeVisible();
 
-  // Narrow desktop minimum (720px): horizontal category bar without sideways overflow.
+  // Narrow desktop minimum (720px) and tighter narrow width: horizontal category bar shows edge fade cues without sideways overflow.
   await page.setViewportSize({ width: 720, height: 760 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  await page.setViewportSize({ width: 520, height: 760 });
+  const nav = modal.getByRole('navigation', { name: '设置分类' });
+  const navWrap = nav.locator('..');
+  await expect(navWrap).toHaveAttribute('data-fade-right', 'true');
+  await nav.evaluate((el) => { el.scrollLeft = el.scrollWidth; el.dispatchEvent(new Event('scroll')); });
+  await expect(navWrap).toHaveAttribute('data-fade-left', 'true');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 
   await page.keyboard.press('Escape');
@@ -223,4 +238,23 @@ test('in-panel sub-views hand Escape back to the category and Mod+S saves the ac
   await page.keyboard.press('Control+s');
   await expect.poll(() => page.evaluate(() => (window as unknown as { __hostSaved?: { name?: string } }).__hostSaved?.name)).toBe('renamed');
   await expect(page.getByRole('region', { name: '编辑主机', exact: true })).toHaveCount(0);
+
+  // Escape precedence: sub-view -> clear search -> close modal.
+  await page.getByRole('button', { name: '编辑 renamed', exact: true }).click();
+  await expect(editor).toBeVisible();
+  const modal = page.getByRole('dialog', { name: '设置' });
+  const search = modal.getByRole('searchbox', { name: '搜索设置' });
+  await search.fill('YOLO');
+  await search.press('Escape');
+  // First Escape exits the sub-view while keeping the search query and modal open.
+  await expect(search).toHaveValue('YOLO');
+  await expect(modal).toBeVisible();
+  // Second Escape clears the search query and reveals the host list (sub-view already exited).
+  await search.press('Escape');
+  await expect(search).toHaveValue('');
+  await expect(editor).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '添加主机', exact: true })).toBeVisible();
+  // Third Escape closes the Settings modal.
+  await page.keyboard.press('Escape');
+  await expect(modal).toHaveCount(0);
 });

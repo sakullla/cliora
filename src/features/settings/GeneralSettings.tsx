@@ -8,13 +8,12 @@ import { Icon } from '../../components/Icon';
 import type { IconName } from '../../components/Icon';
 import { SearchField } from '../../components/SearchField';
 import { ToolIcon } from '../../components/ToolIcon';
-import { ToastStack } from '../../components/Toast';
 import { ToolIconActions } from './ToolIconSettings';
 import { TraySettings } from './TerminalSettings';
 import { navigateChoices } from '../../lib/choiceNavigation';
 import { native, nativeAvailable } from '../../lib/native';
 import { searchShortcutHint } from '../../lib/shortcut';
-import { useToasts } from '../../lib/toast';
+import { useToastContext } from '../../lib/toast';
 import { setUpdateOffer, useUpdateOffer, type UpdateOffer } from '../../lib/appUpdate';
 import brandIcon from '../../../src-tauri/icons/128x128@2x.png';
 import { setLanguage, supportedLanguages, type AppLanguage } from '../../i18n';
@@ -243,7 +242,7 @@ export function GeneralSettings({ pane, tools, managed, preservedUnknown, icons,
   onReopenOnboarding: () => void;
 }) {
   const { t, i18n } = useTranslation();
-  const toasts = useToasts();
+  const toasts = useToastContext();
   const language: AppLanguage = i18n.language === 'en' ? 'en' : 'zh';
   const catalogKey = tools.map((item) => item.id).join('\0');
   const managedKey = managed.join('\0');
@@ -264,7 +263,7 @@ export function GeneralSettings({ pane, tools, managed, preservedUnknown, icons,
     setIconFailure('');
     try {
       await onIconChange(toolId, dataUrl);
-      toasts.showNotice(dataUrl ? t('settings.icons.updated') : t('settings.icons.restored'));
+      toasts?.showNotice(dataUrl ? t('settings.icons.updated') : t('settings.icons.restored'));
     } catch { /* Page error banner presents native rejection detail. */ }
   }
 
@@ -374,7 +373,6 @@ export function GeneralSettings({ pane, tools, managed, preservedUnknown, icons,
         <span><strong>{item.id}</strong><small>{t('settings.managed.preservedUnknown', { count: item.profileCount })}</small></span>
       </div>)}
     </section>
-    <ToastStack status={toasts.notice} alert={toasts.error} onDismiss={toasts.dismiss} />
   </div>;
 
   return <div className={styles.stack}>
@@ -415,6 +413,5 @@ export function GeneralSettings({ pane, tools, managed, preservedUnknown, icons,
         <Button onClick={onReopenOnboarding}>{t('settings.onboarding.action')}</Button>
       </div>
     </section>
-    <ToastStack status={toasts.notice} alert={toasts.error} onDismiss={toasts.dismiss} />
   </div>;
 }

@@ -175,6 +175,13 @@
 }
 
 /* Category tabs */
+.navWrap {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
 .nav {
   flex: 1;
   min-width: 0;
@@ -500,8 +507,39 @@
   .stageHint {
     white-space: normal;
   }
-  .nav {
+  .navWrap {
+    flex: none;
     margin: 0 calc(var(--space-4) * -1);
+    overflow: hidden;
+  }
+  .navWrap::before,
+  .navWrap::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 28px;
+    pointer-events: none;
+    z-index: 1;
+    opacity: 0;
+    transition: opacity var(--fast) var(--ease);
+  }
+  .navWrap::before {
+    left: 0;
+    background: linear-gradient(to right, var(--sidebar) 18%, transparent);
+  }
+  .navWrap::after {
+    right: 0;
+    background: linear-gradient(to left, var(--sidebar) 18%, transparent);
+  }
+  .navWrap[data-fade-left='true']::before {
+    opacity: 1;
+  }
+  .navWrap[data-fade-right='true']::after {
+    opacity: 1;
+  }
+  .nav {
+    margin: 0;
     padding: 0 var(--space-4);
     overflow-x: auto;
     overflow-y: hidden;

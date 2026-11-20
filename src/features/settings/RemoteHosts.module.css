@@ -1,22 +1,22 @@
-.panel { display: grid; gap: var(--space-3); margin-bottom: var(--space-5); }
+.panel { display: grid; gap: var(--space-4); margin-bottom: 0; }
 .head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-3) var(--space-5); flex-wrap: wrap; }
-.head h2 { font-size: var(--fs-heading); font-weight: var(--fw-semibold); }
-.head p { margin-top: var(--space-0_5); max-width: 64ch; color: var(--text-2); font-size: var(--fs-body); }
+.head h2 { margin: 0; font-size: var(--fs-title); font-weight: var(--fw-bold); line-height: 1.35; }
+.head p { margin-top: var(--space-1); max-width: 64ch; color: var(--text-2); font-size: var(--fs-control); line-height: 1.55; }
 .hostCount { color: var(--text-3) !important; font-size: var(--fs-caption) !important; font-weight: var(--fw-medium); }
-.error { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); margin: 0; padding: var(--space-2_5) var(--space-3); border: 1px solid var(--danger-line); border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--danger); font-size: var(--fs-body); }
+.error { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); margin: 0; padding: var(--space-2_5) var(--space-3); border: 1px solid var(--danger-line); border-radius: var(--radius); background: var(--danger-soft); color: var(--danger); font-size: var(--fs-control); line-height: 1.5; }
 .error > span { min-width: 0; overflow-wrap: anywhere; }
 
 /* Empty */
-.empty { display: grid; justify-items: center; gap: var(--space-1_5); padding: var(--space-10) var(--space-6); border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); background: var(--surface); text-align: center; }
+.empty { display: grid; justify-items: center; gap: var(--space-1_5); padding: var(--space-10) var(--space-6); border: 1px dashed var(--line-strong); border-radius: var(--radius-xl); background: var(--surface); text-align: center; }
 .emptyGlyph { display: grid; place-items: center; width: 48px; height: 48px; margin-bottom: var(--space-1_5); border-radius: var(--radius-lg); background: var(--info-soft); color: var(--info); }
 .empty strong { font-size: var(--fs-title); font-weight: var(--fw-semibold); }
 .empty p { max-width: 44ch; color: var(--text-2); font-size: var(--fs-body); line-height: 1.6; }
 .empty > button { margin-top: var(--space-2_5); }
 
 /* Host list */
-.list { display: grid; margin: 0; padding: 0; list-style: none; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: none; }
+.list { display: grid; margin: 0; padding: 0; list-style: none; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: none; }
 .list > li + li { border-top: 1px solid var(--line); }
-.host { display: flex; align-items: center; gap: var(--space-3); min-width: 0; min-height: calc(var(--row-h) + var(--space-5)); padding: var(--space-3) var(--space-4); transition: background-color var(--fast) var(--ease); }
+.host { display: flex; align-items: center; gap: var(--space-3); min-width: 0; min-height: calc(var(--row-h) + var(--space-5)); padding: var(--space-3) var(--space-5); transition: background-color var(--fast) var(--ease); }
 .host:hover { background: var(--surface-2); }
 .hostGlyph { display: grid; place-items: center; flex: none; width: 36px; height: 36px; border-radius: var(--radius-sm); background: var(--info-soft); color: var(--info); }
 .hostCopy { display: grid; gap: var(--space-1); flex: 1; min-width: 0; }
@@ -81,7 +81,7 @@
   .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .field[data-span="host"], .field[data-span="auth"], .field[data-span="half"] { grid-column: 1 / -1; }
   .field[data-span="port"], .field[data-span="user"] { grid-column: span 1; }
-  .host { flex-wrap: wrap; }
+  .host { flex-wrap: wrap; padding: var(--space-3) var(--space-4); }
   .hostActions { width: 100%; justify-content: flex-end; }
   .hostMeta code { max-width: 100%; }
   .path { max-width: 100%; }

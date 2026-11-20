@@ -1,9 +1,9 @@
 /* Settings → Worktrees: launch choice cards, per-project prepare commands, created worktrees. */
-.page { display: grid; gap: var(--space-5); min-width: 0; }
+.page { display: grid; gap: var(--space-4); min-width: 0; }
 .page > :global(.settings-group) { margin-bottom: 0; }
 
 .notice { position: sticky; top: var(--space-2); z-index: 2; justify-self: start; display: inline-flex; align-items: center; gap: var(--space-1_5); margin: 0; padding: var(--space-1) var(--space-2_5); border: 1px solid var(--success-line); border-radius: var(--radius-pill); background: var(--success-soft); color: var(--success); font-size: var(--fs-caption); font-weight: var(--fw-medium); animation: reveal 200ms var(--ease); }
-.error { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0 var(--space-5) var(--space-4); padding: var(--space-2) var(--space-3); border: 1px solid var(--danger-line); border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--danger); font-size: var(--fs-control); line-height: 1.5; }
+.error { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0 var(--space-5) var(--space-4); padding: var(--space-2_5) var(--space-3); border: 1px solid var(--danger-line); border-radius: var(--radius); background: var(--danger-soft); color: var(--danger); font-size: var(--fs-control); line-height: 1.5; }
 .error svg { flex: none; margin-top: var(--space-0_5); }
 .muted { margin: 0; padding: var(--space-4) var(--space-5); color: var(--text-3); font-size: var(--fs-control); }
 .empty { display: flex; align-items: center; gap: var(--space-2); margin: 0; padding: var(--space-4) var(--space-5); color: var(--text-3); font-size: var(--fs-control); line-height: 1.5; }

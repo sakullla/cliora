@@ -57,7 +57,45 @@ label.setting-row:hover { background: var(--surface-2); }
 .setting-row-top { align-items: flex-start; }
 .setting-row-block { padding: var(--space-4) var(--space-5); border-top: 1px solid var(--line); }
 .setting-row-block > section { margin-bottom: 0; }
-.setting-error { margin: 0; padding: 0 var(--space-5) var(--space-4); color: var(--danger); font-size: var(--fs-body); font-weight: var(--fw-regular); }
+.setting-error {
+  margin: var(--space-3) var(--space-5) var(--space-4);
+  padding: var(--space-2_5) var(--space-3);
+  border: 1px solid var(--danger-line);
+  border-radius: var(--radius);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: var(--fs-control);
+  font-weight: var(--fw-regular);
+  line-height: 1.5;
+}
+
+/* Search jump highlight: brief emerald border & ring on the scrolled target section. */
+[data-settings-modal] [data-flash-anchor='true'] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-ring);
+  animation: settings-anchor-flash 1.4s var(--ease);
+}
+@keyframes settings-anchor-flash {
+  0% {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-ring);
+  }
+  65% {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-ring);
+  }
+  100% {
+    border-color: var(--accent-line);
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-settings-modal] [data-flash-anchor='true'] {
+    animation: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-ring);
+  }
+}
 
 /* A row's write is confirmed in place, once the backend returned the stored value. */
 .setting-saved {
@@ -176,7 +214,7 @@ label.setting-row:hover { background: var(--surface-2); }
   .setting-row select, .setting-row > .setting-select, .setting-row > [role="radiogroup"] { width: 100%; max-width: none; flex-basis: 100%; }
   .setting-row > button, .setting-row > span:last-child:not(:first-child) { flex: 1 1 100%; justify-content: flex-start; }
   .setting-row-block { padding: var(--space-3) var(--space-4); }
-  .setting-error { padding: 0 var(--space-4) var(--space-3); }
+  .setting-error { margin: var(--space-3) var(--space-4) var(--space-3); padding: var(--space-2_5) var(--space-3); }
   .custom-terminal-fields { min-width: 0; }
   .custom-terminal-actions { justify-content: flex-start; }
   .managed-search { flex: 1 1 100%; min-width: 0; }

@@ -101,14 +101,31 @@ export function SettingsModal<T extends string>({
   const { t } = useTranslation();
   const titleId = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const navRef = useRef<HTMLElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const flashTargetRef = useRef<HTMLElement | null>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
   const [flashAnchor, setFlashAnchor] = useState<string | null>(null);
+  const [navFade, setNavFade] = useState({ left: false, right: false });
   const subViewHandlers = useRef<Array<() => boolean>>([]);
+  const clearFlashTarget = useCallback(() => {
+    if (flashTargetRef.current) {
+      flashTargetRef.current.removeAttribute('data-flash-anchor');
+      flashTargetRef.current = null;
+    }
+  }, []);
+  const updateNavFade = useCallback(() => {
+    const el = navRef.current;
+    if (!el) return;
+    const overflow = el.scrollWidth - el.clientWidth > 2;
+    const left = overflow && el.scrollLeft > 2;
+    const right = overflow && el.scrollLeft + el.clientWidth < el.scrollWidth - 2;
+    setNavFade((prev) => (prev.left === left && prev.right === right ? prev : { left, right }));
+  }, []);
   const registerSubViewEscape = useCallback((handler: () => boolean) => {
     subViewHandlers.current.push(handler);
     return () => { subViewHandlers.current = subViewHandlers.current.filter((item) => item !== handler); };
@@ -143,8 +160,28 @@ export function SettingsModal<T extends string>({
     if (!open) {
       setQuery('');
       setActiveIndex(0);
+      setFlashAnchor(null);
+      clearFlashTarget();
     }
-  }, [open]);
+  }, [open, clearFlashTarget]);
+
+  useEffect(() => {
+    if (!open) return;
+    const el = navRef.current;
+    const raf = requestAnimationFrame(updateNavFade);
+    window.addEventListener('resize', updateNavFade);
+    let observer: ResizeObserver | null = null;
+    if (el && typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(updateNavFade);
+      observer.observe(el);
+      if (listRef.current) observer.observe(listRef.current);
+    }
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', updateNavFade);
+      observer?.disconnect();
+    };
+  }, [open, items.length, updateNavFade]);
 
   useLayoutEffect(() => {
     if (!open || isSearching) return;
@@ -155,28 +192,57 @@ export function SettingsModal<T extends string>({
     if (!open || !anchorRequest?.anchor) return;
     const anchor = anchorRequest.anchor;
     let raf = 0;
-    let attempts = 0;
-    const locate = () => {
+    let observer: MutationObserver | null = null;
+    let timeout = 0;
+    const applyTarget = () => {
       const target = dialogRef.current?.querySelector<HTMLElement>(`#${CSS.escape(anchor)}`);
-      if (target) {
-        target.scrollIntoView({ block: 'start', behavior: 'instant' as ScrollBehavior });
-        setFlashAnchor(anchor);
-        return;
+      if (!target) return false;
+      target.scrollIntoView({ block: 'start', behavior: 'instant' as ScrollBehavior });
+      clearFlashTarget();
+      target.setAttribute('data-flash-anchor', 'true');
+      flashTargetRef.current = target;
+      setFlashAnchor(anchor);
+      observer?.disconnect();
+      observer = null;
+      if (timeout) {
+        window.clearTimeout(timeout);
+        timeout = 0;
       }
-      if (attempts < 12) {
-        attempts += 1;
-        raf = requestAnimationFrame(locate);
-      }
+      return true;
     };
-    raf = requestAnimationFrame(locate);
-    return () => cancelAnimationFrame(raf);
-  }, [open, value, anchorRequest]);
+    raf = requestAnimationFrame(() => {
+      if (applyTarget()) return;
+      const root = scrollerRef.current ?? dialogRef.current;
+      if (!root || typeof MutationObserver === 'undefined') return;
+      observer = new MutationObserver(() => {
+        applyTarget();
+      });
+      observer.observe(root, { childList: true, subtree: true });
+      timeout = window.setTimeout(() => {
+        observer?.disconnect();
+        observer = null;
+      }, 2500);
+    });
+    return () => {
+      cancelAnimationFrame(raf);
+      observer?.disconnect();
+      if (timeout) window.clearTimeout(timeout);
+    };
+  }, [open, value, anchorRequest, clearFlashTarget]);
 
   useEffect(() => {
-    if (!flashAnchor) return;
-    const timer = window.setTimeout(() => setFlashAnchor(null), 1400);
+    if (!flashAnchor) {
+      clearFlashTarget();
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setFlashAnchor(null);
+      clearFlashTarget();
+    }, 1400);
     return () => window.clearTimeout(timer);
-  }, [flashAnchor]);
+  }, [flashAnchor, clearFlashTarget]);
+
+  useEffect(() => clearFlashTarget, [clearFlashTarget]);
 
   function hasOtherOpenDialog() {
     return [...document.querySelectorAll('dialog[open]')].some((node) => node !== dialogRef.current);
@@ -184,13 +250,13 @@ export function SettingsModal<T extends string>({
 
   function requestClose() {
     if (closeDisabled) return;
+    if (escapeSubView()) return;
+    if (onSubViewEscape?.()) return;
     if (query) {
       setQuery('');
       setActiveIndex(0);
       return;
     }
-    if (escapeSubView()) return;
-    if (onSubViewEscape?.()) return;
     onClose();
   }
 
@@ -227,16 +293,16 @@ export function SettingsModal<T extends string>({
         event.stopPropagation();
         return;
       }
+      if (escapeSubView() || onSubViewEscape?.()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       if (query) {
         event.preventDefault();
         event.stopPropagation();
         setQuery('');
         setActiveIndex(0);
-        return;
-      }
-      if (escapeSubView() || onSubViewEscape?.()) {
-        event.preventDefault();
-        event.stopPropagation();
         return;
       }
       return;
@@ -320,11 +386,24 @@ export function SettingsModal<T extends string>({
               setActiveIndex(0);
             }}
             onKeyDown={(event) => {
-              if (event.key === 'Escape' && query) {
-                event.preventDefault();
-                event.stopPropagation();
-                setQuery('');
-                setActiveIndex(0);
+              if (event.key === 'Escape') {
+                if (closeDisabled) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  return;
+                }
+                if (escapeSubView() || onSubViewEscape?.()) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  return;
+                }
+                if (query) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setQuery('');
+                  setActiveIndex(0);
+                  return;
+                }
                 return;
               }
               if (!results.length) return;
@@ -355,40 +434,46 @@ export function SettingsModal<T extends string>({
           </button>}
         </div>
 
-        <nav className={styles.nav} aria-label={t('settings.tabs.label')}>
-          <div
-            ref={listRef}
-            className={styles.list}
-            role="tablist"
-            aria-orientation="vertical"
-            aria-label={t('settings.tabs.label')}
-            onKeyDown={moveTabs}
-          >
-            {items.map((item) => {
-              const selected = !isSearching && item.id === active.id;
-              return <button
-                key={item.id}
-                type="button"
-                role="tab"
-                id={`settings-tab-${item.id}`}
-                data-category={item.id}
-                aria-selected={selected}
-                aria-controls="settings-panel"
-                tabIndex={item.id === active.id ? 0 : -1}
-                className={styles.item}
-                aria-label={item.label}
-                title={item.hint}
-                onClick={() => selectCategory(item.id)}
-              >
-                <span className={styles.glyph} aria-hidden="true"><Icon name={item.icon} size={16} /></span>
-                <span className={styles.text}>
-                  <strong>{item.label}</strong>
-                  <small>{item.hint}</small>
-                </span>
-              </button>;
-            })}
-          </div>
-        </nav>
+        <div
+          className={styles.navWrap}
+          data-fade-left={navFade.left ? 'true' : undefined}
+          data-fade-right={navFade.right ? 'true' : undefined}
+        >
+          <nav ref={navRef} className={styles.nav} aria-label={t('settings.tabs.label')} onScroll={updateNavFade}>
+            <div
+              ref={listRef}
+              className={styles.list}
+              role="tablist"
+              aria-orientation="vertical"
+              aria-label={t('settings.tabs.label')}
+              onKeyDown={moveTabs}
+            >
+              {items.map((item) => {
+                const selected = !isSearching && item.id === active.id;
+                return <button
+                  key={item.id}
+                  type="button"
+                  role="tab"
+                  id={`settings-tab-${item.id}`}
+                  data-category={item.id}
+                  aria-selected={selected}
+                  aria-controls="settings-panel"
+                  tabIndex={item.id === active.id ? 0 : -1}
+                  className={styles.item}
+                  aria-label={item.label}
+                  title={item.hint}
+                  onClick={() => selectCategory(item.id)}
+                >
+                  <span className={styles.glyph} aria-hidden="true"><Icon name={item.icon} size={16} /></span>
+                  <span className={styles.text}>
+                    <strong>{item.label}</strong>
+                    <small>{item.hint}</small>
+                  </span>
+                </button>;
+              })}
+            </div>
+          </nav>
+        </div>
       </aside>
 
       <div className={styles.stage}>
