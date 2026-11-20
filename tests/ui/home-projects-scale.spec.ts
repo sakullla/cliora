@@ -39,10 +39,10 @@ test('hundreds of directories render as one compact page, grow on demand and nev
   await expect(rows).toHaveCount(12);
   // Most recently used first.
   await expect(rows.first()).toHaveAttribute('data-project-id', 'p0');
-  // Compact rows of one height, each with exactly one primary launch.
+  // Compact rows of one height, each with one secondary split launch control.
   const heights = await rows.evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().height)));
   expect(Math.max(...heights)).toBeLessThanOrEqual(64);
-  for (const row of await rows.all()) await expect(row.locator('[data-variant="primary"]')).toHaveCount(1);
+  for (const row of await rows.all()) await expect(row.locator('[data-split-variant="secondary"]')).toHaveCount(1);
   // A long name stays on one line inside its row and keeps the full name in its tooltip.
   const long = rows.filter({ hasText: '最长的项目名称' }).locator('strong').first();
   expect(await long.evaluate((node) => node.getBoundingClientRect().height < 26 && node.getBoundingClientRect().right <= node.closest('[data-project-id]')!.getBoundingClientRect().right)).toBe(true);

@@ -155,7 +155,7 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
   const mounted = useRef(true);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; if (feedbackTimer.current) clearTimeout(feedbackTimer.current); }; }, []);
-  function showPageError(value: unknown) { setFeedback(''); setError(formatFailure(value, t('home.launcher.operationFailed'), projectNext)); }
+  function showPageError(value: unknown) { setFeedback(''); toasts?.dismiss('status'); setError(formatFailure(value, t('home.launcher.operationFailed'), projectNext)); }
   function showPageFeedback(text: string) {
     setError('');
     if (toasts) {
@@ -168,7 +168,7 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
   }
   function showDialogError(value: unknown) { setDialogFeedback(''); setDialogError(formatFailure(value, t('home.launcher.operationFailed'), projectNext)); }
   function showDialogFeedback(text: string) { setDialogError(''); setDialogFeedback(text); }
-  function begin(id: string) { setBusy(id); setError(''); setFeedback(''); setDialogError(''); setDialogFeedback(''); }
+  function begin(id: string) { setBusy(id); setError(''); setFeedback(''); toasts?.dismiss('status'); setDialogError(''); setDialogFeedback(''); }
 
   useEffect(() => {
     if (!repair?.projectId || focusedRepair.current === repair.sequence || revealedRepair.current === repair.sequence) return;
@@ -527,6 +527,7 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
         : text(result.mode);
       if (surface === 'dialog') {
         showDialogFeedback(message);
+        showPageFeedback(message);
       } else showPageFeedback(message);
       // Keep the project card state current without delaying the launch result.
       void refresh();

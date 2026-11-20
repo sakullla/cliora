@@ -177,23 +177,24 @@ test('project launch success and failure replace each other', async ({ page }) =
   await install(page, { withProject: true });
   await page.goto('/');
   const region = page.getByRole('region', { name: '项目与启动' });
+  const toastStatus = page.locator('.toast-stack [role="status"]');
   await region.getByRole('button', { name: '启动', exact: true }).click();
-  await expect(region.getByRole('status')).toContainText('已向外部终端发送启动请求');
-  await expect(region.getByRole('status')).not.toContainText('已登录');
+  await expect(toastStatus).toContainText('已向外部终端发送启动请求');
+  await expect(toastStatus).not.toContainText('已登录');
   await expect(region.getByRole('alert')).toHaveCount(0);
   await page.evaluate(() => { (window as unknown as { __statusCopy: { launchFails: boolean } }).__statusCopy.launchFails = true; });
   await region.getByRole('button', { name: '启动', exact: true }).click();
   await expect(region.getByRole('alert')).toContainText('终端没有打开');
   await expect(region.getByRole('alert')).toContainText('请重试');
-  await expect(region.getByRole('status')).toHaveCount(0);
-  await expect(region.getByText('已向外部终端发送启动请求')).toHaveCount(0);
+  await expect(toastStatus).toHaveCount(0);
+  await expect(page.getByText('已向外部终端发送启动请求')).toHaveCount(0);
   await page.evaluate(() => { (window as unknown as { __statusCopy: { launchFails: boolean } }).__statusCopy.launchFails = false; });
   await region.getByRole('button', { name: '启动', exact: true }).click();
-  await expect(region.getByRole('status')).toContainText('已向外部终端发送启动请求');
+  await expect(toastStatus).toContainText('已向外部终端发送启动请求');
   await expect(region.getByRole('alert')).toHaveCount(0);
   await page.evaluate(() => { (window as unknown as { __statusCopy: { projectsFail: boolean } }).__statusCopy.projectsFail = true; });
   await region.getByRole('button', { name: '启动', exact: true }).click();
-  await expect(region.getByRole('status')).toContainText('已向外部终端发送启动请求');
+  await expect(toastStatus).toContainText('已向外部终端发送启动请求');
   await expect(region.getByRole('alert')).toContainText('项目列表读取失败');
   await expect(region.getByRole('alert')).toContainText('可再次启动，或在设置中检查终端');
 });
@@ -203,28 +204,29 @@ test('record copy and resume replace the previous result', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
   const records = page.getByRole('region', { name: '记录内容' });
+  const toasts = page.locator('.toast-stack');
   await expect(records.getByLabel('原生恢复命令')).toContainText('codex resume 1111');
   await records.getByText('会话选项', { exact: true }).click();
   await records.getByRole('button', { name: '复制命令' }).click();
-  await expect(records.getByText('已复制原生恢复命令，粘贴后由终端执行。')).toBeVisible();
-  await expect(records.getByRole('alert')).toHaveCount(0);
+  await expect(toasts.getByText('已复制原生恢复命令，粘贴后由终端执行。')).toBeVisible();
+  await expect(toasts.getByRole('alert')).toHaveCount(0);
   await page.evaluate(() => { (window as unknown as { __statusCopy: { copyFails: boolean } }).__statusCopy.copyFails = true; });
   await records.getByRole('button', { name: '复制命令' }).click();
-  await expect(records.getByRole('alert')).toHaveText('复制失败，恢复命令仍在页面上，可以手动选择。');
-  await expect(records.getByText('已复制')).toHaveCount(0);
+  await expect(toasts.getByRole('alert')).toHaveText('复制失败，恢复命令仍在页面上，可以手动选择。');
+  await expect(toasts.getByText('已复制')).toHaveCount(0);
   await page.evaluate(() => { (window as unknown as { __statusCopy: { copyFails: boolean } }).__statusCopy.copyFails = false; });
   await records.getByRole('button', { name: '复制命令' }).click();
-  await expect(records.getByText('已复制原生恢复命令，粘贴后由终端执行。')).toBeVisible();
-  await expect(records.getByRole('alert')).toHaveCount(0);
+  await expect(toasts.getByText('已复制原生恢复命令，粘贴后由终端执行。')).toBeVisible();
+  await expect(toasts.getByRole('alert')).toHaveCount(0);
   await page.evaluate(() => { (window as unknown as { __statusCopy: { resumeFails: boolean } }).__statusCopy.resumeFails = true; });
   await records.getByRole('button', { name: '在外部终端继续' }).click();
-  await expect(records.getByRole('alert')).toContainText('终端没有打开');
-  await expect(records.getByText('已复制')).toHaveCount(0);
-  await expect(records.getByText('已请求外部终端恢复会话')).toHaveCount(0);
+  await expect(toasts.getByRole('alert')).toContainText('终端没有打开');
+  await expect(toasts.getByText('已复制')).toHaveCount(0);
+  await expect(toasts.getByText('已请求外部终端恢复会话')).toHaveCount(0);
   await page.evaluate(() => { (window as unknown as { __statusCopy: { resumeFails: boolean } }).__statusCopy.resumeFails = false; });
   await records.getByRole('button', { name: '在外部终端继续' }).click();
-  await expect(records.getByText('已请求外部终端恢复会话。')).toBeVisible();
-  await expect(records.getByRole('alert')).toHaveCount(0);
+  await expect(toasts.getByText('已请求外部终端恢复会话。')).toBeVisible();
+  await expect(toasts.getByRole('alert')).toHaveCount(0);
 });
 
 test('native rule save failure is an alert and success stays a status', async ({ page }) => {
@@ -238,20 +240,21 @@ test('native rule save failure is an alert and success stays a status', async ({
   await dialog.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const library = page.getByRole('region', { name: '资料库内容' });
+  const toasts = page.locator('.toast-stack');
   const icon = library.getByRole('button', { name: 'Codex · 未写入' });
   await page.evaluate(() => { (window as unknown as { __statusCopy: { ruleSaveFails: boolean } }).__statusCopy.ruleSaveFails = true; });
   await icon.click();
-  const alert = library.getByRole('alert');
+  const alert = toasts.getByRole('alert');
   await expect(alert).toContainText('规则保存失败');
   await expect(alert).toContainText('可以再次点击该 CLI 图标');
-  await expect(library.getByRole('status')).toHaveCount(0);
+  await expect(toasts.getByRole('status')).toHaveCount(0);
   const color = await dangerColor(alert.locator('.toast-icon').first());
   expect(color.same).toBe(true);
   expect(color.fixed).toBe(false);
   await page.evaluate(() => { (window as unknown as { __statusCopy: { ruleSaveFails: boolean } }).__statusCopy.ruleSaveFails = false; });
   await icon.click();
-  await expect(library.getByText('已写入 Codex。')).toBeVisible();
-  await expect(library.getByRole('alert')).toHaveCount(0);
+  await expect(toasts.getByText('已写入 Codex。')).toBeVisible();
+  await expect(toasts.getByRole('alert')).toHaveCount(0);
 });
 
 test('export list failure stays in the dialog and is not an empty list', async ({ page }) => {
@@ -344,8 +347,9 @@ test('saved price stays visible when the following usage read fails', async ({ p
   await records.getByLabel('缓存读取单价').fill('1');
   await records.getByLabel('缓存写入单价').fill('1');
   await records.getByRole('button', { name: '保存价格' }).click();
-  await expect(records.getByText('估算价格已保存；只影响本机统计。')).toBeVisible();
-  const usageAlert = records.getByRole('alert').filter({ hasText: '用量读取失败' });
+  const toasts = page.locator('.toast-stack');
+  await expect(toasts.getByText('估算价格已保存；只影响本机统计。')).toBeVisible();
+  const usageAlert = page.getByRole('alert').filter({ hasText: '用量读取失败' });
   await expect(usageAlert).toContainText('用量读取失败');
   await expect(usageAlert).toContainText('可点击刷新本机记录或调整筛选');
 });
@@ -359,7 +363,7 @@ test('dialog launch success stays with the list failure after the dialog closes'
   const dialog = page.getByRole('dialog');
   await page.evaluate(() => { (window as unknown as { __statusCopy: { projectsFail: boolean } }).__statusCopy.projectsFail = true; });
   await dialog.getByRole('button', { name: 'YOLO' }).click();
-  const pageStatus = region.locator(':scope > [role="status"]');
+  const pageStatus = page.locator('.toast-stack [role="status"]');
   const pageAlert = region.locator(':scope > [role="alert"]');
   await expect(pageStatus).toContainText('已向外部终端发送启动 YOLO请求');
   await expect(pageAlert).toContainText('项目列表读取失败');
@@ -388,11 +392,11 @@ test('saved library item stays visible when the following list read fails', asyn
   await expect(dialogAlert).not.toContainText('新建');
   await dialog.getByRole('button', { name: '关闭' }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(library.getByRole('status')).toContainText('已保存在本机资料库');
-  const alert = library.getByRole('alert');
-  await expect(alert).toContainText('资料列表读取失败');
-  await expect(alert).not.toContainText('搜索');
-  await expect(alert).not.toContainText('新建');
+  await expect(library.getByRole('status').filter({ hasText: '已保存在本机资料库' })).toContainText('已保存在本机资料库');
+  const staleBanner = library.getByRole('status').filter({ hasText: '资料列表读取失败' });
+  await expect(staleBanner).toContainText('资料列表读取失败');
+  await expect(staleBanner).not.toContainText('搜索');
+  await expect(staleBanner).not.toContainText('新建');
   await expect(library.getByRole('button', { name: '发布检查已更新', exact: true })).toBeVisible();
   await library.getByRole('button', { name: '修改' }).click();
   await page.getByRole('dialog').getByRole('button', { name: '保存', exact: true }).click();
@@ -421,7 +425,7 @@ test('a bound rule still updates its targets when the list read after saving fai
   expect(await page.evaluate(() => (window as unknown as { __ruleSyncs?: number }).__ruleSyncs ?? 0)).toBe(1);
   await dialog.getByRole('button', { name: '关闭', exact: true }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(library.getByRole('alert')).toContainText('资料列表读取失败');
+  await expect(page.locator('.toast-stack [role="alert"]')).toContainText('资料列表读取失败');
   await expect(library.getByRole('button', { name: '提交约定', exact: true })).toBeVisible();
 });
 
@@ -451,10 +455,11 @@ test('the automatic record scan stays quiet and a manual refresh reports', async
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
   const records = page.getByRole('region', { name: '记录内容' });
+  const toasts = page.locator('.toast-stack');
   await expect(records.getByLabel('原生恢复命令')).toContainText('codex resume 1111');
-  await expect(records.getByText('已刷新本机记录。')).toHaveCount(0);
+  await expect(toasts.getByText('已刷新本机记录。')).toHaveCount(0);
   await records.getByRole('button', { name: '刷新本机记录' }).click();
-  await expect(records.getByText('已刷新本机记录。')).toBeVisible();
+  await expect(toasts.getByText('已刷新本机记录。')).toBeVisible();
 });
 
 test('an empty library offers to create the first item', async ({ page }) => {

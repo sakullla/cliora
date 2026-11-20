@@ -513,9 +513,9 @@ test('the project launch menu saves another tool, then launches it with that too
   await installSplitLaunch(page);
   await page.goto('/');
   const card = page.getByRole('region', { name: '项目与启动' }).locator('[data-project-id="demo"]');
-  await expect(card.locator('[data-variant="primary"]')).toHaveCount(1);
+  await expect(card.locator('[data-split-variant="secondary"]')).toHaveCount(1);
   const launch = card.getByRole('button', { name: '启动', exact: true });
-  await expect(launch).toHaveAttribute('data-variant', 'primary');
+  await expect(launch).toHaveAttribute('data-variant', 'secondary');
   const menuButton = card.getByRole('button', { name: '用其他工具启动 Demo' });
   await menuButton.click();
   const menu = page.getByRole('menu', { name: '用其他工具启动 Demo' });
@@ -524,7 +524,7 @@ test('the project launch menu saves another tool, then launches it with that too
   await expect(menu).not.toContainText('工作台');
   await menu.getByRole('menuitem', { name: /Grok/ }).click();
   await expect(card.locator('[class*="contextLine"]')).toContainText('Grok');
-  await expect(page.getByRole('region', { name: '项目与启动' }).getByRole('status')).toContainText('已向外部终端发送启动 YOLO请求');
+  await expect(page.locator('.toast-stack [role="status"]')).toContainText('已向外部终端发送启动 YOLO请求');
   expect(await splitCalls(page)).toEqual([
     ['set_project_tool', { projectId: 'demo', toolId: 'grok' }],
     ['launch_cli', { toolId: 'grok', projectId: 'demo', sessionId: null, mode: 'yolo', directory: null, worktreeIntent: 'given' }],
@@ -579,7 +579,7 @@ test('a remote project launches another tool from the menu without saving it', a
   const card = projects.locator('[data-project-id="remote:rp"]');
   await expect(card).toContainText('远程仓库');
   await expect(projects.locator('[data-project-id="demo"]')).toHaveCount(0);
-  await expect(card.locator('[data-variant="primary"]')).toHaveCount(1);
+  await expect(card.locator('[data-split-variant="secondary"]')).toHaveCount(1);
   await card.getByRole('button', { name: '用其他工具启动 远程仓库' }).click();
   await page.getByRole('menu', { name: '用其他工具启动 远程仓库' }).getByRole('menuitem', { name: /Grok/ }).click();
   await expect(card.locator('[class*="contextLine"]')).toContainText('Grok');
@@ -939,7 +939,7 @@ test('desktop tools launch directly and an uninstalled editor keeps official gui
   const projects = page.getByLabel('项目与启动');
   const projectLaunch = projects.getByRole('button', { name: '启动', exact: true });
   await projectLaunch.click();
-  await expect(projects.getByRole('status')).toContainText('ZCode 已请求启动桌面应用');
+  await expect(page.locator('.toast-stack [role="status"]')).toContainText('ZCode 已请求启动桌面应用');
   await expect(projects).not.toContainText('已向外部终端');
   expect(await dialogs()).toBe(0);
   const projectRequest = (await requests()).find((item) => item.projectId === 'proj-1');
@@ -967,7 +967,7 @@ test('desktop tools launch directly and an uninstalled editor keeps official gui
   await expect(toolLaunch).toHaveAttribute('title', '直接启动已安装的 ZCode，不选择目录');
   const beforeTool = await dialogs();
   await toolLaunch.click();
-  await expect(workspace.getByRole('status')).toContainText('ZCode 已请求启动桌面应用');
+  await expect(page.locator('.toast-stack [role="status"]')).toContainText('ZCode 已请求启动桌面应用');
   await toolLaunch.click({ button: 'right' });
   await expect(toolLaunch).toBeEnabled();
   expect(await dialogs()).toBe(beforeTool);
@@ -985,7 +985,7 @@ test('desktop tools launch directly and an uninstalled editor keeps official gui
   const beforeCursor = await dialogs();
   await cursorLaunch.click();
   await cursorLaunch.click({ button: 'right' });
-  await expect(workspace.getByRole('status')).toContainText('Cursor 已请求启动桌面应用');
+  await expect(page.locator('.toast-stack [role="status"]')).toContainText('Cursor 已请求启动桌面应用');
   expect(await dialogs()).toBe(beforeCursor);
   const cursorRequests = (await requests()).filter((item) => item.toolId === 'cursor' && item.projectId == null);
   expect(cursorRequests.length).toBeGreaterThanOrEqual(2);
@@ -1154,7 +1154,7 @@ test('workbench launch opens the page, external and desktop launches do not, and
   await setMode('external');
   await projects.getByRole('button', { name: '启动', exact: true }).click();
   await expect(page.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
-  await expect(projects.getByRole('status')).toContainText('已向外部终端发送启动请求');
+  await expect(page.locator('.toast-stack [role="status"]')).toContainText('已向外部终端发送启动请求');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   await expect(page.getByRole('tab', { name: /Codex/ })).toHaveCount(1);
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页', exact: true }).click();

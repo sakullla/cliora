@@ -141,7 +141,7 @@ test('one state shares its badge across pages and each Toolbar or card has at mo
   const homeInstalled = homeRow.locator('[data-status="managedTool.ok"]');
   await expect(homeInstalled).toHaveText('0.160.0');
   await expect(homeInstalled).not.toHaveAttribute('data-tone', /.*/);
-  await expect(page.locator('[data-project-id="cliora"] [data-variant="primary"]')).toHaveCount(1);
+  await expect(page.locator('[data-project-id="cliora"] [data-split-variant="secondary"]')).toHaveCount(1);
   violations.push(...await primaryViolations(page, '首页'));
   badges.push(...(await statusBadges(page)).map((item) => ({ page: '首页', ...item })));
 
