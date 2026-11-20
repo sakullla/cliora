@@ -54,11 +54,14 @@ async function installDesktop(page: Page, projects: unknown[] = []) {
       byModel: [], byTool: [], byProject: [], topSessions: [], models: [], untimedRequests: 0, duplicateRequests: 0,
       partialSessions: 0, staleSessions: 0, mixedCurrency: false, latestEventAt: null, priceSources: [], scans: [],
     });
+    let theme = 'system';
+    const bootstrap = () => ({ preferences: { schema_version: 1, managed_tools: Object.keys(names), theme }, tools });
     Object.assign(window, {
       isTauri: true,
       __TAURI_INTERNALS__: {
-        invoke: async (command: string) => {
-          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: 'system' }, tools };
+        invoke: async (command: string, args: { theme?: string } = {}) => {
+          if (command === 'get_bootstrap') return bootstrap();
+          if (command === 'set_theme') { theme = args.theme ?? theme; return bootstrap(); }
           if (command === 'list_cli_adapters') return {
             registered: Object.entries(names).map(([id, name]) => ({ id, name, interfaceFormats: [], nativeConfig: { state: 'available', reason: '' }, launch: { state: 'planned', reason: '' }, resume: { state: 'planned', reason: '' }, resources: { state: 'planned', reason: '' }, history: { state: 'planned', reason: '' } })),
             managedIds: Object.keys(names), preservedUnknown: [],
@@ -1391,4 +1394,56 @@ test('command palette surfaces live workbench sessions and searches deep setting
   await page.keyboard.press('Control+K');
   await dialog.getByRole('option', { name: /alpha-service/ }).click();
   await expect(page.getByRole('region', { name: '当前会话' })).toContainText('Codex');
+});
+
+test('home uses compact page header and dark theme keeps clear surface and muted-text separation', async ({ page }) => {
+  await installDesktop(page);
+  await page.setViewportSize({ width: 1360, height: 768 });
+  await page.goto('/');
+  await expect(page.getByText('正在读取本机设置')).toBeHidden();
+
+  const header = page.locator('header.page-head');
+  await expect(header).toHaveAttribute('data-compact', 'true');
+  await expect(header.getByRole('heading', { name: '首页', level: 1 })).toBeVisible();
+  await expect(header.getByRole('button', { name: '新建会话' })).toBeVisible();
+  const headerBox = await header.boundingBox();
+  expect(headerBox).not.toBeNull();
+  expect(headerBox!.height).toBeLessThanOrEqual(64);
+  await expectNoHorizontalScroll(page);
+
+  await page.getByRole('button', { name: '深色主题', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+
+  const tokens = await page.evaluate(() => {
+    const style = getComputedStyle(document.documentElement);
+    const read = (name: string) => style.getPropertyValue(name).trim().toLowerCase();
+    const parseHex = (hex: string) => [0, 2, 4].map((offset) => parseInt(hex.slice(1 + offset, 3 + offset), 16));
+    const luminance = (hex: string) => {
+      const [r, g, b] = parseHex(hex).map((value) => {
+        const channel = value / 255;
+        return channel <= 0.03928 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4);
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const contrast = (a: string, b: string) => {
+      const [l1, l2] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+      return (l1 + 0.05) / (l2 + 0.05);
+    };
+    const sidebar = read('--sidebar');
+    const bg = read('--bg');
+    const surface = read('--surface');
+    const surfaceRaised = read('--surface-raised');
+    const surface2 = read('--surface-2');
+    const surface3 = read('--surface-3');
+    const line = read('--line');
+    const text3 = read('--text-3');
+    return {
+      surfaces: [sidebar, bg, surface, surfaceRaised, surface2, surface3],
+      line,
+      text3OnSurface3: contrast(text3, surface3),
+    };
+  });
+  expect(new Set(tokens.surfaces).size).toBe(6);
+  expect(tokens.line).not.toBe(tokens.surfaces[2]);
+  expect(tokens.text3OnSurface3).toBeGreaterThanOrEqual(4.5);
 });

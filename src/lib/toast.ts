@@ -70,6 +70,11 @@ export type ToastController = ReturnType<typeof useToasts>;
 /** Nearest page toast controller; the app shell provides a fallback. */
 export const ToastContext = createContext<ToastController | null>(null);
 
+/** Reads the shared toast controller mounted at the shell (or nearest ToastScope). */
+export function useToastContext(): ToastController | null {
+  return useContext(ToastContext);
+}
+
 /**
  * String-based setters for components that used to keep their own
  * `error` / `notice` state and render it inline. An empty string clears the

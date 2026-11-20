@@ -13,6 +13,10 @@ const TOAST_EXIT_MS = 180;
 
 const toneIcon: Record<ToastTone, IconName> = { status: 'check', alert: 'alert', info: 'info', warning: 'alert' };
 
+function prefersReducedMotion(): boolean {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 /** Keeps a toast mounted briefly after it clears so the exit animation can play. */
 function useRendered(item: Toast | null): { toast: Toast | null; leaving: boolean } {
   const [rendered, setRendered] = useState<Toast | null>(item);
@@ -27,6 +31,11 @@ function useRendered(item: Toast | null): { toast: Toast | null; leaving: boolea
       return;
     }
     if (!renderedRef.current) return;
+    if (prefersReducedMotion()) {
+      setRendered(null);
+      setLeaving(false);
+      return;
+    }
     setLeaving(true);
     const timer = window.setTimeout(() => { setRendered(null); setLeaving(false); }, TOAST_EXIT_MS);
     return () => window.clearTimeout(timer);

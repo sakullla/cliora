@@ -11,6 +11,7 @@ import type { IconName } from './components/Icon';
 import brandIcon from '../src-tauri/icons/128x128@2x.png';
 import { useUpdateOffer } from './lib/appUpdate';
 import { ConfirmationHost } from './components/ConfirmationHost';
+import { ToastScope } from './components/Toast';
 import { EmptyState } from './components/EmptyState';
 import { Badge, Button, IconButton } from './components/ui';
 import { PageSkeleton } from './components/Skeleton';
@@ -52,6 +53,7 @@ import { confirmAction } from './lib/confirm';
 import { isEditableTarget, modAria, modLabel, withMod } from './lib/shortcut';
 import { displayPath, shortPath } from './lib/paths';
 import { usePageScroll } from './lib/uiNavigation';
+import { useToasts } from './lib/toast';
 import { browserBootstrap } from './types/domain';
 import type { ApiError, Bootstrap, Theme } from './types/domain';
 import type { HistorySession } from './types/history';
@@ -109,6 +111,7 @@ const themes: { id: Theme; glyph: IconName }[] = [
 
 export default function App() {
   const { t, i18n } = useTranslation();
+  const toasts = useToasts();
   const [bootstrap, setBootstrap] = useState<Bootstrap>(() => browserBootstrap());
   const [catalog, setCatalog] = useState<AdapterCatalog | null>(null);
   const [loading, setLoading] = useState(nativeAvailable);
@@ -862,7 +865,8 @@ export default function App() {
   }
 
   function revealOnboardingLaunchArea() {
-    document.querySelector<HTMLElement>('.home-launcher')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    const reduced = typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    document.querySelector<HTMLElement>('.home-launcher')?.scrollIntoView({ block: 'start', behavior: reduced ? 'auto' : 'smooth' });
   }
 
   const libraryKindLabel = (kind: LibraryKind) => t(kind === 'prompt' ? 'library.page.prompt' : 'library.page.ruleShort');
@@ -1097,7 +1101,7 @@ export default function App() {
     finally { ++preferenceEdits.current.tool_icons; setBusy(false); }
   }
 
-  return <ToolIconsContext value={bootstrap.preferences.tool_icons ?? {}}><div className="shell" data-sidebar-collapsed={sidebarCollapsed} data-page={page} data-context={railDocked ? 'workbench' : undefined} data-focus={focusLayout || undefined}>
+  return <ToastScope toasts={toasts}><ToolIconsContext value={bootstrap.preferences.tool_icons ?? {}}><div className="shell" data-sidebar-collapsed={sidebarCollapsed} data-page={page} data-context={railDocked ? 'workbench' : undefined} data-focus={focusLayout || undefined}>
     <a className="skip-link" href="#main" onClick={(event) => { event.preventDefault(); const main = document.getElementById('main'); main?.focus(); main?.scrollTo({ top: 0 }); }}>{t('common.shell.skipToContent')}</a>
     <aside className="sidebar" aria-label={t('common.nav.mainLabel')}>
       {/* The sidebar's top band is window title bar: it drags the window and, on macOS, holds the traffic lights. */}
@@ -1159,7 +1163,7 @@ export default function App() {
       <div className="content-inner">
       {!nativeAvailable && <div className="environment-banner" role="status"><span className="banner-icon"><Icon name="info" size={16} /></span><span>{t('common.shell.previewBanner')}</span></div>}
       {(error || writeRecoveryFallback) && <div className="error-banner" role="alert"><span className="banner-icon"><Icon name="alert" size={16} /></span><div className="error-copy"><strong>{error?.message ?? t('common.remoteWrite.unknown')}</strong>{error && <span>{error.action}</span>}{writeRecoveryFallback && error && error.message !== t('common.remoteWrite.unknown') && <span>{t('common.remoteWrite.unknown')}</span>}{error?.data_directory && <code>{error.data_directory}</code>}</div>{writeRecoveryFallback && <IconButton size="sm" icon={<Icon name="refresh" size={14} />} onClick={() => requestWriteRecovery(remoteTargetId)} aria-label={t('common.remoteWrite.open')} title={t('common.remoteWrite.open')} />}{error && loaded && <button type="button" onClick={() => setError(null)} aria-label={t('common.dismissError')}><Icon name="close" size={14} /></button>}</div>}
-      {page === 'home' && <PageHeader title={title[0]} subtitle={title[1]} eyebrow={<><span className="page-eyebrow-dot" aria-hidden="true" />{t(`home.hero.${greetingPart()}`)}<span aria-hidden="true">·</span><time>{new Intl.DateTimeFormat(i18n.language?.startsWith('en') ? 'en-US' : 'zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }).format(new Date())}</time></>} actions={nativeAvailable && visibleDescriptors.some((item) => item.launchForm !== 'desktop') ? <Button variant="primary" icon={<Icon name="plus" size={15} />} title={`${t('home.hero.newSessionTitle')} (Alt+N)`} aria-keyshortcuts="Alt+N" onClick={startNewSession}>{t('home.hero.newSession')}</Button> : undefined} />}
+      {page === 'home' && <PageHeader compact title={title[0]} subtitle={title[1]} eyebrow={<><span className="page-eyebrow-dot" aria-hidden="true" />{t(`home.hero.${greetingPart()}`)}<span aria-hidden="true">·</span><time>{new Intl.DateTimeFormat(i18n.language?.startsWith('en') ? 'en-US' : 'zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }).format(new Date())}</time></>} actions={nativeAvailable && visibleDescriptors.some((item) => item.launchForm !== 'desktop') ? <Button variant="primary" icon={<Icon name="plus" size={15} />} title={`${t('home.hero.newSessionTitle')} (Alt+N)`} aria-keyshortcuts="Alt+N" onClick={startNewSession}>{t('home.hero.newSession')}</Button> : undefined} />}
       {page !== 'sessions' && page !== 'home' && <PageHeader title={title[0]} subtitle={title[1]} compact={page === 'records' || page === 'connections' || page === 'library'} />}
       {loading ? <PageSkeleton /> : !loaded ? <EmptyState icon="alert" title={t('common.shell.loadFailedTitle')} detail={t('common.shell.loadFailedDetail')} action={<Button variant="primary" size="sm" className="empty-state-action" onClick={loadBootstrap}>{t('common.shell.loadFailedRetry')}</Button>} /> : <>
         {page === 'home' && onboardingVisible && <OnboardingCard
@@ -1227,5 +1231,5 @@ export default function App() {
       <div hidden={settingsTab !== 'migration'}>{hasVisited('settings:migration') && <Suspense fallback={<PageSkeleton />}><MigrationSettings active={settingsOpen && settingsTab === 'migration'} onImported={() => void refreshAfterImport()} /></Suspense>}</div>
     </>}
   </SettingsModal>
-  {nativeAvailable && bootstrap.preferences.remote_ssh_enabled && <RemoteWriteRecovery target={remoteTargets.find(item => item.id === remoteTargetId) ?? null} />}<CommandPalette open={paletteOpen} commands={commands} sourceFailed={paletteSourceFailed} onRetrySources={() => setPaletteReload((value) => value + 1)} onClose={() => setPaletteOpen(false)} /><ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} /><ConfirmationHost /></ToolIconsContext>;
+  {nativeAvailable && bootstrap.preferences.remote_ssh_enabled && <RemoteWriteRecovery target={remoteTargets.find(item => item.id === remoteTargetId) ?? null} />}<CommandPalette open={paletteOpen} commands={commands} sourceFailed={paletteSourceFailed} onRetrySources={() => setPaletteReload((value) => value + 1)} onClose={() => setPaletteOpen(false)} /><ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} /><ConfirmationHost /></ToolIconsContext></ToastScope>;
 }

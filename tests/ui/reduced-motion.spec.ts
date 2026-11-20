@@ -27,7 +27,7 @@ async function install(page: Page) {
   });
 }
 
-/** Longest animation and transition duration of an element, in milliseconds. */
+/** Longest animation and transition duration/delay of an element, in milliseconds. */
 async function motion(locator: Locator) {
   return locator.evaluate((el) => {
     const longest = (value: string) => Math.max(0, ...value.split(',').map((part) => {
@@ -35,7 +35,13 @@ async function motion(locator: Locator) {
       return text.endsWith('ms') ? parseFloat(text) : parseFloat(text) * 1000;
     }));
     const style = getComputedStyle(el);
-    return { animationName: style.animationName, animation: longest(style.animationDuration), transition: longest(style.transitionDuration) };
+    return {
+      animationName: style.animationName,
+      animation: longest(style.animationDuration),
+      animationDelay: longest(style.animationDelay),
+      transition: longest(style.transitionDuration),
+      transitionDelay: longest(style.transitionDelay),
+    };
   });
 }
 
@@ -91,12 +97,23 @@ test('reduced motion stops dialog, page and control motion', async ({ page }) =>
   expect(settingsMotion.transition, JSON.stringify(settingsMotion)).toBeLessThanOrEqual(0.01);
   await page.keyboard.press('Escape');
   await expect(settingsModal).toHaveCount(0);
-  // Controls keep their hover/press states but drop the transition time.
+  // Controls keep their hover/press states but drop the transition time and delays.
   const button = nav.getByRole('button', { name: '首页', exact: true });
-  expect((await motion(button)).transition).toBeLessThanOrEqual(0.01);
+  const buttonMotion = await motion(button);
+  expect(buttonMotion.transition).toBeLessThanOrEqual(0.01);
+  expect(buttonMotion.transitionDelay).toBeLessThanOrEqual(0.01);
   const primary = page.locator('[data-variant="primary"]').first();
   await expect(primary).toBeVisible();
-  expect((await motion(primary)).transition).toBeLessThanOrEqual(0.01);
+  const primaryMotion = await motion(primary);
+  expect(primaryMotion.transition).toBeLessThanOrEqual(0.01);
+  expect(primaryMotion.animationDelay).toBeLessThanOrEqual(0.01);
+  // Staggered home managed-tool rows also drop their animation-delay under reduced motion.
+  await nav.getByRole('button', { name: '首页', exact: true }).click();
+  const toolRow = page.locator('[data-tool-row]').first();
+  await expect(toolRow).toBeVisible();
+  const rowMotion = await motion(toolRow);
+  expect(rowMotion.animation, JSON.stringify(rowMotion)).toBeLessThanOrEqual(0.01);
+  expect(rowMotion.animationDelay, JSON.stringify(rowMotion)).toBeLessThanOrEqual(0.01);
 });
 
 test('reduced motion stops configuration dialog and level-switch motion', async ({ page }) => {

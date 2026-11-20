@@ -285,9 +285,10 @@ html[data-native="macos"] .content-workbench > .content-inner { padding-top: 0; 
 .page-head > div { position: relative; }
 .page-head p { margin-top: var(--space-1); max-width: 66ch; color: var(--text-3); font-size: var(--fs-control); font-weight: var(--fw-regular); line-height: 1.5; }
 .page-head[data-compact] { align-items: center; margin-bottom: var(--space-3); }
-.page-head[data-compact] > div:first-child { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-3); }
+.page-head[data-compact] > div:first-child { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2_5); }
 .page-head[data-compact] h1 { font-size: 21px; }
 .page-head[data-compact] p { margin-top: 0; font-size: var(--fs-caption); }
+.page-head[data-compact] .page-eyebrow { margin-bottom: 0; padding: 1px var(--space-2) 1px var(--space-1_5); line-height: 18px; box-shadow: none; }
 .page-head-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .page-head-actions kbd { margin-left: var(--space-1); padding: 0 var(--space-1); border-width: 1px; font-size: 10px; line-height: 16px; box-shadow: none; background: transparent; color: var(--text-3); }
 .page-eyebrow { display: inline-flex; align-items: center; gap: var(--space-1_5); margin-bottom: var(--space-1_5); padding: var(--space-0_5) var(--space-2_5) var(--space-0_5) var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface); box-shadow: var(--shadow-sm); color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-medium); line-height: 20px; }

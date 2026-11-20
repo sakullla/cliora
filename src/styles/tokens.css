@@ -188,34 +188,34 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #111513;
-  --sidebar: #0c0f0e;
-  --surface: #161b19;
-  --surface-2: #1d2320;
-  --surface-3: #272f2b;
-  --overlay: rgb(3 6 4 / 66%);
+  --bg: #101513;
+  --sidebar: #0a0d0c;
+  --surface: #171e1b;
+  --surface-2: #1f2723;
+  --surface-3: #29332e;
+  --overlay: rgb(3 6 4 / 68%);
   --wash-a: rgb(82 199 136 / 7%);
   --wash-b: rgb(82 199 136 / 4%);
-  --surface-glass: rgb(22 27 25 / 92%);
-  --surface-raised: var(--surface);
+  --surface-glass: rgb(23 30 27 / 92%);
+  --surface-raised: #1c2420;
   --frame: var(--sidebar);
   --canvas-glow: none;
-  --sidebar-edge: rgb(255 255 255 / 6.5%);
-  --sidebar-divider: rgb(255 255 255 / 6.5%);
-  --sidebar-well: rgb(255 255 255 / 4.5%);
-  --sidebar-well-hover: rgb(255 255 255 / 8%);
-  --sidebar-kbd: rgb(255 255 255 / 8%);
-  --sidebar-active: #1c221f;
-  --sidebar-active-ring: 0 0 0 1px rgb(255 255 255 / 8%), 0 2px 6px -1px rgb(0 0 0 / 38%);
+  --sidebar-edge: rgb(255 255 255 / 9%);
+  --sidebar-divider: rgb(255 255 255 / 8.5%);
+  --sidebar-well: rgb(255 255 255 / 5.5%);
+  --sidebar-well-hover: rgb(255 255 255 / 9.5%);
+  --sidebar-kbd: rgb(255 255 255 / 9%);
+  --sidebar-active: #1e2622;
+  --sidebar-active-ring: 0 0 0 1px rgb(255 255 255 / 10%), 0 2px 6px -1px rgb(0 0 0 / 42%);
 
-  --text: #eef3f0;
-  --text-2: #c1ccc5;
-  --text-3: #8c9a91;
+  --text: #f0f5f2;
+  --text-2: #c6d1ca;
+  --text-3: #98a79e;
 
-  --line: #232a26;
-  --line-strong: #333d37;
-  --control-line: #2d3631;
-  --control-line-hover: #49564e;
+  --line: #28322d;
+  --line-strong: #39463f;
+  --control-line: #334039;
+  --control-line-hover: #506158;
 
   --surface-hover: color-mix(in srgb, var(--text) 5%, var(--surface));
   --surface-pressed: color-mix(in srgb, var(--text) 9%, var(--surface));
@@ -261,12 +261,12 @@
   --shadow-accent: 0 1px 3px rgb(0 0 0 / 40%);
   --inner-highlight: inset 0 1px 0 rgb(255 255 255 / 22%);
   --shadow-canvas: 0 1px 4px rgb(0 0 0 / 30%);
-  --shadow-card: 0 1px 2px rgb(0 0 0 / 28%), inset 0 1px 0 rgb(255 255 255 / 2.5%);
-  --shadow-card-hover: 0 8px 24px -8px rgb(0 0 0 / 52%), inset 0 1px 0 rgb(255 255 255 / 4%);
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 34%), inset 0 1px 0 rgb(255 255 255 / 4%);
+  --shadow-card-hover: 0 8px 24px -8px rgb(0 0 0 / 54%), inset 0 1px 0 rgb(255 255 255 / 6%);
   --shadow-well: inset 0 1px 2px rgb(0 0 0 / 32%);
   --shadow-well-soft: inset 0 1px 1px rgb(0 0 0 / 22%);
   --shadow-thumb: 0 1px 3px rgb(0 0 0 / 48%);
 
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23c1ccc5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238c9a91' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23c6d1ca' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2398a79e' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
 }
