@@ -19,11 +19,23 @@ pub struct Database {
     read_path: Option<std::path::PathBuf>,
 }
 
+const LATEST_VERSION: u32 = 33;
+
 impl Database {
+    /// Independent consumers can read a configured desktop without creating or migrating its DB.
+    pub(crate) fn open_read_only(path: &Path) -> Result<Self, OpenError> {
+        let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version > LATEST_VERSION {
+            return Err(OpenError::UnsupportedVersion(version));
+        }
+        Ok(Self { connection: Mutex::new(connection), read_path: Some(path.to_owned()) })
+    }
+
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 33 {
+        if version > LATEST_VERSION {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;

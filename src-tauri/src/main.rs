@@ -1,6 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    if cliora_lib::remote::twiglane::helper_entry() {
+        return;
+    }
     // OpenSSH starts Cliora as its ProxyCommand to reach a remote host through the local proxy.
     if cliora_lib::remote::proxy::helper_entry() {
         return;

@@ -696,6 +696,7 @@ dependencies = [
  "jsonc-parser",
  "keyring",
  "memchr",
+ "minisign-verify",
  "percent-encoding",
  "portable-pty",
  "rand 0.9.5",

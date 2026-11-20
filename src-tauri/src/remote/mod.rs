@@ -23,6 +23,7 @@ use uuid::Uuid;
 use crate::database::Database;
 use crate::native::profile::{RegisteredCommon, RegisteredProfile};
 
+pub mod twiglane;
 pub mod password;
 pub mod proxy;
 pub mod operations;

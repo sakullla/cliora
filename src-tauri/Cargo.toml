@@ -33,6 +33,7 @@ toml_edit = "0.25"
 toml = { version = "1.1", features = ["preserve_order"] }
 jsonc-parser = { version = "0.34", features = ["serde", "cst"] }
 sha2 = "0.10"
+minisign-verify = "0.2.5"
 zstd = { version = "0.13", default-features = false }
 uuid = { version = "1.26", features = ["v4", "serde"] }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls", "gzip"] }
