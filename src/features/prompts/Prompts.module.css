@@ -84,7 +84,8 @@
 .toolbarSearch { flex: 1 1 280px; min-width: 200px; }
 .toolbarSelect { flex: 0 1 180px; min-width: 140px; }
 .resultBar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1_5) var(--space-2); min-width: 0; font-size: var(--fs-caption); }
-.tagChip { display: inline-flex; align-items: center; gap: var(--space-1); max-width: 160px; min-height: 22px; padding: 0 var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface); box-shadow: none; color: var(--text-2); font-size: var(--fs-micro); font-weight: var(--fw-medium); white-space: nowrap; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), color var(--fast) var(--ease); }
+.tagChip { display: inline-flex; align-items: center; gap: var(--space-1); max-width: 160px; min-height: 22px; padding: 0 var(--space-2); overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface); box-shadow: none; color: var(--text-2); font-size: var(--fs-micro); font-weight: var(--fw-medium); text-overflow: ellipsis; white-space: nowrap; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), color var(--fast) var(--ease); }
+.tagChip > svg { flex: none; }
 .tagChip:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
 .tagChip[data-active], .tagChip[data-active]:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
 .tagChip[data-active]:hover:not(:disabled) { border-color: var(--accent); }

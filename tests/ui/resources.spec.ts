@@ -1497,7 +1497,7 @@ test('MCP card results float as a toast and never push the card list down', asyn
   const before = await documentTop();
   await page.getByRole('button', { name: 'Codex · 已生效' }).click();
   await page.getByRole('dialog', { name: '从 CLI 移除 MCP' }).getByRole('button', { name: '移除', exact: true }).click();
-  const status = page.getByRole('region', { name: '资料库内容' }).getByRole('status').filter({ hasText: '已从 Codex 移除。' });
+  const status = page.locator('.toast-stack [role="status"]').filter({ hasText: '已从 Codex 移除。' });
   await expect(status).toBeVisible();
   expect(await status.evaluate((element) => getComputedStyle(element.parentElement as Element).position)).toBe('fixed');
   expect(await documentTop()).toBe(before);
