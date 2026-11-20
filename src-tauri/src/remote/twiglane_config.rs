@@ -1,11 +1,14 @@
 //! Freeze the configuration OpenSSH resolved (including Host/Match/Include and jump hosts).
 //! An SSH operation consumes this snapshot, never the mutable input file a second time.
-use super::{connection_args, hide_console_window, operations, validate_target, RemoteTarget};
+use super::{
+    connection_args, hide_console_window, operations, twiglane_peer,
+    twiglane_trust::{Profile, Trust},
+    validate_target, RemoteTarget,
+};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Write;
 use std::process::Command;
-use std::time::Duration;
 
 const PRIVATE_SSH: &[&str] = &[
     "-T",
@@ -27,36 +30,17 @@ pub(super) struct Snapshot {
     pub revision: String,
     pub hostname: String,
     config: String,
+    trust: Trust,
+    pub count: usize,
 }
 
 fn quoted(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-fn known_hosts_paths(value: &str) -> Result<String, &'static str> {
-    // ssh -G joins this multi-operand setting without source quotes. Keep a complete home
-    // prefix together (including spaces on macOS/Windows), and avoid guessing at a boundary.
-    let home = dirs::home_dir().and_then(|path| path.to_str().map(str::to_string));
-    let shortened = home
-        .as_deref()
-        .filter(|path| path.contains(' '))
-        .map(|path| value.replace(&format!("{path}/"), "~/"));
-    let text = shortened.as_deref().unwrap_or(value);
-    let parts: Vec<_> = text.split_whitespace().collect();
-    if parts.len() > 1
-        && parts
-            .iter()
-            .any(|path| !(std::path::Path::new(path).is_absolute() || path.starts_with("~/")))
-    {
-        return Err("ambiguous_known_hosts_paths");
-    }
-    Ok(parts.into_iter().map(quoted).collect::<Vec<_>>().join(" "))
-}
-
 fn option(key: &str, value: &str) -> Result<String, &'static str> {
     // ssh -G prints these single operands without source quotes. Restore their token boundary.
     let value = match key {
-        "userknownhostsfile" | "globalknownhostsfile" => known_hosts_paths(value)?,
         "identityfile"
         | "certificatefile"
         | "identityagent"
@@ -76,15 +60,6 @@ fn option(key: &str, value: &str) -> Result<String, &'static str> {
     Ok(format!("{key} {value}\n"))
 }
 
-fn resolution(command: &mut Command) -> Result<String, &'static str> {
-    let data = super::proxy::bounded_output(command, Duration::from_secs(8))
-        .ok_or("ssh_configuration_unavailable")?;
-    if data.len() >= 256 * 1024 {
-        return Err("ssh_configuration_unavailable");
-    }
-    String::from_utf8(data).map_err(|_| "ssh_configuration_unavailable")
-}
-
 impl Snapshot {
     pub(super) fn resolve(target: &RemoteTarget) -> Result<Self, &'static str> {
         validate_target(target).map_err(|_| "invalid_target")?;
@@ -99,19 +74,20 @@ impl Snapshot {
             .args(args)
             .arg("--")
             .arg(dst);
-        let mut profiles = vec![resolution(&mut ssh)?];
+        let mut profiles = vec![Profile::read(&ssh)?];
+        let mut trust = Trust::default();
         let mut seen = HashMap::new();
         let mut index = 0;
         let mut config = String::new();
         let mut hostname = None;
         while index < profiles.len() {
-            let profile = profiles[index].clone();
+            let profile = &profiles[index];
             index += 1;
             let mut alias = None;
             let mut host = None;
             let mut body = String::new();
             let mut jumps = Vec::new();
-            for line in profile.lines() {
+            for line in profile.text.lines() {
                 let (key, value) = line
                     .split_once(' ')
                     .ok_or("ssh_configuration_unavailable")?;
@@ -124,7 +100,13 @@ impl Snapshot {
                         continue;
                     }
                     "hostname" => host = Some(value),
-                    "proxyjump" if value != "none" => jumps.extend(value.split(',')),
+                    "userknownhostsfile" | "globalknownhostsfile" | "revokedhostkeys" => {
+                        body.push_str(&trust.directive(profile, key, value)?);
+                        continue;
+                    }
+                    "proxyjump" if value != "none" => {
+                        jumps.extend(value.split(',').map(str::to_owned))
+                    }
                     // ssh -G has already performed canonicalization. Repeating it can retarget a
                     // hostname if DNS or the consulted configuration changed after selection.
                     "canonicalizehostname" => {
@@ -169,30 +151,113 @@ impl Snapshot {
                     format!("ssh://{jump}")
                 };
                 args.arg("--").arg(dest);
-                profiles.push(resolution(&mut args)?);
+                profiles.push(Profile::read(&args)?);
             }
         }
         let mut digest = Sha256::new();
         digest.update(operations::target_identity(target));
         digest.update(config.as_bytes());
+        trust.bind(&mut digest);
         Ok(Self {
             revision: format!("{:x}", digest.finalize()),
             hostname: hostname.ok_or("ssh_configuration_unavailable")?,
             config,
+            trust,
+            count: seen.len(),
         })
     }
 
-    pub(super) fn command(&self) -> Result<(Command, tempfile::NamedTempFile), &'static str> {
-        let mut file = tempfile::Builder::new()
-            .prefix("cliora-ssh-")
-            .tempfile()
+    pub(super) fn command(
+        &self,
+        expected: Option<&str>,
+    ) -> Result<(Command, tempfile::TempDir), &'static str> {
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("cliora-ssh-");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            builder.permissions(std::fs::Permissions::from_mode(0o700));
+        }
+        let folder = builder
+            .tempdir()
             .map_err(|_| "ssh_configuration_unavailable")?;
-        file.write_all(self.config.as_bytes())
+        self.trust.write(folder.path())?;
+        let executable = std::env::current_exe().map_err(|_| "ssh_configuration_unavailable")?;
+        let exe = executable
+            .to_str()
+            .ok_or("ssh_configuration_unavailable")?
+            .replace('%', "%%");
+        let mut output = String::new();
+        for (index, section) in self
+            .config
+            .strip_prefix("Host ")
+            .ok_or("ssh_configuration_unavailable")?
+            .split("\nHost ")
+            .enumerate()
+        {
+            let (host, body) = section
+                .split_once('\n')
+                .ok_or("ssh_configuration_unavailable")?;
+            output.push_str(&format!("Host {host}\nControlMaster no\nControlPath none\nStrictHostKeyChecking yes\nUpdateHostKeys no\nNoHostAuthenticationForLocalhost no\n"));
+            let original = body
+                .lines()
+                .find_map(|line| line.strip_prefix("knownhostscommand "))
+                .filter(|value| *value != "none");
+            output.push_str(&format!(
+                "KnownHostsCommand {} {} {index} %I %K",
+                quoted(&exe),
+                twiglane_peer::FLAG
+            ));
+            if let Some(chain) = original {
+                std::fs::File::create(folder.path().join(format!("configured-lookup-{index}")))
+                    .map_err(|_| "ssh_configuration_unavailable")?;
+                output.push(' ');
+                output.push_str(chain);
+            }
+            output.push('\n');
+            for line in body.lines() {
+                let (key, value) = line
+                    .split_once(' ')
+                    .ok_or("ssh_configuration_unavailable")?;
+                if key == "knownhostscommand" {
+                    continue;
+                }
+                if matches!(
+                    key,
+                    "userknownhostsfile" | "globalknownhostsfile" | "revokedhostkeys"
+                ) && value != "none"
+                {
+                    output.push_str(key);
+                    for name in value.split_whitespace() {
+                        output.push(' ');
+                        let path = folder.path().join(name);
+                        output.push_str(&quoted(
+                            &path
+                                .to_str()
+                                .ok_or("ssh_configuration_unavailable")?
+                                .replace('%', "%%"),
+                        ));
+                    }
+                } else {
+                    output.push_str(line);
+                }
+                output.push('\n');
+            }
+        }
+        let config = folder.path().join("config");
+        std::fs::File::create(&config)
+            .and_then(|mut file| file.write_all(output.as_bytes()))
             .map_err(|_| "ssh_configuration_unavailable")?;
         let mut command = Command::new("ssh");
         hide_console_window(&mut command);
-        command.arg("-F").arg(file.path()).args(PRIVATE_SSH);
-        // Keep the input alias for OpenSSH %n expansion. Only the frozen config resolves it.
-        Ok((command, file))
+        command.arg("-F").arg(config).args(PRIVATE_SSH);
+        twiglane_peer::setup(
+            &mut command,
+            folder.path(),
+            &self.revision,
+            expected,
+            self.count,
+        )?;
+        Ok((command, folder))
     }
 }

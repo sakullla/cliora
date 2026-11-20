@@ -115,6 +115,11 @@ def install(directory, expected, signature):
 
 def run():
     op = sys.argv[1]
+    if op in ("install", "connect"):
+        sys.stdout.buffer.write(b"twiglane-peer/1\n")
+        sys.stdout.buffer.flush()
+        if sys.stdin.buffer.read(1) != b"G":
+            fail("peer_unverified")
     directory = agent_dir(op == "install")
     if op == "probe":
         source = current_agent(directory)

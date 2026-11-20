@@ -4,9 +4,9 @@ use crate::database::Database;
 use base64::Engine;
 use minisign_verify::{PublicKey, Signature};
 use serde_json::{json, Value};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 const FLAG: &str = "--twiglane-remote-v1";
 // Public key from Twiglane's updater configuration. The signed message identifies this artifact type.
@@ -41,14 +41,14 @@ fn identity(target: &RemoteTarget) -> Result<Value> {
 fn resolve<'a>(
     targets: &'a [RemoteTarget],
     id: &str,
-    revision: &str,
+    revision: Option<&str>,
 ) -> Result<(&'a RemoteTarget, Snapshot)> {
     let target = targets
         .iter()
         .find(|target| target.enabled && target.id == id)
         .ok_or("target_unavailable")?;
     let snapshot = Snapshot::resolve(target)?;
-    if snapshot.revision != revision {
+    if revision.is_some_and(|revision| snapshot.revision != revision) {
         return Err("target_changed");
     }
     Ok((target, snapshot))
@@ -133,9 +133,54 @@ fn configure_transport(
     Ok(())
 }
 
+fn verified_transport(
+    command: &mut Command,
+    snapshot: &Snapshot,
+    folder: &Path,
+    expected: &str,
+) -> Result<std::process::ExitStatus> {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|_| "ssh_unavailable")?;
+    let mut remote_input = child.stdin.take().ok_or("ssh_unavailable")?;
+    let mut remote_output = child.stdout.take().ok_or("ssh_unavailable")?;
+    let mut ready = [0; b"twiglane-peer/1\n".len()];
+    if remote_output.read_exact(&mut ready).is_err() || ready != *b"twiglane-peer/1\n" {
+        drop(remote_input);
+        let _ = child.kill();
+        let status = child.wait().map_err(|_| "ssh_unavailable")?;
+        return if status.success() {
+            Err("peer_unverified")
+        } else {
+            Ok(status)
+        };
+    }
+    // Some OpenSSH configurations may skip KnownHostsCommand. Require the complete
+    // observation before the bootstrap can create its directory or read any upload.
+    let authorized = super::twiglane_peer::token(folder, &snapshot.revision, snapshot.count);
+    if authorized.as_deref() != Ok(expected) || remote_input.write_all(b"G").is_err() {
+        drop(remote_input);
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("target_changed");
+    }
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut std::io::stdin().lock(), &mut remote_input);
+    });
+    if std::io::copy(&mut remote_output, &mut std::io::stdout().lock()).is_err() {
+        let _ = child.kill();
+    }
+    child.wait().map_err(|_| "ssh_unavailable")
+}
+
 fn run(args: &[String], database: impl FnOnce() -> Result<PathBuf>) -> Result<()> {
     if args == ["version"] {
-        println!("{}", json!({"protocol":1}));
+        println!(
+            "{}",
+            json!({"protocol":1,"kind":"cliora-twiglane-connector-v1"})
+        );
         return Ok(());
     }
     let (op, target, revision, digest) = match args {
@@ -164,10 +209,50 @@ fn run(args: &[String], database: impl FnOnce() -> Result<PathBuf>) -> Result<()
         _ => return Err("unsupported_action"),
     };
     let targets = registered_targets(&database()?)?;
-    let (target, snapshot) = resolve(&targets, target, revision)?;
-    let (mut command, private_config) = snapshot.command()?;
+    let (target, snapshot) = resolve(&targets, target, (op == "probe").then_some(revision))?;
+    if op != "probe" && revision == &snapshot.revision {
+        return Err("probe_required");
+    }
+    if !valid_digest(revision) {
+        return Err("target_changed");
+    }
+    let (mut command, private_config) = snapshot.command((op != "probe").then_some(revision))?;
     configure_transport(&mut command, target, op, digest)?;
-    let status = command.status().map_err(|_| "ssh_unavailable")?;
+    let mut response = Vec::new();
+    let status = if op == "probe" {
+        let mut child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .spawn()
+            .map_err(|_| "ssh_unavailable")?;
+        let read = child
+            .stdout
+            .take()
+            .ok_or("ssh_unavailable")?
+            .take(65537)
+            .read_to_end(&mut response);
+        if read.is_err() || response.len() > 65536 {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("invalid_probe");
+        }
+        child.wait().map_err(|_| "ssh_unavailable")?
+    } else {
+        verified_transport(&mut command, &snapshot, private_config.path(), revision)?
+    };
+    if private_config.path().join("mismatch").is_file() {
+        return Err("target_changed");
+    }
+    if status.success() && op == "probe" {
+        let peer =
+            super::twiglane_peer::token(private_config.path(), &snapshot.revision, snapshot.count)?;
+        let mut value: Value = serde_json::from_slice(&response).map_err(|_| "invalid_probe")?;
+        value
+            .as_object_mut()
+            .ok_or("invalid_probe")?
+            .insert("peerRevision".into(), Value::String(peer));
+        println!("{value}");
+    }
     drop(private_config);
     std::process::exit(status.code().unwrap_or(1));
 }
@@ -178,6 +263,17 @@ pub fn helper_entry() -> bool {
     let Some(flag) = args.next() else {
         return false;
     };
+    if flag == super::twiglane_peer::FLAG {
+        let args: std::result::Result<Vec<_>, _> = args.map(|arg| arg.into_string()).collect();
+        if let Err(error) = args
+            .map_err(|_| "peer_unverified")
+            .and_then(|args| super::twiglane_peer::callback(&args))
+        {
+            eprintln!("{}", json!({"error":error}));
+            std::process::exit(2);
+        }
+        return true;
+    }
     if !flag.to_string_lossy().starts_with("--twiglane-remote-") {
         return false;
     }

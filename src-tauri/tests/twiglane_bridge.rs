@@ -33,6 +33,10 @@ fn desktop_exit_mode_resolves_only_current_enabled_targets_and_rejects_untrusted
         serde_json::from_slice::<Value>(&version.stdout).unwrap()["protocol"],
         1
     );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&version.stdout).unwrap()["kind"],
+        "cliora-twiglane-connector-v1"
+    );
     assert!(!path.exists());
     assert_eq!(error(call(&path, &["list"])), "database_unavailable");
     assert!(!path.exists());
@@ -41,8 +45,12 @@ fn desktop_exit_mode_resolves_only_current_enabled_targets_and_rejects_untrusted
     db.update_preferences(|prefs| prefs.remote_ssh_enabled = true)
         .unwrap();
     let ssh_config = home.path().join("ssh_config");
-    let initial_config = "Host test.invalid\n  HostName first.invalid\n  HostKeyAlias first-key\n";
-    std::fs::write(&ssh_config, initial_config).unwrap();
+    let trust = home.path().join("known hosts with spaces");
+    let second_trust = home.path().join("extra trust");
+    std::fs::write(&trust, "# initial trust\n").unwrap();
+    std::fs::write(&second_trust, "").unwrap();
+    let initial_config = format!("Host test.invalid\n  HostName first.invalid\n  HostKeyAlias first-key\n  UserKnownHostsFile \"{}\" \"{}\"\n", trust.display(), second_trust.display());
+    std::fs::write(&ssh_config, &initial_config).unwrap();
     let mut target = RemoteTarget {
         id: "test-build".into(),
         name: "Build box".into(),
@@ -73,6 +81,12 @@ fn desktop_exit_mode_resolves_only_current_enabled_targets_and_rejects_untrusted
         "invalid_artifact"
     );
     assert_eq!(first["effectiveHost"], "first.invalid");
+    std::fs::write(&trust, "# replacement trust\n").unwrap();
+    assert_eq!(
+        error(call(&path, &["probe", &target.id, revision])),
+        "target_changed"
+    );
+    std::fs::write(&trust, "# initial trust\n").unwrap();
     for config in [
         "Host test.invalid\n  HostName second.invalid\n  HostKeyAlias first-key\n",
         "Host test.invalid\n  HostName first.invalid\n  HostKeyAlias second-key\n",

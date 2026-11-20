@@ -25,6 +25,8 @@ use crate::native::profile::{RegisteredCommon, RegisteredProfile};
 
 pub mod twiglane;
 mod twiglane_config;
+mod twiglane_peer;
+mod twiglane_trust;
 pub mod password;
 pub mod proxy;
 pub mod operations;

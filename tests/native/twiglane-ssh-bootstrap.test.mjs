@@ -15,9 +15,17 @@ test('remote bootstrap probes without installing, verifies uploads, preserves th
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const directory = path.join(home, '.local/share/twiglane/agent/v1');
   const agent = path.join(directory, 'agent');
-  const run = (args, input = '') => spawnSync('python3', ['-I', setup, ...args], {
+  const raw = (args, input = '') => spawnSync('python3', ['-I', setup, ...args], {
     input, encoding: 'utf8', env: { ...process.env, HOME: home }, timeout: 5000,
   });
+  const run = (args, input = '') => {
+    if (args[0] === 'probe') return raw(args, input);
+    const result = raw(args, 'G' + input);
+    assert.ok(result.stdout.startsWith('twiglane-peer/1\n'));
+    return { ...result, stdout: result.stdout.slice('twiglane-peer/1\n'.length) };
+  };
+  assert.equal(raw(['install', hash('fixture'), 'test-proof']).status, 2);
+  assert.equal(existsSync(directory), false);
   const probe = () => {
     const result = run(['probe']);
     assert.equal(result.status, 0, result.stderr);
