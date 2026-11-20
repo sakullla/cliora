@@ -344,10 +344,20 @@ export function UsageDashboard({ search, onSearchChange, favoriteOnly, onClearSe
 
   const scanned = lastScanAt ?? (report?.scans.length ? Math.max(...report.scans.map((item) => item.scannedAt)) : null);
   const modelOptions = [{ value: '', label: t('records.page.allModels') }, ...(report?.models ?? []).map((item) => ({ value: item, label: item })), ...(model && !(report?.models ?? []).includes(model) ? [{ value: model, label: model }] : [])];
+  const scopeLabel = rangeCaption(report, range, now);
+  const filterNote = search.trim() || favoriteOnly ? t('records.usage.filtered', { parts: [search.trim() ? t('records.usage.filterSearch', { query: search.trim() }) : '', favoriteOnly ? t('records.page.favoriteOnly') : ''].filter(Boolean).join(' · ') }) : '';
+  const headMeta = [scopeLabel, filterNote].filter(Boolean).join(' · ') || t('records.usage.overviewSubtitle');
 
   return <div className={styles.dashboard} data-loading={loading || undefined} aria-busy={loading || undefined}>
-    <div className={styles.overviewHead}><div><h2>{t('records.usage.title')}</h2><p>{search.trim() || favoriteOnly ? t('records.usage.filtered', { parts: [search.trim() ? t('records.usage.filterSearch', { query: search.trim() }) : '', favoriteOnly ? t('records.page.favoriteOnly') : ''].filter(Boolean).join(' · ') }) : t('records.usage.overviewSubtitle')}</p></div>
+    <div className={styles.overviewHead}>
+      <div className={styles.overviewTitle}>
+        <h2>{t('records.usage.title')}</h2>
+        <span className={styles.overviewMeta}>{headMeta}</span>
+      </div>
       <div className={styles.overviewActions}>
+        <span className={styles.freshness}>
+          {scanning || loading ? <><span className="spinner" aria-hidden="true" />{scanning ? t('records.page.syncing') : t('records.usage.updating')}</> : scanned ? t('records.usage.updatedAt', { time: clockTime(scanned) }) : t('records.usage.notScanned')}
+        </span>
         {onOpenConnections && <Button variant="ghost" size="sm" icon={<Icon name="connections" size={14} />} onClick={onOpenConnections}>{t('records.usage.liveQuotas')}</Button>}
         <Button variant="ghost" size="sm" icon={<Icon name="settings" size={14} />} onClick={() => openPrice()}>{t('records.usage.priceSettings')}</Button>
       </div>
@@ -369,12 +379,6 @@ export function UsageDashboard({ search, onSearchChange, favoriteOnly, onClearSe
         {projectId && <button type="button" className={styles.chip} title={t('records.page.chipTitle')} onClick={() => setProjectId('')}><span>{t('records.page.chipProject', { name: projectId === '__unknown__' ? t('records.page.noProject') : projects.find((item) => item.id === projectId)?.name ?? projectId })}</span><Icon name="close" size={12} /></button>}
         <Button variant="ghost" size="sm" onClick={() => { setToolId(''); setModel(''); setProjectId(''); onClearSearch(); onClearFavoriteOnly(); }}>{t('records.usage.clearFilters')}</Button>
       </span>}
-    </div>
-    <div className={styles.subhead}>
-      <p>{rangeCaption(report, range, now)}</p>
-      <p className={styles.freshness}>
-        {scanning || loading ? <><span className="spinner" aria-hidden="true" />{scanning ? t('records.page.syncing') : t('records.usage.updating')}</> : scanned ? t('records.usage.updatedAt', { time: clockTime(scanned) }) : t('records.usage.notScanned')}
-      </p>
     </div>
 
     {report && totals && showBoundary && <div className={styles.boundary} role="group" aria-label={t('records.usage.boundaryAria')}>

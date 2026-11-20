@@ -1601,3 +1601,90 @@ test('usage dashboard header bridges to live CLI quotas on the tools page', asyn
   await quotasLink.click();
   await expect(page.getByRole('region', { name: '工具' })).toBeVisible();
 });
+
+test('records detail header stays compact and usage KPI cards with primary charts fit above the fold at 1360px', async ({ page }) => {
+  await page.setViewportSize({ width: 1360, height: 850 });
+  await page.addInitScript((report) => {
+    const session = { id: 'compact-a', toolId: 'codex', nativeId: '1111-2222', title: 'Compact reading layout check', cwd: 'C:\\project\\cliora', model: 'gpt-6-astra', projectId: null, startedAt: 1790668800000, updatedAt: 1790668800000, favorite: false, partial: false, stale: false, messageCount: 2, usageCount: 1 };
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: true, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_projects' || command === 'list_history_prices' || command === 'refresh_history') return [];
+        if (command === 'list_history_scans') return [{ toolId: 'codex', scannedAt: Date.now(), sourceCount: 1, failedCount: 0, incomplete: false, detail: '' }];
+        if (command === 'list_history_sessions') return [session];
+        if (command === 'get_history_session') return {
+          session,
+          messages: [
+            { id: 'm1', role: 'user', text: 'Check above-the-fold reading height.', timestamp: 1790668800000 },
+            { id: 'm2', role: 'assistant', text: 'Transcript starts higher when the header is compact.', timestamp: 1790668801000 },
+          ],
+          usage: [],
+          resumeReason: null,
+        };
+        if (command === 'copy_history_resume_command') return "codex resume '1111-2222'";
+        if (command === 'get_usage_report') return report;
+        if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+        if (command.startsWith('plugin:event|')) return 1;
+        return null;
+      } },
+    });
+  }, todayReport());
+
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
+  await expect(page.getByRole('heading', { name: 'Compact reading layout check' })).toBeVisible();
+
+  const detailMetrics = await page.evaluate(() => {
+    const detailBar = document.querySelector<HTMLElement>('[class*="detailBar"]');
+    const transcript = document.querySelector<HTMLElement>('[aria-label="会话正文"]');
+    const recordsRegion = document.querySelector<HTMLElement>('[aria-label="记录内容"]');
+    return {
+      detailBarHeight: detailBar ? Math.round(detailBar.getBoundingClientRect().height) : 0,
+      transcriptTop: transcript ? Math.round(transcript.getBoundingClientRect().top) : 0,
+      nestedToastStacks: recordsRegion ? recordsRegion.querySelectorAll('.toast-stack').length : -1,
+      overflowX: document.documentElement.scrollWidth > window.innerWidth,
+    };
+  });
+  expect(detailMetrics.detailBarHeight).toBeGreaterThan(0);
+  expect(detailMetrics.detailBarHeight).toBeLessThanOrEqual(140);
+  expect(detailMetrics.transcriptTop).toBeLessThanOrEqual(340);
+  expect(detailMetrics.nestedToastStacks).toBe(0);
+  expect(detailMetrics.overflowX).toBe(false);
+
+  await page.getByRole('tab', { name: '用量', exact: true }).click();
+  const summary = page.getByRole('region', { name: '用量概览' });
+  await expect(summary).toBeVisible();
+  const chart = page.getByRole('group', { name: /用量趋势/ });
+  await expect(chart).toBeVisible();
+  const composition = page.getByRole('group', { name: 'token 构成' });
+  await expect(composition).toBeVisible();
+
+  const usageMetrics = await page.evaluate(() => {
+    const summaryEl = document.querySelector<HTMLElement>('[aria-label="用量概览"]');
+    const chartEl = document.querySelector<HTMLElement>('[role="group"][aria-label*="用量趋势"]');
+    const compEl = document.querySelector<HTMLElement>('[role="group"][aria-label="token 构成"]');
+    const boundaryEl = document.querySelector<HTMLElement>('[role="group"][aria-label="数据边界"]');
+    return {
+      viewportHeight: window.innerHeight,
+      summaryBottom: summaryEl ? Math.round(summaryEl.getBoundingClientRect().bottom) : 0,
+      chartTop: chartEl ? Math.round(chartEl.getBoundingClientRect().top) : 0,
+      chartBottom: chartEl ? Math.round(chartEl.getBoundingClientRect().bottom) : 0,
+      compTop: compEl ? Math.round(compEl.getBoundingClientRect().top) : 0,
+      boundaryVisible: !!boundaryEl && boundaryEl.getBoundingClientRect().height > 0,
+      overflowX: document.documentElement.scrollWidth > window.innerWidth,
+    };
+  });
+  expect(usageMetrics.boundaryVisible).toBe(true);
+  expect(usageMetrics.summaryBottom).toBeLessThan(usageMetrics.viewportHeight);
+  expect(usageMetrics.chartTop).toBeLessThan(560);
+  expect(usageMetrics.chartBottom).toBeLessThanOrEqual(usageMetrics.viewportHeight);
+  expect(usageMetrics.compTop).toBeLessThan(560);
+  expect(usageMetrics.overflowX).toBe(false);
+
+  await page.setViewportSize({ width: 720, height: 850 });
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});

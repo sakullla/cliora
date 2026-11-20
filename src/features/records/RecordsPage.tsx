@@ -13,7 +13,7 @@ import { displayPath } from '../../lib/paths';
 import { FilterSelect } from '../../components/FilterSelect';
 import { SearchField } from '../../components/SearchField';
 import { ToastStack } from '../../components/Toast';
-import { useToasts } from '../../lib/toast';
+import { useToastContext, useToasts } from '../../lib/toast';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
 import { EmptyState } from '../../components/EmptyState';
@@ -201,7 +201,9 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent
   const scanningRef = useRef(false);
   const backgroundScanningRef = useRef(false);
   const lastScan = useRef(0);
-  const toasts = useToasts();
+  const sharedToasts = useToastContext();
+  const localToasts = useToasts();
+  const toasts = sharedToasts ?? localToasts;
   const [copyFlash, setCopyFlash] = useState(0);
   const [cwdCopied, setCwdCopied] = useState(0);
   useEffect(() => {
@@ -756,7 +758,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent
     </div>}<Button className={styles.refresh} size="sm" icon={<Icon name="refresh" size={16} />} loading={scanning || (remoteTargetId !== 'local' && filterLoading)} disabled={backgroundScanning} aria-label={t(remoteTargetId === 'local' ? 'records.page.refreshAria' : 'records.page.remoteRefreshAria')} onClick={() => void refresh()}><span>{scanning || (remoteTargetId !== 'local' && filterLoading) ? t('records.page.refreshing') : t('records.page.refresh')}</span></Button></div>
     {scanning && scanMode === 'manual' && <p className={styles.caveat} role="status">{t('records.page.scanning', { tool: tools.find(item => item.id === scanProgress?.toolId)?.name ?? scanProgress?.toolId ?? '', progress: scanProgress?.totalSources ? `${scanProgress.completedSources} / ${scanProgress.totalSources}` : t('records.page.discovering') })}<span className={styles.progress} aria-hidden="true"><span style={scanProgress?.totalSources ? { width: `${Math.min(100, (scanProgress.completedSources / scanProgress.totalSources) * 100)}%` } : undefined} data-indeterminate={!scanProgress?.totalSources || undefined} /></span><Button size="sm" onClick={() => void cancelScan()}>{t('records.page.stopScan')}</Button></p>}
     {remoteTargetId !== 'local' && (filterLoading || remoteCancelled) && <div className={styles.remoteProgress} role="status"><span>{filterLoading ? t(remoteSlow ? 'records.page.remoteSlowHint' : 'records.page.remoteLoadingHint') : t('records.page.remoteCancelled')}</span><Button size="sm" variant="ghost" onClick={filterLoading ? cancelRemoteRead : () => void refresh()}>{t(filterLoading ? 'records.page.cancelRemoteRead' : 'records.page.retryList')}</Button></div>}
-    <ToastStack status={toasts.notice} alert={toasts.error} onDismiss={toasts.dismiss} />
+    {!sharedToasts && <ToastStack status={toasts.notice} alert={toasts.error} onDismiss={toasts.dismiss} />}
     <div className={styles.columns} id="records-sessions-panel" role="tabpanel" aria-labelledby="records-sessions-tab" hidden={tab !== 'sessions'}>
       <aside className={styles.sessionLibrary} aria-label={t('records.page.libraryAria')}>
         <div className={styles.filters}>
@@ -786,7 +788,6 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent
         <button type="button" className={styles.backToList} onClick={() => { setMobileDetail(false); if (selectedId) requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(`[data-session-id="${CSS.escape(selectedId)}"]`)?.focus()); }}>{t('records.page.backToList')}</button>
         {selected ? <>
         <div className={styles.detailBar}>
-        <div className={styles.detailEyebrow}><ToolIcon toolId={selected.session.toolId} size={18} /><span>{toolName(selected.session.toolId)}</span><span className={styles.modelBadge}>{selected.session.model ?? t('records.page.modelUnknown')}</span>{remoteTargetId === 'local' && !openedChild && <button type="button" disabled={favoriteBusy} data-active={selected.session.favorite || undefined} aria-pressed={selected.session.favorite} onClick={() => void favorite()} aria-label={selected.session.favorite ? t('records.page.unfavoriteAria') : t('records.page.favoriteAria')}>{selected.session.favorite ? t('records.page.favoritedStar') : t('records.page.favoriteStar')}</button>}</div>
         {openedChild && openedTrail ? <nav className={styles.childTrail} aria-label={t('records.association.trail')}>
           <button type="button" onClick={() => setChildPath([])}>{selected.session.title || t('records.page.untitled')}</button>
           {openedTrail.map((node, index) => {
@@ -798,8 +799,16 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent
             </span>;
           })}
         </nav> : null}
-        <div className={styles.detailHead}><h2 title={openedChild ? childTitle(openedChild.name, t('records.association.unnamed')) : selected.session.title}>{openedChild ? childTitle(openedChild.name, t('records.association.unnamed')) : (selected.session.title || t('records.page.untitled'))}</h2></div>
-        {!openedChild && <div className={styles.detailMeta}>{selected.session.cwd ? <button type="button" className={styles.cwdChip} data-copied={cwdCopied > 0 || undefined} title={`${displayPath(selected.session.cwd)} · ${t('records.page.copyPath')}`} onClick={() => void writeClipboard(displayPath(selected.session.cwd!)).then((ok) => { if (ok) setCwdCopied((value) => value + 1); })}><Icon name={cwdCopied > 0 ? 'check' : 'folder'} size={13} /><span>{cwdCopied > 0 ? t('records.page.pathCopied') : (projects.find((item) => item.id === selected.session.projectId)?.name ?? selected.session.cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? t('records.page.cwdUnknown'))}</span></button> : <span><Icon name="folder" size={14} />{projects.find((item) => item.id === selected.session.projectId)?.name ?? t('records.page.cwdUnknown')}</span>}<time title={day(selected.session.updatedAt)}>{t('records.page.updated', { time: compactDay(selected.session.updatedAt) })}</time></div>}
+        <div className={styles.detailHead}>
+          <h2 title={openedChild ? childTitle(openedChild.name, t('records.association.unnamed')) : selected.session.title}>{openedChild ? childTitle(openedChild.name, t('records.association.unnamed')) : (selected.session.title || t('records.page.untitled'))}</h2>
+          {remoteTargetId === 'local' && !openedChild && <button type="button" className={styles.favoriteBtn} disabled={favoriteBusy} data-active={selected.session.favorite || undefined} aria-pressed={selected.session.favorite} onClick={() => void favorite()} aria-label={selected.session.favorite ? t('records.page.unfavoriteAria') : t('records.page.favoriteAria')}>{selected.session.favorite ? t('records.page.favoritedStar') : t('records.page.favoriteStar')}</button>}
+        </div>
+        <div className={styles.detailMeta}>
+          <span className={styles.toolTag}><ToolIcon toolId={selected.session.toolId} size={15} /><span>{toolName(selected.session.toolId)}</span></span>
+          <span className={styles.modelBadge}>{selected.session.model ?? t('records.page.modelUnknown')}</span>
+          {!openedChild && (selected.session.cwd ? <button type="button" className={styles.cwdChip} data-copied={cwdCopied > 0 || undefined} title={`${displayPath(selected.session.cwd)} · ${t('records.page.copyPath')}`} onClick={() => void writeClipboard(displayPath(selected.session.cwd!)).then((ok) => { if (ok) setCwdCopied((value) => value + 1); })}><Icon name={cwdCopied > 0 ? 'check' : 'folder'} size={13} /><span>{cwdCopied > 0 ? t('records.page.pathCopied') : (projects.find((item) => item.id === selected.session.projectId)?.name ?? selected.session.cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? t('records.page.cwdUnknown'))}</span></button> : <span><Icon name="folder" size={13} />{projects.find((item) => item.id === selected.session.projectId)?.name ?? t('records.page.cwdUnknown')}</span>)}
+          {!openedChild && <time title={day(selected.session.updatedAt)}>{t('records.page.updated', { time: compactDay(selected.session.updatedAt) })}</time>}
+        </div>
         {!openedChild && !listError && activeFilters.length > 0 && <p className={styles.detailScope}><Icon name="sliders" size={14} /><span>{t('records.page.readerScope', { count: sessions.length, total: Math.max(unfilteredTotal, sessions.length) })}</span><button type="button" onClick={clearAllFilters}>{t('records.page.clearAll')}</button></p>}
         {!openedChild && (selected.session.partial || selected.session.stale) && <p className={styles.caveat}>{t('records.page.partialCaveat')}</p>}
         {openedChild ? <div className={styles.resume}><button type="button" onClick={() => setChildPath((path) => path.slice(0, -1))}>{t('records.association.back')}</button></div> : remoteTargetId !== 'local' ? (selected.session.cwd ? <p className={styles.fullPath}>{displayPath(selected.session.cwd)}</p> : null) : <div className={styles.resume}>

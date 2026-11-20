@@ -2,8 +2,8 @@
 .filter[data-variant="select"] { flex-wrap: nowrap; gap: var(--space-1); }
 .select { width: auto; min-width: 120px; }
 .select :global(button) { min-height: var(--control-h-sm); }
-.presets { display: flex; flex-wrap: wrap; gap: var(--space-1); padding: var(--space-1); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
-.presets button { min-height: 30px; padding: 0 var(--space-3); border: 1px solid transparent; border-radius: var(--radius-sm); color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); background: transparent; box-shadow: none; white-space: nowrap; }
+.presets { display: flex; flex-wrap: wrap; gap: var(--space-0_5); padding: var(--space-0_5); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.presets button { min-height: 28px; padding: 0 var(--space-2_5); border: 1px solid transparent; border-radius: var(--radius-sm); color: var(--text-2); font-size: var(--fs-control); font-weight: var(--fw-regular); background: transparent; box-shadow: none; white-space: nowrap; }
 .presets button[aria-checked="true"] { color: var(--accent); border-color: var(--accent-line); background: var(--surface); box-shadow: var(--shadow-xs); }
 .selectedRange { min-width: 0; min-height: 28px; padding: var(--space-1); border: 0; color: var(--text); background: none; box-shadow: none; font-size: var(--fs-body); font-weight: var(--fw-regular); white-space: nowrap; }
 :global(.guide-dialog):has(.calendar) { width: min(420px, calc(100vw - var(--space-8))); }
