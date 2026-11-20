@@ -203,10 +203,10 @@ test('non-running toolbar collapses, narrow/compact stage and status bars do not
     await expect.poll(() => footer.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
   }
 
-  // Switching to an ended session collapses .runningActions with display:none.
+  // Switching to an ended session hides .runningActions without shifting title/chip geometry.
   await page.setViewportSize({ width: 1360, height: 800 });
   await page.getByRole('tab', { name: /Claude Code/ }).click();
   const runningActions = bar.locator('[class*="runningActions"]');
-  await expect.poll(() => runningActions.evaluate((el) => getComputedStyle(el).display)).toBe('none');
-  await expect.poll(() => runningActions.evaluate((el) => el.getBoundingClientRect().width)).toBe(0);
+  await expect.poll(() => runningActions.evaluate((el) => getComputedStyle(el).visibility)).toBe('hidden');
+  await expect.poll(() => runningActions.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe('none');
 });

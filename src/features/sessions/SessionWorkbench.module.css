@@ -530,7 +530,8 @@
 .exitTag { background: var(--danger-soft); color: var(--danger); font-variant-numeric: tabular-nums; }
 .paneTag { background: var(--accent-soft); color: var(--accent); font-variant-numeric: tabular-nums; }
 .pinBadge { display: inline-flex; flex: none; color: var(--accent); }
-.rowActions { position: absolute; top: 50%; right: 6px; display: flex; align-items: center; gap: 1px; opacity: 0; transform: translateY(-50%); transition: opacity var(--fast) var(--ease); pointer-events: none; }
+.rowActions { position: absolute; top: 50%; right: 6px; z-index: 1; display: flex; align-items: center; gap: 1px; opacity: 0; transform: translateY(-50%); transition: opacity var(--fast) var(--ease); pointer-events: none; }
+.row[data-selected] .rowActions { pointer-events: auto; }
 .row:hover .rowActions,
 .row:focus-within .rowActions { opacity: 1; pointer-events: auto; }
 .rowActions .rowMenuBtn[data-size],
@@ -898,9 +899,11 @@
 .terminalActions .toolButton[data-variant]:active:not(:disabled) { background: var(--term-press); }
 .terminalActions .toolButton[aria-pressed='true'][data-variant],
 .terminalActions .toolButton[aria-expanded='true'][data-variant] { background: color-mix(in srgb, var(--term-accent) 14%, transparent); color: var(--term-accent); }
-.runningActions:not([data-running]) { display: none; }
-.runningActions:not([data-running]):first-child + .actionGroup { margin-left: 0; padding-left: 0; }
-.runningActions:not([data-running]):first-child + .actionGroup::before { display: none; }
+.runningActions:not([data-running]) { visibility: hidden; pointer-events: none; }
+.runningActions:not([data-running]) + .actionGroup::before { visibility: hidden; }
+/* The hidden group keeps its width so the tools never jump, but the well only frames what is visible. */
+.terminalActions:has(> .runningActions:not([data-running])) { background: transparent; box-shadow: none; }
+.terminalActions:has(> .runningActions:not([data-running])) > .actionGroup:last-child { margin-block: calc(var(--space-0_75) * -1); margin-right: calc(var(--space-0_75) * -1); padding: var(--space-0_75); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--term-raise) 78%, var(--term-chrome)); box-shadow: inset 0 0 0 1px var(--term-line), 0 1px 2px color-mix(in srgb, var(--term-shadow) 45%, transparent); }
 /* Quick input is the everyday action: crisp accent-tinted pill integrated cleanly inside the tray. */
 .terminalActions .composerTrigger[data-variant] { gap: var(--space-1_5); padding: 0 var(--space-2_5); background: color-mix(in srgb, var(--term-accent) 11%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--term-accent) 22%, transparent); color: var(--term-accent); }
 .terminalActions .composerTrigger[data-variant]:hover:not(:disabled) { background: color-mix(in srgb, var(--term-accent) 17%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--term-accent) 32%, transparent); color: var(--term-accent); }
@@ -1998,8 +2001,6 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .root[data-compact] .terminalActions { padding: 0; }
 .root[data-compact] .actionGroup { gap: 0; }
 .root[data-compact] .actionGroup + .actionGroup { margin-left: var(--space-1); padding-left: var(--space-1); }
-.root[data-tight] .runningActions:not([data-running]):first-child + .actionGroup,
-.root[data-compact] .runningActions:not([data-running]):first-child + .actionGroup { margin-left: 0; padding-left: 0; }
 .root[data-compact] .stageTail .endBtn[data-variant] { margin-left: var(--space-1_5); }
 .root[data-compact] .terminalActions .toolButton[data-size] { width: 26px; }
 .root[data-compact] .composerTrigger[data-size] { width: 26px; padding: 0; }
