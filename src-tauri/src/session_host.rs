@@ -1073,29 +1073,33 @@ impl RemoteControlParser {
     }
 
     fn push(&mut self, bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
-        if self.pending.is_empty() && (self.signals.is_empty() || !bytes.contains(&0x1b)) {
-            return (bytes.to_vec(), Vec::new());
+        // Keep only an unfinished marker between reads. Ordinary ANSI output
+        // can go straight to the coalescer in the same allocation.
+        let mut output = std::mem::take(&mut self.pending);
+        output.extend_from_slice(bytes);
+        if self.signals.is_empty() || (!output.ends_with(b"\x1b") && memchr::memmem::find(&output, b"\x1b]").is_none()) {
+            return (output, Vec::new());
         }
-        self.pending.extend_from_slice(bytes);
-        let mut output = Vec::with_capacity(self.pending.len());
+
         let mut states = Vec::new();
+        let mut written = 0;
         let mut cursor = 0;
-        while cursor < self.pending.len() {
-            let rest = &self.pending[cursor..];
+        while cursor < output.len() {
+            let rest = &output[cursor..];
             if let Some((signal, state)) = self.signals.iter().find(|(signal, _)| rest.starts_with(signal)) {
                 states.push(*state);
                 cursor += signal.len();
             } else if self.signals.iter().any(|(signal, _)| signal.starts_with(rest)) {
+                self.pending.extend_from_slice(rest);
                 break;
             } else {
-                // Only ESC can begin a control signal. Copy ordinary output in
-                // spans instead of comparing every byte with every signal.
                 let length = 1 + memchr::memchr(0x1b, &rest[1..]).unwrap_or(rest.len() - 1);
-                output.extend_from_slice(&rest[..length]);
+                if written != cursor { output.copy_within(cursor..cursor + length, written); }
+                written += length;
                 cursor += length;
             }
         }
-        self.pending.drain(..cursor);
+        output.truncate(written);
         (output, states)
     }
 }
@@ -1537,6 +1541,18 @@ mod remote_state_tests {
         let other = b"\x1b]777;cliora;cliora-other;ready\x07\x1b[6n";
         assert_eq!(parser.push(other), (other.to_vec(), vec![]));
         assert_eq!(parser.push(b"\x1b]777;cliora;cliora-test;ended\x07").1, [REMOTE_ENDED]);
+    }
+
+    #[test]
+    fn control_parser_only_retains_a_partial_marker_after_a_large_read() {
+        let mut parser = RemoteControlParser::new(Some("cliora-test"));
+        let text = "\x1b[32m中文\x1b[0m".repeat(2048);
+        let suffix = b"\x1b]777;cliora;";
+        let chunk = [text.as_bytes(), suffix].concat();
+        assert_eq!(parser.push(&chunk), (text.into_bytes(), vec![]));
+        assert_eq!(parser.pending, suffix);
+        assert!(parser.pending.capacity() <= parser.signals.iter().map(|(signal, _)| signal.len()).max().unwrap());
+        assert_eq!(parser.push(b"cliora-test;ready\x07ok"), (b"ok".to_vec(), vec![CONNECTED]));
     }
 
     #[test]

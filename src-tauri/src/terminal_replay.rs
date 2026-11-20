@@ -74,9 +74,15 @@ impl Default for ModeTracker {
 }
 
 impl ModeTracker {
-    pub fn feed(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            self.step(byte);
+    pub fn feed(&mut self, mut bytes: &[u8]) {
+        while !bytes.is_empty() {
+            if self.at_boundary() {
+                // Ordinary text cannot change a replay mode.
+                let Some(start) = memchr::memchr2(0x1b, 0x9b, bytes) else { break };
+                bytes = &bytes[start..];
+            }
+            self.step(bytes[0]);
+            bytes = &bytes[1..];
         }
     }
 
@@ -175,8 +181,7 @@ impl ModeTracker {
     }
 
     fn apply_private(&mut self, enabled: bool) {
-        let params = std::mem::take(&mut self.params);
-        for part in params.split(|byte| *byte == b';' || *byte == b':') {
+        for part in self.params.split(|byte| *byte == b';' || *byte == b':') {
             let Some(mode) = std::str::from_utf8(part).ok().and_then(|text| text.parse::<u16>().ok()) else { continue };
             if ALT_SCREEN_MODES.contains(&mode) {
                 if enabled {
