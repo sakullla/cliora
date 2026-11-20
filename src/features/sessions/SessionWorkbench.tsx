@@ -33,7 +33,7 @@ import { SessionTerminal, cleanTerminalTitle, encodeBase64, type OutputChunk, ty
 import { PendingTerminalOutput } from './pendingOutput';
 import { SessionActivityIcon, sessionBadgeTone } from './SessionActivityIcon';
 import type { TerminalTheme } from './terminalTheme';
-import { TERMINAL_FONT_SIZE_DEFAULT, TERMINAL_FONT_SIZE_MAX, TERMINAL_FONT_SIZE_MIN, TERMINAL_LINE_HEIGHT, getTerminalPreferences, setTerminalCursorBlink, setTerminalDensity, setTerminalFontSize, setTerminalSoundEnabled, setTerminalThemePreference, useTerminalPreferences, type TerminalDensity, type TerminalThemePreference } from '../../lib/terminalPreferences';
+import { TERMINAL_FONT_SIZE_DEFAULT, TERMINAL_FONT_SIZE_MAX, TERMINAL_FONT_SIZE_MIN, TERMINAL_LINE_HEIGHT, getTerminalPreferences, setTerminalCursorBlink, setTerminalDensity, setTerminalFontSize, setTerminalScrollSpeed, setTerminalSoundEnabled, setTerminalThemePreference, useTerminalPreferences, type TerminalDensity, type TerminalScrollSpeed, type TerminalThemePreference } from '../../lib/terminalPreferences';
 import { PlaceLabel, SessionRail, type RailSession, type SessionTone } from './SessionRail';
 import { remoteSessionMayExist, sessionConfirmedEnded } from './sessionState';
 import { placeParts, railPlace, railTaskTitle } from './railTitle';
@@ -518,7 +518,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [railSearch, setRailSearch] = useState('');
   const [arrangement, setArrangement] = useState<RailArrangement>(readRailArrangement);
   const terminalPrefs = useTerminalPreferences();
-  const { fontSize, soundEnabled, cursorBlink, density } = terminalPrefs;
+  const { fontSize, soundEnabled, cursorBlink, density, scrollSpeed } = terminalPrefs;
   const themePreference = terminalPrefs.theme;
   const [appTheme, setAppTheme] = useState<TerminalTheme>(currentAppTheme);
   const [split, setSplit] = useState<[string, string] | null>(null);
@@ -1027,8 +1027,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     formatError: (error) => formatFailure(error, t('sessions.pasteFilesFailedTitle'), t('common.nativeError.retry')),
   });
   // Ended sessions keep their xterm buffers alive; mounting only the running, selected,
-  // and recently selected terminals bounds that memory. Re-selecting remounts from replay.
-  const MOUNTED_ENDED_LIMIT = 3;
+  // and most recently selected terminal bounds WebView memory. Re-selecting remounts from replay.
+  const MOUNTED_ENDED_LIMIT = 1;
   const [recentSessionIds, setRecentSessionIds] = useState<string[]>([]);
   useEffect(() => {
     if (!selectedId) return;
@@ -1723,6 +1723,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
 
   const updateDensity = useCallback((next: TerminalDensity) => setTerminalDensity(next), []);
+  const updateScrollSpeed = useCallback((next: TerminalScrollSpeed) => setTerminalScrollSpeed(next), []);
 
   const toggleEndedCollapsed = useCallback(() => {
     setEndedCollapsed((current) => {
@@ -1851,6 +1852,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setAttentionIds((current) => { if (!current.has(id)) return current; const next = new Set(current); next.delete(id); return next; });
     setUnreadIds((current) => toggleInSet(current, id, false));
     setGitContexts((current) => { if (!current.has(id)) return current; const next = new Map(current); next.delete(id); return next; });
+    setReviewStates((current) => { if (!current.has(id)) return current; const next = new Map(current); next.delete(id); return next; });
+    setCodeStatuses((current) => { if (!current.has(id)) return current; const next = new Map(current); next.delete(id); return next; });
+    setCodeStatusUnknown((current) => { if (!current.has(id)) return current; const next = new Map(current); next.delete(id); return next; });
+    setCodeStatusReviews((current) => { if (!current.has(id)) return current; const next = new Map(current); next.delete(id); return next; });
     setComposerDrafts((current) => {
       if (!(id in current)) return current;
       const next = { ...current };
@@ -3577,7 +3582,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   const canResume = !remotePane && tools.some(tool => tool.id === session.toolId && tool.resume?.state === 'available' && tool.history?.state === 'available');
                   // Clipboard files use the same queue; local sessions retain staged files.
                   const peeking = peekSessionId === session.id;
-                  return <SessionTerminal key={session.id} sessionId={session.id} toolId={session.toolId} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} suspendInput={!!peekSession && session.id === selectedId} peeking={peeking} keepRendererWarm={renderActive && scopedSessionIds.has(session.id)} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onFilesPaste={(inputs) => uploads.enqueueUpload(session.id, remotePane || null, inputs)} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={TERMINAL_LINE_HEIGHT[density]} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
+                  return <SessionTerminal key={session.id} sessionId={session.id} toolId={session.toolId} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} suspendInput={!!peekSession && session.id === selectedId} peeking={peeking} keepRendererWarm={renderActive && scopedSessionIds.has(session.id)} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onFilesPaste={(inputs) => uploads.enqueueUpload(session.id, remotePane || null, inputs)} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={TERMINAL_LINE_HEIGHT[density]} scrollSpeed={scrollSpeed} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
                     header={split && visible ? <div className={styles.paneHead}>
                       <SessionActivityIcon tone={sessionTone(session)} slot="pane" className={styles.paneDot} label={stateLabel(session, sessionTone(session))} />
                       <ToolIcon toolId={session.toolId} size={14} />
@@ -3714,7 +3719,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                 {scrolledIds.has(current.id) && <Badge className={styles.statusBadge} tone="warning"><Icon name="arrowUp" size={12} />{t('sessions.scrolledBack')}</Badge>}
                 {split && <span className={styles.statusItem} data-tone="accent"><Icon name="columns" size={12} />{t('sessions.splitView')}</span>}
                 <span className={styles.statusTools}>
-                  <TerminalAppearance open={appearanceOpen} theme={themePreference} fontSize={fontSize} defaultFontSize={TERMINAL_FONT_SIZE_DEFAULT} minFontSize={TERMINAL_FONT_SIZE_MIN} maxFontSize={TERMINAL_FONT_SIZE_MAX} density={density} cursorBlink={cursorBlink} soundEnabled={soundEnabled} onToggle={() => { setMenu(null); setShortcutsOpen(false); setAppearanceOpen((value) => !value); }} onClose={closeAppearance} onTheme={setTerminalTheme} onFontSize={updateFontSize} onDensity={updateDensity} onCursorBlink={toggleCursorBlink} onSound={toggleSound} />
+                  <TerminalAppearance open={appearanceOpen} theme={themePreference} fontSize={fontSize} defaultFontSize={TERMINAL_FONT_SIZE_DEFAULT} minFontSize={TERMINAL_FONT_SIZE_MIN} maxFontSize={TERMINAL_FONT_SIZE_MAX} density={density} scrollSpeed={scrollSpeed} cursorBlink={cursorBlink} soundEnabled={soundEnabled} onToggle={() => { setMenu(null); setShortcutsOpen(false); setAppearanceOpen((value) => !value); }} onClose={closeAppearance} onTheme={setTerminalTheme} onFontSize={updateFontSize} onDensity={updateDensity} onScrollSpeed={updateScrollSpeed} onCursorBlink={toggleCursorBlink} onSound={toggleSound} />
                   <WorkbenchShortcuts open={shortcutsOpen} onToggle={() => { setAppearanceOpen(false); setShortcutsOpen((value) => !value); }} onClose={closeShortcuts} />
                 </span>
               </footer>}

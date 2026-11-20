@@ -1,16 +1,17 @@
 .block { display: grid; gap: var(--space-3); min-width: 0; }
 .heading { min-height: var(--control-h-sm); }
-.browser { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-3_5) var(--space-4) var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-card); }
+.browser { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-4) var(--space-4_5, var(--space-4)) var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-card); }
 
 /* Header: the project switcher is the title; one primary action and a menu sit opposite. */
-.header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); min-width: 0; }
+.header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); min-width: 0; padding-bottom: var(--space-3); border-bottom: 1px solid var(--line); }
 .titleBlock { display: flex; align-items: center; gap: var(--space-2_5); min-width: 0; }
 .select { flex: 0 1 auto; width: auto; min-width: 0; max-width: 320px; }
 .meta { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; color: var(--text-3); font-size: var(--fs-caption); white-space: nowrap; }
 .meta > span + span::before { content: '·'; margin-inline-end: var(--space-2); color: var(--line-strong); }
-.linked { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--accent); }
+.linked { display: inline-flex; align-items: center; gap: var(--space-1); padding: 1px var(--space-2); border: 1px solid var(--accent-line); border-radius: var(--radius-pill); background: var(--accent-soft); color: var(--accent); font-size: var(--fs-micro); font-weight: var(--fw-medium); line-height: 18px; }
+.meta > .linked::before { display: none; }
 .root { display: inline-flex; align-items: center; gap: var(--space-1); min-width: 0; color: var(--text-3); }
-.root > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); white-space: nowrap; }
+.root > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); font-size: var(--fs-micro); white-space: nowrap; }
 .meta { overflow: hidden; }
 .headerActions { display: flex; flex: none; align-items: center; gap: var(--space-1_5); }
 
@@ -26,21 +27,63 @@
 .dot { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--danger); }
 .toolPick { flex: 0 0 160px; }
 .matchCount { flex: none; color: var(--text-3); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.viewSwitch { display: inline-flex; flex: none; align-items: center; gap: 2px; height: var(--control-h); padding: 3px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.viewSwitch button { display: grid; place-items: center; width: 28px; height: 28px; min-height: 28px; padding: 0; border: 0; border-radius: calc(var(--radius) - 3px); background: transparent; color: var(--text-3); box-shadow: none; transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease); }
+.viewSwitch button:hover:not(:disabled) { color: var(--text); background: transparent; box-shadow: none; }
+.viewSwitch button[aria-pressed="true"] { background: var(--surface); color: var(--accent); box-shadow: var(--shadow-pill-active); }
 
-/* Repository rows: one line each, quiet until hovered. */
-.list { display: grid; grid-auto-rows: max-content; max-height: 440px; overflow: auto; overscroll-behavior: contain; margin: 0 calc(var(--space-2) * -1); }
+/* Smart prefix quick-filter bar for large multi-repo projects (12+ repositories). */
+.groupBar { display: flex; flex-wrap: nowrap; align-items: center; gap: var(--space-1_5); min-width: 0; padding: 2px 0; overflow-x: auto; scrollbar-width: none; }
+.groupBar::-webkit-scrollbar { display: none; }
+.groupChip { display: inline-flex; flex: none; align-items: center; gap: var(--space-1_5); height: 26px; min-height: 26px; padding: 0 var(--space-2_5); border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface-2); color: var(--text-2); font-size: var(--fs-micro); font-weight: var(--fw-medium); white-space: nowrap; box-shadow: none; transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease); }
+.groupChip:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface); color: var(--text); box-shadow: none; }
+.groupChip[aria-pressed="true"] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); font-weight: var(--fw-semibold); }
+.groupChip em { padding: 0 5px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--text-3); font-style: normal; font-size: 10px; font-variant-numeric: tabular-nums; line-height: 16px; }
+.groupChip[aria-pressed="true"] em { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+
+/* Repository rows: crisp scannable rhythm, quiet until hovered, generous viewport for large projects. */
+.list { display: grid; grid-auto-rows: max-content; max-height: min(540px, 58vh); overflow: auto; overscroll-behavior: contain; margin: 0 calc(var(--space-2) * -1); padding-right: 2px; scrollbar-width: thin; }
 /* Identity (name, and only the detail that tells a row apart) on the left; the worktree picker and
    actions stay in fixed tracks on the right so every row lines up at every width. */
-.row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; align-content: center; column-gap: var(--space-3); row-gap: 0; min-height: 44px; padding: var(--space-1_5) var(--space-2); border-radius: var(--radius); transition: background-color var(--fast) var(--ease); }
+.row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; align-content: center; column-gap: var(--space-3); row-gap: 0; min-height: 44px; padding: var(--space-1_5) var(--space-2_5); border-radius: var(--radius); transition: background-color var(--fast) var(--ease); }
+.row + .row::before { content: ''; position: absolute; top: 0; right: var(--space-2_5); left: var(--space-2_5); height: 1px; background: color-mix(in srgb, var(--line) 60%, transparent); pointer-events: none; transition: opacity var(--fast) var(--ease); }
+.row:hover::before, .row:focus-within::before, .row:hover + .row::before, .row:focus-within + .row::before { opacity: 0; }
+.row[data-favorite] { background: color-mix(in srgb, var(--warning-soft) 35%, transparent); }
 .row > .name { grid-column: 1; grid-row: 1; }
 .row > .path { grid-column: 1; grid-row: 2; }
 .row:not([data-detail]) > .name { grid-row: 1 / span 2; }
-.row > .place, .row > .placeholder { grid-column: 2; grid-row: 1 / span 2; }
+.row > .place, .row > .placeholder, .row > .branchTag { grid-column: 2; grid-row: 1 / span 2; }
 .row > .rowActions { grid-column: 3; grid-row: 1 / span 2; }
+.branchTag { display: inline-flex; align-items: center; gap: var(--space-1); max-width: 170px; height: 22px; padding: 0 var(--space-2); border-radius: var(--radius-pill); background: var(--surface-2); color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); white-space: nowrap; }
+.branchTag > svg { flex: none; color: var(--accent); opacity: .85; }
+.branchTag > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* Multi-column card grid for large projects: eliminates horizontal whitespace and shows 3x more repos at once. */
+.list[data-view="grid"] { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); align-content: start; gap: var(--space-2); max-height: min(600px, 64vh); margin: 0; padding: 2px; }
+.list[data-view="grid"] > .row { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; align-items: center; align-content: space-between; column-gap: var(--space-2); row-gap: var(--space-2); min-height: 76px; padding: var(--space-2_5) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); contain-intrinsic-size: auto 76px; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease); }
+.list[data-view="grid"] > .row::before { display: none; }
+.list[data-view="grid"] > .row:hover,
+.list[data-view="grid"] > .row:focus-within { border-color: var(--accent-line); background: color-mix(in srgb, var(--accent-soft) 24%, var(--surface)); box-shadow: var(--shadow-sm); }
+.list[data-view="grid"] > .row[data-favorite] { border-color: color-mix(in srgb, var(--warning-line) 85%, var(--line)); background: color-mix(in srgb, var(--warning-soft) 36%, var(--surface)); }
+.list[data-view="grid"] > .row[data-state="unavailable"] { border-color: color-mix(in srgb, var(--danger-line) 70%, var(--line)); }
+.list[data-view="grid"] > .row > .name { grid-column: 1 / -1; grid-row: 1; }
+.list[data-view="grid"] > .row > .name strong { font-size: var(--fs-control); }
+.list[data-view="grid"] > .row > .path { grid-column: 1 / -1; grid-row: 2; margin-top: calc(var(--space-1) * -1); }
+.list[data-view="grid"] > .row[data-detail] { grid-template-rows: auto auto auto; min-height: 92px; contain-intrinsic-size: auto 92px; }
+.list[data-view="grid"] > .row > .place,
+.list[data-view="grid"] > .row > .placeholder,
+.list[data-view="grid"] > .row > .branchTag { grid-column: 1; grid-row: 2; justify-self: start; max-width: 100%; }
+.list[data-view="grid"] > .row[data-detail] > .place,
+.list[data-view="grid"] > .row[data-detail] > .placeholder,
+.list[data-view="grid"] > .row[data-detail] > .branchTag { grid-row: 3; }
+.list[data-view="grid"] > .row > .rowActions { grid-column: 2; grid-row: 2; }
+.list[data-view="grid"] > .row[data-detail] > .rowActions { grid-row: 3; }
+.list[data-view="grid"] > .row .launch { min-width: 60px; }
+.list[data-view="grid"] > .row:not(:hover):not(:focus-within) .launch:not(:disabled) { border-color: var(--line); background: var(--surface-2); color: var(--text-2); }
 /* Hundreds of repositories: rows outside the scroll viewport skip layout and paint.
    Row menus render in a portal, so the containment never clips them. */
 .list > .row, .candidates > .candidate { content-visibility: auto; contain-intrinsic-size: auto 44px; }
-.row:hover, .row:focus-within { background: var(--row-hover); }
+.row:hover, .row:focus-within { background: var(--surface-2); }
 .name { display: flex; align-items: center; gap: var(--space-1_5); min-width: 0; }
 .name strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-body); font-weight: var(--fw-semibold); }
 /* The checkout path keeps the first line; the fallback note wraps to its own line when the
@@ -61,7 +104,9 @@
 .favorite[aria-pressed="true"], .favorite[aria-pressed="true"]:hover:not(:disabled) { color: var(--warning); }
 .favorite[aria-pressed="true"] svg { fill: currentColor; }
 .launch { min-width: 68px; }
-.row:not(:hover):not(:focus-within) .launch:not(:disabled) { border-color: transparent; background: transparent; color: var(--text-2); }
+.row:not(:hover):not(:focus-within) .launch:not(:disabled) { border-color: transparent; background: transparent; color: var(--text-3); }
+.row:hover .launch:not(:disabled), .row:focus-within .launch:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+.row:hover .launch:hover:not(:disabled), .row:focus-within .launch:hover:not(:disabled) { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
 .rowMenu { display: grid; place-items: center; width: var(--control-h-sm); height: var(--control-h-sm); padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; box-shadow: none; color: var(--text-3); opacity: 0; }
 .rowMenu:hover { background: var(--surface-3); color: var(--text); }
 .row:hover .rowMenu, .row:focus-within .rowMenu, .rowMenu[aria-expanded="true"] { opacity: 1; }

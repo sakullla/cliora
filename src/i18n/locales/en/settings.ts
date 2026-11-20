@@ -182,6 +182,7 @@ export default {
     colorsHint: 'Follow the app theme, or pin the terminal dark or light.',
     fontSizeHint: '{{size}}px is the default; workbench shortcuts adjust it too.',
     densityHint: 'Terminal line spacing: compact, standard, or relaxed.',
+    scrollSpeedHint: 'Wheel and trackpad scroll multiplier for terminals and fullscreen TUIs (e.g. Codex, Claude).',
     cursorBlinkHint: 'Turn off for a steady terminal cursor.',
     soundHint: 'Chime when a session finishes or needs attention.',
     customCommand: 'Custom command',

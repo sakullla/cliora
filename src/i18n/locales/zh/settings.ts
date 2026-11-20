@@ -182,6 +182,7 @@ export default {
     colorsHint: '跟随应用主题，或固定为深色、浅色终端。',
     fontSizeHint: '默认 {{size}}px；工作台内也可用快捷键微调。',
     densityHint: '终端行距：紧凑、标准、宽松三档。',
+    scrollSpeedHint: '滚轮与触控板在终端和全屏 TUI（如 Codex、Claude）中的滚动倍率。',
     cursorBlinkHint: '关闭后终端光标常亮，不再闪烁。',
     soundHint: '会话完成或需要注意时播放提示音。',
     customCommand: '自定义命令',

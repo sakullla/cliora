@@ -24,10 +24,53 @@ export const WORKSPACE_MANIFEST_OPEN = 'cliora:workspace-manifest-open';
 export function isBusinessWorkspace(value: unknown): value is BusinessWorkspace {
   return !!value && typeof value === 'object' && typeof (value as BusinessWorkspace).id === 'string' && Array.isArray((value as BusinessWorkspace).repositories);
 }
-// Per-viewer conveniences: the project, CLI and checkouts last used come back on the next visit.
+// Per-viewer conveniences: the project, CLI, view mode and checkouts last used come back on the next visit.
 const selectedKey = 'cliora:workspace-selected';
 const toolKey = 'cliora:workspace-tool';
 const pathsKey = 'cliora:workspace-paths';
+const viewKey = 'cliora:workspace-view-mode';
+type WorkspaceViewMode = 'grid' | 'list';
+const GRID_AUTO_THRESHOLD = 8;
+const GROUP_BAR_THRESHOLD = 12;
+
+/** Derive smart prefix groups (e.g. `e6-common`, `e6-ms`, `dmh`) for large multi-repo projects. */
+function repositoryPrefixGroups(repositories: WorkspaceRepository[]): { key: string; count: number; match: (name: string) => boolean }[] {
+  if (repositories.length < GROUP_BAR_THRESHOLD) return [];
+  const segmentsOf = (name: string) => name.toLowerCase().split(/[-_./]+/).filter(Boolean);
+  const firstCounts = new Map<string, number>();
+  for (const repo of repositories) {
+    const first = segmentsOf(repo.name)[0];
+    if (first) firstCounts.set(first, (firstCounts.get(first) ?? 0) + 1);
+  }
+  const bucketCounts = new Map<string, { count: number; prefix: string }>();
+  for (const repo of repositories) {
+    const segs = segmentsOf(repo.name);
+    if (!segs.length) continue;
+    const first = segs[0];
+    // If one top-level prefix dominates (e.g. `e6-*` > 45%), refine into 2-segment module prefixes.
+    const dominant = (firstCounts.get(first) ?? 0) > repositories.length * 0.45 && segs.length >= 2;
+    const key = dominant ? `${first}-${segs[1]}` : first;
+    const entry = bucketCounts.get(key);
+    if (entry) entry.count += 1;
+    else bucketCounts.set(key, { count: 1, prefix: key });
+  }
+  const groups = [...bucketCounts.entries()]
+    .filter(([, entry]) => entry.count >= 2)
+    .sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0]))
+    .slice(0, 10)
+    .map(([key, entry]) => ({
+      key,
+      count: entry.count,
+      match: (name: string) => {
+        const segs = segmentsOf(name);
+        if (!segs.length) return false;
+        const first = segs[0];
+        const dominant = (firstCounts.get(first) ?? 0) > repositories.length * 0.45 && segs.length >= 2;
+        return (dominant ? `${first}-${segs[1]}` : first) === key;
+      },
+    }));
+  return groups.length >= 2 ? groups : [];
+}
 const stored = (key: string) => { try { return localStorage.getItem(key) ?? ''; } catch { return ''; } };
 const remember = (key: string, value: string) => { try { if (value) localStorage.setItem(key, value); else localStorage.removeItem(key); } catch { /* optional preference */ } };
 /** Member checkouts read back raw: whether each one still exists is only known beside the project. */
@@ -87,6 +130,11 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
   const instance = useId();
   const loadedAt = useRef(0);
   const [filter, setFilter] = useState<'all' | 'favorites' | 'attention'>('all');
+  const [prefixGroup, setPrefixGroup] = useState('');
+  const [viewPref, setViewPref] = useState<WorkspaceViewMode | ''>(() => {
+    const saved = stored(viewKey);
+    return saved === 'grid' || saved === 'list' ? saved : '';
+  });
   const listRef = useRef<HTMLDivElement>(null);
   const [toolId, setToolId] = useState(() => stored(toolKey));
   const [launching, setLaunching] = useState('');
@@ -118,7 +166,7 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
       // This project is already linked with exactly this content: continue the source member
       // instead of asking the user to confirm the same file again.
       setSelectedId(incomingManifest.manifest.workspaceId);
-      setQuery(''); setFilter('all');
+      setQuery(''); setFilter('all'); setPrefixGroup('');
       setSourceIntent({ workspaceId: incomingManifest.manifest.workspaceId, repositoryId: source });
       return;
     }
@@ -384,6 +432,9 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
   const favoriteCount = allRepositories.filter(repo => repo.favorite).length;
   const brokenCount = allRepositories.filter(isBroken).length;
   const activeFilter = filter === 'favorites' && !favoriteCount ? 'all' : filter === 'attention' && !brokenCount ? 'all' : filter;
+  const prefixGroups = useMemo(() => repositoryPrefixGroups(allRepositories), [allRepositories]);
+  const activePrefixGroup = prefixGroups.find(group => group.key === prefixGroup) ?? null;
+  const viewMode: WorkspaceViewMode = viewPref || (allRepositories.length >= GRID_AUTO_THRESHOLD ? 'grid' : 'list');
   const needle = deferredQuery.trim().toLowerCase();
   // Favorites lead; everything else keeps the project's own order. Every word must match the
   // name or a path, so `team api` narrows hundreds of repositories in one step.
@@ -391,12 +442,13 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
     const tokens = needle.split(/\s+/).filter(Boolean);
     const matching = allRepositories.filter(repo => {
       if ((activeFilter === 'favorites' && !repo.favorite) || (activeFilter === 'attention' && repo.locations.some(location => location.available))) return false;
+      if (activePrefixGroup && !activePrefixGroup.match(repo.name)) return false;
       if (!tokens.length) return true;
       const text = `${repo.name} ${repo.locations.map(location => location.path).join(' ')}`.toLowerCase();
       return tokens.every(token => text.includes(token));
     });
     return matching.sort((a, b) => Number(b.favorite) - Number(a.favorite));
-  }, [allRepositories, activeFilter, needle]);
+  }, [allRepositories, activeFilter, activePrefixGroup, needle]);
   const filtered = shown.length !== allRepositories.length;
   const visibleCandidates = (candidates ?? []).filter(item => `${item.name} ${item.path}`.toLowerCase().includes(scanQuery.trim().toLowerCase()));
   const addable = (candidates ?? []).filter(item => item.kind === 'repository');
@@ -425,10 +477,11 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
     if (!spotlightProject || revealedSpotlight.current === spotlightProject.token || loading) return;
     const matchedWorkspace = workspaces.find(ws => ws.repositories.some(repo => repo.locations.some(loc => loc.projectId === spotlightProject.id)));
     if (matchedWorkspace) {
-      if (selectedId !== matchedWorkspace.id || query || filter !== 'all') {
+      if (selectedId !== matchedWorkspace.id || query || filter !== 'all' || prefixGroup) {
         setSelectedId(matchedWorkspace.id);
         setQuery('');
         setFilter('all');
+        setPrefixGroup('');
         return;
       }
       const matchedRepo = matchedWorkspace.repositories.find(repo => repo.locations.some(loc => loc.projectId === spotlightProject.id));
@@ -447,7 +500,7 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
       revealedSpotlight.current = spotlightProject.token;
       blockRef.current?.scrollIntoView({ block: 'start', behavior: 'auto' });
     }
-  }, [spotlightProject?.id, spotlightProject?.token, workspaces, selectedId, query, filter, loading]);
+  }, [spotlightProject?.id, spotlightProject?.token, workspaces, selectedId, query, filter, prefixGroup, loading]);
 
   // A v2 handoff continues the sender's own member: this page selects that project, clears any
   // narrowing the viewer left behind and lands on the member row. It never picks another
@@ -456,7 +509,7 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
     // Wait for the list, its selection, and the end of any in-flight write: the row's primary
     // action is disabled while an operation runs, so focusing earlier would land nowhere.
     if (!sourceIntent || busy || loading || workspaces.length === 0) return;
-    setQuery(''); setFilter('all');
+    setQuery(''); setFilter('all'); setPrefixGroup('');
     const workspace = workspaces.find(item => item.id === sourceIntent.workspaceId) ?? null;
     // A first-time acceptance reaches this effect before the refreshed list carries the project;
     // the intent waits for that read instead of being dropped.
@@ -498,7 +551,7 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
     {workspaces.length > 0 && current ? <>
       <div className={styles.header}>
         <div className={styles.titleBlock}>
-          <FilterSelect variant="title" className={styles.select} disabled={busy || scanBusy || candidates !== null} label={t('workspaces.select')} triggerDetail={false} value={selectedId} options={workspaces.map(item => ({ value: item.id, label: item.name, detail: t('workspaces.repositories', { count: item.repositories.length }) }))} onChange={id => { setSelectedId(id); setQuery(''); setFilter('all'); }} />
+          <FilterSelect variant="title" className={styles.select} disabled={busy || scanBusy || candidates !== null} label={t('workspaces.select')} triggerDetail={false} value={selectedId} options={workspaces.map(item => ({ value: item.id, label: item.name, detail: t('workspaces.repositories', { count: item.repositories.length }) }))} onChange={id => { setSelectedId(id); setQuery(''); setFilter('all'); setPrefixGroup(''); }} />
           <span className={styles.meta}>
             <span>{t('workspaces.repositories', { count: allRepositories.length })}</span>
             {root && <span className={styles.root} title={t('workspaces.rootHint', { path: displayPath(root) })}><Icon name="folder" size={12} /><span>{displayPath(root)}</span></span>}
@@ -521,14 +574,23 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
           {favoriteCount > 0 && <button type="button" className={styles.chip} aria-pressed={activeFilter === 'favorites'} onClick={() => setFilter(activeFilter === 'favorites' ? 'all' : 'favorites')}><Icon name="star" size={12} />{t('workspaces.filterFavorites', { count: favoriteCount })}</button>}
           {brokenCount > 0 && <button type="button" className={styles.chip} data-tone="danger" aria-pressed={activeFilter === 'attention'} title={t('workspaces.attentionHint', { count: brokenCount })} onClick={() => setFilter(activeFilter === 'attention' ? 'all' : 'attention')}><span className={styles.dot} aria-hidden="true" />{t('workspaces.filterAttention', { count: brokenCount })}</button>}
           {filtered && <span className={styles.matchCount} role="status">{t('workspaces.matchCount', { shown: shown.length, total: allRepositories.length })}</span>}
+          {allRepositories.length >= 4 && <div className={styles.viewSwitch} role="group" aria-label={t('workspaces.viewMode')}>
+            <button type="button" aria-pressed={viewMode === 'grid'} aria-label={t('workspaces.viewGrid')} title={t('workspaces.viewGrid')} onClick={() => { setViewPref('grid'); remember(viewKey, 'grid'); }}><Icon name="grid" size={14} /></button>
+            <button type="button" aria-pressed={viewMode === 'list'} aria-label={t('workspaces.viewList')} title={t('workspaces.viewList')} onClick={() => { setViewPref('list'); remember(viewKey, 'list'); }}><Icon name="list" size={14} /></button>
+          </div>}
           {enabledTools.length > 0 && <FilterSelect className={styles.toolPick} label={t('workspaces.tool')} title={t('workspaces.tool')} value={launchTool} options={enabledTools.map(tool => ({ value: tool.id, label: tool.name, icon: <ToolIcon toolId={tool.id} size={14} /> }))} onChange={id => { setToolId(id); remember(toolKey, id); }} />}
         </div>
-        {shown.length > 0 ? <div className={styles.list} ref={listRef} aria-label={t('workspaces.previewRepositories')} onKeyDown={event => moveFocus(event)}>
+        {prefixGroups.length > 0 && <div className={styles.groupBar} role="group" aria-label={t('workspaces.groupFilter')}>
+          <button type="button" className={styles.groupChip} aria-pressed={!activePrefixGroup} onClick={() => setPrefixGroup('')}><span>{t('workspaces.groupAll')}</span><em>{allRepositories.length}</em></button>
+          {prefixGroups.map(group => <button key={group.key} type="button" className={styles.groupChip} aria-pressed={activePrefixGroup?.key === group.key} onClick={() => setPrefixGroup(activePrefixGroup?.key === group.key ? '' : group.key)}><span>{group.key}</span><em>{group.count}</em></button>)}
+        </div>}
+        {shown.length > 0 ? <div className={styles.list} data-view={viewMode} ref={listRef} aria-label={t('workspaces.previewRepositories')} onKeyDown={event => moveFocus(event)}>
           {shown.map(repo => {
             const { places, available, remembered, path: selectedPath, fallback } = placeOf(current.id, repo);
             const broken = !available;
             const missing = repo.locations[0];
             const shownPath = broken ? (missing?.path ? relativePath(missing.path, repo.name) : '') : relativePath(selectedPath, repo.name);
+            const currentBranch = !broken ? available?.worktrees.find(tree => tree.path === selectedPath)?.branch : null;
             // Identity reads as one block: the name, and below it only what tells this row apart
             // (a distinguishing path, a missing directory or a fallback). Unique rows stay one line.
             const hasDetail = broken || fallback || !!shownPath;
@@ -538,7 +600,11 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
                 // Only a row that shows the picker may promise that choosing replaces the fallback.
                 ? <em className={styles.fallback} title={t('workspaces.worktreeFallbackHint', { path: displayPath(remembered ?? '') })}>{t('workspaces.worktreeFallback')}</em>
                 : <em className={styles.fallback} title={t('workspaces.worktreeFallbackHintSingle', { path: displayPath(remembered ?? '') })}>{t('workspaces.worktreeFallbackSingle', { path: displayPath(selectedPath) })}</em>)}</>}</span>}
-              {places.size > 1 ? <select className={styles.place} aria-label={`${repo.name} ${worktreeLabel}`} title={selectedPath} value={selectedPath} onChange={event => setPaths(previous => ({ ...previous, [placeKey(current.id, repo.id)]: event.target.value }))}>{[...places].map(([path, place]) => <option key={path} value={path}>{place.label}</option>)}</select> : <span className={styles.placeholder} />}
+              {places.size > 1
+                ? <select className={styles.place} aria-label={`${repo.name} ${worktreeLabel}`} title={selectedPath} value={selectedPath} onChange={event => setPaths(previous => ({ ...previous, [placeKey(current.id, repo.id)]: event.target.value }))}>{[...places].map(([path, place]) => <option key={path} value={path}>{place.label}</option>)}</select>
+                : currentBranch
+                  ? <span className={styles.branchTag} title={currentBranch}><Icon name="branch" size={11} /><span>{currentBranch}</span></span>
+                  : <span className={styles.placeholder} />}
               <span className={styles.rowActions}>
                 <Button size="sm" variant="ghost" className={styles.favorite} aria-label={repo.favorite ? unfavoriteLabel : favoriteLabel} title={repo.favorite ? unfavoriteLabel : favoriteLabel} aria-pressed={repo.favorite} icon={<Icon name="star" size={14} />} onClick={() => void toggleFavorite(repo)} />
                 {broken
@@ -552,7 +618,7 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
               </span>
             </article>;
           })}
-        </div> : <div className={styles.empty} role="status"><span>{t('workspaces.noMatches')}</span><Button size="sm" variant="ghost" onClick={() => { setQuery(''); setFilter('all'); }}>{t('workspaces.clearFilters')}</Button></div>}
+        </div> : <div className={styles.empty} role="status"><span>{t('workspaces.noMatches')}</span><Button size="sm" variant="ghost" onClick={() => { setQuery(''); setFilter('all'); setPrefixGroup(''); }}>{t('workspaces.clearFilters')}</Button></div>}
       </> : <div className={styles.emptyState}><p>{t('workspaces.emptyReposAction')}</p><Button size="sm" variant="ghost" icon={<Icon name="search" size={13} />} disabled={busy || scanBusy} onClick={() => void discover(true)}>{t('workspaces.discover')}</Button></div>}
     </> : <div className={styles.intro}>
       <span className={styles.introIcon} aria-hidden="true"><Icon name="folder" size={18} /></span>

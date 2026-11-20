@@ -14,52 +14,52 @@
   --font-sans: "Inter", "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
   --font-display: "Inter", "Segoe UI Variable Display", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
 
-  /* Calm sage-tinted frame, paper cards and one leaf-green identity color. */
-  --bg: #f5f7f4;
-  --sidebar: #eef2ed;
+  /* Crisp alabaster-stone frame, pure paper surfaces and one emerald-pine identity color. */
+  --bg: #f7f8f7;
+  --sidebar: #f1f3f1;
   --surface: #ffffff;
-  --surface-2: #f2f5f1;
-  --surface-3: #e4e9e3;
-  --overlay: rgb(18 28 22 / 36%);
-  --wash-a: rgb(47 122 82 / 6%);
-  --wash-b: rgb(47 122 82 / 3%);
-  --surface-glass: rgb(255 255 255 / 90%);
+  --surface-2: #f3f5f3;
+  --surface-3: #e7ebe8;
+  --overlay: rgb(16 24 20 / 38%);
+  --wash-a: rgb(26 122 80 / 6%);
+  --wash-b: rgb(26 122 80 / 3%);
+  --surface-glass: rgb(255 255 255 / 92%);
   --surface-raised: var(--surface);
   --aurora-1: transparent;
   --aurora-2: transparent;
   --aurora-3: transparent;
   --frame: var(--sidebar);
   --canvas-glow: none;
-  --sidebar-edge: color-mix(in srgb, #18211c 6%, transparent);
-  --sidebar-divider: color-mix(in srgb, #18211c 7%, transparent);
-  --sidebar-well: color-mix(in srgb, #18211c 4%, transparent);
+  --sidebar-edge: color-mix(in srgb, #141d18 7%, transparent);
+  --sidebar-divider: color-mix(in srgb, #141d18 7%, transparent);
+  --sidebar-well: color-mix(in srgb, #141d18 4.5%, transparent);
   --sidebar-well-hover: #ffffff;
-  --sidebar-kbd: color-mix(in srgb, #18211c 6%, transparent);
+  --sidebar-kbd: color-mix(in srgb, #141d18 6.5%, transparent);
   --sidebar-active: #ffffff;
-  --sidebar-active-ring: 0 0 0 1px rgb(24 33 28 / 6%), 0 1px 3px rgb(24 33 28 / 7%);
+  --sidebar-active-ring: 0 0 0 1px rgb(20 29 24 / 7%), 0 1px 3px rgb(20 29 24 / 6%);
 
-  --text: #18211c;
-  --text-2: #364139;
-  --text-3: #5a645d;
+  --text: #141c17;
+  --text-2: #38443d;
+  --text-3: #637068;
 
-  --line: #e2e7e0;
-  --line-strong: #cfd7cc;
-  --control-line: #d5dcd3;
-  --control-line-hover: #a3ada4;
+  --line: #e4e8e5;
+  --line-strong: #ced5d0;
+  --control-line: #d4dbd6;
+  --control-line-hover: #9faaa3;
 
   --surface-hover: color-mix(in srgb, var(--text) 3%, var(--surface));
   --surface-pressed: color-mix(in srgb, var(--text) 6%, var(--surface));
-  --row-hover: color-mix(in srgb, var(--text) 4%, transparent);
+  --row-hover: color-mix(in srgb, var(--text) 3.8%, transparent);
 
-  /* Leaf green is reserved for identity, current context, focus and primary work. */
-  --accent: #2f7a52;
-  --accent-hover: #276845;
-  --accent-bright: #4caf74;
+  /* Emerald-pine is reserved for identity, current context, focus and primary work. */
+  --accent: #1d7a52;
+  --accent-hover: #176644;
+  --accent-bright: #34b37a;
   --on-accent: #ffffff;
-  --accent-soft: #edf6ef;
-  --accent-line: #b5dbc1;
-  --accent-ring: rgb(47 122 82 / 18%);
-  --selection: #d2ecd9;
+  --accent-soft: #eaf6f0;
+  --accent-line: #b2dec7;
+  --accent-ring: rgb(29 122 82 / 18%);
+  --selection: #d0ecdc;
   --accent-border: var(--accent);
   --accent-fill: var(--accent);
   --accent-fill-hover: var(--accent-hover);
@@ -182,53 +182,53 @@
   --medium: 190ms;
   --slow: 240ms;
 
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23364139' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235a645d' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2338443d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23637068' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #121614;
-  --sidebar: #0d100e;
-  --surface: #171c19;
-  --surface-2: #1d231f;
-  --surface-3: #272e29;
-  --overlay: rgb(3 6 4 / 64%);
-  --wash-a: rgb(127 207 155 / 7%);
-  --wash-b: rgb(127 207 155 / 4%);
-  --surface-glass: rgb(23 28 25 / 92%);
+  --bg: #111513;
+  --sidebar: #0c0f0e;
+  --surface: #161b19;
+  --surface-2: #1d2320;
+  --surface-3: #272f2b;
+  --overlay: rgb(3 6 4 / 66%);
+  --wash-a: rgb(82 199 136 / 7%);
+  --wash-b: rgb(82 199 136 / 4%);
+  --surface-glass: rgb(22 27 25 / 92%);
   --surface-raised: var(--surface);
   --frame: var(--sidebar);
   --canvas-glow: none;
-  --sidebar-edge: rgb(255 255 255 / 6%);
-  --sidebar-divider: rgb(255 255 255 / 6%);
+  --sidebar-edge: rgb(255 255 255 / 6.5%);
+  --sidebar-divider: rgb(255 255 255 / 6.5%);
   --sidebar-well: rgb(255 255 255 / 4.5%);
-  --sidebar-well-hover: rgb(255 255 255 / 7.5%);
-  --sidebar-kbd: rgb(255 255 255 / 7.5%);
-  --sidebar-active: #1c221e;
-  --sidebar-active-ring: 0 0 0 1px rgb(255 255 255 / 7%), 0 2px 6px -1px rgb(0 0 0 / 35%);
+  --sidebar-well-hover: rgb(255 255 255 / 8%);
+  --sidebar-kbd: rgb(255 255 255 / 8%);
+  --sidebar-active: #1c221f;
+  --sidebar-active-ring: 0 0 0 1px rgb(255 255 255 / 8%), 0 2px 6px -1px rgb(0 0 0 / 38%);
 
-  --text: #eef3ef;
-  --text-2: #c5cec7;
-  --text-3: #98a49b;
+  --text: #eef3f0;
+  --text-2: #c1ccc5;
+  --text-3: #8c9a91;
 
-  --line: #242b26;
-  --line-strong: #343d37;
-  --control-line: #2e3631;
-  --control-line-hover: #4a554d;
+  --line: #232a26;
+  --line-strong: #333d37;
+  --control-line: #2d3631;
+  --control-line-hover: #49564e;
 
   --surface-hover: color-mix(in srgb, var(--text) 5%, var(--surface));
   --surface-pressed: color-mix(in srgb, var(--text) 9%, var(--surface));
   --row-hover: color-mix(in srgb, var(--text) 5.5%, transparent);
 
-  --accent: #7fcf9b;
-  --accent-hover: #9edcb3;
-  --accent-bright: #b6e9c8;
-  --on-accent: #0b2416;
-  --accent-soft: #152a1d;
-  --accent-line: #2b5139;
-  --accent-ring: rgb(127 207 155 / 22%);
-  --selection: #1e3b29;
+  --accent: #52c788;
+  --accent-hover: #6cd69c;
+  --accent-bright: #90e5b6;
+  --on-accent: #071e12;
+  --accent-soft: #12281d;
+  --accent-line: #244f38;
+  --accent-ring: rgb(82 199 136 / 22%);
+  --selection: #1b3a29;
   --accent-border: var(--accent);
   --accent-fill: var(--accent);
   --accent-fill-hover: var(--accent-hover);
@@ -267,6 +267,6 @@
   --shadow-well-soft: inset 0 1px 1px rgb(0 0 0 / 22%);
   --shadow-thumb: 0 1px 3px rgb(0 0 0 / 48%);
 
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23c5cec7' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2398a49b' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23c1ccc5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238c9a91' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
 }

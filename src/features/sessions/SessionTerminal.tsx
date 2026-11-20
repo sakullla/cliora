@@ -14,6 +14,8 @@ import { TerminalScrollbar } from './TerminalScrollbar';
 import { TerminalWebglLifecycle } from './terminalWebgl';
 import type { OutputChunk, PendingTerminalOutput } from './pendingOutput';
 import { createTerminalIme, type TerminalIme } from './terminalIme';
+import { computeAppWheelSteps, computeViewportWheelLines, createWheelAccumulator, resetWheelAccumulator } from './terminalWheel';
+import { TERMINAL_SCROLL_MULTIPLIER, type TerminalScrollSpeed } from '../../lib/terminalPreferences';
 import styles from './SessionWorkbench.module.css';
 
 export type TerminalMatch = { row: number; col: number; length: number };
@@ -291,8 +293,17 @@ export function guardReplayReplies(term: Terminal): { replaying: boolean; dispos
 }
 
 // Keep the browser-side terminal buffer bounded. The native replay remains the
-// source of truth when an ended session is mounted again.
-const TERMINAL_SCROLLBACK = 6000;
+// source of truth when an ended session is mounted again. Hidden background
+// terminals trim their scrollback after an idle grace period to keep WebView
+// memory low when many sessions run in parallel.
+const TERMINAL_SCROLLBACK_ACTIVE = 3500;
+const TERMINAL_SCROLLBACK_HIDDEN = 1000;
+const HIDDEN_SCROLLBACK_TRIM_MS = 15_000;
+const ACTIVE_WRITE_FLUSH_MS = 16;
+const HIDDEN_WRITE_FLUSH_MS = 80;
+const ACTIVE_ACTIVITY_INSPECT_MS = 80;
+const HIDDEN_ACTIVITY_INSPECT_MS = 300;
+const APP_WHEEL_PACE_MS = 12;
 
 export type TerminalBridge = {
   writeError: (error: unknown) => void;
@@ -315,7 +326,7 @@ export type TerminalBridge = {
  * `active` means the terminal is on screen (one pane, or either pane of a split).
  * `focused` marks the one pane that owns keyboard input.
  */
-export function SessionTerminal({ sessionId, toolId, label, active, keepRendererWarm = false, focused = active, suspendInput = false, peeking = false, running, remote = false, startedAt, fontSize, lineHeight = 1.35, theme, cursorBlink, pane, header, overlay, footer, onFilesPaste, writers, pending, handles, bridge }: {
+export function SessionTerminal({ sessionId, toolId, label, active, keepRendererWarm = false, focused = active, suspendInput = false, peeking = false, running, remote = false, startedAt, fontSize, lineHeight = 1.35, scrollSpeed = 'standard', theme, cursorBlink, pane, header, overlay, footer, onFilesPaste, writers, pending, handles, bridge }: {
   sessionId: string;
   toolId: string;
   /** Start time (ms). A replay of a session this young still answers its device queries. */
@@ -336,6 +347,7 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
   onFilesPaste?: (inputs: { name: string; encodeBytes: () => Promise<string> }[]) => void;
   fontSize: number;
   lineHeight?: number;
+  scrollSpeed?: TerminalScrollSpeed;
   theme: TerminalTheme;
   cursorBlink: boolean;
   pane?: number;
@@ -378,6 +390,7 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
   const imagePasteRef = useRef(onFilesPaste);
   const fontSizeRef = useRef(fontSize);
   const lineHeightRef = useRef(lineHeight);
+  const scrollSpeedRef = useRef(scrollSpeed);
   const themeRef = useRef(theme);
   activeRef.current = active;
   focusedRef.current = focused;
@@ -387,6 +400,7 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
   imagePasteRef.current = onFilesPaste;
   fontSizeRef.current = fontSize;
   lineHeightRef.current = lineHeight;
+  scrollSpeedRef.current = scrollSpeed;
   themeRef.current = theme;
 
   useEffect(() => {
@@ -402,9 +416,10 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       cursorWidth: 2,
       cursorInactiveStyle: 'outline',
       disableStdin: !runningRef.current,
-      scrollback: TERMINAL_SCROLLBACK,
+      scrollback: activeRef.current ? TERMINAL_SCROLLBACK_ACTIVE : TERMINAL_SCROLLBACK_HIDDEN,
       scrollOnUserInput: true,
       smoothScrollDuration: 0,
+      scrollSensitivity: TERMINAL_SCROLL_MULTIPLIER[scrollSpeedRef.current] ?? TERMINAL_SCROLL_MULTIPLIER.standard,
       fastScrollSensitivity: 5,
       macOptionIsMeta: true,
       allowProposedApi: true,
@@ -494,11 +509,12 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       frameChunks.push(bytes);
       if (flushScheduled) return;
       flushScheduled = true;
-      // Parsing must continue while hidden, including terminal protocol replies.
+      // Parsing must continue while hidden, including terminal protocol replies,
+      // but background terminals can coalesce over a wider window to cut DOM/GC churn.
       if (awaitingInputResponse) {
         awaitingInputResponse = false;
         queueMicrotask(flushWrites);
-      } else flushTimer = window.setTimeout(flushWrites, 16);
+      } else flushTimer = window.setTimeout(flushWrites, activeRef.current ? ACTIVE_WRITE_FLUSH_MS : HIDDEN_WRITE_FLUSH_MS);
     };
     const markLiveOutput = () => {
       if (disposed || !runningRef.current) return;
@@ -577,8 +593,94 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       return false;
     });
 
-    // Shift+wheel reads normal-buffer scrollback. Scroll by whole rows. Writing
-    // scrollTop up to scrollHeight lands in the unused host pixels, and the next
+    // Wheel accumulators for normal-buffer scrollback and mouse-tracking TUIs (Codex, Claude, Grok, tmux).
+    const viewportWheel = createWheelAccumulator();
+    const appWheel = createWheelAccumulator();
+    let appWheelTimer = 0;
+    let appWheelRemaining = 0;
+    let appWheelDirection: -1 | 1 = 1;
+    let appWheelPayload: { col: number; row: number; x: number; y: number; ctrl: boolean; alt: boolean; shift: boolean } | null = null;
+    const cancelAppWheel = () => {
+      window.clearTimeout(appWheelTimer);
+      appWheelTimer = 0;
+      appWheelRemaining = 0;
+      appWheelPayload = null;
+    };
+    const triggerAppWheelStep = (): boolean => {
+      if (disposed || !appWheelPayload) return false;
+      const mode = term.modes.mouseTrackingMode;
+      if (mode !== 'vt200' && mode !== 'drag' && mode !== 'any') return false;
+      const core = (term as unknown as {
+        _core?: {
+          coreMouseService?: {
+            triggerMouseEvent?: (event: {
+              col: number; row: number; x: number; y: number;
+              button: number; action: number; ctrl: boolean; alt: boolean; shift: boolean;
+            }) => boolean;
+          };
+        };
+      })._core;
+      const trigger = core?.coreMouseService?.triggerMouseEvent;
+      if (typeof trigger !== 'function') return false;
+      return trigger.call(core!.coreMouseService, {
+        ...appWheelPayload,
+        button: 4,
+        action: appWheelDirection < 0 ? 0 : 1,
+      });
+    };
+    const pumpAppWheel = () => {
+      appWheelTimer = 0;
+      if (disposed || appWheelRemaining <= 0) { cancelAppWheel(); return; }
+      appWheelRemaining -= 1;
+      if (!triggerAppWheelStep()) { cancelAppWheel(); return; }
+      if (appWheelRemaining > 0) {
+        appWheelTimer = window.setTimeout(pumpAppWheel, APP_WHEEL_PACE_MS);
+      }
+    };
+    const dispatchAppWheel = (event: WheelEvent): boolean => {
+      const screenEl = term.element?.querySelector<HTMLElement>('.xterm-screen');
+      const core = (term as unknown as {
+        _core?: {
+          _mouseService?: { getMouseReportCoords?: (ev: MouseEvent, el: HTMLElement) => { col: number; row: number; x: number; y: number } | undefined };
+          coreMouseService?: { triggerMouseEvent?: (ev: unknown) => boolean };
+        };
+      })._core;
+      if (!screenEl || typeof core?._mouseService?.getMouseReportCoords !== 'function' || typeof core?.coreMouseService?.triggerMouseEvent !== 'function') {
+        return false;
+      }
+      const coords = core._mouseService.getMouseReportCoords(event, screenEl);
+      if (!coords) return false;
+      const rowHeight = screenEl.clientHeight / Math.max(1, term.rows);
+      const result = computeAppWheelSteps(appWheel, event, {
+        rowHeight,
+        rows: term.rows,
+        speed: scrollSpeedRef.current,
+      });
+      event.preventDefault();
+      if (!result) return true;
+      if (appWheelRemaining > 0 && appWheelDirection !== result.direction) cancelAppWheel();
+      appWheelDirection = result.direction;
+      appWheelPayload = {
+        col: coords.col,
+        row: coords.row,
+        x: coords.x,
+        y: coords.y,
+        ctrl: event.ctrlKey,
+        alt: event.altKey,
+        shift: event.shiftKey,
+      };
+      // Send the first step immediately for zero-latency feedback; pace extra steps
+      // so each report travels as its own clean packet (preserving tmux escape-time safety).
+      triggerAppWheelStep();
+      if (result.steps > 1) {
+        appWheelRemaining = Math.min(8, appWheelRemaining + result.steps - 1);
+        if (!appWheelTimer) appWheelTimer = window.setTimeout(pumpAppWheel, APP_WHEEL_PACE_MS);
+      }
+      return true;
+    };
+
+    // Normal-buffer scrollback: scroll by whole rows with configured scroll speed.
+    // Writing scrollTop up to scrollHeight lands in unused host pixels, and the next
     // redraw rounds onto another row and paints the previous frame on top.
     const wheelScrollViewport = (event: WheelEvent) => {
       if (event.deltaY === 0) return;
@@ -586,13 +688,12 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       if (!viewport) return;
       userScrollRef.current = true;
       const rowHeight = viewport.clientHeight / Math.max(1, term.rows);
-      let amount = event.deltaY;
-      if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) amount *= rowHeight;
-      else if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) amount *= viewport.clientHeight;
-      if (event.altKey) amount *= 5;
-      const lines = amount / Math.max(1, rowHeight);
-      const steps = Math.trunc(lines) || (amount > 0 ? 1 : -1);
-      term.scrollLines(steps);
+      const steps = computeViewportWheelLines(viewportWheel, event, {
+        rowHeight,
+        viewportHeight: viewport.clientHeight,
+        speed: scrollSpeedRef.current,
+      });
+      if (steps !== 0) term.scrollLines(steps);
       event.preventDefault();
     };
 
@@ -627,6 +728,7 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       pasteFiles(files);
     };
     node.addEventListener('paste', onPaste, true);
+    node.addEventListener('pointerleave', cancelAppWheel);
 
     // Keep the IME helper's caret positioning from scrolling the window or any ancestor.
     const resetAncestorScroll = (event: Event) => {
@@ -687,6 +789,9 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
           wheelScrollViewport(event);
           return false;
         }
+        // Accelerate mouse-tracking TUI wheel events (Codex, Claude Code, Grok, tmux)
+        // so both discrete mouse wheels and macOS trackpads scroll smoothly and briskly.
+        if (dispatchAppWheel(event)) return false;
         return true;
       }
       if (!alternate) {
@@ -699,7 +804,7 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
     let scrollSnapshot = '';
     const reportScroll = () => {
       if (disposed) return;
-      ime.schedule();
+      if (activeRef.current) ime.schedule();
       const buffer = term.buffer.active;
       const snapshot = activeRef.current ? `${buffer.type}:${buffer.baseY}:${buffer.viewportY}:${term.rows}:${viewportRef.current?.clientHeight ?? 0}` : '';
       // A spinner redraw usually leaves the scroll geometry unchanged. Avoid
@@ -754,10 +859,10 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       // allocate a copy of the full viewport or inspect the scrollback buffer.
       const footer = activity ? Array.from({ length: Math.min(term.rows, 12) }, (_, row) => buffer.getLine(buffer.baseY + Math.max(0, term.rows - 12) + row)?.translateToString(true) ?? '') : [];
       knownActivity = activity?.({ title: terminalTitle, lines: footer }) ?? null;
-      if (knownActivity !== null) {
+      if (knownActivity !== null || !runningRef.current) {
         lastScreen = '';
         window.clearTimeout(liveTimer);
-        if (liveStreaming !== knownActivity) {
+        if (knownActivity !== null && liveStreaming !== knownActivity) {
           liveStreaming = knownActivity;
           if (!disposed && runningRef.current) bridge.current.outputActive(sessionId, knownActivity);
         }
@@ -775,7 +880,7 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
     const parsedSub = term.onWriteParsed(() => {
       // Coalesce output bursts across many xterm parse callbacks. The timer is
       // demand-driven, including when hidden, and leaves no idle polling loop.
-      if (!activityTimer) activityTimer = window.setTimeout(inspectActivity, 80);
+      if (!activityTimer) activityTimer = window.setTimeout(inspectActivity, activeRef.current ? ACTIVE_ACTIVITY_INSPECT_MS : HIDDEN_ACTIVITY_INSPECT_MS);
       // Do not start a second animation frame when xterm already follows the
       // last row. Keep the deferred correction for a genuinely moved viewport.
       if (activeRef.current && !awayFromBottom && term.buffer.active.viewportY < term.buffer.active.baseY) scrollToLatest();
@@ -1041,8 +1146,12 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
     });
     return () => {
       flushInput();
+      cancelAppWheel();
+      resetWheelAccumulator(appWheel);
+      resetWheelAccumulator(viewportWheel);
       window.clearTimeout(gridTimer);
       disposed = true;
+      lastScreen = '';
       ime.dispose();
       if (imeRef.current === ime) imeRef.current = null;
       replies.dispose();
@@ -1057,6 +1166,7 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       if (writers.current.get(sessionId) === publish) writers.current.delete(sessionId);
       if (handles.current.get(sessionId) === handle) handles.current.delete(sessionId);
       node.removeEventListener('paste', onPaste, true);
+      node.removeEventListener('pointerleave', cancelAppWheel);
       node.removeEventListener('wheel', trackWheelIntent, true);
       document.removeEventListener('scroll', resetAncestorScroll, true);
       bellSub.dispose();
@@ -1087,6 +1197,31 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       }
     };
   }, [sessionId, toolId, writers, pending, handles, bridge]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.scrollSensitivity = TERMINAL_SCROLL_MULTIPLIER[scrollSpeed] ?? TERMINAL_SCROLL_MULTIPLIER.standard;
+  }, [scrollSpeed]);
+
+  // Trim scrollback on hidden terminals after a grace period to reclaim xterm
+  // buffer memory across many concurrent sessions; restore full depth on reveal.
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    if (active || peeking) {
+      if (term.options.scrollback !== TERMINAL_SCROLLBACK_ACTIVE) {
+        term.options.scrollback = TERMINAL_SCROLLBACK_ACTIVE;
+      }
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (termRef.current === term && !activeRef.current && term.options.scrollback !== TERMINAL_SCROLLBACK_HIDDEN) {
+        term.options.scrollback = TERMINAL_SCROLLBACK_HIDDEN;
+      }
+    }, HIDDEN_SCROLLBACK_TRIM_MS);
+    return () => window.clearTimeout(timer);
+  }, [active, peeking]);
 
   useEffect(() => {
     const term = termRef.current;

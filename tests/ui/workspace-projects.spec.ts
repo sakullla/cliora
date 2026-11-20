@@ -849,6 +849,7 @@ test('a worktree fallback keeps the checkout path readable at medium widths', as
 test('a uniquely named repository reads as one line and lines up with its neighbours', async ({ page }) => {
   await install(page);
   const project = page.locator('[data-business-workspaces]').first();
+  await project.getByRole('button', { name: '紧凑列表', exact: true }).click();
   const unique = project.locator('[data-repository-id="repo-2"]');
   await expect(unique).toBeVisible();
   // Nothing tells a unique name apart, so no empty path track is reserved for it.
@@ -857,4 +858,74 @@ test('a uniquely named repository reads as one line and lines up with its neighb
   expect(await height('repo-2')).toBeLessThan(await height('repo-0'));
   const launch = async (id: string) => (await project.locator(`[data-repository-id="${id}"] [data-row-primary]`).boundingBox())!.x;
   expect(Math.abs(await launch('repo-0') - await launch('repo-2'))).toBeLessThanOrEqual(1);
+});
+
+test('large business projects default to multi-column card grid with smart prefix groups and view toggle', async ({ page }) => {
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await install(page, 48);
+  const names = [
+    ...Array.from({ length: 8 }, (_, i) => `e6-common-mod-${i}`),
+    ...Array.from({ length: 8 }, (_, i) => `e6-ms-service-${i}`),
+    ...Array.from({ length: 4 }, (_, i) => `dmh-worker-${i}`),
+  ];
+  await page.evaluate((repoNames) => {
+    const app = window as any;
+    const orig = app.__TAURI_INTERNALS__.invoke;
+    const largeWorkspace = [{
+      id: 'ws-large',
+      name: '端到端',
+      revision: 1,
+      manifestPath: '/Users/dev/e6.dev-workspace.json',
+      manifestRevision: 1,
+      error: null,
+      repositories: repoNames.map((name: string, index: number) => ({
+        id: `r-${index}`,
+        name,
+        favorite: index === 0,
+        locations: [{
+          id: `loc-${index}`,
+          hostId: 'local',
+          path: `/Users/dev/project/e6yun3.0/${name}`,
+          projectId: `p-${index}`,
+          targetId: null,
+          available: true,
+          kind: 'repository',
+          reason: null,
+          worktrees: [{ path: `/Users/dev/project/e6yun3.0/${name}`, name, branch: 'main', current: true }],
+        }],
+      })),
+    }];
+    app.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === 'list_business_workspaces') return largeWorkspace;
+      if (command === 'refresh_workspace_manifest') return largeWorkspace[0];
+      return orig(command, args);
+    };
+  }, names);
+  await projectAction(page, '刷新项目');
+  const project = page.locator('[data-business-workspaces]').first();
+  const list = project.locator('[aria-label="清单中的仓库"]');
+  await expect(project.locator('[data-repository-id="r-0"]')).toBeVisible();
+  await expect(list).toHaveAttribute('data-view', 'grid');
+  // Multi-column layout: the first two cards sit side by side on the same row.
+  const first = (await project.locator('[data-repository-id="r-0"]').boundingBox())!;
+  const second = (await project.locator('[data-repository-id="r-1"]').boundingBox())!;
+  expect(Math.abs(first.y - second.y)).toBeLessThanOrEqual(2);
+  expect(second.x).toBeGreaterThan(first.x + first.width - 1);
+
+  // Smart prefix groups expand dominant `e6-*` into `e6-common` / `e6-ms` alongside `dmh`.
+  const groups = project.getByRole('group', { name: '按前缀分组' });
+  await expect(groups.getByRole('button', { name: /e6-common/ })).toBeVisible();
+  await expect(groups.getByRole('button', { name: /e6-ms/ })).toBeVisible();
+  await expect(groups.getByRole('button', { name: /dmh/ })).toBeVisible();
+  await groups.getByRole('button', { name: /dmh/ }).click();
+  await expect(project.locator('[data-repository-id]')).toHaveCount(4);
+  await groups.getByRole('button', { name: /全部/ }).click();
+  await expect(project.locator('[data-repository-id]')).toHaveCount(20);
+
+  // Explicit view switch toggles to list mode and persists.
+  await project.getByRole('button', { name: '紧凑列表', exact: true }).click();
+  await expect(list).toHaveAttribute('data-view', 'list');
+  const firstList = (await project.locator('[data-repository-id="r-0"]').boundingBox())!;
+  const secondList = (await project.locator('[data-repository-id="r-1"]').boundingBox())!;
+  expect(secondList.y).toBeGreaterThanOrEqual(firstList.y + firstList.height - 1);
 });

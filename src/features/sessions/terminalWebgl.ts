@@ -88,7 +88,10 @@ export class TerminalWebglLifecycle {
         contextLoss?.dispose();
       } finally {
         try {
-          addon?.dispose();
+          if (addon) {
+            try { this.terminal.clearTextureAtlas(); } catch { /* Atlas may already be released. */ }
+            addon.dispose();
+          }
         } finally {
           if (restoreBlink && !this.closed) {
             this.terminal.options.cursorBlink = blink;

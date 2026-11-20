@@ -3,10 +3,10 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { Button, IconButton } from '../../components/ui';
 import { modLabel } from '../../lib/shortcut';
-import type { TerminalDensity, TerminalThemePreference } from '../../lib/terminalPreferences';
+import type { TerminalDensity, TerminalScrollSpeed, TerminalThemePreference } from '../../lib/terminalPreferences';
 import styles from './SessionWorkbench.module.css';
 
-export function TerminalAppearance({ open, theme, fontSize, defaultFontSize, minFontSize, maxFontSize, density, cursorBlink, soundEnabled, onToggle, onClose, onTheme, onFontSize, onDensity, onCursorBlink, onSound }: {
+export function TerminalAppearance({ open, theme, fontSize, defaultFontSize, minFontSize, maxFontSize, density, scrollSpeed, cursorBlink, soundEnabled, onToggle, onClose, onTheme, onFontSize, onDensity, onScrollSpeed, onCursorBlink, onSound }: {
   open: boolean;
   theme: TerminalThemePreference;
   fontSize: number;
@@ -14,6 +14,7 @@ export function TerminalAppearance({ open, theme, fontSize, defaultFontSize, min
   minFontSize: number;
   maxFontSize: number;
   density: TerminalDensity;
+  scrollSpeed: TerminalScrollSpeed;
   cursorBlink: boolean;
   soundEnabled: boolean;
   onToggle: () => void;
@@ -21,6 +22,7 @@ export function TerminalAppearance({ open, theme, fontSize, defaultFontSize, min
   onTheme: (theme: TerminalThemePreference) => void;
   onFontSize: (size: number) => void;
   onDensity: (density: TerminalDensity) => void;
+  onScrollSpeed: (speed: TerminalScrollSpeed) => void;
   onCursorBlink: () => void;
   onSound: () => void;
 }) {
@@ -55,6 +57,11 @@ export function TerminalAppearance({ open, theme, fontSize, defaultFontSize, min
     { value: 'standard', label: t('sessions.lineStandard') },
     { value: 'relaxed', label: t('sessions.lineRelaxed') },
   ];
+  const speeds: { value: TerminalScrollSpeed; label: string }[] = [
+    { value: 'slow', label: t('sessions.scrollSlow') },
+    { value: 'standard', label: t('sessions.scrollStandard') },
+    { value: 'fast', label: t('sessions.scrollFast') },
+  ];
 
   return <div className={styles.appearance} ref={root}>
     <Button ref={trigger} variant="ghost" size="sm" className={styles.statusButton} aria-label={t('sessions.displaySettings')} title={t('sessions.displaySettings')} aria-expanded={open} aria-controls="terminal-appearance-panel" onClick={onToggle} icon={<Icon name="sliders" size={14} />}>{t('sessions.displayShort')}</Button>
@@ -70,6 +77,7 @@ export function TerminalAppearance({ open, theme, fontSize, defaultFontSize, min
       <div className={styles.appearanceSection}>
         <div className={styles.appearanceRow}><span className={styles.appearanceLabel}>{t('sessions.fontSize')}</span><div className={styles.fontStepper}><button type="button" disabled={fontSize <= minFontSize} aria-label={t('sessions.fontSizeDown')} title={t('sessions.fontSizeDown') + ` (${modLabel}+-)`} onClick={() => onFontSize(fontSize - 1)}><span aria-hidden="true">−</span></button><button type="button" className={styles.fontValue} aria-label={t('sessions.fontSizeReset', { size: defaultFontSize })} title={t('sessions.fontSizeReset', { size: defaultFontSize })} onClick={() => onFontSize(defaultFontSize)}>{fontSize}<small>px</small></button><button type="button" disabled={fontSize >= maxFontSize} aria-label={t('sessions.fontSizeUp')} title={t('sessions.fontSizeUp') + ` (${modLabel}+=)`} onClick={() => onFontSize(fontSize + 1)}><Icon name="plus" size={12} /></button></div></div>
         <div className={styles.appearanceRow}><span className={styles.appearanceLabel}>{t('sessions.lineHeight')}</span><div className={styles.densityChoices} role="radiogroup" aria-label={t('sessions.lineHeight')}>{densities.map((item) => <button key={item.value} type="button" role="radio" aria-checked={density === item.value} onClick={() => onDensity(item.value)}>{item.label}</button>)}</div></div>
+        <div className={styles.appearanceRow}><span className={styles.appearanceLabel}>{t('sessions.scrollSpeed')}</span><div className={styles.densityChoices} role="radiogroup" aria-label={t('sessions.scrollSpeed')}>{speeds.map((item) => <button key={item.value} type="button" role="radio" aria-checked={scrollSpeed === item.value} onClick={() => onScrollSpeed(item.value)}>{item.label}</button>)}</div></div>
       </div>
       <div className={styles.appearanceSwitches}>
         <button type="button" role="switch" aria-checked={cursorBlink} onClick={onCursorBlink}><span><Icon name="terminal" size={14} />{t('sessions.cursorBlink')}</span><span className={styles.switchTrack} aria-hidden="true"><i /></span></button>

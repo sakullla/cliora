@@ -336,7 +336,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!paletteOpen || !nativeAvailable) return;
+    if (!paletteOpen) {
+      setPaletteProjects([]);
+      setPaletteLiveSessions([]);
+      setPaletteSessions([]);
+      setPaletteLibrary([]);
+      return;
+    }
+    if (!nativeAvailable) return;
     let live = true;
     setPaletteSourceFailed(false);
     const markFailed = () => { if (live) setPaletteSourceFailed(true); };

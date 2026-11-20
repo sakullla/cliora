@@ -11,10 +11,10 @@ export class PendingTerminalOutput {
   private readonly maxSessionChunks: number;
 
   constructor(
-    maxSessions = 32,
-    maxBytes = 4 * 1024 * 1024,
-    maxSessionBytes = 512 * 1024,
-    maxSessionChunks = 256,
+    maxSessions = 24,
+    maxBytes = 1.5 * 1024 * 1024,
+    maxSessionBytes = 256 * 1024,
+    maxSessionChunks = 128,
   ) {
     this.maxSessions = maxSessions;
     this.maxBytes = maxBytes;

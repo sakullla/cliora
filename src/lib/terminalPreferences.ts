@@ -2,16 +2,19 @@ import { useSyncExternalStore } from 'react';
 
 export type TerminalThemePreference = 'auto' | 'dark' | 'light';
 export type TerminalDensity = 'compact' | 'standard' | 'relaxed';
+export type TerminalScrollSpeed = 'slow' | 'standard' | 'fast';
 
 export const TERMINAL_FONT_SIZE_MIN = 12;
 export const TERMINAL_FONT_SIZE_MAX = 20;
 export const TERMINAL_FONT_SIZE_DEFAULT = 14;
 export const TERMINAL_LINE_HEIGHT: Record<TerminalDensity, number> = { compact: 1.2, standard: 1.35, relaxed: 1.5 };
+export const TERMINAL_SCROLL_MULTIPLIER: Record<TerminalScrollSpeed, number> = { slow: 1, standard: 2, fast: 3.5 };
 
 export interface TerminalPreferences {
   fontSize: number;
   theme: TerminalThemePreference;
   density: TerminalDensity;
+  scrollSpeed: TerminalScrollSpeed;
   cursorBlink: boolean;
   soundEnabled: boolean;
 }
@@ -19,6 +22,7 @@ export interface TerminalPreferences {
 const FONT_SIZE_KEY = 'cliora:workbench-font-size';
 const THEME_KEY = 'cliora:workbench-terminal-theme';
 const DENSITY_KEY = 'cliora:workbench-density';
+const SCROLL_SPEED_KEY = 'cliora:workbench-scroll-speed';
 const CURSOR_BLINK_KEY = 'cliora:workbench-cursor-blink';
 const SOUND_KEY = 'cliora:workbench-sound';
 
@@ -42,10 +46,12 @@ function readAll(): TerminalPreferences {
   const size = Number(storedSize);
   const theme = read(THEME_KEY);
   const density = read(DENSITY_KEY);
+  const scrollSpeed = read(SCROLL_SPEED_KEY);
   return {
     fontSize: storedSize !== null && Number.isInteger(size) && size >= TERMINAL_FONT_SIZE_MIN && size <= TERMINAL_FONT_SIZE_MAX ? size : TERMINAL_FONT_SIZE_DEFAULT,
     theme: theme === 'dark' || theme === 'light' ? theme : 'auto',
     density: density === 'compact' || density === 'relaxed' ? density : 'standard',
+    scrollSpeed: scrollSpeed === 'slow' || scrollSpeed === 'fast' ? scrollSpeed : 'standard',
     cursorBlink: read(CURSOR_BLINK_KEY) !== 'false',
     soundEnabled: read(SOUND_KEY) !== 'false',
   };
@@ -89,6 +95,11 @@ export function setTerminalDensity(density: TerminalDensity) {
   if (density !== snapshot.density) commit({ ...snapshot, density });
 }
 
+export function setTerminalScrollSpeed(scrollSpeed: TerminalScrollSpeed) {
+  write(SCROLL_SPEED_KEY, scrollSpeed);
+  if (scrollSpeed !== snapshot.scrollSpeed) commit({ ...snapshot, scrollSpeed });
+}
+
 export function setTerminalCursorBlink(cursorBlink: boolean) {
   write(CURSOR_BLINK_KEY, String(cursorBlink));
   if (cursorBlink !== snapshot.cursorBlink) commit({ ...snapshot, cursorBlink });
@@ -102,7 +113,7 @@ export function setTerminalSoundEnabled(soundEnabled: boolean) {
 // Another window (or a direct localStorage write elsewhere) keeps every subscriber in step.
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (event) => {
-    if (event.key !== null && ![FONT_SIZE_KEY, THEME_KEY, DENSITY_KEY, CURSOR_BLINK_KEY, SOUND_KEY].includes(event.key)) return;
+    if (event.key !== null && ![FONT_SIZE_KEY, THEME_KEY, DENSITY_KEY, SCROLL_SPEED_KEY, CURSOR_BLINK_KEY, SOUND_KEY].includes(event.key)) return;
     const next = readAll();
     if (JSON.stringify(next) !== JSON.stringify(snapshot)) commit(next);
   });

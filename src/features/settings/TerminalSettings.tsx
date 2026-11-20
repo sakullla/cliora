@@ -11,10 +11,12 @@ import {
   setTerminalCursorBlink,
   setTerminalDensity,
   setTerminalFontSize,
+  setTerminalScrollSpeed,
   setTerminalSoundEnabled,
   setTerminalThemePreference,
   useTerminalPreferences,
   type TerminalDensity,
+  type TerminalScrollSpeed,
   type TerminalThemePreference,
 } from '../../lib/terminalPreferences';
 import { Icon } from '../../components/Icon';
@@ -201,6 +203,11 @@ export function TerminalDisplaySettings() {
     { value: 'standard' as TerminalDensity, label: t('sessions.lineStandard') },
     { value: 'relaxed' as TerminalDensity, label: t('sessions.lineRelaxed') },
   ];
+  const speeds = [
+    { value: 'slow' as TerminalScrollSpeed, label: t('sessions.scrollSlow') },
+    { value: 'standard' as TerminalScrollSpeed, label: t('sessions.scrollStandard') },
+    { value: 'fast' as TerminalScrollSpeed, label: t('sessions.scrollFast') },
+  ];
   return <section className="settings-group" id="settings-terminal-display" aria-label={t('settings.terminal.display')}>
     <div className="setting-intro"><h2>{t('settings.terminal.display')}</h2><p>{t('settings.terminal.displayHint')}</p></div>
     <div className="setting-row"><span><strong>{t('sessions.terminalColors')}</strong><small>{t('settings.terminal.colorsHint')}</small></span><Segmented label={t('sessions.terminalColors')} value={prefs.theme} options={themes} onChange={setTerminalThemePreference} /></div>
@@ -212,6 +219,7 @@ export function TerminalDisplaySettings() {
       </span>
     </div>
     <div className="setting-row"><span><strong>{t('sessions.lineHeight')}</strong><small>{t('settings.terminal.densityHint')}</small></span><Segmented label={t('sessions.lineHeight')} value={prefs.density} options={densities} onChange={setTerminalDensity} /></div>
+    <div className="setting-row"><span><strong>{t('sessions.scrollSpeed')}</strong><small>{t('settings.terminal.scrollSpeedHint')}</small></span><Segmented label={t('sessions.scrollSpeed')} value={prefs.scrollSpeed} options={speeds} onChange={setTerminalScrollSpeed} /></div>
     <label className="setting-row"><span><strong>{t('sessions.cursorBlink')}</strong><small>{t('settings.terminal.cursorBlinkHint')}</small></span><Switch aria-label={t('sessions.cursorBlink')} checked={prefs.cursorBlink} onChange={setTerminalCursorBlink} /></label>
     <label className="setting-row"><span><strong>{t('sessions.sound')}</strong><small>{t('settings.terminal.soundHint')}</small></span><Switch aria-label={t('sessions.sound')} checked={prefs.soundEnabled} onChange={setTerminalSoundEnabled} /></label>
   </section>;

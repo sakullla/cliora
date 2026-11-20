@@ -4,11 +4,11 @@
 .quick { overflow: hidden; border: 1px solid transparent; border-radius: var(--radius-xl); background: transparent; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease); }
 .quick:not([open]) { justify-self: start; max-width: 100%; }
 .quick[open] { border-color: var(--line); background: var(--surface); box-shadow: var(--shadow-card); }
-.quick > summary { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 32px; padding: 0 var(--space-3); border-radius: var(--radius-pill); color: var(--text-2); font-size: var(--fs-control); font-weight: var(--fw-medium); transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease); }
-.quick[open] > summary { display: flex; width: 100%; min-height: var(--row-h); border-radius: 0; border-bottom: 1px solid var(--line); background: var(--surface-2); color: var(--text); font-weight: var(--fw-semibold); }
+.quick > summary { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 32px; padding: 0 var(--space-3); border: 1px solid transparent; border-radius: var(--radius-pill); color: var(--text-2); font-size: var(--fs-control); font-weight: var(--fw-medium); transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease); }
+.quick[open] > summary { display: flex; width: 100%; min-height: var(--row-h); border: 0; border-radius: 0; border-bottom: 1px solid var(--line); background: var(--surface-2); color: var(--text); font-weight: var(--fw-semibold); }
 .quick > summary small { min-width: 0; margin-left: var(--space-1); overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); text-overflow: ellipsis; white-space: nowrap; }
 .quick[open] > summary small { margin-left: auto; }
-.quick:not([open]) > summary:hover { background: var(--surface-2); color: var(--text); }
+.quick:not([open]) > summary:hover { border-color: var(--line); background: var(--surface); color: var(--text); }
 .quickContent { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-4); }
 .quickContent > div:first-child { display: grid; gap: var(--space-0_5); }
 .quickContent > div:first-child strong { font-size: var(--fs-body); font-weight: var(--fw-semibold); }
@@ -96,10 +96,10 @@
 .infoActions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5); }
 .infoCopyFailed { color: var(--danger); font-size: var(--fs-caption); }
 
-/* No standalone directory is the normal case for people who work in business projects: one quiet
-   line with the add action, not a large invitation competing with the project list below. */
-.emptyProjects { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); padding: var(--space-2_5) var(--space-3); border: 1px dashed var(--line); border-radius: var(--radius-lg); background: transparent; }
-.emptyIcon { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: var(--radius); background: var(--surface-3); color: var(--text-3); }
+/* No standalone directory is the normal case for people who work in business projects: one calm
+   compact card with the add action, never competing with the business project list below. */
+.emptyProjects { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); padding: var(--space-2_5) var(--space-3_5); border: 1px solid var(--line); border-radius: var(--radius-xl); background: color-mix(in srgb, var(--surface) 72%, var(--bg)); }
+.emptyIcon { display: grid; place-items: center; flex: none; width: 30px; height: 30px; border-radius: var(--radius); background: var(--accent-soft); color: var(--accent); }
 .emptyCopy { display: flex; flex-wrap: wrap; align-items: baseline; flex: 1 1 240px; gap: var(--space-0_5) var(--space-2); min-width: 0; }
 .emptyCopy strong { font-size: var(--fs-body); font-weight: var(--fw-semibold); }
 .emptyCopy span { color: var(--text-3); font-size: var(--fs-caption); line-height: 1.5; }

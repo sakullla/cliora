@@ -4414,3 +4414,44 @@ test('long session titles at 640px keep the compact waiting jump and every title
   await expect(page.locator('[role="tab"][aria-selected="true"]')).toHaveAttribute('data-session-id', 's2');
   expect(await noSidewaysScroll()).toBe(true);
 });
+
+test('terminal appearance font stepper centers value and px on one line and updates scroll speed', async ({ page }) => {
+  await openWorkbench(page);
+  await page.getByRole('button', { name: '终端显示', exact: true }).click();
+  const appearance = page.getByRole('dialog', { name: '终端显示' });
+  const fontReset = appearance.getByRole('button', { name: '重置默认字号（14px）' });
+  await expect(fontReset).toHaveText('14px');
+  const metrics = await fontReset.evaluate((button) => {
+    const small = button.querySelector('small')!;
+    const btnRect = button.getBoundingClientRect();
+    const smallRect = small.getBoundingClientRect();
+    return {
+      overflowY: button.scrollHeight > button.clientHeight + 1,
+      smallInside: smallRect.top >= btnRect.top && smallRect.bottom <= btnRect.bottom + 0.5,
+      smallVisible: smallRect.width > 0 && smallRect.height > 0,
+    };
+  });
+  expect(metrics).toEqual({ overflowY: false, smallInside: true, smallVisible: true });
+
+  const speedGroup = appearance.getByRole('radiogroup', { name: '滚动速度' });
+  await expect(speedGroup.getByRole('radio', { name: '标准', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await speedGroup.getByRole('radio', { name: '快速', exact: true }).click();
+  await expect(speedGroup.getByRole('radio', { name: '快速', exact: true })).toHaveAttribute('aria-checked', 'true');
+  expect(await page.evaluate(() => localStorage.getItem('cliora:workbench-scroll-speed'))).toBe('fast');
+});
+
+test('mouse-tracking TUI accelerates wheel scrolling into multiple atomic SGR reports', async ({ page }) => {
+  await openWorkbench(page);
+  await page.evaluate(() => {
+    (window as unknown as { __output: (text: string) => void }).__output('\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[Hcodex-tui');
+  });
+  await expect(page.locator('.xterm-accessibility-tree').first()).toContainText('codex-tui');
+  const screen = page.getByRole('region', { name: '当前会话' }).locator('.xterm-screen');
+  const box = (await screen.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.evaluate(() => { (window as unknown as { __writeLog: unknown[] }).__writeLog.length = 0; });
+  await page.mouse.wheel(0, -120);
+  await expect.poll(async () => (await writeLog(page)).length).toBeGreaterThanOrEqual(2);
+  const reports = await writeLog(page);
+  expect(reports.every((item) => /^\x1b\[<64;\d+;\d+M$/.test(item.text))).toBe(true);
+});
