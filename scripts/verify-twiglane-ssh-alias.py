@@ -196,6 +196,17 @@ ForceCommand {forced}
     fresh_peer = checked_probe(new_catalog)["peerRevision"]
     assert fresh_peer != new_peer
     assert bridge("connect", "fixture", fresh_peer, digest, "development").returncode == 0
+    pinned_identity = checked_probe(new_catalog)["peerIdentity"]
+    with known.open("a") as known_file:
+        known_file.write("# unrelated trust-file update\n")
+    edited_catalog = revision()
+    edited = checked_probe(edited_catalog)
+    assert edited_catalog != new_catalog and edited["peerRevision"] != fresh_peer
+    assert edited["peerIdentity"] == pinned_identity
+    rotate(replacement)
+    rotated = checked_probe(edited_catalog)
+    assert rotated["peerIdentity"] != pinned_identity
+    rotate(directory / "server-A")
     provider = support / "host key provider"
     provider.write_text("#!/bin/sh\ncat '" + str(known) + "'\n")
     provider.chmod(0o700)

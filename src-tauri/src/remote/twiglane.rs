@@ -247,10 +247,10 @@ fn run(args: &[String], database: impl FnOnce() -> Result<PathBuf>) -> Result<()
         let peer =
             super::twiglane_peer::token(private_config.path(), &snapshot.revision, snapshot.count)?;
         let mut value: Value = serde_json::from_slice(&response).map_err(|_| "invalid_probe")?;
-        value
-            .as_object_mut()
-            .ok_or("invalid_probe")?
-            .insert("peerRevision".into(), Value::String(peer));
+        let probe = value.as_object_mut().ok_or("invalid_probe")?;
+        probe.insert("peerRevision".into(), Value::String(peer));
+        let identity = super::twiglane_peer::host_identity(private_config.path())?;
+        probe.insert("peerIdentity".into(), Value::String(identity));
         println!("{value}");
     }
     drop(private_config);

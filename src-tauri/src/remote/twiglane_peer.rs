@@ -40,6 +40,18 @@ fn file_for(folder: &Path, index: usize) -> PathBuf {
     folder.join(format!("peer-{index}"))
 }
 
+/// Stable identity of the authenticated final host, independent of its route or trust policy.
+pub(super) fn host_identity(folder: &Path) -> Result<String> {
+    let key = fs::read(file_for(folder, 0)).map_err(|_| "peer_unverified")?;
+    if key.len() != 32 {
+        return Err("peer_unverified");
+    }
+    let mut hash = Sha256::new();
+    hash.update(b"cliora-twiglane-host-key-v1\0");
+    hash.update(key);
+    Ok(format!("{:x}", hash.finalize()))
+}
+
 pub(super) fn token(folder: &Path, catalog: &str, count: usize) -> Result<String> {
     let mut hash = Sha256::new();
     hash.update(b"cliora-twiglane-authenticated-peers-v1\0");
