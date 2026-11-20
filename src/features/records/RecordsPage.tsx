@@ -805,7 +805,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent
         </div>
         <div className={styles.detailMeta}>
           <span className={styles.toolTag}><ToolIcon toolId={selected.session.toolId} size={15} /><span>{toolName(selected.session.toolId)}</span></span>
-          <span className={styles.modelBadge}>{selected.session.model ?? t('records.page.modelUnknown')}</span>
+          <span className={styles.modelBadge} title={selected.session.model ?? t('records.page.modelUnknown')}>{selected.session.model ?? t('records.page.modelUnknown')}</span>
           {!openedChild && (selected.session.cwd ? <button type="button" className={styles.cwdChip} data-copied={cwdCopied > 0 || undefined} title={`${displayPath(selected.session.cwd)} · ${t('records.page.copyPath')}`} onClick={() => void writeClipboard(displayPath(selected.session.cwd!)).then((ok) => { if (ok) setCwdCopied((value) => value + 1); })}><Icon name={cwdCopied > 0 ? 'check' : 'folder'} size={13} /><span>{cwdCopied > 0 ? t('records.page.pathCopied') : (projects.find((item) => item.id === selected.session.projectId)?.name ?? selected.session.cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? t('records.page.cwdUnknown'))}</span></button> : <span><Icon name="folder" size={13} />{projects.find((item) => item.id === selected.session.projectId)?.name ?? t('records.page.cwdUnknown')}</span>)}
           {!openedChild && <time title={day(selected.session.updatedAt)}>{t('records.page.updated', { time: compactDay(selected.session.updatedAt) })}</time>}
         </div>

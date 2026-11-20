@@ -1637,6 +1637,7 @@ test('records detail header stays compact and usage KPI cards with primary chart
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记录' }).click();
   await expect(page.getByRole('heading', { name: 'Compact reading layout check' })).toBeVisible();
+  await expect(page.locator('[class*="modelBadge"]')).toHaveAttribute('title', 'gpt-6-astra');
 
   const detailMetrics = await page.evaluate(() => {
     const detailBar = document.querySelector<HTMLElement>('[class*="detailBar"]');
