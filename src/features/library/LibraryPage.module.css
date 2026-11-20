@@ -112,7 +112,7 @@
   box-shadow: none;
   color: var(--text);
   font-family: var(--font-display);
-  font-size: var(--fs-heading);
+  font-size: var(--fs-title);
   font-weight: var(--fw-bold);
   letter-spacing: -.01em;
   line-height: 1.4;
@@ -160,13 +160,18 @@
 .list > :global(.empty-state) { grid-column: 1 / -1; }
 
 /* Distribution outcome: each target keeps its own success or failure line. */
-.result { display: grid; gap: var(--space-2); padding: var(--space-3) var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-card); }
+.result { display: grid; gap: var(--space-2); padding: var(--space-3) var(--space-4); border: 1px solid var(--accent-line); border-radius: var(--radius-xl); background: var(--accent-soft); box-shadow: var(--shadow-card); }
+.result[data-tone="warning"] { border-color: var(--warning-line); background: var(--warning-soft); }
 .resultHead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
 .resultHead > svg { flex: none; color: var(--success); }
 .result[data-tone="warning"] .resultHead > svg { color: var(--warning); }
 .resultHead > span { flex: 1 1 200px; min-width: 0; }
-.resultList { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+.resultList { display: grid; gap: var(--space-1_5); margin: 0; padding: 0; list-style: none; }
 .resultList li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); min-width: 0; color: var(--text-2); font-size: var(--fs-caption); }
+.resultList li[data-state="failed"],
+.resultList li[data-state="conflict"] { padding: var(--space-1_5) var(--space-2_5); border: 1px solid var(--danger-line); border-radius: var(--radius-sm); background: var(--surface); }
+.resultList li[data-state="failed"] { border-color: var(--danger-line); box-shadow: inset 3px 0 0 var(--danger); }
+.resultList li[data-state="conflict"] { border-color: var(--warning-line); box-shadow: inset 3px 0 0 var(--warning); }
 .resultList li > svg { flex: none; color: var(--success); }
 .resultList li[data-state="failed"] > svg { color: var(--danger); }
 .resultList li[data-state="conflict"] > svg { color: var(--warning); }
@@ -176,12 +181,14 @@
    so long paths wrap instead of being cut off in a narrow window. */
 .resultText { margin: 0; color: var(--text-2); font-size: var(--fs-caption); line-height: 1.5; overflow-wrap: anywhere; }
 .resultState { flex: 1 1 auto; min-width: 0; color: var(--text-2); }
-.resultList li[data-state="failed"] .resultState { color: var(--danger); }
-.resultList li[data-state="conflict"] .resultState { color: var(--warning); }
+.resultList li[data-state="failed"] .resultState { color: var(--danger); font-weight: var(--fw-semibold); }
+.resultList li[data-state="conflict"] .resultState { color: var(--warning); font-weight: var(--fw-semibold); }
 .resultFoot { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .resultList li .resultPath, .resultList li .resultDetail { flex: 1 1 100%; padding-left: calc(var(--space-3) + var(--space-2_5)); }
 .resultList li .resultPath { font-family: var(--font-mono); }
 .resultList li .resultDetail { color: var(--text-2); }
+.resultList li[data-state="failed"] .resultDetail { color: var(--danger); }
+.resultList li[data-state="conflict"] .resultDetail { color: var(--warning); }
 
 /* Editor (dialog) */
 .editor { display: grid; gap: var(--space-3); }

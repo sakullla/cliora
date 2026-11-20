@@ -7,6 +7,7 @@ import { ConflictCompare } from '../../components/configuration/ConflictCompare'
 import { SearchField } from '../../components/SearchField';
 import { Icon } from '../../components/Icon';
 import { EmptyState } from '../../components/EmptyState';
+import { StatusBanner } from '../../components/StatusBanner';
 import { SkeletonRows } from '../../components/Skeleton';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
 import { confirmAction } from '../../lib/confirm';
@@ -408,7 +409,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
         </div>
       </div>
       {loading && loaded && <p className={styles.progress} role="status">{t('library.resources.refreshing')}</p>}
-      {stale && loaded && <div className={styles.stale} role="status"><strong>{t('library.resources.staleTitle')}</strong><span>{t('library.resources.staleDetail')}</span><Button size="sm" disabled={loading} onClick={() => void reload()}>{t('library.resources.retry')}</Button></div>}
+      {stale && loaded && <StatusBanner tone="warning" action={<Button size="sm" icon={<Icon name="refresh" size={14} />} disabled={loading} onClick={() => void reload()}>{t('library.resources.retry')}</Button>}><strong>{t('library.resources.staleTitle')}</strong>{' '}<span>{t('library.resources.staleDetail')}</span></StatusBanner>}
       {empty ?? <ul className={styles.list} aria-label={t('library.resources.mcpListAria')}>
         {shown.map((item) => {
           const places = placementsByDefinition.get(item.id) ?? [];

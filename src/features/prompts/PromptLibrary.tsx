@@ -13,6 +13,7 @@ import { Icon } from '../../components/Icon';
 import { Badge, Button } from '../../components/ui';
 import { saveShortcutHint } from '../../lib/shortcut';
 import { EmptyState } from '../../components/EmptyState';
+import { StatusBanner } from '../../components/StatusBanner';
 import { RowMenu } from '../../components/RowMenu';
 import type { BusinessWorkspace } from '../../types/workspaces';
 import type { LibraryItem } from '../../types/library';
@@ -241,10 +242,13 @@ export function PromptLibrary({ context, active, createSignal, discardSignal, sp
       {tagFilter && <button type="button" className={styles.tagChip} data-active="true" aria-label={t('library.page.activeTagChip', { tag: tagFilter })} onClick={() => filters(() => setTagFilter(''))}>#{tagFilter}<Icon name="close" size={11} /></button>}
       {filtering && <Button variant="ghost" size="sm" onClick={clearFilters}>{t('library.page.clearFilters')}</Button>}
     </div>
-    {scopeError && <p className={styles.error} role="alert">{scopeError}</p>}
-    {error && !draft && !assignOpen && <p className={styles.error} role="alert">{error}</p>}
-    {stale && <div className={styles.error} role="alert"><p>{t('library.page.listStale', { kind: t('prompts.title') })}</p><span>{hasKnownSaved && savedReadError ? savedReadError.replace(t('library.page.savedListNext'), t('library.page.listRetryNext')) : query.error}</span><Button size="sm" onClick={refresh}>{t('prompts.retry')}</Button></div>}
-    {notice && <p className={styles.notice} role="status">{notice}</p>}
+    {scopeError && <StatusBanner tone="error">{scopeError}</StatusBanner>}
+    {error && !draft && !assignOpen && <StatusBanner tone="error">{error}</StatusBanner>}
+    {stale && <StatusBanner tone="warning" action={<Button size="sm" icon={<Icon name="refresh" size={14} />} onClick={refresh}>{t('prompts.retry')}</Button>}>
+      <span>{t('library.page.listStale', { kind: t('prompts.title') })}</span>
+      {(hasKnownSaved && savedReadError ? savedReadError.replace(t('library.page.savedListNext'), t('library.page.listRetryNext')) : query.error) && <> <span className={styles.staleDetail}>{hasKnownSaved && savedReadError ? savedReadError.replace(t('library.page.savedListNext'), t('library.page.listRetryNext')) : query.error}</span></>}
+    </StatusBanner>}
+    {notice && <StatusBanner tone="success">{notice}</StatusBanner>}
     <div className={styles.libraryList} aria-label={t('library.page.listAria', { kind: t('prompts.title') })} aria-busy={query.loading || undefined}>
       {query.loading && !rows.length && <p className={styles.hint} role="status">{t('prompts.loading')}</p>}
       {query.error && !stale ? <EmptyState icon="library" title={t('library.page.loadFailedTitle', { kind: t('prompts.title') })} detail={query.error} action={<Button onClick={refresh}>{t('prompts.retry')}</Button>} /> : rows.map(item => <article className={styles.row} key={item.id} data-library-id={item.id} data-source={item.scope.kind} data-selected={selected[item.id] ? 'true' : undefined}>

@@ -30,8 +30,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
 import { formatFailure } from '../../lib/feedback';
 import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/workbenchLaunch';
-import { useToasts } from '../../lib/toast';
-import { ToastScope } from '../../components/Toast';
+import { useToastContext, useToasts } from '../../lib/toast';
 import { SkeletonRows } from '../../components/Skeleton';
 import { navigateChoices } from '../../lib/choiceNavigation';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
@@ -148,7 +147,9 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
   const [savedText, setSavedText] = useState('');
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(busy); busyRef.current = busy;
-  const toasts = useToasts();
+  const sharedToasts = useToastContext();
+  const fallbackToasts = useToasts();
+  const toasts = sharedToasts ?? fallbackToasts;
   const [listLoading, setListLoading] = useState(nativeAvailable);
   const [dialogError, setDialogError] = useState('');
   const [dialogNotice, setDialogNotice] = useState('');
@@ -779,7 +780,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     if (!shown.length) return <EmptyState icon="search" title={t('library.page.noResults', { kind: kindName(kind) })} action={filtering ? <Button onClick={clearFilters}>{t('library.page.clearFilters')}</Button> : undefined} />;
     return null;
   }
-  return <section className={styles.page} aria-label={t('library.page.label')} data-host-target={remoteTargetId}>{!listStale && <RemoteReadStatus state={remoteReads} />}<ToastScope toasts={toasts}>
+  return <section className={styles.page} aria-label={t('library.page.label')} data-host-target={remoteTargetId}>{!listStale && <RemoteReadStatus state={remoteReads} />}
     <Toolbar className={styles.libraryBar} role="group" primary={section === 'skill' && remoteTargetId !== 'local' && !scopedTools.some(tool => tool.remoteResources ? !!tool.remoteResources.skillRoot : tool.management?.skills === true) ? undefined : <Button variant="primary" icon={<Icon name="plus" size={14} />} onClick={() => { if (section === 'rule') start(kind); else setCreateSignal((value) => value + 1); }}>{section === 'mcp' ? t('library.resources.newMcp') : section === 'skill' ? t('tools.skills.add') : t('library.page.new', { kind: kindName(kind) })}</Button>}>
       <div className="tabs" role="tablist" aria-label={t('library.page.typesAria')} onKeyDown={navigateChoices}>
         {sectionTabs.map(([id, icon, label]) => <button key={id} type="button" role="tab" id={`library-${id}-tab`} aria-controls={`library-${id}-panel`} className={section === id ? 'active' : undefined} aria-selected={section === id} tabIndex={section === id ? 0 : -1} onClick={() => void openSection(id)}>
@@ -922,5 +923,5 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
         </div>;
       })()}
     </GuideDialog>
-  </ToastScope></section>;
+  </section>;
 }
