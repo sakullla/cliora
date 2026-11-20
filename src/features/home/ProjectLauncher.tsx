@@ -22,6 +22,7 @@ import { SkeletonRows } from '../../components/Skeleton';
 import { Badge, Button, Segmented, SplitButton, Toolbar } from '../../components/ui';
 import { ensureRemoteProject, useRemoteFolderPicker } from '../remote/remoteLaunch';
 import { formatFailure } from '../../lib/feedback';
+import { useToastContext } from '../../lib/toast';
 import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from '../sessions/workbenchLaunch';
 import { ProjectInfoDialog, type ProjectInfoRow } from './ProjectInfoDialog';
 import styles from './ProjectLauncher.module.css';
@@ -80,6 +81,7 @@ function readSort(): ProjectSort {
 
 export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQueryChange: setProjectQuery, remoteSshEnabled = false, remoteTargetId = 'local', onWorkbenchSession, onWorkbenchFailure, incomingManifest, onManifestConsumed }: { onManifestConsumed?: (preview: WorkspaceManifestPreview) => void; incomingManifest?: WorkspaceManifestPreview | null; tools: AdapterDescriptor[]; projectQuery: string; onQueryChange: (query: string) => void; repair?: TrayRepairTarget | null; spotlight?: { id: string; token: number } | null; remoteSshEnabled?: boolean; remoteTargetId?: string; onWorkbenchSession?: (sessionId: string) => void; onWorkbenchFailure?: (failure: WorkbenchFailure) => void }) {
   const { t, i18n } = useTranslation();
+  const toasts = useToastContext();
   const projectNext = t('home.launcher.projectNext');
   // Recent work is identified with real project data: the backend returns projects by last_opened.
   const relative = new Intl.RelativeTimeFormat(i18n.language || 'zh-CN', { numeric: 'auto' });
@@ -156,6 +158,10 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
   function showPageError(value: unknown) { setFeedback(''); setError(formatFailure(value, t('home.launcher.operationFailed'), projectNext)); }
   function showPageFeedback(text: string) {
     setError('');
+    if (toasts) {
+      toasts.showNotice(text);
+      return;
+    }
     setFeedback(text);
     if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
     feedbackTimer.current = setTimeout(() => { feedbackTimer.current = null; setFeedback((current) => current === text ? '' : current); }, 5000);
@@ -521,7 +527,6 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
         : text(result.mode);
       if (surface === 'dialog') {
         showDialogFeedback(message);
-        setFeedback(message);
       } else showPageFeedback(message);
       // Keep the project card state current without delaying the launch result.
       void refresh();
@@ -626,6 +631,7 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
       {attentionCount > 0 && <button type="button" className={styles.filterChip} aria-pressed={attentionActive} title={t('home.launcher.attentionHint')} onClick={() => setAttentionOnly(!attentionActive)}><span className={styles.attentionDot} aria-hidden="true" />{t('home.launcher.attention', { count: attentionCount })}</button>}
       <Segmented size="sm" className={styles.sortSwitch} label={t('home.launcher.sortLabel')} value={sortMode} onChange={changeSort} options={[{ value: 'recent', label: t('home.launcher.sortRecent') }, { value: 'name', label: t('home.launcher.sortName') }]} />
     </div>}
+    <div className={styles.directorySurface} data-directory-surface>
     {scopeLoading ? <SkeletonRows count={2} /> : (orderedProjects.length || orderedRemote.length) ? <>
     {pageProjects.length > 0 && <div className={styles.projectList}>
     {pageProjects.map((project) => {
@@ -659,7 +665,7 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
           <div className={styles.actions}>
             {pinButton(project.id, project.name)}
             {descriptor?.resumeLatestAvailable && <Button size="sm" variant="ghost" disabled={!!busy || !project.available || !toolId} onClick={() => void launch(toolId, project.id, projectMode, undefined, 'page', true)}>{t('home.launcher.resumeLatest')}</Button>}
-            <SplitButton size="sm" icon={<Icon name="play" size={14} />} disabled={!!busy || !project.available || !toolId} title={!project.available ? t('home.launcher.dirUnavailable') : projectMode === 'yolo' ? t('home.tools.launchYolo') : launchSettings?.projectMode === 'yolo' ? t('home.tools.launchYoloFallback') : undefined} menuLabel={t('home.launcher.launchMenu', { name: project.name })} menuDisabled={!!busy || !project.available || !managed.length} menu={launchMenu(toolId, (next) => void launchWith(project, toolId, next))} onClick={() => void launch(toolId, project.id, projectMode)}>{t('home.tools.launch')}</SplitButton>
+            <SplitButton variant="secondary" size="sm" className={styles.launchSplit} icon={<Icon name="play" size={14} />} disabled={!!busy || !project.available || !toolId} title={!project.available ? t('home.launcher.dirUnavailable') : projectMode === 'yolo' ? t('home.tools.launchYolo') : launchSettings?.projectMode === 'yolo' ? t('home.tools.launchYoloFallback') : undefined} menuLabel={t('home.launcher.launchMenu', { name: project.name })} menuDisabled={!!busy || !project.available || !managed.length} menu={launchMenu(toolId, (next) => void launchWith(project, toolId, next))} onClick={() => void launch(toolId, project.id, projectMode)}>{t('home.tools.launch')}</SplitButton>
             <RowMenu label={t('home.launcher.moreActions', { name: project.name })}>
               <button type="button" role="menuitem" onClick={() => setEditingId(project.id)}><Icon name="pencil" size={14} /><span>{t('home.launcher.edit')}</span></button>
               <button type="button" role="menuitem" onClick={() => setInfoId(project.id)}><Icon name="info" size={14} /><span>{t('home.launcher.info')}</span></button>
@@ -725,7 +731,7 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
             <FilterSelect className={styles.toolSelect} label={t('home.launcher.toolFor', { name: project.name })} value={toolId} options={[{ value: '', label: t('home.launcher.pickTool') }, ...toolOptions(managed)]} placeholder={t('home.launcher.pickTool')} disabled={!!busy || !managed.length} searchLabel={t('home.launcher.searchTool')} onChange={(value) => setRemoteProjects((items) => items.map((item) => item.id === project.id ? { ...item, preferredTool: value || null } : item))} />
             <div className={styles.actions}>
               {pinButton(`remote:${project.id}`, project.name)}
-              <SplitButton size="sm" icon={<Icon name="play" size={14} />} disabled={!!busy || !toolId} title={projectMode === 'yolo' ? t('home.tools.launchYolo') : undefined} menuLabel={t('home.launcher.launchMenu', { name: project.name })} menuDisabled={!!busy || !managed.length} menu={launchMenu(toolId, (next) => void launchRemoteWith(project, next))} onClick={() => void launch(toolId, `remote:${project.id}`, projectMode)}>{t('home.tools.launch')}</SplitButton>
+              <SplitButton variant="secondary" size="sm" className={styles.launchSplit} icon={<Icon name="play" size={14} />} disabled={!!busy || !toolId} title={projectMode === 'yolo' ? t('home.tools.launchYolo') : undefined} menuLabel={t('home.launcher.launchMenu', { name: project.name })} menuDisabled={!!busy || !managed.length} menu={launchMenu(toolId, (next) => void launchRemoteWith(project, next))} onClick={() => void launch(toolId, `remote:${project.id}`, projectMode)}>{t('home.tools.launch')}</SplitButton>
               <RowMenu label={t('home.launcher.moreActions', { name: project.name })}>
                 <button type="button" role="menuitem" onClick={() => setInfoId(`remote:${project.id}`)}><Icon name="info" size={14} /><span>{t('home.launcher.info')}</span></button>
                 <button type="button" role="menuitem" data-danger="true" onClick={() => void removeRemote(project)}><Icon name="trash" size={14} /><span>{t('home.remote.remove')}</span></button>
@@ -751,6 +757,7 @@ export function ProjectLauncher({ tools, repair, spotlight, projectQuery, onQuer
       {unindexedResume.map((item) => <p key={item.id}>{item.name}：{item.history.reason} {t('home.launcher.resumeOnProject')}</p>)}
       {!resumable.length && managed.filter((item) => item.resume != null && item.resume.state !== 'available').map((item) => <p key={item.id}>{item.name}：{item.resume.reason}</p>)}
     </div></details>}
+    </div>
     {/* Business projects group repositories for management; launching from a directory comes first. */}
     {remoteTargetId === 'local' && <WorkspaceBrowser tools={tools} launchSettings={launchSettings} enablePageSearch={!(totalProjects > 4 || projectQuery)} spotlightProject={spotlightProject?.workspaceBacked && spotlightProject.id !== repair?.projectId ? spotlight : null} onSession={onWorkbenchSession} incomingManifest={incomingManifest} onManifestConsumed={onManifestConsumed} />}
     {remotePicker.element}

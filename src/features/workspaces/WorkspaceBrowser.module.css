@@ -119,12 +119,12 @@ div.empty { display: flex; align-items: center; justify-content: center; gap: va
 .emptyState { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3) var(--space-3_5); border: 1px dashed var(--line-strong); border-radius: var(--radius); color: var(--text-3); font-size: var(--fs-caption); }
 .emptyState p { margin: 0; }
 
-/* No project yet: a single calm invitation instead of an empty frame. */
-.intro { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
-.introIcon { display: grid; flex: none; place-items: center; width: 36px; height: 36px; border-radius: var(--radius); background: var(--accent-soft); color: var(--accent); }
-.introCopy { display: grid; flex: 1; gap: var(--space-0_5); min-width: 0; }
-.introCopy strong { font-size: var(--fs-title); font-weight: var(--fw-semibold); }
-.introCopy span { color: var(--text-3); font-size: var(--fs-caption); }
+/* No project yet: a single compact band bar so Home reveals more content above the fold. */
+.introBar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); min-width: 0; padding: var(--space-2) var(--space-3_5); border: 1px solid var(--line); border-radius: var(--radius-xl); background: color-mix(in srgb, var(--surface) 72%, var(--bg)); }
+.introIcon { display: grid; flex: none; place-items: center; width: 30px; height: 30px; border-radius: var(--radius); background: var(--accent-soft); color: var(--accent); }
+.introCopy { display: flex; flex-wrap: wrap; align-items: baseline; flex: 1 1 220px; gap: var(--space-0_5) var(--space-2); min-width: 0; }
+.introCopy strong { font-size: var(--fs-body); font-weight: var(--fw-semibold); color: var(--text); }
+.introCopy span { color: var(--text-3); font-size: var(--fs-caption); line-height: 1.5; }
 
 .error, .warning, .notice { display: flex; align-items: center; gap: var(--space-2); margin: 0; padding: var(--space-2) var(--space-2_5); border: 1px solid var(--danger-line); border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--text); font-size: var(--fs-caption); white-space: pre-wrap; overflow-wrap: anywhere; }
 .error > svg { flex: none; color: var(--danger); }

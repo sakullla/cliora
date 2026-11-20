@@ -546,9 +546,9 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
     {current && <button type="button" role="menuitem" data-danger="true" disabled={busy} onClick={() => void deleteProject()}>{t('workspaces.deleteProject')}</button>}
   </RowMenu>;
   return <section ref={blockRef} className={styles.block} aria-label={t('workspaces.title')} data-business-workspaces>
-    <Toolbar className={styles.heading} title={t('workspaces.title')} count={workspaces.length ? <Badge>{workspaces.length}</Badge> : undefined} />
-    <div className={styles.browser}>
     {workspaces.length > 0 && current ? <>
+      <Toolbar className={styles.heading} title={t('workspaces.title')} count={<Badge>{workspaces.length}</Badge>} />
+      <div className={styles.browser}>
       <div className={styles.header}>
         <div className={styles.titleBlock}>
           <FilterSelect variant="title" className={styles.select} disabled={busy || scanBusy || candidates !== null} label={t('workspaces.select')} triggerDetail={false} value={selectedId} options={workspaces.map(item => ({ value: item.id, label: item.name, detail: t('workspaces.repositories', { count: item.repositories.length }) }))} onChange={id => { setSelectedId(id); setQuery(''); setFilter('all'); setPrefixGroup(''); }} />
@@ -620,15 +620,18 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
           })}
         </div> : <div className={styles.empty} role="status"><span>{t('workspaces.noMatches')}</span><Button size="sm" variant="ghost" onClick={() => { setQuery(''); setFilter('all'); setPrefixGroup(''); }}>{t('workspaces.clearFilters')}</Button></div>}
       </> : <div className={styles.emptyState}><p>{t('workspaces.emptyReposAction')}</p><Button size="sm" variant="ghost" icon={<Icon name="search" size={13} />} disabled={busy || scanBusy} onClick={() => void discover(true)}>{t('workspaces.discover')}</Button></div>}
-    </> : <div className={styles.intro}>
-      <span className={styles.introIcon} aria-hidden="true"><Icon name="folder" size={18} /></span>
-      <div className={styles.introCopy}><strong>{loading ? t('workspaces.loading') : t('workspaces.empty')}</strong><span>{loadError || t('workspaces.hint')}</span></div>
+      </div>
+    </> : <div className={styles.introBar} data-empty-workspace>
+      <span className={styles.introIcon} aria-hidden="true"><Icon name="folder" size={16} /></span>
+      <div className={styles.introCopy}>
+        <strong>{loading ? t('workspaces.loading') : t('workspaces.title')}</strong>
+        <span>{loadError || t('workspaces.empty')}</span>
+      </div>
       {!loading && <div className={styles.headerActions}>
-        {loadError ? <Button size="sm" onClick={() => void reload(true)}>{t('workspaces.retry')}</Button> : <Button size="sm" variant="primary" data-project-add disabled={busy} icon={<Icon name="plus" size={14} />} onClick={startCreate}>{t('workspaces.create')}</Button>}
+        {loadError ? <Button size="sm" onClick={() => void reload(true)}>{t('workspaces.retry')}</Button> : <Button size="sm" data-project-add disabled={busy} icon={<Icon name="plus" size={14} />} onClick={startCreate}>{t('workspaces.create')}</Button>}
         <Button size="sm" variant="ghost" disabled={busy} onClick={() => void chooseManifest()}>{t('workspaces.openManifest')}</Button>
       </div>}
     </div>}
-    </div>
     <GuideDialog open={editName !== null} title={t(renaming ? 'workspaces.rename' : 'workspaces.create')} hint={t(renaming ? 'workspaces.renameHint' : 'workspaces.createHint')} closeDisabled={busy} onClose={() => setEditName(null)}>
       <form className={styles.form} onSubmit={event => { event.preventDefault(); void saveProject(); }}>
         <label>{t('workspaces.name')}<input autoFocus value={editName ?? ''} onChange={event => setEditName(event.target.value)} maxLength={160} /></label>

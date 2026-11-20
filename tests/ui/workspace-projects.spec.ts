@@ -700,8 +700,20 @@ test('deleting a project trims only the checkouts it owned', async ({ page }) =>
 
 test('creating the first project keeps the keyboard in the new project', async ({ page }) => {
   await page.addInitScript(() => { (window as any).__workspaceEmptyProjects = true; });
+  await page.setViewportSize({ width: 1360, height: 900 });
   await install(page);
   const block = page.locator('[data-business-workspaces]').first();
+  // Empty business workspace renders as a compact single-band bar with no overflow at 1360px / 720px.
+  const bar = block.locator('[data-empty-workspace]');
+  await expect(bar).toBeVisible();
+  const barBox = await bar.boundingBox();
+  expect(barBox).not.toBeNull();
+  expect(barBox!.height).toBeLessThanOrEqual(72);
+  for (const width of [1360, 720]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), `width ${width}`).toBeLessThanOrEqual(0);
+  }
+  await page.setViewportSize({ width: 1360, height: 900 });
   await block.getByRole('button', { name: '新建项目', exact: true }).click();
   const create = page.getByRole('dialog', { name: '新建项目' });
   await create.getByRole('textbox', { name: '项目名称' }).fill('发布平台');

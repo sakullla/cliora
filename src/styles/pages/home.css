@@ -1,5 +1,5 @@
 /* Home: start new work, resume recent work, then manage tools. */
-.home-band { display: flex; flex-direction: column; gap: var(--space-6); min-width: 0; }
+.home-band { display: flex; flex-direction: column; gap: var(--space-5); min-width: 0; }
 .home-band > * { min-width: 0; }
 .home-tools { min-width: 0; container-type: inline-size; }
 .home-section-hint { display: none; }

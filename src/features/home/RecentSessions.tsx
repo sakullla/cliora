@@ -3,8 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
 import { Badge, Button } from '../../components/ui';
-import { ToastStack } from '../../components/Toast';
-import { useToasts } from '../../lib/toast';
+import { useToastContext } from '../../lib/toast';
 import { native, nativeAvailable } from '../../lib/native';
 import { shortPath } from '../../lib/paths';
 import type { HistorySession } from '../../types/history';
@@ -22,7 +21,7 @@ export function RecentSessions({ tools, active, onResume, onOpenSession, onOpenR
   onOpenRecords: () => void;
 }) {
   const { t, i18n } = useTranslation();
-  const toasts = useToasts();
+  const toasts = useToastContext();
   const [sessions, setSessions] = useState<HistorySession[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -65,7 +64,7 @@ export function RecentSessions({ tools, active, onResume, onOpenSession, onOpenR
     setBusy(session.id);
     try {
       // An external terminal only confirms the request; it never claims the CLI resumed.
-      if (await onResume(session) === 'terminal') toasts.showNotice(t('home.recent.terminalRequested'));
+      if (await onResume(session) === 'terminal') toasts?.showNotice(t('home.recent.terminalRequested'));
     } finally { setBusy(null); }
   }
 
@@ -99,6 +98,5 @@ export function RecentSessions({ tools, active, onResume, onOpenSession, onOpenR
           </li>;
         })}
       </ul>}
-    <ToastStack status={toasts.notice} alert={toasts.error} onDismiss={toasts.dismiss} />
   </section>;
 }

@@ -96,6 +96,7 @@
 .rowActions { display: grid; grid-column: 3 / -1; grid-template-columns: subgrid; align-items: center; justify-items: end; column-gap: var(--space-1_5); }
 .rowActions > .favorite { grid-column: 1; }
 .rowActions > .launch, .rowActions > .recheck { grid-column: 2; justify-self: stretch; }
+.row:hover .launch:not(:disabled), .row:focus-within .launch:not(:disabled) { border-color: var(--accent-line); color: var(--accent); }
 .rowActions > .configure { grid-column: 3; }
 .rowActions > .menu { grid-column: 4; }
 .note {
@@ -155,6 +156,14 @@
 .empty { padding: var(--space-8) var(--space-4); color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); text-align: center; }
 
 @keyframes pulse { 50% { opacity: .3; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .row,
+  .row:nth-child(n),
+  .note,
+  .status[data-status="managedTool.loading"] > span:first-child,
+  .loadingBar { animation: none; animation-delay: 0ms; }
+}
 
 /* Narrow list: profiles move to their own line, while the actions keep sharing the list's
    subgrid so every launch button still lands in the same column. `.list` resolves this query

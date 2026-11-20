@@ -98,14 +98,13 @@ test('project cards keep one launch action and home never scrolls sideways', asy
   }
   await page.setViewportSize({ width: 1360, height: 900 });
 
-  // Both split-button halves use the color tokens as backgrounds, not as invalid background images.
+  // Both split-button halves use secondary surface at rest and gain emerald emphasis on hover.
   const expectSplitPaint = async () => {
-    const split = cards.first().locator('[data-split-variant="primary"]');
+    const split = cards.first().locator('[data-split-variant="secondary"]');
     const buttons = split.getByRole('button');
     await expect(buttons).toHaveCount(2);
-    await buttons.nth(1).hover();
-    const mainButton = split.locator('[data-variant="primary"]');
-    const tokens = await split.evaluate((element) => {
+    const mainButton = split.locator('[data-variant="secondary"]');
+    const tokens = await split.evaluate(() => {
       const resolve = (token: string) => {
         const probe = document.createElement('span');
         probe.style.backgroundColor = `var(${token})`;
@@ -114,47 +113,42 @@ test('project cards keep one launch action and home never scrolls sideways', asy
         probe.remove();
         return color;
       };
-      return { fill: resolve('--accent-fill'), ink: resolve('--on-accent') };
-    });
-    // The button paints animate (base.css transitions background-color and color), so a sampled
-    // style right after a theme switch or re-render can be a mid-transition color under parallel
-    // worker CPU contention. Wait for the transition to settle before sampling the full paint.
-    await expect.poll(() => mainButton.evaluate((element) => {
-      const style = getComputedStyle(element);
-      return `${style.backgroundColor}|${style.color}`;
-    })).toBe(`${tokens.fill}|${tokens.ink}`);
-    await expect.poll(() => buttons.nth(1).evaluate((element) => getComputedStyle(element).color)).toBe(tokens.ink);
-    const paint = await split.evaluate((element) => {
-      const resolve = (token: string) => {
-        const probe = document.createElement('span');
-        probe.style.backgroundColor = `var(${token})`;
-        document.body.append(probe);
-        const color = getComputedStyle(probe).backgroundColor;
-        probe.remove();
-        return color;
-      };
-      const main = element.querySelector<HTMLElement>('[data-variant="primary"]')!;
-      const menu = element.querySelector<HTMLElement>(':scope > div:last-child > button')!;
-      const mainStyle = getComputedStyle(main);
-      const menuStyle = getComputedStyle(menu);
       return {
-        main: mainStyle.backgroundColor,
-        menu: menuStyle.backgroundColor,
-        mainImage: mainStyle.backgroundImage,
-        menuImage: menuStyle.backgroundImage,
-        mainInk: mainStyle.color,
-        menuInk: menuStyle.color,
+        surface: resolve('--surface'),
+        text: resolve('--text'),
+        soft: resolve('--accent-soft'),
+        accent: resolve('--accent'),
         fill: resolve('--accent-fill'),
-        hover: resolve('--accent-fill-hover'),
         ink: resolve('--on-accent'),
       };
     });
-    expect(paint.main).toBe(paint.fill);
-    await expect.poll(() => buttons.nth(1).evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(paint.hover);
+    // At rest: calm secondary surface with no background-image.
+    await page.mouse.move(0, 0);
+    await expect.poll(() => mainButton.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return `${style.backgroundColor}|${style.color}`;
+    })).toBe(`${tokens.surface}|${tokens.text}`);
+
+    // On hover of the menu half: row gets emerald soft emphasis on main, and solid emerald fill on hovered half.
+    await buttons.nth(1).hover();
+    await expect.poll(() => mainButton.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return `${style.backgroundColor}|${style.color}`;
+    })).toBe(`${tokens.soft}|${tokens.accent}`);
+    await expect.poll(() => buttons.nth(1).evaluate((element) => {
+      const style = getComputedStyle(element);
+      return `${style.backgroundColor}|${style.color}`;
+    })).toBe(`${tokens.fill}|${tokens.ink}`);
+    const paint = await split.evaluate((element) => {
+      const main = element.querySelector<HTMLElement>('[data-variant="secondary"]')!;
+      const menu = element.querySelector<HTMLElement>(':scope > div:last-child > button')!;
+      return {
+        mainImage: getComputedStyle(main).backgroundImage,
+        menuImage: getComputedStyle(menu).backgroundImage,
+      };
+    });
     expect(paint.mainImage).toBe('none');
     expect(paint.menuImage).toBe('none');
-    expect(paint.mainInk).toBe(paint.ink);
-    expect(paint.menuInk).toBe(paint.ink);
     await page.mouse.move(0, 0);
   };
   await expectSplitPaint();
@@ -301,5 +295,57 @@ test('five remote projects with mixed tools and both badges keep names and actio
       expect(new Set(rows.map((row) => row.moreEnd)).size, label).toBe(1);
       expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), label).toBeLessThanOrEqual(0);
     }
+  }
+});
+
+test('home attaches resume-by-id under directory surface, routes transient feedback to global toast, and fits 1360/720', async ({ page }) => {
+  await page.addInitScript(() => {
+    let failHistory = true;
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: Record<string, any> = {}) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex' }] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true, launchForm: 'terminal', resume: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+          if (command === 'get_registered_tool_workspace') return { probe: { tool: 'codex', selectedPath: '/fixture/codex', installations: [{ path: '/fixture/codex', version: '1.0.0', status: 'available', source: 'native' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '', installCommand: null, upgradeCommand: null }, profiles: [], binding: null, common: null, snapshots: [], recoveryNeeded: [], customPath: null };
+          if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'list_projects') return [{ id: 'desk', name: '栖点', path: '/work/cliora', available: true, preferredTool: 'codex', lastOpened: 1790758800, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {} }];
+          if (command === 'list_history_sessions') {
+            if (failHistory) { failHistory = false; throw { message: '历史索引暂不可用' }; }
+            return [{ id: 's1', toolId: 'codex', nativeId: 'nat-1', title: '修复首页层级', cwd: '/work/cliora', updatedAt: Date.now() - 60000 }];
+          }
+          if (command === 'launch_cli') return { mode: args.request?.mode ?? 'normal', status: 'terminal_requested' };
+          if (command.startsWith('plugin:event|')) return 1;
+          if (command.startsWith('list_')) return [];
+          return null;
+        },
+      },
+    });
+  });
+
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await page.goto('/');
+  // '恢复指定会话' attaches inside the same directory surface right below the directory list.
+  const surface = page.locator('[data-directory-surface]');
+  await expect(surface.locator('[data-project-id="desk"]')).toBeVisible();
+  await expect(surface.locator('details summary')).toContainText('恢复指定会话');
+
+  // RecentSessions preserves explicit error/retry state, then recovers to list and uses global Toast.
+  const recent = page.locator('[data-home-section="recent"]');
+  await expect(recent.getByRole('alert')).toBeVisible();
+  await recent.getByRole('button', { name: '重试读取', exact: true }).click();
+  await expect(recent.getByText('修复首页层级')).toBeVisible();
+
+  // Launching a project routes transient success feedback to the single global ToastStack.
+  await surface.locator('[data-project-id="desk"]').getByRole('button', { name: '启动', exact: true }).click();
+  await expect(page.locator('.toast-stack')).toHaveCount(1);
+  await expect(page.locator('.toast-stack .toast[role="status"]')).toBeVisible();
+  await expect(recent.locator('.toast-stack')).toHaveCount(0);
+
+  // No horizontal overflow at 1360px and 720px.
+  for (const width of [1360, 720]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), `width ${width}`).toBeLessThanOrEqual(0);
   }
 });

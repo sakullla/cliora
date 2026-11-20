@@ -1,14 +1,17 @@
 .workspace { display: grid; align-content: start; gap: var(--space-3); min-width: 0; container: launcher / inline-size; }
 
-/* Advanced resume by id stays folded as a quiet inline pill until opened. */
-.quick { overflow: hidden; border: 1px solid transparent; border-radius: var(--radius-xl); background: transparent; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease); }
-.quick:not([open]) { justify-self: start; max-width: 100%; }
-.quick[open] { border-color: var(--line); background: var(--surface); box-shadow: var(--shadow-card); }
-.quick > summary { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 32px; padding: 0 var(--space-3); border: 1px solid transparent; border-radius: var(--radius-pill); color: var(--text-2); font-size: var(--fs-control); font-weight: var(--fw-medium); transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease); }
-.quick[open] > summary { display: flex; width: 100%; min-height: var(--row-h); border: 0; border-radius: 0; border-bottom: 1px solid var(--line); background: var(--surface-2); color: var(--text); font-weight: var(--fw-semibold); }
-.quick > summary small { min-width: 0; margin-left: var(--space-1); overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); text-overflow: ellipsis; white-space: nowrap; }
-.quick[open] > summary small { margin-left: auto; }
-.quick:not([open]) > summary:hover { border-color: var(--line); background: var(--surface); color: var(--text); }
+/* Unified surface for the directory list (or empty bar) with 'resume by session id' attached cleanly below. */
+.directorySurface { display: grid; gap: 0; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-card); }
+.directorySurface:empty { display: none; }
+
+/* Advanced resume by id attaches cleanly to the bottom of the directory card. */
+.quick { overflow: hidden; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--surface-2) 55%, var(--surface)); transition: background-color var(--fast) var(--ease); }
+.quick:first-child { border-top: 0; }
+.quick[open] { background: var(--surface); }
+.quick > summary { display: flex; align-items: center; gap: var(--space-2); width: 100%; min-height: 36px; padding: 0 var(--space-3_5); border: 0; border-radius: 0; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-medium); transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease); }
+.quick[open] > summary { min-height: 38px; border-bottom: 1px solid var(--line); background: var(--surface-2); color: var(--text); font-weight: var(--fw-semibold); }
+.quick > summary small { min-width: 0; margin-left: auto; overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); text-overflow: ellipsis; white-space: nowrap; }
+.quick:not([open]) > summary:hover { background: var(--surface-2); color: var(--text); }
 .quickContent { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-4); }
 .quickContent > div:first-child { display: grid; gap: var(--space-0_5); }
 .quickContent > div:first-child strong { font-size: var(--fs-body); font-weight: var(--fw-semibold); }
@@ -35,7 +38,8 @@
 /* Directories are one compact list on one surface: a row is the name over a single muted line
    (tool · profile · directory · last used) with pin, launch and more at the end. Hundreds of
    directories stay scannable, and only a page of rows is rendered at a time. */
-.projectList { display: grid; gap: 0; min-width: 0; padding: var(--space-1); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-card); container: project-list / inline-size; }
+.projectList { display: grid; gap: 0; min-width: 0; padding: var(--space-1); container: project-list / inline-size; }
+.projectList + .projectList { border-top: 1px solid var(--line); }
 .project { position: relative; display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3); border-radius: var(--radius-lg); transition: background-color var(--fast) var(--ease); }
 .project + .project::before { content: ''; position: absolute; top: 0; right: var(--space-3); left: var(--space-3); height: 1px; background: var(--line); pointer-events: none; }
 .project:hover, .project:focus-within { background: var(--surface-2); }
@@ -69,6 +73,23 @@
 .controls .toolSelect { width: 168px; min-width: 0; }
 .controls .toolSelect > button { min-height: var(--control-h-sm); font-size: var(--fs-caption); }
 .controls .actions { flex-wrap: nowrap; justify-content: flex-end; }
+/* Row launch split button stays calm secondary at rest, gaining emerald emphasis on row or button hover/focus. */
+.project:hover .launchSplit > button[data-variant="secondary"]:not(:disabled),
+.project:focus-within .launchSplit > button[data-variant="secondary"]:not(:disabled),
+.project:hover .launchSplit > :last-child > button:not(:disabled),
+.project:focus-within .launchSplit > :last-child > button:not(:disabled) {
+  border-color: var(--accent-line);
+  background-color: var(--accent-soft);
+  color: var(--accent);
+}
+.project:hover .launchSplit > button[data-variant="secondary"]:hover:not(:disabled),
+.project:focus-within .launchSplit > button[data-variant="secondary"]:hover:not(:disabled),
+.project:hover .launchSplit > :last-child > button:hover:not(:disabled),
+.project:focus-within .launchSplit > :last-child > button:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background-color: var(--accent-fill);
+  color: var(--on-accent);
+}
 /* The pin is quiet until it matters: always visible once pinned, otherwise on row hover/focus. */
 .pin { color: var(--text-3); }
 .pin[data-pinned], .pin[data-pinned]:hover:not(:disabled) { color: var(--warning); }
@@ -77,7 +98,7 @@
   .pin:not([data-pinned]) { opacity: 0; transition: opacity var(--fast) var(--ease); }
   .project:hover .pin, .project:focus-within .pin { opacity: 1; }
 }
-.moreRow { display: flex; justify-content: center; margin-top: calc(var(--space-1) * -1); }
+.moreRow { display: flex; justify-content: center; padding: var(--space-1) 0; border-top: 1px solid var(--line); }
 .moreButton { color: var(--text-2); }
 .cardError { display: flex; align-items: flex-start; gap: var(--space-2); padding: var(--space-2) var(--space-2_5); border: 1px solid var(--danger-line); border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--danger); font-size: var(--fs-caption); line-height: 1.5; }
 .cardError > span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
@@ -98,7 +119,7 @@
 
 /* No standalone directory is the normal case for people who work in business projects: one calm
    compact card with the add action, never competing with the business project list below. */
-.emptyProjects { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); padding: var(--space-2_5) var(--space-3_5); border: 1px solid var(--line); border-radius: var(--radius-xl); background: color-mix(in srgb, var(--surface) 72%, var(--bg)); }
+.emptyProjects { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); padding: var(--space-2_5) var(--space-3_5); background: color-mix(in srgb, var(--surface) 72%, var(--bg)); }
 .emptyIcon { display: grid; place-items: center; flex: none; width: 30px; height: 30px; border-radius: var(--radius); background: var(--accent-soft); color: var(--accent); }
 .emptyCopy { display: flex; flex-wrap: wrap; align-items: baseline; flex: 1 1 240px; gap: var(--space-0_5) var(--space-2); min-width: 0; }
 .emptyCopy strong { font-size: var(--fs-body); font-weight: var(--fw-semibold); }
