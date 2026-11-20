@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffe
 import { useTranslation } from 'react-i18next';
 import { highlightRuns } from '../../components/CommandPalette';
 import { Icon, type IconName } from '../../components/Icon';
+import { ToastHost } from '../../components/Toast';
 import { ToolIcon } from '../../components/ToolIcon';
 import { Badge, Button, IconButton } from '../../components/ui';
 import { isEditableTarget, searchShortcutHint, withMod } from '../../lib/shortcut';
@@ -351,6 +352,7 @@ export function SettingsModal<T extends string>({
     }}
     onKeyDown={handleDialogKeyDown}
   >
+    <ToastHost>
     <div className={styles.shell}>
       <aside className={styles.sidebar}>
         <div className={styles.railTop}>
@@ -556,5 +558,6 @@ export function SettingsModal<T extends string>({
         </div>
       </div>
     </div>
+    </ToastHost>
   </dialog>;
 }

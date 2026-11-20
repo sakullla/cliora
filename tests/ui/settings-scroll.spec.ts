@@ -135,6 +135,11 @@ test('settings modal keeps wheel inside the active category, searches across cat
   });
   await expect(codexRow.locator('img')).toHaveAttribute('src', `data:image/png;base64,${base64}`);
   await expect(codexRow.getByText('自定义图标')).toBeVisible();
+  // Settings toasts render inside the modal top-layer so they stay visible and clickable above the backdrop.
+  const modalToast = modal.locator('.toast-stack [role="status"]');
+  await expect(modalToast).toBeVisible();
+  await modalToast.getByRole('button', { name: '关闭提示' }).click();
+  await expect(modalToast).toHaveCount(0);
   await codexRow.getByRole('button', { name: '恢复默认' }).click();
   await expect(codexRow.getByRole('button', { name: '恢复默认' })).toHaveCount(0);
 
