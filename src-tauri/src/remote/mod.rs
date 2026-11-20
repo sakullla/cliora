@@ -258,6 +258,8 @@ fn seed_remote_agents(target: &RemoteTarget, tool_id: &str) -> Result<serde_json
 
 fn assemble_remote_agents(tool_id: &str, files: &[String], encoded: &str, capability: crate::adapters::agents::AgentCapability, detail: String) -> serde_json::Value {
     let extension = resource_layout(tool_id).agent_extension.unwrap_or("md");
+    let agent_adapter = crate::adapters::Registry::builtins().get(tool_id).and_then(|adapter| adapter.agents());
+    let dir_named = agent_adapter.is_some_and(|adapter| adapter.directory_name_matches_definition());
     let mut lines = encoded.lines();
     let mut entries = Vec::new();
     for (index, path) in files.iter().enumerate() {
@@ -266,14 +268,23 @@ fn assemble_remote_agents(tool_id: &str, files: &[String], encoded: &str, capabi
         let Some(value) = lines.next() else { continue; };
         let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(value.trim()) else { continue; };
         let Ok(content) = String::from_utf8(bytes) else { continue; };
+        let fallback = if dir_named {
+            let Some(name) = agent_adapter.and_then(|adapter| adapter.definition_fallback(Path::new(path))) else {
+                continue;
+            };
+            name
+        } else {
+            agent_adapter
+                .and_then(|adapter| adapter.definition_fallback(Path::new(path)))
+                .unwrap_or_else(|| Path::new(path).file_stem().and_then(|stem| stem.to_str()).unwrap_or("agent").to_owned())
+        };
         if let Some(root) = remote_agent_root(tool_id, "global", None) {
             let disabled = format!("{}/.cliora-disabled-agents/agents", root.trim_end_matches("/agents"));
             if let Some(canonical) = canonical_agent_path(path, &root).or_else(|| canonical_agent_path(path, &disabled)) { transactions::observe(&canonical, Some(content.as_bytes())); }
         }
-        let stem = Path::new(path).file_stem().and_then(|stem| stem.to_str()).unwrap_or("agent");
         let enabled = !path.contains("/.cliora-disabled-agents/");
         let format = if extension == "toml" { "toml" } else { "markdown" };
-        entries.push(crate::resources::agents::entry(tool_id, Path::new(path), format, content, stem, enabled, "独立定义"));
+        entries.push(crate::resources::agents::entry(tool_id, Path::new(path), format, content, &fallback, enabled, "独立定义"));
     }
     let snapshot = crate::resources::agents::AgentSnapshot {
         target: crate::resources::plugins::PluginTarget { tool_id: tool_id.to_owned(), scope: crate::native::adapter::Scope::Global, project_path: None, context_id: None },
@@ -841,11 +852,41 @@ fn materialize_remote_agents(
         let extension = resource_layout(tool_id).agent_extension.ok_or_else(|| RemoteError::Storage("此适配器未声明远程 Agent 格式".into()))?;
         let enabled = entry.get("enabled").and_then(serde_json::Value::as_bool).unwrap_or(true);
         let destination = if enabled { &root } else { &disabled };
-        let generated = format!("{destination}/{name}.{extension}");
-        let path = entry.get("path").and_then(serde_json::Value::as_str).and_then(|path| canonical_agent_path(path, destination)).unwrap_or(generated);
+        let agent_adapter = crate::adapters::Registry::builtins().get(tool_id).and_then(|adapter| adapter.agents());
+        let dir_named = agent_adapter.is_some_and(|adapter| adapter.directory_name_matches_definition());
+        let generated = remote_agent_target_path(agent_adapter, destination, name, extension)?;
+        let path = if dir_named {
+            generated
+        } else {
+            entry.get("path").and_then(serde_json::Value::as_str).and_then(|path| canonical_agent_path(path, destination)).unwrap_or(generated)
+        };
         files.push((path, content.as_bytes().to_vec()));
     }
     prepare_upload(&removes, &files)
+}
+
+fn remote_agent_target_path(
+    agent_adapter: Option<&dyn crate::adapters::agents::AgentAdapter>,
+    destination: &str,
+    name: &str,
+    extension: &str,
+) -> Result<String, RemoteError> {
+    if let Some(adapter) = agent_adapter.filter(|adapter| adapter.directory_name_matches_definition()) {
+        let probe_root = Path::new("/cliora-root");
+        let built = adapter.writable_definition(probe_root, name).map_err(RemoteError::Storage)?;
+        let mut relative = built.strip_prefix(probe_root).map_err(|_| RemoteError::InvalidPath)?;
+        if let Some(dir) = adapter.definition_dirs().first() {
+            if let Ok(stripped) = relative.strip_prefix(dir) {
+                relative = stripped;
+            }
+        }
+        let suffix = relative.to_string_lossy().replace('\\', "/");
+        if suffix.is_empty() || suffix.starts_with('/') || suffix.contains("..") {
+            return Err(RemoteError::InvalidPath);
+        }
+        return Ok(format!("{destination}/{suffix}"));
+    }
+    Ok(format!("{destination}/{name}.{extension}"))
 }
 
 fn valid_agent_name(name: &str) -> bool {
@@ -858,10 +899,23 @@ fn remote_agent_root(tool_id: &str, scope: &str, project: Option<&str>) -> Optio
     if scope == "project" {
         let project = project?.trim();
         if !valid_text(project, 4096) || project.starts_with('~') || project.contains('\0') { return None; }
-        Some(format!("{project}/{dir}"))
+        let relative = remote_project_agent_relative(tool_id).unwrap_or_else(|| dir.to_owned());
+        if !safe_home_relative(&relative) { return None; }
+        Some(format!("{}/{relative}", project.trim_end_matches('/')))
     } else {
         Some(format!("$HOME/{dir}"))
     }
+}
+
+fn remote_project_agent_relative(tool_id: &str) -> Option<String> {
+    let adapter = crate::adapters::Registry::builtins().get(tool_id)?.agents()?;
+    let probe_project = Path::new("/cliora-project");
+    let root = adapter.root(crate::native::adapter::Scope::Project, Path::new("/cliora-home"), Some(probe_project)).ok()?;
+    let rel_root = root.strip_prefix(probe_project).ok()?;
+    let dir = adapter.definition_dirs().first().copied().unwrap_or("agents");
+    let full = rel_root.join(dir);
+    let text = full.to_string_lossy().replace('\\', "/");
+    (!text.is_empty()).then_some(text)
 }
 
 fn canonical_agent_path(path: &str, root: &str) -> Option<String> {
@@ -3144,6 +3198,47 @@ mod tests {
         let disabled = materialize_remote_agents(&target, "codex", Some(&previous), &disabled).unwrap();
         assert_eq!(disabled.files[0].0, "$HOME/.codex/.cliora-disabled-agents/agents/owned.toml");
         assert_ne!(disabled.files[0].0, disabled.removes[0]);
+    }
+
+    #[test]
+    fn directory_per_agent_remote_agents_round_trip_for_antigravity() {
+        use base64::Engine;
+        let target = RemoteTarget { id: "fixture".into(), name: "fixture".into(), host: "fixture.invalid".into(), port: 22, user: "root".into(), auth_method: "key".into(), identity_file: None, ssh_config: None, default_path: None, enabled: true, created_at: 1, updated_at: 1 };
+        let body = "---\nname: reviewer\ndescription: Review code\nmainAgent: true\n---\n# Reviewer\n\nCheck diffs.\n";
+        let files = vec![
+            "/root/.gemini/config/agents/reviewer/agent.md".to_owned(),
+            "/root/.gemini/config/agents/reviewer/README.md".to_owned(),
+        ];
+        let encoded = format!(
+            "__CLIORA_AGENT__0\n{}\n__CLIORA_AGENT__1\n{}\n",
+            base64::engine::general_purpose::STANDARD.encode(body),
+            base64::engine::general_purpose::STANDARD.encode("# readme")
+        );
+        let capability = crate::adapters::agents::capability("antigravity").unwrap();
+        let assembled = assemble_remote_agents("antigravity", &files, &encoded, capability, "ok".into());
+        let entries = assembled["snapshot"]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["name"], "reviewer");
+        assert_eq!(entries[0]["launchable"], true);
+
+        let saved = materialize_remote_agents(&target, "antigravity", Some(&assembled), &assembled).unwrap();
+        assert_eq!(saved.removes, vec!["$HOME/.gemini/config/agents/reviewer/agent.md"]);
+        assert_eq!(saved.files[0].0, "$HOME/.gemini/config/agents/reviewer/agent.md");
+
+        let mut disabled = assembled.clone();
+        disabled["snapshot"]["entries"][0]["enabled"] = false.into();
+        let disabled_upload = materialize_remote_agents(&target, "antigravity", Some(&assembled), &disabled).unwrap();
+        assert_eq!(disabled_upload.removes, vec!["$HOME/.gemini/config/agents/reviewer/agent.md"]);
+        assert_eq!(disabled_upload.files[0].0, "$HOME/.gemini/config/.cliora-disabled-agents/agents/reviewer/agent.md");
+
+        let project_entry = serde_json::json!({
+            "snapshot": {
+                "target": { "scope": "project", "projectPath": "/srv/work/repo" },
+                "entries": [{ "name": "reviewer", "content": body, "enabled": true }]
+            }
+        });
+        let project_upload = materialize_remote_agents(&target, "antigravity", None, &project_entry).unwrap();
+        assert_eq!(project_upload.files[0].0, "/srv/work/repo/.agents/agents/reviewer/agent.md");
     }
 
     #[test]

@@ -158,11 +158,57 @@ pub(crate) fn cli_data_root(home: &Path) -> PathBuf {
     gemini_root(home).join("antigravity-cli")
 }
 
+const REMOTE_NATIVE_DOCUMENTS: &[super::RemoteNativeDocument] = &[
+    super::RemoteNativeDocument {
+        role: "settings",
+        relative: ".gemini/antigravity-cli/settings.json",
+        format: "json",
+        scope: "global",
+    },
+    super::RemoteNativeDocument {
+        role: "hooks",
+        relative: ".gemini/config/hooks.json",
+        format: "json",
+        scope: "global",
+    },
+    super::RemoteNativeDocument {
+        role: "mcp",
+        relative: ".agents/mcp_config.json",
+        format: "json",
+        scope: "project",
+    },
+    super::RemoteNativeDocument {
+        role: "hooks",
+        relative: ".agents/hooks.json",
+        format: "json",
+        scope: "project",
+    },
+];
+
 pub struct Antigravity;
 
 impl CliAdapter for Antigravity {
     fn remote_resource_layout(&self) -> super::RemoteResourceLayout {
-        super::RemoteResourceLayout { skill_root: Some(".gemini/antigravity-cli/skills"), ..Default::default() }
+        super::RemoteResourceLayout {
+            mcp: Some(super::RemoteMcpLayout {
+                relative: ".gemini/config/mcp_config.json",
+                format: "json",
+                table: "mcpServers",
+                nested: false,
+            }),
+            skill_root: Some(".gemini/antigravity-cli/skills"),
+            agent_root: Some(".gemini/config/agents"),
+            agent_extension: Some("md"),
+        }
+    }
+    fn remote_native_documents(&self) -> &'static [super::RemoteNativeDocument] {
+        REMOTE_NATIVE_DOCUMENTS
+    }
+    fn parse_remote_mcp(&self, text: &str) -> Result<Value, String> {
+        parse_remote_mcp_document(text)
+    }
+    fn render_remote_mcp(&self, text: &str, value: &Value) -> Result<Vec<u8>, String> {
+        render_remote_mcp_document(text, value)
     }
     fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
         Some(self)
@@ -992,6 +1038,162 @@ fn mcp_document_for_shape(
         }
     }
     Ok(Some(Value::Object(map)))
+}
+
+fn valid_remote_mcp_name(value: &str) -> bool {
+    !value.trim().is_empty() && value.len() <= 160 && !value.chars().any(char::is_control)
+}
+
+fn parse_remote_mcp_document(text: &str) -> Result<Value, String> {
+    if text.trim().is_empty() {
+        return Ok(json!({ "entries": [], "definitions": [] }));
+    }
+    let document: Value =
+        serde_json::from_str(text).map_err(|e| format!("远程 MCP JSON 无效：{e}"))?;
+    let entries: Vec<Value> = document
+        .get("mcpServers")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .map(|(name, server)| {
+            let url = ["serverUrl", "url", "httpUrl"]
+                .into_iter()
+                .find_map(|key| server.get(key).and_then(Value::as_str))
+                .unwrap_or_default();
+            let transport = if url.is_empty() { "stdio" } else { "http" };
+            let enabled = if server.get("disabled").and_then(Value::as_bool) == Some(true) {
+                false
+            } else {
+                server
+                    .get("enabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true)
+            };
+            json!({
+                "name": name,
+                "transport": transport,
+                "cwd": server.get("cwd").and_then(Value::as_str).unwrap_or_default(),
+                "command": server.get("command").and_then(Value::as_str).unwrap_or_default(),
+                "args": server.get("args").cloned().unwrap_or_else(|| json!([])),
+                "url": url,
+                "env": server.get("env").cloned().unwrap_or_else(|| json!({})),
+                "headers": server.get("headers").cloned().unwrap_or_else(|| json!({})),
+                "inLibrary": false,
+                "enabled": enabled,
+                "protectedValues": false
+            })
+        })
+        .collect();
+    Ok(json!({ "entries": entries, "definitions": [] }))
+}
+
+fn render_remote_mcp_document(text: &str, value: &Value) -> Result<Vec<u8>, String> {
+    let mut document = if text.trim().is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str::<Value>(text)
+            .map_err(|error| format!("远程配置不是 JSON 对象：{error}"))?
+    };
+    let on_disk = document.get("mcpServers").cloned();
+    let entries = value
+        .get("entries")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut servers = serde_json::Map::new();
+    for item in entries {
+        let Some(name) = item
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| valid_remote_mcp_name(name))
+        else {
+            continue;
+        };
+        let existing = on_disk
+            .as_ref()
+            .and_then(|map| map.get(name))
+            .and_then(Value::as_object);
+        let mut server = existing.cloned().unwrap_or_default();
+        let transport = item
+            .get("transport")
+            .and_then(Value::as_str)
+            .unwrap_or("stdio");
+        if transport == "sse" {
+            return Err(
+                "Antigravity 没有已确认的旧版 HTTP+SSE 映射，未改写为 Streamable HTTP".into(),
+            );
+        }
+        if transport == "http" {
+            for key in ["command", "args", "env", "cwd", "url", "httpUrl"] {
+                server.remove(key);
+            }
+            if let Some(url) = item.get("url").and_then(Value::as_str) {
+                server.insert("serverUrl".into(), Value::String(url.into()));
+            }
+            match item.get("headers").and_then(Value::as_object) {
+                Some(headers) if !headers.is_empty() => {
+                    server.insert("headers".into(), Value::Object(headers.clone()));
+                }
+                _ => {
+                    server.remove("headers");
+                }
+            }
+        } else {
+            for key in ["serverUrl", "url", "httpUrl", "headers"] {
+                server.remove(key);
+            }
+            if let Some(command) = item.get("command").and_then(Value::as_str) {
+                server.insert("command".into(), Value::String(command.into()));
+            }
+            match item.get("args").and_then(Value::as_array) {
+                Some(args) if !args.is_empty() => {
+                    server.insert("args".into(), Value::Array(args.clone()));
+                }
+                _ => {
+                    server.remove("args");
+                }
+            }
+            match item.get("env").and_then(Value::as_object) {
+                Some(env) if !env.is_empty() => {
+                    server.insert("env".into(), Value::Object(env.clone()));
+                }
+                _ => {
+                    server.remove("env");
+                }
+            }
+            match item
+                .get("cwd")
+                .and_then(Value::as_str)
+                .filter(|cwd| !cwd.is_empty())
+            {
+                Some(cwd) => {
+                    server.insert("cwd".into(), Value::String(cwd.into()));
+                }
+                None => {
+                    server.remove("cwd");
+                }
+            }
+        }
+        server.remove("enabled");
+        let enabled = item
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let was_disabled = existing
+            .and_then(|map| map.get("disabled"))
+            == Some(&Value::Bool(true));
+        if !enabled {
+            server.insert("disabled".into(), Value::Bool(true));
+        } else if was_disabled {
+            server.remove("disabled");
+        }
+        servers.insert(name.into(), Value::Object(server));
+    }
+    let object = document
+        .as_object_mut()
+        .ok_or_else(|| "远程配置不是 JSON 对象".to_owned())?;
+    object.insert("mcpServers".into(), Value::Object(servers));
+    serde_json::to_vec_pretty(&document).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -2059,5 +2261,107 @@ mod tests {
             .map(crate::adapters::contract::CliAdapter::id)
             .collect();
         assert_eq!(publishers, ["antigravity"]);
+    }
+
+    #[test]
+    fn remote_layout_and_native_documents_cover_config_mcp_skills_and_agents() {
+        let layout = Antigravity.remote_resource_layout();
+        let mcp = layout.mcp.expect("antigravity remote mcp layout");
+        assert_eq!(mcp.relative, ".gemini/config/mcp_config.json");
+        assert_eq!(mcp.format, "json");
+        assert_eq!(mcp.table, "mcpServers");
+        assert!(!mcp.nested);
+        assert_eq!(layout.skill_root, Some(".gemini/antigravity-cli/skills"));
+        assert_eq!(layout.agent_root, Some(".gemini/config/agents"));
+        assert_eq!(layout.agent_extension, Some("md"));
+
+        let docs: Vec<(&str, &str, &str, &str)> = Antigravity
+            .remote_native_documents()
+            .iter()
+            .map(|doc| (doc.scope, doc.role, doc.relative, doc.format))
+            .collect();
+        assert_eq!(
+            docs,
+            vec![
+                ("global", "settings", ".gemini/antigravity-cli/settings.json", "json"),
+                ("global", "hooks", ".gemini/config/hooks.json", "json"),
+                ("project", "mcp", ".agents/mcp_config.json", "json"),
+                ("project", "hooks", ".agents/hooks.json", "json"),
+            ]
+        );
+    }
+
+    #[test]
+    fn remote_mcp_round_trip_uses_server_url_and_disabled_flag_and_preserves_unknown_keys() {
+        let empty = Antigravity.parse_remote_mcp("").unwrap();
+        assert_eq!(empty["entries"].as_array().unwrap().len(), 0);
+
+        let disk = r#"{
+          "extraTop": true,
+          "mcpServers": {
+            "stdio-tool": {
+              "command": "npx",
+              "args": ["-y", "demo"],
+              "env": { "TOKEN": "1" },
+              "cwd": "/srv/app",
+              "disabled": true,
+              "trust": true
+            },
+            "http-tool": {
+              "serverUrl": "https://example.test/mcp",
+              "headers": { "X-Api": "abc" },
+              "oauth": { "clientId": "cid" }
+            },
+            "legacy-http": {
+              "httpUrl": "https://legacy.test/mcp"
+            }
+          }
+        }"#;
+        let mut parsed = Antigravity.parse_remote_mcp(disk).unwrap();
+        let entries = parsed["entries"].as_array_mut().unwrap();
+        let find = |items: &[Value], name: &str| {
+            items
+                .iter()
+                .find(|item| item["name"] == name)
+                .cloned()
+                .unwrap()
+        };
+        let stdio = find(entries, "stdio-tool");
+        assert_eq!(stdio["transport"], "stdio");
+        assert_eq!(stdio["cwd"], "/srv/app");
+        assert_eq!(stdio["enabled"], false);
+        let http = find(entries, "http-tool");
+        assert_eq!(http["transport"], "http");
+        assert_eq!(http["url"], "https://example.test/mcp");
+        assert_eq!(http["enabled"], true);
+        let legacy = find(entries, "legacy-http");
+        assert_eq!(legacy["transport"], "http");
+        assert_eq!(legacy["url"], "https://legacy.test/mcp");
+
+        // Re-enable stdio-tool and disable http-tool.
+        for item in entries.iter_mut() {
+            if item["name"] == "stdio-tool" {
+                item["enabled"] = json!(true);
+            }
+            if item["name"] == "http-tool" {
+                item["enabled"] = json!(false);
+            }
+        }
+        let rendered = Antigravity.render_remote_mcp(disk, &parsed).unwrap();
+        let out: Value = serde_json::from_slice(&rendered).unwrap();
+        assert_eq!(out["extraTop"], true);
+        assert_eq!(out["mcpServers"]["stdio-tool"]["cwd"], "/srv/app");
+        assert_eq!(out["mcpServers"]["stdio-tool"]["trust"], true);
+        assert!(out["mcpServers"]["stdio-tool"].get("disabled").is_none());
+        assert!(out["mcpServers"]["stdio-tool"].get("enabled").is_none());
+        assert_eq!(out["mcpServers"]["http-tool"]["serverUrl"], "https://example.test/mcp");
+        assert!(out["mcpServers"]["http-tool"].get("url").is_none());
+        assert_eq!(out["mcpServers"]["http-tool"]["disabled"], true);
+        assert_eq!(out["mcpServers"]["http-tool"]["oauth"]["clientId"], "cid");
+        assert_eq!(out["mcpServers"]["legacy-http"]["serverUrl"], "https://legacy.test/mcp");
+        assert!(out["mcpServers"]["legacy-http"].get("httpUrl").is_none());
+
+        let sse = json!({"entries": [{"name": "s", "transport": "sse", "url": "https://e.test/sse"}]});
+        assert!(Antigravity.render_remote_mcp("{}", &sse).unwrap_err().contains("HTTP+SSE"));
     }
 }
