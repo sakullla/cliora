@@ -4219,6 +4219,7 @@ test('split view and a docked rail hide the temporary look, and focus mode keeps
   await page.getByRole('tab', { name: /Codex/ }).click();
   await expect(selected).toHaveAttribute('data-session-id', 's1');
   await bell('s2');
+  await expect(rail.getByRole('button', { name: '1 个会话等你处理' })).toBeVisible();
   await openClaudeSessionMenu(page);
   await page.getByRole('menu', { name: 'Claude Code 会话操作', exact: true }).getByRole('menuitem', { name: '临时查看', exact: true }).click();
   await expect(dialog).toBeVisible();

@@ -514,7 +514,12 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       if (awaitingInputResponse) {
         awaitingInputResponse = false;
         queueMicrotask(flushWrites);
-      } else flushTimer = window.setTimeout(flushWrites, activeRef.current ? ACTIVE_WRITE_FLUSH_MS : HIDDEN_WRITE_FLUSH_MS);
+      } else {
+        const delay = activeRef.current || (frameChunks.length === 1 && bytes.length < 64)
+          ? ACTIVE_WRITE_FLUSH_MS
+          : HIDDEN_WRITE_FLUSH_MS;
+        flushTimer = window.setTimeout(flushWrites, delay);
+      }
     };
     const markLiveOutput = () => {
       if (disposed || !runningRef.current) return;
