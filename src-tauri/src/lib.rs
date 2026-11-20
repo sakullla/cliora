@@ -95,6 +95,7 @@ pub mod portable;
 mod process_environment;
 pub mod projects;
 pub mod prompts;
+pub mod secrets;
 pub mod workspaces;
 pub mod remote;
 pub mod resources;
@@ -267,6 +268,12 @@ pub fn run() {
             commands::preview_prompt_import,
             commands::delete_prompt,
             commands::record_prompt_usage,
+            commands::list_prompt_secrets,
+            commands::create_prompt_secret,
+            commands::rename_prompt_secret,
+            commands::update_prompt_secret_value,
+            commands::delete_prompt_secret,
+            commands::resolve_prompt_secret_references,
             commands::list_library_items,
             commands::save_library_item,
             commands::delete_library_item,

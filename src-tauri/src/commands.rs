@@ -7633,3 +7633,80 @@ pub async fn record_prompt_usage(
     })
     .await
 }
+
+// Prompt secrets are local-only: metadata and reference status never travel with a
+// remote target, and the value enters the native credential store only.
+#[tauri::command]
+pub async fn list_prompt_secrets(
+    app: AppHandle,
+) -> Result<Vec<crate::secrets::PromptSecret>, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::list(&db, &AppCredentialStore).map_err(native_error)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn create_prompt_secret(
+    app: AppHandle,
+    alias: String,
+    value: String,
+) -> Result<crate::secrets::PromptSecret, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::create(&db, &AppCredentialStore, &alias, &value).map_err(native_error)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn rename_prompt_secret(
+    app: AppHandle,
+    id: String,
+    expected_version: u64,
+    alias: String,
+) -> Result<crate::secrets::PromptSecret, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::rename(&db, &AppCredentialStore, &id, expected_version, &alias)
+            .map_err(native_error)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn update_prompt_secret_value(
+    app: AppHandle,
+    id: String,
+    expected_version: u64,
+    value: String,
+) -> Result<crate::secrets::PromptSecret, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::update_value(&db, &AppCredentialStore, &id, expected_version, &value)
+            .map_err(native_error)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn delete_prompt_secret(
+    app: AppHandle,
+    id: String,
+    expected_version: u64,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::delete(&db, &AppCredentialStore, &id, expected_version)
+            .map_err(native_error)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn resolve_prompt_secret_references(
+    app: AppHandle,
+    body: String,
+) -> Result<Vec<crate::secrets::PromptSecretReference>, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::resolve(&db, &AppCredentialStore, &body).map_err(native_error)
+    })
+    .await
+}

@@ -23,7 +23,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 33 {
+        if version > 34 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -700,6 +700,25 @@ impl Database {
             )?;
             tx.commit()?;
         }
+        if version < 34 {
+            // Prompt secrets keep only opaque metadata: the value lives behind the
+            // native credential boundary keyed by `credential_id`. No sync trigger
+            // registers this table, so secret metadata never enters WebDAV or a
+            // portable bundle; prompt bodies keep the reference text itself.
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS prompt_secrets (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   alias TEXT NOT NULL UNIQUE,
+                   credential_id TEXT NOT NULL UNIQUE,
+                   version INTEGER NOT NULL CHECK(version > 0),
+                   created_at INTEGER NOT NULL,
+                   updated_at INTEGER NOT NULL
+                 );
+                 PRAGMA user_version = 34;",
+            )?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection: Mutex::new(connection),
             read_path: (path != Path::new(":memory:") && !path.as_os_str().is_empty())
@@ -783,6 +802,9 @@ impl Database {
 /// strict CREATE TABLE checks and never repair a contradictory user_version.
 #[cfg(test)]
 pub(crate) fn remove_later_fixture_tables(conn: &Connection, target_version: u32) -> rusqlite::Result<()> {
+    if target_version < 34 {
+        conn.execute_batch("DROP TABLE IF EXISTS prompt_secrets;")?;
+    }
     if target_version < 33 {
         for table in ["prompt_batch_items", "prompt_usage", "prompt_metadata"] {
             conn.execute_batch(&format!("DROP TABLE IF EXISTS {table};"))?;
@@ -984,7 +1006,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 33);
+            assert_eq!(version, 34);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
@@ -999,6 +1021,65 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM sync_outbox", [], |row| row.get(0))
                 .map_err(|error| error.to_string())?;
             assert_eq!(sync_count, 0);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn v33_database_gains_prompt_secrets_without_touching_prompts() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cliora.db");
+        {
+            let db = Database::open(&path).unwrap();
+            crate::prompts::save(
+                &db,
+                &crate::prompts::PromptDraft {
+                    id: None,
+                    title: "kept prompt".into(),
+                    body: "existing body".into(),
+                    scope: crate::prompts::PromptScope::Global,
+                    tags: vec!["review".into()],
+                    expected_version: None,
+                },
+            )
+            .unwrap();
+            db.with_connection(|conn| {
+                // A pre-v34 database has neither the table nor the version.
+                super::remove_later_fixture_tables(conn, 33).map_err(|error| error.to_string())?;
+                conn.execute_batch("PRAGMA user_version = 33;").map_err(|error| error.to_string())?;
+                Ok(())
+            })
+            .unwrap();
+        }
+        let db = Database::open(&path).unwrap();
+        db.with_connection(|conn| {
+            let version: u32 = conn
+                .query_row("PRAGMA user_version", [], |row| row.get(0))
+                .map_err(|error| error.to_string())?;
+            assert_eq!(version, 34);
+            let secrets: i64 = conn
+                .query_row("SELECT COUNT(*) FROM prompt_secrets", [], |row| row.get(0))
+                .map_err(|error| error.to_string())?;
+            assert_eq!(secrets, 0);
+            let body: String = conn
+                .query_row("SELECT body FROM library_items WHERE kind='prompt'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())?;
+            assert_eq!(body, "existing body");
+            let metadata: i64 = conn
+                .query_row("SELECT COUNT(*) FROM prompt_metadata", [], |row| row.get(0))
+                .map_err(|error| error.to_string())?;
+            assert_eq!(metadata, 1);
+            Ok(())
+        })
+        .unwrap();
+        // The upgrade is idempotent when the database is opened again.
+        let db = Database::open(&path).unwrap();
+        db.with_connection(|conn| {
+            let version: u32 = conn
+                .query_row("PRAGMA user_version", [], |row| row.get(0))
+                .map_err(|error| error.to_string())?;
+            assert_eq!(version, 34);
             Ok(())
         })
         .unwrap();

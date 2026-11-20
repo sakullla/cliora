@@ -13,6 +13,7 @@ import type { Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, MemoryAggregate, MemoryReadRequest, MemoryReadResult, MemoryDelete, MemoryDocument, MemoryEnable, MemoryList, MemorySave, MemoryTarget, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, SavedWorkbenchSession, TerminalId, TrayStatus, TwiglaneLinkOutcome, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchGitContext, WorkbenchWorktree, WorkbenchReplay, WorkbenchSession, WorkbenchTerminalSize, RemoteSessionIndexEntry, WorktreeBase, WorktreeBasePreview, WorktreeCleanupReport, WorktreeLedgerEntry, WorktreeMenuStatus, WorktreePrepareCommand } from '../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
+import type { PromptSecret, PromptSecretReference } from '../types/secrets';
 import type { McpDefinition, McpDraft, McpDraftPreview, McpDraftTargetRequest, McpCommitResult, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpStore, NativeRuleFile, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue, SkillManifest, SkillFileListing, SkillFilePreview } from '../types/resources';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, RemoteHistorySnapshot, ScanStatus, UsageReport } from '../types/history';
 import { markOnboardingLaunched } from './onboarding';
@@ -243,6 +244,14 @@ export const native = {
   previewPromptImport: (context: PromptContext, input: PromptImportInput, options?: RemoteOperationOptions) => promptCommand<PromptImportPreview>('preview_prompt_import', context, { input }, 'read', options),
   deletePrompt: (context: PromptContext, id: string, expectedVersion: number, options?: RemoteOperationOptions) => promptCommand<void>('delete_prompt', context, { id, expectedVersion }, 'write', options),
   recordPromptUsage: (context: PromptContext, id: string, favorite: boolean | null, used: boolean) => command<void>('record_prompt_usage', { targetId: context.targetId && context.targetId !== 'local' ? context.targetId : null, id, favorite, used }),
+  // Prompt secrets are device-local: these wrappers never carry a target id, so a
+  // remote library context cannot create, list or resolve a local secret.
+  listPromptSecrets: () => command<PromptSecret[]>('list_prompt_secrets'),
+  createPromptSecret: (alias: string, value: string) => command<PromptSecret>('create_prompt_secret', { alias, value }),
+  renamePromptSecret: (id: string, expectedVersion: number, alias: string) => command<PromptSecret>('rename_prompt_secret', { id, expectedVersion, alias }),
+  updatePromptSecretValue: (id: string, expectedVersion: number, value: string) => command<PromptSecret>('update_prompt_secret_value', { id, expectedVersion, value }),
+  deletePromptSecret: (id: string, expectedVersion: number) => command<void>('delete_prompt_secret', { id, expectedVersion }),
+  resolvePromptSecretReferences: (body: string) => command<PromptSecretReference[]>('resolve_prompt_secret_references', { body }),
   previewWorkspaceLink: (url: string) => command<WorkspaceManifestPreview>('preview_workspace_link', { url }),
   listBusinessWorkspaces: () => command<BusinessWorkspace[]>('list_business_workspaces'),
   createBusinessWorkspace: (name: string) => command<BusinessWorkspace>('create_business_workspace', { name }),
