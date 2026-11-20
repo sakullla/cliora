@@ -1,6 +1,6 @@
 .block { display: grid; gap: var(--space-3); min-width: 0; }
 .heading { min-height: var(--control-h-sm); }
-.browser { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-4) var(--space-4_5, var(--space-4)) var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-card); }
+.browser { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-card); }
 
 /* Header: the project switcher is the title; one primary action and a menu sit opposite. */
 .header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); min-width: 0; padding-bottom: var(--space-3); border-bottom: 1px solid var(--line); }
@@ -27,22 +27,22 @@
 .dot { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--danger); }
 .toolPick { flex: 0 0 160px; }
 .matchCount { flex: none; color: var(--text-3); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.viewSwitch { display: inline-flex; flex: none; align-items: center; gap: 2px; height: var(--control-h); padding: 3px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
-.viewSwitch button { display: grid; place-items: center; width: 28px; height: 28px; min-height: 28px; padding: 0; border: 0; border-radius: calc(var(--radius) - 3px); background: transparent; color: var(--text-3); box-shadow: none; transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease); }
+.viewSwitch { display: inline-flex; flex: none; align-items: center; gap: var(--space-0_5); height: var(--control-h); padding: var(--space-0_75); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.viewSwitch button { display: grid; place-items: center; width: 28px; height: 28px; min-height: 28px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-3); box-shadow: none; transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease); }
 .viewSwitch button:hover:not(:disabled) { color: var(--text); background: transparent; box-shadow: none; }
 .viewSwitch button[aria-pressed="true"] { background: var(--surface); color: var(--accent); box-shadow: var(--shadow-pill-active); }
 
 /* Smart prefix quick-filter bar for large multi-repo projects (12+ repositories). */
-.groupBar { display: flex; flex-wrap: nowrap; align-items: center; gap: var(--space-1_5); min-width: 0; padding: 2px 0; overflow-x: auto; scrollbar-width: none; }
+.groupBar { display: flex; flex-wrap: nowrap; align-items: center; gap: var(--space-1_5); min-width: 0; padding: var(--space-0_5) 0; overflow-x: auto; scrollbar-width: none; }
 .groupBar::-webkit-scrollbar { display: none; }
 .groupChip { display: inline-flex; flex: none; align-items: center; gap: var(--space-1_5); height: 26px; min-height: 26px; padding: 0 var(--space-2_5); border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface-2); color: var(--text-2); font-size: var(--fs-micro); font-weight: var(--fw-medium); white-space: nowrap; box-shadow: none; transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease); }
 .groupChip:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface); color: var(--text); box-shadow: none; }
 .groupChip[aria-pressed="true"] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); font-weight: var(--fw-semibold); }
-.groupChip em { padding: 0 5px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--text-3); font-style: normal; font-size: 10px; font-variant-numeric: tabular-nums; line-height: 16px; }
+.groupChip em { padding: 0 var(--space-1_25); border-radius: var(--radius-pill); background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--text-3); font-style: normal; font-size: 10px; font-variant-numeric: tabular-nums; line-height: 16px; }
 .groupChip[aria-pressed="true"] em { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 
 /* Repository rows: crisp scannable rhythm, quiet until hovered, generous viewport for large projects. */
-.list { display: grid; grid-auto-rows: max-content; max-height: min(540px, 58vh); overflow: auto; overscroll-behavior: contain; margin: 0 calc(var(--space-2) * -1); padding-right: 2px; scrollbar-width: thin; }
+.list { display: grid; grid-auto-rows: max-content; max-height: min(540px, 58vh); overflow: auto; overscroll-behavior: contain; margin: 0 calc(var(--space-2) * -1); padding-right: var(--space-0_5); scrollbar-width: thin; }
 /* Identity (name, and only the detail that tells a row apart) on the left; the worktree picker and
    actions stay in fixed tracks on the right so every row lines up at every width. */
 .row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; align-content: center; column-gap: var(--space-3); row-gap: 0; min-height: 44px; padding: var(--space-1_5) var(--space-2_5); border-radius: var(--radius); transition: background-color var(--fast) var(--ease); }
@@ -59,7 +59,7 @@
 .branchTag > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* Multi-column card grid for large projects: eliminates horizontal whitespace and shows 3x more repos at once. */
-.list[data-view="grid"] { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); align-content: start; gap: var(--space-2); max-height: min(600px, 64vh); margin: 0; padding: 2px; }
+.list[data-view="grid"] { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); align-content: start; gap: var(--space-2); max-height: min(600px, 64vh); margin: 0; padding: var(--space-0_5); }
 .list[data-view="grid"] > .row { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; align-items: center; align-content: space-between; column-gap: var(--space-2); row-gap: var(--space-2); min-height: 76px; padding: var(--space-2_5) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); contain-intrinsic-size: auto 76px; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease); }
 .list[data-view="grid"] > .row::before { display: none; }
 .list[data-view="grid"] > .row:hover,
