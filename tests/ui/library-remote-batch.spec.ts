@@ -18,13 +18,13 @@ const host = {
   updatedAt: 1,
 };
 
-const names: Record<string, string> = { codex: 'Codex', claude_code: 'Claude Code', grok: 'Grok', cursor: 'Cursor' };
+const names: Record<string, string> = { codex: 'Codex', claude_code: 'Claude Code', grok: 'Grok', cursor: 'Cursor', antigravity: 'Antigravity' };
 
 async function installRemoteLibrary(page: Page, largeSkills = false, skillMode: 'builtin' | 'read-only' | 'unsupported' | 'mixed' = 'builtin', initialSkillFailure = 'none') {
   await page.addInitScript(({ host, names, largeSkills, skillMode, initialSkillFailure }) => {
     localStorage.setItem('cliora:remote-target', host.id);
     const tools = Object.entries(names).map(([id, name]) => ({ id, name, installation: 'not_checked', configuration: 'not_checked' }));
-    const roots: Record<string, string> = { codex: '.codex/skills', claude_code: '.claude/skills', grok: '.grok/skills', cursor: '.cursor/skills' };
+    const roots: Record<string, string> = { codex: '.codex/skills', claude_code: '.claude/skills', grok: '.grok/skills', cursor: '.cursor/skills', antigravity: '.gemini/antigravity-cli/skills' };
     const registered = Object.entries(names).map(([id, name]) => ({
       remoteResources: { mcp: { relative: '.fixture/config.json', format: 'json', table: 'servers', nested: false }, skillRoot: skillMode === 'builtin' || (skillMode === 'mixed' && ['codex', 'cursor'].includes(id)) ? roots[id] : null, agentRoot: null, agentExtension: null },
       remoteSkillDirectories: skillMode === 'unsupported' || (skillMode === 'mixed' && id === 'grok') ? [] : [{ relative: roots[id], readOnly: skillMode === 'read-only' || (skillMode === 'mixed' && id === 'claude_code'), detail: 'fixture' }],
@@ -35,6 +35,13 @@ async function installRemoteLibrary(page: Page, largeSkills = false, skillMode: 
     const state = { fail: false, delay: false, name: 'node_repl', skillFailure: initialSkillFailure, libraryFail: false };
     const versions: Record<string, string> = {};
     const snapshots = new Map<string, Record<string, string>>();
+    const mcpStores: Record<string, any> = {
+      codex: { entries: [{ name: state.name, transport: 'stdio', command: 'node', args: ['repl.js'], url: '', env: {}, headers: {}, inLibrary: true, enabled: true }], definitions: [] },
+      claude_code: { entries: [], definitions: [] },
+      grok: { entries: [], definitions: [] },
+      cursor: { entries: [], definitions: [] },
+      antigravity: { entries: [], definitions: [] },
+    };
     const skillStores: Record<string, any> = {};
     if (largeSkills) for (const cli of ['codex', 'grok']) {
       versions[`$HOME/.cliora/resources/${cli}/skills.json`] = 'a'.repeat(64);
@@ -85,22 +92,25 @@ async function installRemoteLibrary(page: Page, largeSkills = false, skillMode: 
           if (command === 'save_remote_resource_store') {
             const expected = args.operation.expectedFiles;
             if (largeSkills && (Object.keys(expected).length > 16384 || Object.entries(versions).some(([path, hash]) => expected[path] !== hash))) throw { message: 'inventory baseline rejected' };
-            calls.push({ command, expected, value: args.value, toolId: args.toolId });
-            skillStores[args.toolId] = structuredClone(args.value);
+            calls.push({ command, kind: args.kind, expected, value: args.value, toolId: args.toolId });
+            if (args.kind === 'mcp') mcpStores[args.toolId] = structuredClone(args.value);
+            else skillStores[args.toolId] = structuredClone(args.value);
             snapshots.set(args.operation.requestId, { ...versions });
             return null;
           }
           if (command === 'list_remote_resource_stores') {
             calls.push({ command, kind: args.kind, toolIds: args.toolIds, targetId: args.targetId, refresh: args.operation?.refresh });
             if (state.fail) throw { message: 'fixture refresh permission failure' };
-            const result = { stores: { codex: { entries: [{ name: args.targetId === 'host-2' ? 'other_host_row' : state.name, transport: 'stdio', command: 'node', args: ['repl.js'], url: '', env: {}, headers: {}, inLibrary: true, enabled: true }], definitions: [] } } };
+            const result = args.targetId === 'host-2'
+              ? { stores: { codex: { entries: [{ name: 'other_host_row', transport: 'stdio', command: 'node', args: ['repl.js'], url: '', env: {}, headers: {}, inLibrary: true, enabled: true }], definitions: [] } } }
+              : { stores: structuredClone(mcpStores) };
             if (state.delay) { state.delay = false; return new Promise(resolve => { release = () => resolve(result); }); }
             return result;
           }
           if (command === 'cancel_remote_operation') { calls.push({ command }); return true; }
           if (command === 'get_remote_resource_store') {
             calls.push({ command, kind: args.kind, toolId: args.toolId });
-            return { entries: [] };
+            return args.kind === 'mcp' ? structuredClone(mcpStores[args.toolId] ?? { entries: [], definitions: [] }) : { entries: [] };
           }
           if (command === 'list_remote_library_items') calls.push({ command, kind: args.kind, targetId: args.targetId, search: args.search });
           if (command === 'list_remote_library_items' && state.libraryFail) throw { message: 'remote library fixture denied' };
@@ -149,7 +159,41 @@ test('remote library MCP reads every CLI in one batch', async ({ page }) => {
   expect(singles).toEqual([]);
   expect(batches.length).toBeGreaterThan(0);
   expect(batches.length).toBeLessThanOrEqual(2);
-  expect(batches[0].toolIds).toEqual(['codex', 'claude_code', 'grok', 'cursor']);
+  expect(batches[0].toolIds).toEqual(['codex', 'claude_code', 'grok', 'cursor', 'antigravity']);
+});
+
+test('remote library MCP shows actual CLI placements and writes/removes on the clicked Antigravity CLI', async ({ page }) => {
+  await openMcp(page);
+  const workspace = page.getByRole('region', { name: '资料库 MCP' });
+  const row = workspace.locator('[data-mcp-id="remote:node_repl"]');
+  await expect(row).toBeVisible();
+  await expect(row.getByText('已写入 1 处', { exact: true })).toBeVisible();
+  await expect(row.getByText('尚未写入 CLI', { exact: true })).toHaveCount(0);
+  const codexBtn = row.getByRole('button', { name: /^Codex ·/ });
+  const agyBtn = row.getByRole('button', { name: /^Antigravity ·/ });
+  await expect(codexBtn).toHaveAttribute('aria-pressed', 'true');
+  await expect(agyBtn).toHaveAttribute('aria-pressed', 'false');
+
+  // Clicking Antigravity writes node_repl into antigravity's remote store without duplicating the row.
+  await agyBtn.click();
+  await expect(row.getByText('已写入 2 处', { exact: true })).toBeVisible();
+  await expect(agyBtn).toHaveAttribute('aria-pressed', 'true');
+  await expect(workspace.locator('[data-mcp-id]')).toHaveCount(1);
+  const writes = await page.evaluate(() => (window as any).__resourceCalls.filter((call: any) => call.command === 'save_remote_resource_store' && call.kind === 'mcp'));
+  expect(writes).toHaveLength(1);
+  expect(writes[0].toolId).toBe('antigravity');
+  expect(writes[0].value.entries.map((entry: any) => entry.name)).toEqual(['node_repl']);
+
+  // Clicking active Antigravity confirms and removes only from antigravity.
+  await agyBtn.click();
+  await page.getByRole('dialog').getByRole('button', { name: '移除', exact: true }).click();
+  await expect(row.getByText('已写入 1 处', { exact: true })).toBeVisible();
+  await expect(agyBtn).toHaveAttribute('aria-pressed', 'false');
+  await expect(codexBtn).toHaveAttribute('aria-pressed', 'true');
+  const allWrites = await page.evaluate(() => (window as any).__resourceCalls.filter((call: any) => call.command === 'save_remote_resource_store' && call.kind === 'mcp'));
+  expect(allWrites).toHaveLength(2);
+  expect(allWrites[1].toolId).toBe('antigravity');
+  expect(allWrites[1].value.entries).toEqual([]);
 });
 
 
@@ -238,7 +282,7 @@ test('remote library reads all forty Claude Skills using the published adapter c
   await expect(page.getByRole('button', { name: 'perf-skill-0', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'perf-skill-39', exact: true })).toBeVisible();
   const calls = await page.evaluate(() => (window as any).__resourceCalls.filter((call: any) => call.kind === 'skills'));
-  expect(calls[0].toolIds).toEqual(['codex', 'claude_code', 'grok', 'cursor']);
+  expect(calls[0].toolIds).toEqual(['codex', 'claude_code', 'grok', 'cursor', 'antigravity']);
   await expect(page.getByRole('button', { name: '添加 Skill', exact: true })).toBeVisible();
 });
 

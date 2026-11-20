@@ -43,11 +43,14 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   const remoteTools = tools.filter(tool => tool.remoteResources ? !!tool.remoteResources.mcp : tool.management?.mcp === true);
   const remoteToolId = remoteTools[0]?.id ?? '';
   const remoteToolIds = remoteTools.map(tool => tool.id);
-  const remoteToolFor = (id: string | null | undefined) => id?.startsWith('remote:') ? id.split(':')[1] || remoteToolId : remoteToolId;
   const remoteReads = useRemoteReads(remoteTargetId, remoteToolIds.join('|'), active);
   const native = remoteReads.native;
   const [definitions, setDefinitions] = useState<McpDefinition[]>([]);
   const [placements, setPlacements] = useState<McpPlacement[]>([]);
+  const remoteToolsFor = (id: string | null | undefined) => {
+    const placed = id ? [...new Set(placements.filter(entry => entry.definitionId === id).map(entry => entry.toolId))] : [];
+    return placed.length ? placed : remoteToolId ? [remoteToolId] : [];
+  };
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -81,10 +84,46 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     try {
       if (remoteTargetId) {
         const bundle = await native.listRemoteResourceStores(remoteTargetId, remoteToolIds, 'mcp', { fresh });
-        const stores = remoteToolIds.map(toolId => (bundle.stores?.[toolId] ?? { entries: [] }) as { entries?: NativeMcpEntry[] });
-        const items: McpDefinition[] = stores.flatMap((store, toolIndex) => (store.entries ?? []).map((entry, index) => ({ id: `remote:${remoteToolIds[toolIndex]}:${entry.name}`, name: entry.name, transport: entry.transport, command: entry.command, args: entry.args ?? [], cwd: entry.cwd ?? '', url: entry.url ?? '', env: entry.env ?? {}, headers: entry.headers ?? {}, inLibrary: entry.inLibrary !== false, version: index + 1 })));
+        const byNameMap = new Map<string, McpDefinition>();
+        const placed: McpPlacement[] = [];
+        for (const toolId of remoteToolIds) {
+          const store = (bundle.stores?.[toolId] ?? { entries: [] }) as { entries?: NativeMcpEntry[] };
+          for (const [index, entry] of (store.entries ?? []).entries()) {
+            const definitionId = `remote:${entry.name}`;
+            const existing = byNameMap.get(entry.name);
+            const inLibrary = entry.inLibrary !== false;
+            if (!existing) {
+              byNameMap.set(entry.name, {
+                id: definitionId,
+                name: entry.name,
+                transport: entry.transport,
+                command: entry.command,
+                args: entry.args ?? [],
+                cwd: entry.cwd ?? '',
+                url: entry.url ?? '',
+                env: entry.env ?? {},
+                headers: entry.headers ?? {},
+                inLibrary,
+                version: index + 1,
+              });
+            } else if (inLibrary && !existing.inLibrary) {
+              existing.inLibrary = true;
+            }
+            placed.push({
+              definitionId,
+              toolId,
+              scope: 'global',
+              projectPath: null,
+              contextId: null,
+              enabled: entry.enabled !== false,
+            });
+          }
+        }
         if (request !== loadRequest.current) return;
-        setDefinitions(items); setPlacements([]); setLoaded(true); setStale(false);
+        setDefinitions([...byNameMap.values()]);
+        setPlacements(placed);
+        setLoaded(true);
+        setStale(false);
         return;
       }
       const [items, placed] = await Promise.all([native.listMcpDefinitions(), native.listMcpPlacements()]);
@@ -195,8 +234,14 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     setBusy(true); setError('');
     try {
       if (remoteTargetId) {
-        const targetToolId = remoteToolFor(item.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { fresh: true }) as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
-        await native.saveRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { ...store, entries: (store.entries ?? []).filter(entry => entry.name !== item.name), definitions: (store.definitions ?? []).filter(entry => entry.name !== item.name) });
+        for (const targetToolId of remoteToolsFor(item.id)) {
+          const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { fresh: true }) as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
+          await native.saveRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { ...store, entries: (store.entries ?? []).filter(entry => entry.name !== item.name), definitions: (store.definitions ?? []).filter(entry => entry.name !== item.name) });
+        }
+        await reload();
+        setDraft(null);
+        setNotice(t('library.resources.removed'));
+        return;
       } else await native.deleteMcpDefinition(item.id, item.version);
       setDefinitions(current => current.filter(entry => entry.id !== item.id));
       setDraft(null);
@@ -212,7 +257,9 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     try {
       const name = mcpCopyName(item.name, definitions.map((entry) => entry.name));
       if (remoteTargetId) {
-        const targetToolId = remoteToolFor(item.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { fresh: true }) as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
+        const targetToolId = remoteToolsFor(item.id)[0];
+        if (!targetToolId) throw new Error(t('library.resources.loadFailedDetail'));
+        const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { fresh: true }) as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
         const source = (store.entries ?? []).find(entry => entry.name === item.name);
         if (!source) throw new Error(t('library.resources.loadFailedDetail'));
         const copied = { ...source, name };
@@ -242,10 +289,14 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     try {
       const alreadyPlaced = !!draft.id && placements.some((item) => item.definitionId === draft.id);
       if (remoteTargetId) {
-        const targetToolId = remoteToolFor(normalized.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { fresh: true }) as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
-        const entries = (store.entries ?? []).filter(entry => entry.name !== normalized.name);
-        const remoteEntry = { ...normalized, enabled: true, protectedValues: false };
-        await native.saveRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { ...store, entries: [...entries, remoteEntry], definitions: [...(store.definitions ?? []).filter(entry => entry.name !== normalized.name), remoteEntry] });
+        const previousName = definitions.find(entry => entry.id === normalized.id)?.name ?? normalized.name;
+        for (const targetToolId of remoteToolsFor(normalized.id)) {
+          const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { fresh: true }) as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
+          const prior = (store.entries ?? []).find(entry => entry.name === previousName || entry.name === normalized.name);
+          const entries = (store.entries ?? []).filter(entry => entry.name !== previousName && entry.name !== normalized.name);
+          const remoteEntry: NativeMcpEntry = { ...normalized, enabled: prior?.enabled ?? true, protectedValues: false };
+          await native.saveRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { ...store, entries: [...entries, remoteEntry], definitions: [...(store.definitions ?? []).filter(entry => entry.name !== previousName && entry.name !== normalized.name), remoteEntry] });
+        }
         await reload();
         setDraft(null);
         setNotice(t('library.resources.saved'));
@@ -329,10 +380,24 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     setBusy(true); setError(''); setNotice('');
     try {
       if (remoteTargetId) {
-        const targetToolId = remoteToolFor(item.id); const store = await native.getRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { fresh: true }) as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
-        const entries = (store.entries ?? []).map(entry => entry.name === item.name ? { ...entry, enabled: !place } : entry);
-        await native.saveRemoteResourceStore(remoteTargetId, targetToolId, 'mcp', { ...store, entries, definitions: store.definitions ?? [] });
-        await reload();
+        if (place) {
+          if (!await confirmAction(t('library.resources.confirmRemoveMcpPlacement', { name: item.name, tool: toolName }), () => true, { title: t('library.resources.removeMcpPlacementTitle'), confirmLabel: t('library.skillDist.removeAction'), destructive: true })) return;
+          const store = await native.getRemoteResourceStore(remoteTargetId, toolId, 'mcp', { fresh: true }) as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
+          const entries = (store.entries ?? []).filter(entry => entry.name !== item.name);
+          const defs = (store.definitions ?? []).filter(entry => entry.name !== item.name);
+          await native.saveRemoteResourceStore(remoteTargetId, toolId, 'mcp', { ...store, entries, definitions: defs });
+          await reload();
+          setNotice(t('library.page.removed', { where, tool: toolName }));
+        } else {
+          const store = await native.getRemoteResourceStore(remoteTargetId, toolId, 'mcp', { fresh: true }) as { entries?: NativeMcpEntry[]; definitions?: McpDefinition[] };
+          const remoteEntry: NativeMcpEntry = { name: item.name, transport: item.transport, command: item.command, args: item.args, cwd: item.cwd ?? '', url: item.url ?? '', env: item.env ?? {}, headers: item.headers ?? {}, inLibrary: item.inLibrary !== false, enabled: true, protectedValues: false };
+          const entries = [...(store.entries ?? []).filter(entry => entry.name !== item.name), remoteEntry];
+          const defs = [...(store.definitions ?? []).filter(entry => entry.name !== item.name), { ...item, inLibrary: item.inLibrary !== false }];
+          await native.saveRemoteResourceStore(remoteTargetId, toolId, 'mcp', { ...store, entries, definitions: defs });
+          await reload();
+          setNotice(t('library.page.written', { where, tool: toolName }));
+        }
+        return;
       } else if (place) {
         const target: McpDraftTargetRequest = { toolId, scope, projectPath: place.projectPath, contextId: await removalContext(place), enabled: place.enabled, operation: 'remove' };
         const candidate = await native.previewMcpDraft(mcpDraftOf(item), [target]);
@@ -423,7 +488,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
             <Badge className={styles.count} tone={places.length ? 'accent' : 'neutral'} dot={places.length > 0}>{places.length ? t('library.resources.placedCount', { count: places.length }) : t('library.resources.notPlaced')}</Badge>
             <code className={styles.command} title={summary}>{summary || t(isRemoteMcp(item.transport) ? 'library.resources.noUrl' : 'library.resources.noCommand')}</code>
             <div className={styles.foot}>
-              <ScopeMarks className={styles.marks} contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={tools} places={places} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleMcp(item, toolId, scope, projectPath, contextId)} mark={(place) => {
+              <ScopeMarks className={styles.marks} contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={remoteTargetId ? remoteTools : tools} places={places} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleMcp(item, toolId, scope, projectPath, contextId)} mark={(place) => {
                 if (!place) return { pressed: false, state: 'off', status: t('library.page.markOff') };
                 if (!place.enabled) return { pressed: true, state: 'unavailable', status: t('library.resources.markDisabled') };
                 return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
