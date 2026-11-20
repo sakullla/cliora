@@ -925,7 +925,9 @@ test('large business projects default to multi-column card grid with smart prefi
   // Explicit view switch toggles to list mode and persists.
   await project.getByRole('button', { name: '紧凑列表', exact: true }).click();
   await expect(list).toHaveAttribute('data-view', 'list');
-  const firstList = (await project.locator('[data-repository-id="r-0"]').boundingBox())!;
-  const secondList = (await project.locator('[data-repository-id="r-1"]').boundingBox())!;
-  expect(secondList.y).toBeGreaterThanOrEqual(firstList.y + firstList.height - 1);
+  await expect.poll(async () => {
+    const firstList = (await project.locator('[data-repository-id="r-0"]').boundingBox())!;
+    const secondList = (await project.locator('[data-repository-id="r-1"]').boundingBox())!;
+    return secondList.y > firstList.y + 20 && Math.abs(secondList.x - firstList.x) <= 2;
+  }).toBe(true);
 });
