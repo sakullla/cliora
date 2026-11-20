@@ -307,15 +307,30 @@ fn contract_fixtures_and_deep_links_are_strict_and_preview_only() {
     let repository = "6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8";
     let link = format!("cliora://workspace?v=2&file={encoded}&repository={repository}");
     assert_eq!(manifest_link(&link).unwrap(), (path.to_string(), repository.to_string()));
+    // Forward compatibility: unknown parameters are ignored and later versions keep the
+    // same required fields, so a newer sender does not break an older receiver.
+    for extended in [
+        format!("cliora://workspace?v=2&file={encoded}&repository={repository}&adopt=1"),
+        format!("cliora://workspace?v=2&file={encoded}&adopt=1&repository={repository}"),
+        format!("cliora://workspace?v=2&file={encoded}&repository={repository}&future=a&future=b"),
+        format!("cliora://workspace?v=3&file={encoded}&repository={repository}"),
+        format!("cliora://workspace?v=2&&file={encoded}&repository={repository}&"),
+    ] {
+        assert_eq!(
+            manifest_link(&extended).unwrap(),
+            (path.to_string(), repository.to_string()),
+            "{extended}"
+        );
+    }
     for url in [
         // Old project links carry no source repository: refuse instead of narrowing to a file preview.
         format!("cliora://workspace?v=1&file={encoded}"),
         format!("cliora://workspace?v=1&file={encoded}&repository={repository}"),
-        format!("cliora://workspace?v=3&file={encoded}&repository={repository}"),
+        format!("cliora://workspace?v=two&file={encoded}&repository={repository}"),
+        format!("cliora://workspace?v=2&v=2&file={encoded}&repository={repository}"),
         format!("cliora://workspace?v=2&file=relative.json&repository={repository}"),
         format!("cliora://workspace?v=2&file=%2Ftmp%2Fone&file=%2Ftmp%2Ftwo&repository={repository}"),
         format!("cliora://workspace?v=2&file={encoded}&repository={repository}&repository={repository}"),
-        format!("cliora://workspace?v=2&file={encoded}&command=delete&repository={repository}"),
         format!("cliora://workspace?v=2&file={encoded}"),
         format!("cliora://workspace?v=2&repository={repository}"),
         format!("cliora://workspace?v=2&file={encoded}&repository=not-a-uuid"),

@@ -1,4 +1,4 @@
-import { settleCapture, previousCaptureCleanup } from './capture-ready.mjs';
+import { settleCapture, previousCaptureCleanup, sceneTheme } from './capture-ready.mjs';
 /** Synthetic WebDAV sync and backup screens for visual inspection; never platform acceptance evidence. */
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,7 @@ const languageOption = option('--language', 'zh');
 const languages = languageOption === 'all' ? ['zh', 'en'] : [languageOption];
 // The General tab is captured too when asked, so the settings grouping has browser evidence.
 const only = option('--only', '').split(',').filter(Boolean);
+const curated = !only.length && !process.argv.includes('--full');
 const withGeneral = process.argv.includes('--general');
 const compat640 = process.env.CLIORA_CAPTURE_640 === '1' || process.argv.includes('--compat-640');
 const defaultWidths = compat640 ? [1360, 900, 720, 640] : [1360, 900, 720];
@@ -56,6 +57,10 @@ const scenarios = {
     { key: 'library:project-review', kind: 'library', label: '北辰项目审查提示词', reason: '项目范围与独立标签完整保留，不上传为通用提示词，也不发布伪删除。' },
   ] },
 };
+
+const daily = ['unconnected', 'healthy', 'attention', 'failing', 'local-only'];
+const selectedScenarios = Object.entries(scenarios).filter(([name]) => curated ? daily.includes(name) : !only.length || only.includes(name));
+if (only.some(name => !(name in scenarios))) throw new Error('Unknown sync scene in --only');
 
 function installMock(seed) {
   const control = { configured: false, enabled: true, lastSuccess: null, lastError: null, pending: 0, receipt: null, projects: [], blockers: [], conflicts: [], localOnly: [], ...seed };
@@ -132,28 +137,22 @@ try {
 if (!previewReady) throw new Error(`预览服务未就绪：${previewUrl}`);
 browser = await chromium.launch();
 for (const theme of themes) for (const width of widths) for (const language of languages) {
-  for (const [name, seed] of Object.entries(scenarios).filter(([name]) => !only.length || only.includes(name))) {
+  for (const [index, [name, seed]] of selectedScenarios.entries()) {
+    if (curated && theme !== sceneTheme(themes, widths, width, index)) continue;
     let page = null;
     try {
-      page = await browser.newPage({ viewport: { width, height: 1100 }, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme });
+      page = await browser.newPage({ viewport: { width, height: 1100 }, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme, reducedMotion: 'reduce' });
       page.on('pageerror', (error) => failures.push({ type: 'pageerror', name, theme, width, language, message: error.message }));
       await page.addInitScript(installMock, { ...seed, theme, language, sampleTransfers: transfers });
       const shot = async (label) => {
         await settleCapture(page);
-        // A ready dialog can still be midway through its finite opacity animation.
-        // Wait for actual paint readiness; leave infinite progress spinners alone.
-        await page.evaluate(async () => {
-          const finite = document.getAnimations().filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity);
-          await Promise.all(finite.map((animation) => animation.finished.catch(() => {})));
-          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-        });
-        await page.waitForFunction(() => [...document.querySelectorAll('dialog[open], [role="dialog"]')].filter((node) => node.getClientRects().length > 0).every((node) => getComputedStyle(node).opacity === '1'));
+        await page.waitForFunction(() => [...document.querySelectorAll('dialog[open], [role="dialog"]')].filter(node => node.getClientRects().length > 0).every(node => getComputedStyle(node).opacity === '1'));
         const paint = await page.evaluate(() => ({
           theme: document.documentElement.dataset.theme,
           dialogs: [...document.querySelectorAll('dialog[open], [role="dialog"]')].filter((node) => node.getClientRects().length > 0).map((node) => ({ opacity: getComputedStyle(node).opacity, backdropOpacity: node.tagName === 'DIALOG' ? getComputedStyle(node, '::backdrop').opacity : null })),
         }));
         const file = `${language}-${theme}-${width}-${label}.png`;
-        await page.screenshot({ path: `${out}/${file}`, fullPage: true });
+        await page.screenshot({ path: `${out}/${file}`, fullPage: true, animations: 'disabled' });
         shots.push({ name: label, scenario: name, theme, width, language, file, paint });
         const over = await page.evaluate(findOverflow);
         if (over.length) failures.push({ type: 'overflow', name: label, theme, width, language, over });
@@ -166,7 +165,7 @@ for (const theme of themes) for (const width of widths) for (const language of l
       else await page.getByRole('button', { name: language === 'en' ? 'Set up WebDAV' : '配置 WebDAV', exact: true }).first().waitFor();
       await shot(name);
       if (width === 1360 || width === 640) {
-        if (name === 'unconnected') {
+        if (name === 'unconnected' && !curated) {
           await page.getByRole('button', { name: language === 'en' ? 'Set up WebDAV' : '配置 WebDAV' }).first().click();
           await page.getByRole('region', { name: language === 'en' ? 'Set up WebDAV' : '配置 WebDAV', exact: true }).waitFor(); await shot('connect-dialog');
           await page.keyboard.press('Escape');
@@ -187,18 +186,20 @@ for (const theme of themes) for (const width of widths) for (const language of l
             await page.keyboard.press('Escape'); await page.getByRole('dialog', { name: language === 'en' ? 'Resolve conflicts' : '处理冲突' }).waitFor({ state: 'hidden' });
           }
         }
-        if (name === 'local-only') {
+        if (name === 'local-only' && !curated) {
           await page.getByRole('button', { name: language === 'en' ? 'Sync now' : '立即同步', exact: true }).first().click();
           await page.getByRole('dialog', { name: language === 'en' ? 'Sync result' : '同步结果', exact: true }).waitFor();
           await shot('local-only-result');
         }
         if (name === 'healthy') {
-          await page.evaluate(() => { window.__sync.hang = true; });
-          await page.getByRole('button', { name: language === 'en' ? 'Sync now' : '立即同步' }).first().click();
-          await page.getByRole('dialog', { name: language === 'en' ? 'Syncing' : '正在同步', exact: true }).waitFor(); await shot('sync-running');
-          await page.evaluate(() => { window.__sync.hang = false; });
-          await page.reload();
-          await openSync(page, language);
+          if (!curated) {
+            await page.evaluate(() => { window.__sync.hang = true; });
+            await page.getByRole('button', { name: language === 'en' ? 'Sync now' : '立即同步' }).first().click();
+            await page.getByRole('dialog', { name: language === 'en' ? 'Syncing' : '正在同步', exact: true }).waitFor(); await shot('sync-running');
+            await page.evaluate(() => { window.__sync.hang = false; });
+            await page.reload();
+            await openSync(page, language);
+          }
           await page.getByRole('button', { name: language === 'en' ? 'Sync now' : '立即同步' }).first().click();
           await page.getByRole('dialog', { name: language === 'en' ? 'Sync result' : '同步结果', exact: true }).waitFor(); await shot('sync-result');
         }
@@ -213,13 +214,13 @@ for (const theme of themes) for (const width of widths) for (const language of l
     // The General tab: task clusters, the folded update card, and the host list tab.
     let page = null;
     try {
-      page = await browser.newPage({ viewport: { width, height: 1100 }, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme });
+      page = await browser.newPage({ viewport: { width, height: 1100 }, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme, reducedMotion: 'reduce' });
       page.on('pageerror', (error) => failures.push({ type: 'pageerror', name: 'general', theme, width, language, message: error.message }));
       await page.addInitScript(installMock, { ...scenarios.attention, theme, language, remoteSsh: true, sampleTransfers: transfers });
       const shot = async (label) => {
         await settleCapture(page);
         const file = `${language}-${theme}-${width}-${label}.png`;
-        await page.screenshot({ path: `${out}/${file}`, fullPage: true });
+        await page.screenshot({ path: `${out}/${file}`, fullPage: true, animations: 'disabled' });
         shots.push({ name: label, scenario: 'general', theme, width, language, file });
         const over = await page.evaluate(findOverflow);
         if (over.length) failures.push({ type: 'overflow', name: label, theme, width, language, over });
@@ -252,7 +253,7 @@ for (const theme of themes) for (const width of widths) for (const language of l
 const escape = (value) => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const invocation = ['node', 'scripts/capture-sync.mjs', ...process.argv.slice(2)].join(' ');
 fs.writeFileSync(`${out}/index.html`, `<!doctype html><meta charset="utf-8"><title>Sync captures</title><style>body{font:14px system-ui;background:#222;color:#eee}figure{display:inline-block;margin:12px;vertical-align:top}img{max-width:640px;border:1px solid #555}</style><p>${failures.length ? '捕获有失败，请查看清单' : '捕获完成'} · ${shots.length} 张 · <a href="capture-sync-manifest.json" style="color:#b8d2ff">捕获清单</a></p><p>${escape(acceptanceNote)}</p>${shots.map((item) => `<figure><img src="${escape(item.file)}"><figcaption>${escape(item.file)}</figcaption></figure>`).join('')}`);
-fs.writeFileSync(`${out}/capture-sync-manifest.json`, JSON.stringify({ capturedAt: new Date().toISOString(), synthetic: true, acceptance, invocation, previewUrl, matrix: { themes, widths, languages }, scenarios: [...Object.keys(scenarios).filter((name) => !only.length || only.includes(name)), ...(withGeneral ? ['general'] : [])], success: failures.length === 0, imageCount: shots.length, captures: shots, failures }, null, 2) + '\n');
+fs.writeFileSync(`${out}/capture-sync-manifest.json`, JSON.stringify({ capturedAt: new Date().toISOString(), synthetic: true, acceptance, invocation, previewUrl, matrix: { themes, widths, languages }, scenarios: [...selectedScenarios.map(([name]) => name), ...(withGeneral ? ['general'] : [])], success: failures.length === 0, imageCount: shots.length, captures: shots, failures }, null, 2) + '\n');
 const rows = [...new Set(shots.map((item) => item.name))].map((label) => `| ${label} | ${shots.filter((item) => item.name === label).map((item) => `[${item.language} ${item.theme} ${item.width}](${item.file})`).join(' · ')} |`);
 fs.writeFileSync(`${out}/README.md`, `# 迁移与同步捕获\n\n[浏览图片画廊](index.html) · [机器可读清单](capture-sync-manifest.json)\n\n捕获 WebDAV 未连接、正常、需处理、失败、暂停与项目/范围提示词本地保留状态，连接、导出、恢复对话框，冲突展开，以及同步进行中与结果。\n\n执行：\n\n\`\`\`sh\nCLIORA_PREVIEW_URL=http://127.0.0.1:14736 ${invocation}\n\`\`\`\n\n\`--theme all|light|dark\`、\`--size 1360,900,720\` 与 \`--language all|zh|en\` 可缩小范围；640 需显式指定或设置 CLIORA_CAPTURE_640=1；\`CLIORA_CAPTURE_OUT\` 指定输出目录。预览服务器需运行当前 frontend build。\n\n本次生成 ${shots.length} 张图片，${failures.length} 项检查失败（页面错误、横向溢出或场景步骤失败）。${acceptanceNote}\n\n| 场景 | 图片 |\n| --- | --- |\n${rows.join('\n')}\n`);
 console.log(JSON.stringify({ out, count: shots.length, failures }, null, 2));

@@ -1279,13 +1279,20 @@ pub fn manifest_link(url: &str) -> Result<(String, String), String> {
             "v" if version.is_none() => version = Some(value.into_owned()),
             "file" if path.is_none() => path = Some(value.into_owned()),
             "repository" if repository.is_none() => repository = Some(value.into_owned()),
-            _ => return Err("项目清单链接含未知或重复字段".into()),
+            "v" | "file" | "repository" => return Err("项目清单链接含重复参数".into()),
+            // Unknown keys are ignored so a newer sender can add context without breaking
+            // the preview on an older receiver.
+            _ => {}
         }
     }
-    // Only v2 carries the source repository; old project links are refused instead of being
-    // silently narrowed to a file preview.
-    if version.as_deref() != Some("2") {
-        return Err("仅支持 v=2 项目清单链接，旧版项目链接请重新发起".into());
+    // v1 carries no source repository and is refused instead of being silently narrowed to a
+    // file preview; later versions keep the same required fields and preview semantics.
+    let supported = version
+        .as_deref()
+        .and_then(|value| value.parse::<u32>().ok())
+        .is_some_and(|value| value >= 2);
+    if !supported {
+        return Err("仅支持 v=2 及更新的项目清单链接，旧版项目链接请重新发起".into());
     }
     let path = path.ok_or("项目清单链接缺少 file 参数")?;
     if !Path::new(&path).is_absolute() || path.chars().any(char::is_control) {

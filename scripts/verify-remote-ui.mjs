@@ -11,8 +11,8 @@ const output = path.resolve(process.env.CLIORA_REMOTE_UI_OUT ?? path.join(root, 
 const args = process.argv.slice(2);
 const option = (name, fallback) => { const i = args.indexOf(name); return i < 0 ? fallback : args[i + 1]; };
 const theme = option('--theme', 'all');
-const size = option('--size', 'all');
-if (!['all', 'light', 'dark'].includes(theme) || !/^(all|(?:1360|900|640)(?:,(?:1360|900|640))*)$/.test(size)) throw new Error('Invalid capture matrix.');
+const size = option('--size', '1360');
+if (!['all', 'light', 'dark'].includes(theme) || !/^(all|(?:1360|900|720|640)(?:,(?:1360|900|720|640))*)$/.test(size)) throw new Error('Invalid capture matrix.');
 const children = new Set();
 const report = { schemaVersion: 1, synthetic: true, nativeAcceptance: 'unverified', status: 'failed', matrix: { theme, size }, runs: [], failures: [] };
 let stopping = false;
@@ -72,11 +72,11 @@ try {
   ]) {
     const directory = path.join(output, name);
     try {
-      await run([script, ...flags, '--theme', theme, '--size', size], { CLIORA_PREVIEW_URL: url, CLIORA_CAPTURE_OUT: directory });
+      await run([script, ...flags, '--theme', theme, '--size', size, ...args.filter(arg => arg === '--full')], { CLIORA_PREVIEW_URL: url, CLIORA_CAPTURE_OUT: directory });
       const manifest = JSON.parse(await readFile(path.join(directory, manifestName), 'utf8'));
       const imageCount = manifest.imageCount ?? manifest.shots?.length ?? 0;
       const themes = theme === 'all' ? ['light', 'dark'] : [theme];
-      const widths = size === 'all' ? [1360, 900, 640] : size.split(',').map(Number);
+      const widths = size === 'all' ? [1360, 900, 720, ...(process.env.CLIORA_CAPTURE_640 === '1' ? [640] : [])] : size.split(',').map(Number);
       const captures = manifest.captures ?? manifest.shots ?? [];
       if (themes.some(value => widths.some(width => !captures.some(shot => shot.theme === value && (shot.width === width || shot.viewport?.width === width))))) throw new Error(`${name}: incomplete theme/width matrix`);
       if (manifest.success !== true || manifest.failures?.length || manifest.missing?.length || manifest.runErrors?.length || manifest.shots?.some(shot => shot.pageErrors?.length || shot.overflow || shot.actionError) || !(imageCount > 0)) throw new Error(`${name}: capture errors, missing scenarios, or no images`);

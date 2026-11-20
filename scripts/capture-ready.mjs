@@ -28,3 +28,8 @@ export async function settleCapture(page) {
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   });
 }
+
+/** Give each scene one theme per requested width, with both themes represented in the gallery. */
+export function sceneTheme(themes, widths, width, index) {
+  return themes[(widths.indexOf(width) + index) % themes.length];
+}

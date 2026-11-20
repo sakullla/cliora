@@ -6,20 +6,25 @@ import styles from './RowMenu.module.css';
 
 /** `icon` and `title` replace the default ellipsis trigger, e.g. for the menu half of a split button.
  *  `side` opens the menu beside the trigger instead of below it, for triggers in a narrow vertical rail. */
-export function RowMenu({ label, children, className, icon, title, side = false }: { label: string; children: ReactNode; className?: string; icon?: ReactNode; title?: string; side?: boolean }) {
+export function RowMenu({ label, children, className, icon, title, side = false }: { label: string; children: ReactNode | (() => ReactNode); className?: string; icon?: ReactNode; title?: string; side?: boolean }) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<HTMLButtonElement | null>(null);
+  const open = anchor !== null;
+  return <div className={styles.rowMenu}>
+    <button type="button" className={className ?? styles.rowMenuButton} aria-label={label} title={title ?? t('tools.workspace.moreActions')} aria-expanded={open} aria-haspopup="menu" onClick={event => setAnchor(open ? null : event.currentTarget)} onKeyDown={event => { if (event.key === 'ArrowDown' && !open) { event.preventDefault(); setAnchor(event.currentTarget); } }}>{icon ?? <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>}</button>
+    {anchor && <MenuPanel anchor={anchor} label={label} side={side} close={() => setAnchor(null)}>
+      {typeof children === 'function' ? children() : children}
+    </MenuPanel>}
+  </div>;
+}
+
+function MenuPanel({ anchor, label, side, close, children }: { anchor: HTMLButtonElement; label: string; side: boolean; close: () => void; children: ReactNode }) {
   const [box, setBox] = useState<{ top: number; left: number } | null>(null);
-  const [portalTarget, setPortalTarget] = useState<HTMLElement>(document.body);
-  const ref = useRef<HTMLDivElement>(null);
-  const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const portalTarget = anchor.closest('dialog') ?? document.body;
   const items = () => [...panel.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? []];
-  const dismiss = (restoreFocus: boolean) => { setOpen(false); if (restoreFocus) trigger.current?.focus(); };
-  useLayoutEffect(() => { setPortalTarget(ref.current?.closest('dialog') ?? document.body); }, [open]);
-  // Keyboard users land on the first action once the menu has been placed.
-  useEffect(() => { if (open && box) items()[0]?.focus({ preventScroll: true }); }, [open, box !== null]);
-  useEffect(() => { if (!open) setBox(null); }, [open]);
+  const dismiss = (restoreFocus: boolean) => { close(); if (restoreFocus) anchor.focus(); };
+  useEffect(() => { if (box) items()[0]?.focus({ preventScroll: true }); }, [box !== null]);
   function keyNavigate(event: ReactKeyboardEvent<HTMLDivElement>) {
     const list = items(); if (!list.length) return;
     const index = list.indexOf(document.activeElement as HTMLButtonElement);
@@ -30,9 +35,8 @@ export function RowMenu({ label, children, className, icon, title, side = false 
     list[next].focus();
   }
   useLayoutEffect(() => {
-    if (!open) return;
     const place = () => {
-      const triggerRect = ref.current?.getBoundingClientRect();
+      const triggerRect = anchor.parentElement?.getBoundingClientRect();
       const menu = panel.current;
       if (!triggerRect || !menu) return;
       const width = menu.offsetWidth;
@@ -66,21 +70,17 @@ export function RowMenu({ label, children, className, icon, title, side = false 
       window.removeEventListener('scroll', place, true);
       dialogHost?.removeEventListener('animationend', place);
     };
-  }, [open, side, portalTarget]);
+  }, [anchor, side, portalTarget]);
   useEffect(() => {
-    if (!open) return;
-    const close = (event: MouseEvent) => {
+    const outside = (event: MouseEvent) => {
       const target = event.target as Node;
-      if (ref.current?.contains(target) || panel.current?.contains(target)) return;
-      setOpen(false);
+      if (anchor.parentElement?.contains(target) || panel.current?.contains(target)) return;
+      close();
     };
     const key = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismiss(true); } };
-    document.addEventListener('mousedown', close);
+    document.addEventListener('mousedown', outside);
     document.addEventListener('keydown', key, true);
-    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', key, true); };
-  }, [open]);
-  return <div className={styles.rowMenu} ref={ref}>
-    <button ref={trigger} type="button" className={className ?? styles.rowMenuButton} aria-label={label} title={title ?? t('tools.workspace.moreActions')} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen(value => !value)} onKeyDown={event => { if (event.key === 'ArrowDown' && !open) { event.preventDefault(); setOpen(true); } }}>{icon ?? <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>}</button>
-    {open && createPortal(<div ref={panel} className={styles.rowMenuList} role="menu" aria-label={label} style={box ? { top: box.top, left: box.left } : { top: 0, left: -10000 }} onKeyDown={keyNavigate} onClick={() => dismiss(true)}>{children}</div>, portalTarget)}
-  </div>;
+    return () => { document.removeEventListener('mousedown', outside); document.removeEventListener('keydown', key, true); };
+  }, [anchor, close]);
+  return createPortal(<div ref={panel} className={styles.rowMenuList} role="menu" aria-label={label} style={box ? { top: box.top, left: box.left } : { top: 0, left: -10000 }} onKeyDown={keyNavigate} onClick={() => dismiss(true)}>{children}</div>, portalTarget);
 }

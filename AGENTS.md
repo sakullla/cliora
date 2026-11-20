@@ -21,6 +21,7 @@ The app registers the `cliora://` scheme through the deep-link plugin; `cliora:/
 - `npm run dev`: run the frontend only; native storage is unavailable in browser mode.
 - `npm run build`: type-check TypeScript and build with Vite.
 - `npx playwright install chromium-headless-shell`: install the browser test prerequisite.
+- `npm run verify:projects`: reuse the current build (rebuild when inputs change) and run the business-project, large picker, and dialog menu regressions.
 - `npm run verify`: run Node tests, Playwright tests, and the frontend build.
 - `npm run test:unit:all`: run Rust library tests, then Node tests.
 - `cargo test --manifest-path src-tauri/Cargo.toml`: run Rust tests.
@@ -39,6 +40,8 @@ Use `*.spec.ts` for Playwright tests and `*.test.mjs` for Node tests. Add regres
 
 `scripts/capture-ui.mjs` is the UI capture tool. It opens the Vite preview in Playwright, installs synthetic native IPC, walks the screens, and writes a gallery. Use it to check layout after a UI change. The pictures are not a local project and are not native platform acceptance. A running desktop window is separate: `scripts/drive-records.mjs` can capture it only when that process exposes a local WebView2 CDP endpoint. Do not resize or cover the Cliora window to produce these Playwright captures; the script sets its own viewport.
 
+Run `node scripts/verify-ui-captures.mjs` to build and capture the entire desktop gallery with one preview server. It writes `docs/verification/product-ui-ux/index.html`. Use `--skip-build` with a current build, `--only workbench,memory` to focus the gallery, or `--list` to see all areas. The default uses 1360px, distributes representative states across both themes, and runs two areas at a time. Set `CLIORA_CAPTURE_JOBS=1` to run serially or `CLIORA_PRODUCT_CAPTURE_OUT` to save a focused run separately. `--size 1360,720` adds a compatibility sample, while `--full` on the verification runner restores the historical compatibility matrix.
+
 Start a frontend first. `npm run dev -- --port 14736` matches the default preview. While `npm run tauri dev` is already running, point the script at that server instead. Browser mode has no native storage; the script supplies the fixtures.
 
 ```powershell
@@ -47,26 +50,21 @@ node scripts/capture-ui.mjs --skills --theme light --size 1360
 ```
 
 - `--theme all|light|dark` chooses the theme. The default is `all`.
-- With no area selector, capture page overviews only. Use `--full` for the exhaustive capture set.
+- With no area selector, the direct script captures page overviews. Dedicated areas choose representative screens by default. Add `--full` for additional states and variants.
 - `--size all|1360,900,720` chooses widths. The default is desktop width `1360`; smaller widths are opt-in compatibility checks. The native window minimum is 720px. `640` is not a normal desktop scenario and only runs when explicitly passed or when `CLIORA_CAPTURE_640=1` / `--compat-640` is set.
+- `--projects` captures one project list per requested width, rotating the selected themes. A width sweep shows the overview at its largest width and the worktree fallback at smaller widths. A single width shows the fallback. The batch and manifest previews are captured once each at the largest width. Use `node scripts/capture-product-ux.mjs --only projects` after building to start a preview and record just this gallery.
 - `--skills` captures the Skill list, the SKILL.md reading view, and the SKILL.md editor.
 - `--connections`, `--records`, `--sessions`, and `--features` capture those areas. `--workflows` is an alias of `--features`.
-- `--mcp` captures the tool MCP list with its details, edit and add dialogs, plus the library MCP list, editor, and CLI target panel.
+- `--mcp` samples tool detail and write conflict, library targets, and batch import preview.
 - `--list` prints page and feature scenario names. `--only settings` captures only Settings; `--only 'tools,library,sessions,usage,settings'` selects page overviews; `--only 'kimi-*'` limits feature scenarios. It does not filter `--skills`.
 - `CLIORA_CAPTURE_OUT` sets the output directory. The default is `docs/verification/ui`.
 - `CLIORA_PREVIEW_URL` sets the preview. The default is `http://127.0.0.1:14736`.
 
 The Skill fixture treats the directory name as the skill. `crud-page` has a mismatched frontmatter name and an empty description. `lark-apps` is markdown without frontmatter. Both stay on the list as 本机目录; they open in reading mode and switch to the editor with 编辑. `code-review` is a managed package and opens the same editor with 启用 Skill. 放进资料库 is only on an external directory. The editor capture types into SKILL.md and expects 保存 to become enabled. A name or description mismatch is not 暂不可读取.
 
-`scripts/capture-sync.mjs` captures only 迁移与同步: WebDAV unconnected, healthy, needs-attention, failing and paused states, the connect/export/import dialogs, an open conflict, and the sync progress and result dialogs. It takes the same `--theme`/`--size` options and writes to `docs/verification/ui-sync` unless `CLIORA_CAPTURE_OUT` is set.
+The workbench gallery samples active and ended sessions, large worktree selection, quick input and find, new session, restore, remote disconnect, and the empty launchpad. `--full` adds platform and error variants. `--only 'workbench-restore-*'` captures just that area, and `--performance` runs the remote-stream measurement once.
 
-`scripts/capture-workbench.mjs` captures the 工作台 screen: the session rail with long titles, terminal canvas and scrollbar, display preferences, quick input and find bar, ended-session state, the folded sidebar (including the macOS title-bar layout), the worktree menu and management dialog (including hundreds of worktrees: the menu filter, the current-project scope and the all-projects grouping), the new-session dialog, and the empty launchpad in both themes at 1360 by default (900 and 640 are opt-in). It takes the same `--theme`/`--size` options, reports page errors and horizontal overflow, and writes `docs/verification/ui-workbench` unless `CLIORA_CAPTURE_OUT` is set.
-
-Workbench captures wait for fixture content and paint readiness. The ended-session capture also records layout metrics. Add `--performance` to run the remote-stream stress measurement once, at the first selected theme/size; ordinary captures omit it. `scripts/capture-product-ux.mjs` forwards `--theme`, `--size`, and `--performance`, defaults to 1360px, and its pages gallery omits the home and migration overviews covered by their dedicated galleries.
-
-Workbench's default gallery includes nine representative desktop states per theme. Use `--full` for all platform/error/large-list variants or `--only 'workbench-restore-*'` to target one area. The product capture wrapper forwards `--full` to workbench captures. `--size all` is an explicit compatibility sweep, not the daily default.
-
-`scripts/capture-memory.mjs` captures only 工具与连接 → 记忆: the grouped list, reading, frontmatter properties, editing, creating, type filtering, no-match, the CLI-wide switch off, per-store and per-entry switches, a read-only CLI, and the empty state. It takes the same `--theme`/`--size` options, reports page errors and horizontal overflow, and writes to `docs/verification/ui-memory` unless `CLIORA_CAPTURE_OUT` is set.
+Memory samples the grouped list, editing, partial reads, switches, and read-only entries. Sync samples setup, healthy and failed status, conflicts, local-only data, and sync results. Both accept `--full` or a scenario-level `--only`. The rule distribution gallery samples partial failure, conflicts, and readback recovery. The cross-app review roundtrip is a separate command because it uses both previews. Its default captures three moments from the roundtrip, and `--full` records each intermediate state in both themes.
 
 Each run checks horizontal overflow and page errors, then writes `index.html`, `README.md`, and a mode-specific manifest. A successful nonempty run removes obsolete PNGs listed in that gallery's previous manifest; unrelated files remain. A narrow run replaces the gallery in the output directory, so set `CLIORA_CAPTURE_OUT` when the existing full gallery should stay.
 

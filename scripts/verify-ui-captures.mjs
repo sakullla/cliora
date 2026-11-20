@@ -1,14 +1,4 @@
-/**
- * One command for the UI capture acceptance run (02 ADR-7): build the frontend, serve it with
- * vite preview on 127.0.0.1:14736, run the four capture scripts over all themes and widths, then
- * stop the preview. The scripts run as one job per theme × width, two at a time by default
- * (CLIORA_CAPTURE_JOBS overrides), and the total wall-clock is printed at the end. The
- * default matrix is 1360/900/720 for every gallery, with 640 only when
- * CLIORA_CAPTURE_640=1. Output goes to docs/verification/ui-redesign/<script>/<theme>-<width>,
- * each with the script's own gallery, manifest and job.log. Any failing job makes the run exit
- * non-zero and its failing scenarios are printed. Captures use synthetic IPC and are
- * not native platform acceptance.
- */
+/** Build and run the curated product gallery. --full runs the archived compatibility matrix. */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -16,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const runStarted = Date.now();
+const args = process.argv.slice(2);
+const full = args.includes('--full');
 const port = 14736;
 const previewUrl = `http://127.0.0.1:${port}`;
 const outRoot = path.join(root, 'docs', 'verification', 'ui-redesign');
@@ -39,7 +31,7 @@ const scripts = ['capture-ui', 'capture-sync', 'capture-workbench', 'capture-mem
 const jobs = scripts.flatMap((script) => themes.flatMap((theme) => widths.map((width) => ({
   script,
   label: `${theme}-${width}`,
-  args: ['--theme', theme, '--size', String(width), ...(script === 'capture-ui' && theme === 'light' && width === 1360 ? ['--measure'] : [])],
+  args: ['--theme', theme, '--size', String(width), ...(script === 'capture-ui' ? [] : ['--full']), ...(script === 'capture-ui' && theme === 'light' && width === 1360 ? ['--measure'] : [])],
   manifest: `${script}-manifest.json`,
 }))));
 
@@ -66,14 +58,23 @@ function failingScenarios(script, file) {
   return (data.failures ?? []).map((item) => typeof item === 'string' ? item : describe(item));
 }
 
-if (await reachable()) {
-  console.error(`${previewUrl} 已有服务在运行；请先停止它，本命令需要独占端口 ${port} 提供当前构建。`);
-  process.exit(1);
+if (args.includes('--list')) process.exit(await run(['scripts/capture-product-ux.mjs', '--list']));
+
+if (!args.includes('--skip-build')) {
+  console.log('> build: tsc -b && vite build');
+  if (await run(['node_modules/typescript/bin/tsc', '-b']) !== 0 || await run(['node_modules/vite/bin/vite.js', 'build']) !== 0) {
+    console.error('前端构建失败，未运行截图。');
+    process.exit(1);
+  }
 }
 
-console.log('> build: tsc -b && vite build');
-if (await run(['node_modules/typescript/bin/tsc', '-b']) !== 0 || await run(['node_modules/vite/bin/vite.js', 'build']) !== 0) {
-  console.error('前端构建失败，未运行截图。');
+if (!full) {
+  const code = await run(['scripts/capture-product-ux.mjs', ...args.filter(arg => arg !== '--skip-build')]);
+  console.log(`总耗时 ${Math.round((Date.now() - runStarted) / 1000)} s`);
+  process.exit(code);
+}
+if (await reachable()) {
+  console.error(`${previewUrl} 已有服务在运行；请先停止它，本命令需要独占端口 ${port} 提供当前构建。`);
   process.exit(1);
 }
 

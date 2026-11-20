@@ -1,5 +1,6 @@
 /** Capture the current configuration/account UI with the shared sanitized IPC fixture. */
 import fs from 'node:fs';
+import { sceneTheme } from './capture-ready.mjs';
 import ts from 'typescript';
 import { expect } from '@playwright/test';
 
@@ -54,10 +55,13 @@ const extra = [
 ].map(([name, tool, title, state, action]) => ({ name, tool, title, state, action }));
 export const configurationScenarios = [...variants, ...quickAdvanced, ...extra];
 
-async function fixtureInstaller() {
+let fixtureModule;
+function fixtureInstaller() {
+  if (fixtureModule) return fixtureModule;
   const text = fs.readFileSync(new URL('../tests/ui/configuration-workspace-fixture.ts', import.meta.url), 'utf8');
   const code = ts.transpileModule(text, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
-  return import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
+  fixtureModule = import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
+  return fixtureModule;
 }
 
 export async function installCaptureConfigurationProtocol(page) {
@@ -103,10 +107,12 @@ async function installPresentation(page, theme, names, rawTemplate) {
   }, { theme, names, rawTemplate });
 }
 
-export async function captureConfiguration({ browser, themes, widths, selected, url, capture, failures }) {
+export async function captureConfiguration({ browser, themes, widths, selected, curated, url, capture, failures }) {
   const { installConfigurationWorkspace } = await fixtureInstaller();
-  for (const width of widths) for (const theme of themes) for (const scene of configurationScenarios.filter(item => selected.includes(item.name))) {
-    const page = await browser.newPage({ baseURL: url, viewport: { width, height: 1100 } });
+  const chosen = configurationScenarios.filter(scene => selected.includes(scene.name));
+  for (const width of widths) for (const theme of themes) for (const [index, scene] of chosen.entries()) {
+    if (curated && theme !== sceneTheme(themes, widths, width, index)) continue;
+    const page = await browser.newPage({ baseURL: url, viewport: { width, height: 1100 }, locale: 'zh-CN', reducedMotion: 'reduce' });
     // Same 30 s wait budget as the other capture scripts; each scene boots a fresh page, which can
     // take longer than 10 s when verify-ui-captures runs several capture jobs at once.
     page.setDefaultTimeout(30000);
@@ -136,7 +142,7 @@ export async function captureConfiguration({ browser, themes, widths, selected, 
         else await page.locator('[data-profile-id="existing"]').getByRole('button', { name: '修改', exact: true }).click();
         await expect(dialog).toBeVisible();
         if (action === 'quick') await expect(dialog.getByRole('button', { name: '快速配置', exact: true })).toHaveAttribute('aria-pressed', 'true');
-        if (action === 'advanced') { const advanced = dialog.getByRole('button', { name: '高级配置', exact: true }); if (await advanced.getAttribute('aria-pressed') !== 'true') await advanced.click(); }
+        if (['advanced', 'directory', 'directory-required', 'check'].includes(action)) { const advanced = dialog.getByRole('button', { name: '高级配置', exact: true }); if (await advanced.getAttribute('aria-pressed') !== 'true') await advanced.click(); }
         if (scene.details) {
           if (['pi', 'open_code', 'kimi_code'].includes(scene.tool)) { await dialog.getByRole('button', { name: /^one(?: ·|$)/ }).click(); await expect(dialog.getByLabel('模型 one', { exact: true })).toBeVisible(); }
           else await dialog.getByRole('button', { name: '常用设置', exact: true }).click();

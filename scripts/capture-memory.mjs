@@ -1,4 +1,4 @@
-import { settleCapture, previousCaptureCleanup } from './capture-ready.mjs';
+import { settleCapture, previousCaptureCleanup, sceneTheme } from './capture-ready.mjs';
 /** Synthetic memory screens (工具 → 记忆) for visual inspection; never platform acceptance evidence. */
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -141,17 +141,22 @@ const shots = [];
 const problems = [];
 const firstLine = (error) => String(error?.message ?? error).split('\n')[0];
 const selected = option('--only', '').split(',').filter(Boolean);
+const curated = !selected.length && !process.argv.includes('--full');
+const daily = ['claude-overview', 'claude-edit', 'qoder-partial-read', 'engine-switches', 'read-only'];
+if (selected.some(name => !scenarios.some(scene => scene.name === name))) throw new Error(`Unknown memory scene; choose ${scenarios.map(scene => scene.name).join(',')}`);
+const chosen = scenarios.filter(scene => curated ? daily.includes(scene.name) : !selected.length || selected.includes(scene.name));
 // Every failure (launch, navigation, action, overflow check, screenshot) is recorded in problems so
 // the manifest, README and index below are always written and the exit code is 1.
 let browser = null;
 try {
   browser = await chromium.launch();
-  for (const theme of themes) for (const width of widths) for (const scenario of scenarios.filter(item => !selected.length || selected.includes(item.name))) {
+  for (const theme of themes) for (const width of widths) for (const [index, scenario] of chosen.entries()) {
+    if (curated && theme !== sceneTheme(themes, widths, width, index)) continue;
     const label = `${scenario.name}/${theme}/${width}`;
     let page = null;
     let stage = 'page';
     try {
-      page = await browser.newPage({ viewport: { width, height: 940 }, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme });
+      page = await browser.newPage({ viewport: { width, height: 940 }, locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme, reducedMotion: 'reduce' });
       page.on('pageerror', error => problems.push(`${label}: ${error.message}`));
       await page.addInitScript(installMock, { fixtures, theme, ...(scenario.seed ?? {}) });
       stage = 'navigation';
@@ -159,7 +164,6 @@ try {
       await openCli(page, scenario.tool);
       await page.getByRole('tab', { name: '记忆', exact: true }).click();
       await expect(page.getByRole('button', { name: '刷新记忆', exact: true })).toBeEnabled();
-      await settleCapture(page);
       stage = 'action';
       try { await scenario.run?.(page); } catch (error) { problems.push(`${label}: ${firstLine(error)}`); }
       await settleCapture(page);

@@ -13,7 +13,11 @@ const value = (flag, fallback) => argv.includes(flag) ? argv[argv.indexOf(flag) 
 const out = path.resolve(value('--out', 'docs/verification/ui-review-roundtrip'));
 const clioraUrl = value('--cliora', 'http://127.0.0.1:14736');
 const twiglaneUrl = value('--twiglane', 'http://127.0.0.1:1430');
-const themes = value('--theme', 'all') === 'all' ? ['light', 'dark'] : [value('--theme', 'light')];
+const themeOption = value('--theme', argv.includes('--full') ? 'all' : 'light');
+if (!['all', 'light', 'dark'].includes(themeOption)) throw new Error('--theme accepts all, light or dark');
+const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
+const curated = !argv.includes('--full');
+const representative = new Set(['cliora-repository-prompt', 'twiglane-source-manager', 'cliora-returned-original-session']);
 fs.mkdirSync(out, { recursive: true });
 const prune = previousCaptureCleanup(out, 'manifest.json');
 const report = { kind: 'two-frontends-synthetic-ipc-and-scheme', nativePlatform: 'unverified', realGit: false, systemScheme: false, input: { projects: 2, repositoryMembers: 49, prompts: 124, reviewSources: 2, viewport: '1360x900' }, captures: [], observations: [], pageErrors: [] };
@@ -26,7 +30,8 @@ try {
     await installReviewDesktop(cliora, theme);
     await twiglane.addInitScript(theme => localStorage.setItem('preview-theme', theme), theme);
     await Promise.all([cliora.goto(clioraUrl), twiglane.goto(twiglaneUrl + '/?cliora=external')]);
-    await expect(twiglane.getByRole('combobox', { name: '选择 Cliora 审查来源' })).toBeVisible();
+    await twiglane.locator('.welcome-recent button').first().waitFor();
+    const sources = twiglane.getByRole('button', { name: '选择 Cliora 审查来源', exact: true });
     const shot = async (page, name) => {
       if (name.startsWith('twiglane-')) {
         await expect(page.locator('.history-task-row[aria-pressed="true"]')).toBeVisible();
@@ -36,6 +41,7 @@ try {
       await settleCapture(page);
       const overflow = await page.evaluate(() => Math.max(0, document.documentElement.scrollWidth - innerWidth));
       if (overflow > 1) throw new Error(`${name}: horizontal overflow ${overflow}`);
+      if (curated && !representative.has(name)) return;
       const file = `${theme}-${name}.png`; await page.screenshot({ path: path.join(out, file) });
       const bytes = fs.readFileSync(path.join(out, file));
       report.captures.push({ file, theme, horizontalOverflow: overflow, sha256: crypto.createHash('sha256').update(bytes).digest('hex') });
@@ -61,8 +67,7 @@ try {
       await cliora.keyboard.press('Escape');
       await twiglane.evaluate(url => window.dispatchEvent(new CustomEvent('twiglane-preview-deep-link', { detail: [url] })), url);
       const id = new URL(url).searchParams.get('reviewId');
-      await expect(twiglane.getByRole('combobox', { name: '选择 Cliora 审查来源' })).toHaveValue(id);
-      await expect(twiglane.locator('.cliora-chip')).toHaveAttribute('title', `来源 cliora 审查 ${id}`);
+      await expect(sources).toHaveAttribute('data-value', id);
       await expect(twiglane.locator('.project-context-path')).toContainText(new URL(url).searchParams.get('worktreePath'));
       await expect.poll(() => twiglane.evaluate(() => window.__clioraPreviewEvidence.receipts.length)).toBeGreaterThan(0);
       const receipt = await twiglane.evaluate(() => window.__clioraPreviewEvidence.receipts.at(-1));
@@ -73,17 +78,17 @@ try {
     await shot(twiglane, 'twiglane-source-a');
     const b = await sendReview(REVIEW_SESSION_B);
     await shot(twiglane, 'twiglane-source-b');
-    await twiglane.getByRole('combobox', { name: '选择 Cliora 审查来源' }).selectOption(a.id);
-    await expect(twiglane.getByRole('combobox', { name: '选择 Cliora 审查来源' })).toHaveValue(a.id);
-    // A native select changes DOM value before its async checkout open finishes.
-    // Wait for the actual source binding and target path, not the transient selection alone.
-    await expect(twiglane.locator('.cliora-chip')).toHaveAttribute('title', `来源 cliora 审查 ${a.id}`);
+    const manager = twiglane.getByRole('button', { name: '管理审查来源（2）', exact: true });
+    await manager.click();
+    const sourceList = twiglane.getByRole('dialog', { name: '管理审查来源' });
+    await expect(sourceList.locator('[data-review-source-id]')).toHaveCount(2);
+    await sourceList.locator(`[data-review-source-id="${a.id}"] .review-source-switch`).click();
+    await expect(sources).toHaveAttribute('data-value', a.id);
     await expect(twiglane.locator('.project-context-path')).toContainText('/work/commerce/team-0/api');
-    await expect(twiglane.getByRole('combobox', { name: '选择 Cliora 审查来源' }).locator('option')).toHaveCount(3);
     await shot(twiglane, 'twiglane-switchback-a');
-    await twiglane.getByText('管理审查来源（2）', { exact: true }).click();
+    await manager.click();
     await shot(twiglane, 'twiglane-source-manager');
-    await twiglane.getByText('管理审查来源（2）', { exact: true }).click();
+    await manager.click();
     await twiglane.getByRole('button', { name: /返回 cliora/ }).click();
     await expect.poll(() => twiglane.evaluate(() => window.__clioraPreviewEvidence.returns.length)).toBe(1);
     const returned = await twiglane.evaluate(() => window.__clioraPreviewEvidence.returns[0]);

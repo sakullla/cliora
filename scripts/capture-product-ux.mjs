@@ -9,18 +9,22 @@ import { preview } from 'vite';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const out = path.resolve(process.env.CLIORA_PRODUCT_CAPTURE_OUT ?? path.join(root, 'docs/verification/product-ui-ux'));
 const buildDirectory = path.resolve(root, process.env.CLIORA_PRODUCT_BUILD_OUT ?? 'dist');
-if (!fs.existsSync(path.join(buildDirectory, 'index.html'))) throw new Error('Run npm run build before capturing the product.');
+const uiAreas = ['home', 'projects', 'connections', 'features', 'quota', 'plugins', 'agents', 'skills', 'mcp', 'prompts', 'rules', 'records', 'sessions', 'remote-hosts', 'write-recovery'];
 const allScenes = [
-  { id: 'pages', script: 'capture-ui.mjs', args: ['--only', 'tools,library,sessions,usage,settings'] },
-  { id: 'home', script: 'capture-ui.mjs', args: ['--home'] },
-  { id: 'projects', script: 'capture-ui.mjs', args: ['--projects'] },
-  { id: 'workbench', script: 'capture-workbench.mjs', args: [] },
-  { id: 'memory', script: 'capture-memory.mjs', args: [] },
-  { id: 'sync', script: 'capture-sync.mjs', args: [] },
+  { id: 'pages', script: 'capture-ui.mjs', args: ['--quick', '--only', 'tools,library,settings'], manifest: 'capture-ui-manifest.json' },
+  ...uiAreas.map(id => ({ id, script: 'capture-ui.mjs', args: [`--${id}`], manifest: `capture-ui-${id}-manifest.json` })),
+  { id: 'rule-results', script: 'capture-library-rule-results.mjs', args: [], manifest: 'capture-rule-results-manifest.json' },
+  ...['workbench', 'memory', 'sync'].map(id => ({ id, script: `capture-${id}.mjs`, args: [], manifest: `capture-${id}-manifest.json` })),
 ];
+const sceneNames = allScenes.map(scene => scene.id);
+if (process.argv.includes('--list')) {
+  console.log(sceneNames.join('\n'));
+  process.exit(0);
+}
+if (!fs.existsSync(path.join(buildDirectory, 'index.html'))) throw new Error('Run npm run build before capturing the product.');
 const onlyIndex = process.argv.indexOf('--only');
-const requested = onlyIndex < 0 ? allScenes.map(scene => scene.id) : (process.argv[onlyIndex + 1] ?? '').split(',');
-if (requested.some(id => !allScenes.some(scene => scene.id === id))) throw new Error('--only accepts pages,home,projects,workbench,memory,sync');
+const requested = onlyIndex < 0 ? sceneNames : (process.argv[onlyIndex + 1] ?? '').split(',');
+if (requested.some(id => !sceneNames.includes(id))) throw new Error(`--only accepts ${sceneNames.join(',')}`);
 const scenes = allScenes.filter(scene => requested.includes(scene.id));
 const option = (flag, fallback) => {
   const index = process.argv.indexOf(flag);
@@ -31,6 +35,8 @@ const option = (flag, fallback) => {
 };
 const theme = option('--theme', 'all');
 const size = option('--size', '1360');
+const jobs = process.env.CLIORA_CAPTURE_JOBS ?? '2';
+if (!/^[1-9]\d*$/.test(jobs)) throw new Error('CLIORA_CAPTURE_JOBS must be a positive integer.');
 fs.mkdirSync(out, { recursive: true });
 const port = await new Promise((resolve, reject) => {
   const reservation = net.createServer();
@@ -43,56 +49,71 @@ const port = await new Promise((resolve, reject) => {
 // strictPort prevents capturing an unrelated server if the released ephemeral port is taken.
 const server = await preview({ root, build: { outDir: buildDirectory }, preview: { host: '127.0.0.1', port, strictPort: true, open: false } });
 const url = `http://127.0.0.1:${port}`;
-const results = [];
-let child;
+const completed = new Map();
+const children = new Set();
 let stopped = false;
-const stop = () => { stopped = true; child?.kill(); server.httpServer.closeAllConnections(); server.httpServer.close(); };
+const stop = () => {
+  stopped = true;
+  for (const child of children) child.kill();
+  server.httpServer.closeAllConnections();
+};
 process.once('SIGINT', stop);
 process.once('SIGTERM', stop);
-try {
-  for (const scene of scenes) {
-    if (stopped) break;
-    const directory = path.join(out, scene.id);
-    fs.mkdirSync(directory, { recursive: true });
-    const log = fs.createWriteStream(path.join(directory, 'capture.log'));
-    const args = [path.join(root, 'scripts', scene.script), ...scene.args, '--theme', theme, '--size', size];
-    if (scene.id === 'workbench' && process.argv.includes('--performance')) args.push('--performance');
-    if (scene.id === 'workbench' && process.argv.includes('--full')) args.push('--full');
-    console.log(`Capturing ${scene.id}: ${theme} × ${size}`);
-    const exitCode = await new Promise(resolve => {
-      child = spawn(process.execPath, args, { cwd: root, windowsHide: true, env: { ...process.env, CLIORA_PREVIEW_URL: url, CLIORA_CAPTURE_OUT: directory }, stdio: ['ignore', 'pipe', 'pipe'] });
-      child.stdout.pipe(log, { end: false });
-      child.stderr.pipe(log, { end: false });
-      child.once('error', error => { log.write(`${error.message}\n`); resolve(1); });
-      child.once('close', code => resolve(code ?? 1));
-    });
-    await new Promise(resolve => log.end(resolve));
-    child = undefined;
-    const expectedManifest = scene.id === 'pages' ? 'capture-ui-manifest.json' : scene.id === 'home' ? 'capture-ui-home-manifest.json' : scene.id === 'projects' ? 'capture-ui-projects-manifest.json' : `capture-${scene.id}-manifest.json`;
-    const manifests = fs.existsSync(path.join(directory, expectedManifest)) ? [expectedManifest] : [];
-    const failures = manifests.flatMap(name => {
-      try {
-        const manifest = JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8'));
-        return [
-          ...(manifest.failures ?? manifest.problems ?? []),
-          ...(manifest.runErrors ?? []),
-          ...(manifest.shots ?? []).filter(shot => shot.pageErrors?.length || shot.overflow || shot.actionError),
-        ];
-      }
-      catch (error) { return [{ type: 'manifest', message: error.message }]; }
-    });
-    if (!manifests.length) failures.push({ type: 'manifest', message: 'Capture did not produce a manifest.' });
-    const success = exitCode === 0 && failures.length === 0;
-    results.push({ scene: scene.id, exitCode, success, failures, gallery: `${scene.id}/index.html`, log: `${scene.id}/capture.log` });
-    console.log(`${scene.id}: ${success ? 'passed' : 'failed'} (${failures.length} reported failures)`);
+
+async function captureArea(scene) {
+  const directory = path.join(out, scene.id);
+  fs.mkdirSync(directory, { recursive: true });
+  const captureStarted = Date.now();
+  const log = fs.createWriteStream(path.join(directory, 'capture.log'));
+  const args = [path.join(root, 'scripts', scene.script), ...scene.args, '--theme', theme, '--size', size];
+  if (scene.id === 'workbench' && process.argv.includes('--performance')) args.push('--performance');
+  if (process.argv.includes('--full')) args.push('--full');
+  console.log(`Capturing ${scene.id}: ${theme} × ${size}`);
+  const exitCode = await new Promise(resolve => {
+    const child = spawn(process.execPath, args, { cwd: root, windowsHide: true, env: { ...process.env, CLIORA_PREVIEW_URL: url, CLIORA_CAPTURE_OUT: directory, CLIORA_RULE_CAPTURE_OUT: directory, CLIORA_RULE_CAPTURE_BUILD_OUT: buildDirectory }, stdio: ['ignore', 'pipe', 'pipe'] });
+    children.add(child);
+    child.stdout.pipe(log, { end: false });
+    child.stderr.pipe(log, { end: false });
+    child.once('error', error => log.write(`${error.message}\n`));
+    child.once('close', code => { children.delete(child); resolve(code ?? 1); });
+  });
+  await new Promise(resolve => log.end(resolve));
+  const failures = [];
+  let imageCount = 0;
+  try {
+    const file = path.join(directory, scene.manifest);
+    if (fs.statSync(file).mtimeMs < captureStarted) throw new Error('Capture did not write a fresh manifest.');
+    const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const shots = manifest.captures ?? manifest.shots ?? [];
+    failures.push(
+      ...(manifest.failures ?? manifest.problems ?? []),
+      ...(manifest.runErrors ?? []),
+      ...shots.filter(shot => shot.pageErrors?.length || shot.overflow || shot.actionError),
+    );
+    failures.push(...(manifest.missing ?? []));
+    imageCount = shots.filter(shot => fs.existsSync(path.join(directory, typeof shot === 'string' ? shot : shot.file ?? `${shot.name}.png`))).length;
+    if (!imageCount || imageCount !== shots.length) failures.push({ type: 'manifest', message: `Captured ${imageCount} of ${shots.length} images.` });
+  } catch (error) {
+    failures.push({ type: 'manifest', message: error.message });
   }
+  const success = exitCode === 0 && failures.length === 0;
+  completed.set(scene.id, { scene: scene.id, exitCode, success, imageCount, failures, gallery: `${scene.id}/index.html`, log: `${scene.id}/capture.log` });
+  console.log(`${scene.id}: ${success ? 'passed' : 'failed'} (${imageCount} images, ${failures.length} reported failures)`);
+}
+
+try {
+  const queue = [...scenes];
+  await Promise.all(Array.from({ length: Math.min(Number(jobs), queue.length) }, async () => {
+    while (queue.length && !stopped) await captureArea(queue.shift());
+  }));
 } finally {
-  child?.kill();
+  for (const child of children) child.kill();
   server.httpServer.closeAllConnections();
   await new Promise(resolve => server.httpServer.close(resolve));
   process.removeListener('SIGINT', stop);
   process.removeListener('SIGTERM', stop);
 }
+const results = scenes.map(scene => completed.get(scene.id)).filter(Boolean);
 const acceptance = { kind: 'playwright-synthetic-ipc', nativePlatform: 'unverified' };
 fs.writeFileSync(path.join(out, 'manifest.json'), JSON.stringify({ acceptance, results }, null, 2));
 fs.writeFileSync(path.join(out, 'README.md'), `# Product UI/UX captures\n\nSynthetic IPC only; native platform behavior is unverified.\n\n${results.map(result => `- [${result.scene}](${result.gallery}): ${result.success ? 'passed' : 'failed'} · [log](${result.log})`).join('\n')}\n`);

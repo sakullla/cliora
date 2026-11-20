@@ -36,10 +36,11 @@
 .row:hover, .row:focus-within { background: var(--row-hover); }
 .name { display: flex; align-items: center; gap: var(--space-1_5); min-width: 0; }
 .name strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-body); font-weight: var(--fw-semibold); }
-.path { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; overflow: hidden; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-caption); white-space: nowrap; }
-.path > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.path { text-overflow: ellipsis; }
-.path em { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--danger); font-family: var(--font-sans); font-style: normal; }
+/* The checkout path keeps the first line; the fallback note wraps to its own line when the
+   track is narrow instead of shrinking the identity to a single character. */
+.path { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--space-2); min-width: 0; overflow: hidden; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-caption); white-space: nowrap; }
+.path > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.path em { flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--danger); font-family: var(--font-sans); font-style: normal; }
 /* A vanished worktree choice falls back to an available checkout and says so beside the path. */
 .path em.fallback { color: var(--warning); }
 /* A missing checkout keeps a readable tail of its path next to the reason. */

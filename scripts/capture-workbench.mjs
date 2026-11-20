@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { chromium, expect } from '@playwright/test';
-import { settleCapture, previousCaptureCleanup } from './capture-ready.mjs';
+import { settleCapture, previousCaptureCleanup, sceneTheme } from './capture-ready.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url)).replace(/\\/g, '/').replace(/\/$/, '');
 const previewUrl = process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736';
@@ -329,6 +329,11 @@ const manifest = [];
 const runErrors = [];
 let browser = null;
 async function shot(name, theme, width, run, empty = false, remoteState = null, promptFailure = null, directoryMode = null, writeRecovery = false, chrome = null) {
+  if (curated && !name.startsWith('workbench-remote-stream-')) {
+    const scene = name.slice(0, -`-${theme}-${width}`.length);
+    const index = defaultScenes.indexOf(scene);
+    if (index === -1 || theme !== sceneTheme(themes, widths, width, index)) return;
+  }
   if (!onlyPatterns.some((pattern) => pattern.test(name))) return;
   const errors = [];
   let actionError = null;
@@ -349,9 +354,10 @@ async function shot(name, theme, width, run, empty = false, remoteState = null, 
       if (remoteState === 'connected') await page.locator('.xterm-rows').filter({ hasText: 'synthetic SSH terminal' }).first().waitFor();
     } else if (empty) await page.locator('[data-empty="true"]').first().waitFor();
     else {
-      // Textarea creation precedes replay. Wait for the end of the fixture's
-      // initial transcript before driving a scene or measuring its layout.
-      await page.locator('.xterm-rows').filter({ hasText: '构建与检查已完成，等待下一条输入' }).first().waitFor();
+      // A narrow viewport may wrap and scroll the final prompt below the visible rows.
+      // The test summary is printed near the end of the replay and stays in view.
+      const transcript = width <= 760 ? /Playwright\s+61 passed/ : /等待下一条输入/;
+      await expect(page.locator('.xterm-rows:visible').first()).toContainText(transcript, { timeout: 10000 });
     }
     if (run) resourceObservation = await run(page) ?? null;
     await settleCapture(page);
@@ -360,7 +366,7 @@ async function shot(name, theme, width, run, empty = false, remoteState = null, 
     await page.screenshot({ path: out + '/' + name + '.png', fullPage: false, animations: 'disabled' });
   } catch (error) {
     actionError = String(error?.message ?? error).split('\n')[0];
-    console.error(name + ': ' + actionError);
+    console.error(name + ': ' + (error?.message ?? error));
   } finally { await page?.close().catch(() => {}); }
   manifest.push({ name, theme, width, locale, pageErrors: errors, overflow, actionError, resourceObservation });
 }
@@ -383,11 +389,10 @@ if (!widths.length || widths.some((width) => ![1360, 900, 720, 640].includes(wid
 const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
 // Routine desktop review: one example of each distinct primary surface. The
 // exhaustive platform/error/large-list variants remain opt-in via --full/--only.
-const defaultScenes = ['workbench-active', 'workbench-worktrees', 'workbench-ended', 'workbench-appearance',
-  'workbench-composer', 'workbench-dialog', 'workbench-restore-mixed', 'workbench-remote-disconnected', 'workbench-peek', 'workbench-empty'];
-const defaultPatterns = defaultScenes.flatMap(scene => ['light', 'dark'].map(theme => `${scene}-${theme}-*`));
-if (process.argv.includes('--performance')) defaultPatterns.push('workbench-remote-stream-*');
-const onlyPatterns = option('--only', process.argv.includes('--full') ? '*' : defaultPatterns.join(',')).split(',').map((pattern) => new RegExp('^' + pattern.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$'));
+const defaultScenes = ['workbench-active', 'workbench-worktrees-many', 'workbench-ended', 'workbench-composer',
+  'workbench-dialog', 'workbench-restore-mixed', 'workbench-remote-disconnected', 'workbench-empty'];
+const curated = !process.argv.includes('--full') && !process.argv.includes('--only');
+const onlyPatterns = option('--only', '*').split(',').map((pattern) => new RegExp('^' + pattern.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$'));
 try {
 if (!previewReady) throw new Error('预览服务未就绪：' + previewUrl);
 browser = await chromium.launch();
@@ -887,12 +892,9 @@ for (const width of widths) {
   });
   await shot('workbench-composer-' + theme + '-' + width, theme, width, async (page) => {
     const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });
-    const screen = stage.locator('.xterm-screen:visible');
-    await screen.waitFor({ timeout: 20000 });
-    await screen.click({ force: true });
-    await page.keyboard.press('Control+Shift+M');
+    await stage.getByRole('button', { name: copy('快捷输入', 'Quick input'), exact: true }).click();
     await stage.getByRole('textbox', { name: /编写多行内容|Compose multi-line/ }).fill('review the diff and summarise the risk in one paragraph');
-    await page.keyboard.press('Control+Shift+F');
+    await stage.getByRole('button', { name: copy('查找输出', 'Find in output'), exact: true }).click();
     await stage.getByRole('searchbox', { name: copy('在终端输出中查找…', 'Find in terminal output…') }).fill('SessionWorkbench');
   });
   // Pre-edit text only: the system candidate list is drawn by the OS IME and never appears in a browser capture.

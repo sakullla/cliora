@@ -65,18 +65,21 @@ export function installWorkspaceFixtures() {
     if (command === 'preview_workspace_manifest') {
       fixture.preview = { ...sharedPreview(args.path), sourceRepositoryId: null, attached: false }; return copy(fixture.preview);
     }
-    // The v2 contract is strict here too: only v=2 with file and a member repository is accepted,
-    // so a browser run cannot show a handoff the native parser would refuse.
+    // Mirror the native v2 contract: required fields stay strict, unknown parameters are
+    // ignored and later versions keep the same preview semantics.
     if (command === 'preview_workspace_link') {
       const url = String(args.url || '');
       if (!url.startsWith('cliora://workspace?') || url.includes('#') || url.includes('+')) throw { message: '项目清单链接无效' };
       const fields = new Map();
       for (const pair of url.slice('cliora://workspace?'.length).split('&')) {
+        if (!pair) continue;
         const [key, value = ''] = pair.split('=');
-        if (!['v', 'file', 'repository'].includes(key) || fields.has(key)) throw { message: '项目清单链接含未知或重复字段' };
+        if (!['v', 'file', 'repository'].includes(key)) continue;
+        if (fields.has(key)) throw { message: '项目清单链接含重复参数' };
         fields.set(key, decodeURIComponent(value));
       }
-      if (fields.get('v') !== '2') throw { message: '仅支持 v=2 项目清单链接，旧版项目链接请重新发起' };
+      const version = Number(fields.get('v'));
+      if (!Number.isInteger(version) || version < 2) throw { message: '仅支持 v=2 及更新的项目清单链接，旧版项目链接请重新发起' };
       const file = fields.get('file') ?? '';
       if (!file) throw { message: '项目清单链接缺少 file 参数' };
       if (!file.startsWith('/')) throw { message: '项目清单链接需使用本机绝对路径' };

@@ -40,8 +40,7 @@ const readPaths = (): Record<string, string> => {
   } catch { return {}; }
 };
 const writePaths = (value: Record<string, string>) => {
-  const entries = Object.entries(value).filter(([, path]) => !!path);
-  remember(pathsKey, entries.length ? JSON.stringify(Object.fromEntries(entries)) : '');
+  remember(pathsKey, Object.keys(value).length ? JSON.stringify(value) : '');
 };
 const failure = (value: unknown) => formatFailure(value, i18n.t('workspaces.failed'), i18n.t('workspaces.retry'));
 /** A worktree choice belongs to one project's member, so A → B → A returns to A's own checkout. */
@@ -128,8 +127,11 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
   const scanId = useRef<string | null>(null);
   const mounted = useRef(true);
   const sequence = useRef(0);
-  const selectedRef = useRef(selectedId); selectedRef.current = selectedId;
   const current = workspaces.find(item => item.id === selectedId) ?? null;
+  const currentId = current?.id;
+  const manifestPath = current?.manifestPath;
+  const linkedId = useRef<string | undefined>(undefined);
+  linkedId.current = manifestPath ? currentId : undefined;
   const enabledTools = tools.filter(tool => tool.launch?.state !== 'unsupported' && tool.launch?.state !== 'planned');
   const launchTool = enabledTools.find(tool => tool.id === toolId)?.id ?? enabledTools[0]?.id ?? '';
   const reload = useCallback(async (refreshSource = false) => {
@@ -139,12 +141,13 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
     try {
       // A background source refresh that cannot run now (for example another window holds the
       // manifest) keeps the last list; the project shows its own source status when it matters.
-      if (refreshSource && selectedRef.current) await native.refreshWorkspaceManifest(selectedRef.current).catch(() => undefined);
+      if (refreshSource && linkedId.current) await native.refreshWorkspaceManifest(linkedId.current).catch(() => undefined);
       const result = await native.listBusinessWorkspaces();
       if (!mounted.current || seq !== sequence.current) return;
       const rows = Array.isArray(result) ? result : [];
       setWorkspaces(rows);
-      setSelectedId(previous => rows.some(item => item.id === previous) ? previous : rows.find(item => item.id === stored(selectedKey))?.id ?? rows[0]?.id ?? '');
+      const savedId = stored(selectedKey);
+      setSelectedId(previous => rows.some(item => item.id === previous) ? previous : rows.find(item => item.id === savedId)?.id ?? rows[0]?.id ?? '');
       setLoadError('');
       loadedAt.current = Date.now();
     } catch (value) { if (mounted.current && seq === sequence.current) setLoadError(failure(value)); }
@@ -169,14 +172,20 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
   // The stored map follows every choice and every successful deletion, so a removed project never
   // leaves its keys behind; a checkout that vanished meanwhile is ignored by its own row instead.
   useEffect(() => { writePaths(paths); }, [paths]);
+  const hasViewedProject = useRef(false);
   useEffect(() => {
-    if (!selectedId || !nativeAvailable) return;
+    if (!currentId || !nativeAvailable) return;
+    // The initial listing just probed every checkout. Only a linked project also needs its
+    // source file read. Later project switches still recheck directories that may have moved.
+    const initialLocal = !hasViewedProject.current && !manifestPath;
+    hasViewedProject.current = true;
+    if (initialLocal) return;
     let live = true;
-    void native.refreshWorkspaceManifest(selectedId).then(value => {
+    void native.refreshWorkspaceManifest(currentId).then(value => {
       if (live && value) setWorkspaces(previous => previous.map(item => item.id === value.id ? value : item));
     }).catch(() => undefined);
     return () => { live = false; };
-  }, [selectedId]);
+  }, [currentId, manifestPath]);
   useEffect(() => {
     const receive = (event: Event) => {
       const path = (event as CustomEvent<string>).detail;
@@ -227,18 +236,33 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
   }
   async function discover(recursive: boolean) {
     if (!current || busy || scanBusy) return;
+    let operationId: string | null = null;
     try {
       const chosen = await open({ directory: true, multiple: !recursive, title: t(recursive ? 'workspaces.scanRoot' : 'workspaces.selectRepos') });
-      if (!chosen) return;
+      if (!chosen || !mounted.current) return;
       const roots = Array.isArray(chosen) ? chosen : [chosen];
-      const operationId = crypto.randomUUID(); scanId.current = operationId;
+      operationId = crypto.randomUUID();
+      scanId.current = operationId;
       setCandidates([]); setChecked(new Set()); setPartial(false); setScanQuery(''); setScanBusy(true); setError('');
       const result = await native.scanWorkspaceRepositories(roots, operationId, recursive);
       if (!mounted.current || scanId.current !== operationId) return;
       setCandidates(result.candidates); setPartial(result.partial || result.cancelled);
       setChecked(new Set(result.candidates.filter(item => item.kind === 'repository').map(item => item.path)));
-    } catch (value) { if (mounted.current) setError(failure(value)); }
-    finally { scanId.current = null; if (mounted.current) setScanBusy(false); }
+    } catch (value) { if (mounted.current && (!operationId || scanId.current === operationId)) setError(failure(value)); }
+    finally {
+      if (operationId && scanId.current === operationId) {
+        scanId.current = null;
+        if (mounted.current) setScanBusy(false);
+      }
+    }
+  }
+  function closeScan() {
+    if (scanId.current) void native.cancelWorkspaceScan(scanId.current);
+    scanId.current = null;
+    setCandidates(null);
+    setChecked(new Set());
+    setScanQuery('');
+    setScanBusy(false);
   }
   async function relink(repository: WorkspaceRepository) {
     if (!current) return;
@@ -317,9 +341,11 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
     });
     if (mounted.current) setLaunching('');
   }
+  const mainCheckoutLabel = t('workspaces.mainCheckout');
+  const worktreeKindLabel = t('workspaces.worktreeKind');
   /** The checkout a row works in: the remembered choice only while it still exists locally. */
   function placeOf(workspaceId: string, repository: WorkspaceRepository) {
-    const places = repositoryPlaces(repository, t('workspaces.mainCheckout'), t('workspaces.worktreeKind'));
+    const places = repositoryPlaces(repository, mainCheckoutLabel, worktreeKindLabel);
     const available = repository.locations.find(location => location.available);
     const remembered = paths[placeKey(workspaceId, repository.id)];
     const chosen = remembered && places.has(remembered) ? remembered : '';
@@ -363,14 +389,13 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
   // name or a path, so `team api` narrows hundreds of repositories in one step.
   const shown = useMemo(() => {
     const tokens = needle.split(/\s+/).filter(Boolean);
-    return allRepositories
-      .filter(repo => {
-        if ((activeFilter === 'favorites' && !repo.favorite) || (activeFilter === 'attention' && repo.locations.some(location => location.available))) return false;
-        if (!tokens.length) return true;
-        const text = `${repo.name} ${repo.locations.map(location => location.path).join(' ')}`.toLowerCase();
-        return tokens.every(token => text.includes(token));
-      })
-      .map((repo, index) => ({ repo, index })).sort((a, b) => Number(b.repo.favorite) - Number(a.repo.favorite) || a.index - b.index).map(item => item.repo);
+    const matching = allRepositories.filter(repo => {
+      if ((activeFilter === 'favorites' && !repo.favorite) || (activeFilter === 'attention' && repo.locations.some(location => location.available))) return false;
+      if (!tokens.length) return true;
+      const text = `${repo.name} ${repo.locations.map(location => location.path).join(' ')}`.toLowerCase();
+      return tokens.every(token => text.includes(token));
+    });
+    return matching.sort((a, b) => Number(b.favorite) - Number(a.favorite));
   }, [allRepositories, activeFilter, needle]);
   const filtered = shown.length !== allRepositories.length;
   const visibleCandidates = (candidates ?? []).filter(item => `${item.name} ${item.path}`.toLowerCase().includes(scanQuery.trim().toLowerCase()));
@@ -453,6 +478,11 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
     returnFocus(repository.id);
   }, [sourceIntent, workspaces, selectedId, loading, busy, t]);
 
+  const launchLabel = t('workspaces.launch');
+  const launchShort = t('workspaces.launchShort');
+  const favoriteLabel = t('workspaces.favorite');
+  const unfavoriteLabel = t('workspaces.unfavorite');
+  const worktreeLabel = t('workspaces.worktree');
   const projectMenu = <RowMenu label={t('workspaces.projectActions')}>
     {current && <button type="button" role="menuitem" disabled={busy || scanBusy} onClick={() => void discover(true)}>{t('workspaces.discover')}</button>}
     <button type="button" role="menuitem" disabled={busy} onClick={startCreate}>{t('workspaces.create')}</button>
@@ -504,17 +534,17 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
                 // Only a row that shows the picker may promise that choosing replaces the fallback.
                 ? <em className={styles.fallback} title={t('workspaces.worktreeFallbackHint', { path: displayPath(remembered ?? '') })}>{t('workspaces.worktreeFallback')}</em>
                 : <em className={styles.fallback} title={t('workspaces.worktreeFallbackHintSingle', { path: displayPath(remembered ?? '') })}>{t('workspaces.worktreeFallbackSingle', { path: displayPath(selectedPath) })}</em>)}</>}</span>
-              {places.size > 1 ? <select className={styles.place} aria-label={`${repo.name} ${t('workspaces.worktree')}`} title={selectedPath} value={selectedPath} onChange={event => setPaths(previous => ({ ...previous, [placeKey(current.id, repo.id)]: event.target.value }))}>{[...places].map(([path, place]) => <option key={path} value={path}>{place.label}</option>)}</select> : <span />}
+              {places.size > 1 ? <select className={styles.place} aria-label={`${repo.name} ${worktreeLabel}`} title={selectedPath} value={selectedPath} onChange={event => setPaths(previous => ({ ...previous, [placeKey(current.id, repo.id)]: event.target.value }))}>{[...places].map(([path, place]) => <option key={path} value={path}>{place.label}</option>)}</select> : <span />}
               <span className={styles.rowActions}>
-                <Button size="sm" variant="ghost" className={styles.favorite} aria-label={t(repo.favorite ? 'workspaces.unfavorite' : 'workspaces.favorite')} title={t(repo.favorite ? 'workspaces.unfavorite' : 'workspaces.favorite')} aria-pressed={repo.favorite} icon={<Icon name="star" size={14} />} onClick={() => void toggleFavorite(repo)} />
+                <Button size="sm" variant="ghost" className={styles.favorite} aria-label={repo.favorite ? unfavoriteLabel : favoriteLabel} title={repo.favorite ? unfavoriteLabel : favoriteLabel} aria-pressed={repo.favorite} icon={<Icon name="star" size={14} />} onClick={() => void toggleFavorite(repo)} />
                 {broken
                   ? <Button size="sm" data-row-primary disabled={busy} icon={<Icon name="link" size={13} />} onClick={() => void relink(repo)}>{t('workspaces.relink')}</Button>
-                  : <Button size="sm" className={styles.launch} data-row-primary loading={launching === repo.id} disabled={busy || !launchTool} aria-label={t('workspaces.launch')} title={launchTool ? undefined : t('workspaces.chooseTool')} icon={<Icon name="play" size={12} />} onClick={() => void pick(repo)}>{t('workspaces.launchShort')}</Button>}
-                <RowMenu className={styles.rowMenu} label={t('workspaces.repoActions', { name: repo.name })}>
+                  : <Button size="sm" className={styles.launch} data-row-primary loading={launching === repo.id} disabled={busy || !launchTool} aria-label={launchLabel} title={launchTool ? undefined : t('workspaces.chooseTool')} icon={<Icon name="play" size={12} />} onClick={() => void pick(repo)}>{launchShort}</Button>}
+                <RowMenu className={styles.rowMenu} label={t('workspaces.repoActions', { name: repo.name })}>{() => <>
                   {!broken && <button type="button" role="menuitem" disabled={busy} onClick={() => void relink(repo)}>{t('workspaces.relink')}</button>}
                   {current.manifestPath && !broken && <button type="button" role="menuitem" disabled={busy} onClick={() => void openInTwiglane(repo)}>{t('workspaces.openInTwiglane')}</button>}
                   <button type="button" role="menuitem" data-danger="true" disabled={busy} onClick={() => void remove(repo)}>{t('workspaces.remove')}</button>
-                </RowMenu>
+                </>}</RowMenu>
               </span>
             </article>;
           })}
@@ -536,7 +566,7 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
         <div className="dialog-footer"><Button variant="ghost" disabled={busy} onClick={() => setEditName(null)}>{t('workspaces.cancel')}</Button><Button type="submit" variant="primary" loading={busy} disabled={!editName?.trim()}>{t('workspaces.save')}</Button></div>
       </form>
     </GuideDialog>
-    <GuideDialog open={candidates !== null} title={t('workspaces.scanTitle')} hint={t('workspaces.scanHint')} wide closeDisabled={busy} onClose={() => { if (scanId.current) void native.cancelWorkspaceScan(scanId.current); scanId.current = null; setCandidates(null); }}>
+    <GuideDialog open={candidates !== null} title={t('workspaces.scanTitle')} hint={t('workspaces.scanHint')} wide closeDisabled={busy} onClose={closeScan}>
       <div className={styles.form}>
         {scanBusy && <div className={styles.scanning} role="status"><span className={styles.spinner} aria-hidden="true" /><span>{t('workspaces.scanning')}</span><Button size="sm" onClick={() => scanId.current && void native.cancelWorkspaceScan(scanId.current)}>{t('workspaces.stop')}</Button></div>}
         {partial && <p className={styles.warning} role="status">{t('workspaces.partial')}</p>}
@@ -552,8 +582,8 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
         </label>)}</div>}
         {error && <p className={styles.error} role="alert">{error}</p>}
         <div className="dialog-footer">
-          <Button variant="ghost" disabled={busy} onClick={() => { if (scanId.current) void native.cancelWorkspaceScan(scanId.current); scanId.current = null; setCandidates(null); }}>{t('workspaces.cancel')}</Button>
-          <Button variant="primary" loading={busy} disabled={scanBusy || !checked.size || !current} onClick={() => current && void operate(async () => { const results = await native.addWorkspaceRepositories(current.id, [...checked], current.revision); const failed = results.filter(item => item.error); if (results.length > failed.length) setNotice(t('workspaces.added', { count: results.length - failed.length })); if (failed.length) { setChecked(new Set(failed.map(item => item.path))); throw new Error(failed.map(item => `${item.path}: ${item.error}`).join('\n')); } setCandidates(null); })}>{t('workspaces.selected', { count: checked.size })}</Button>
+          <Button variant="ghost" disabled={busy} onClick={closeScan}>{t('workspaces.cancel')}</Button>
+          <Button variant="primary" loading={busy} disabled={scanBusy || !checked.size || !current} onClick={() => current && void operate(async () => { const results = await native.addWorkspaceRepositories(current.id, [...checked], current.revision); const failed = results.filter(item => item.error); if (results.length > failed.length) setNotice(t('workspaces.added', { count: results.length - failed.length })); if (failed.length) { setChecked(new Set(failed.map(item => item.path))); throw new Error(failed.map(item => `${item.path}: ${item.error}`).join('\n')); } closeScan(); })}>{t('workspaces.selected', { count: checked.size })}</Button>
         </div>
       </div>
     </GuideDialog>

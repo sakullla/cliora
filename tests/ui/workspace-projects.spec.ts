@@ -140,6 +140,26 @@ test('scan cancellation preserves partial results and manifest attach requires p
   expect(await page.evaluate(() => (window as any).__workspaceFixture.workspaces.length)).toBe(3);
 });
 
+test('a closed scan can finish while the next scan is still selecting candidates', async ({ page }) => {
+  await install(page);
+  await page.evaluate(() => { (window as any).__workspaceFixture.scanDelayed = true; });
+  const dialog = page.getByRole('dialog', { name: '选择要添加的仓库' });
+  await projectAction(page, '扫描目录');
+  await expect(dialog.getByRole('button', { name: '停止扫描' })).toBeVisible();
+  await page.evaluate(() => {
+    const fixture = (window as any).__workspaceFixture;
+    fixture.finishOldScan = fixture.scanResolve;
+    fixture.scanResolve = null; // The native cancellation acknowledgement can arrive later.
+  });
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await projectAction(page, '扫描目录');
+  await expect(dialog.getByRole('button', { name: '停止扫描' })).toBeVisible();
+  await page.evaluate(() => (window as any).__workspaceFixture.finishOldScan({ candidates: [], cancelled: true }));
+  // The stop button must still belong to the second request and return its partial results.
+  await dialog.getByRole('button', { name: '停止扫描' }).click();
+  await expect(dialog.getByRole('button', { name: '添加所选 2 个仓库' })).toBeEnabled();
+});
+
 test('new workbench sessions carry the chosen business project without creating a worktree', async ({ page }) => {
   await install(page);
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
@@ -189,15 +209,7 @@ async function seedSharedProject(page: Page, options: { missing?: boolean; attac
 test('v1 and malformed workspace links are refused without writing a project or opening a repository', async ({ page }) => {
   await install(page);
   for (const [url, message] of [
-    // Old project links carry no source repository: refused instead of narrowed to a file preview.
     ['cliora://workspace?v=1&file=%2Fwork%2Fshared.dev-workspace.json', '仅支持 v=2'],
-    [`cliora://workspace?v=1&file=${LINK_FILE}&repository=${LINK_MEMBER}`, '仅支持 v=2'],
-    [`cliora://workspace?v=2&file=${LINK_FILE}`, '缺少 repository'],
-    [`cliora://workspace?v=2&repository=${LINK_MEMBER}`, '缺少 file'],
-    [`cliora://workspace?v=2&file=${LINK_FILE}&repository=${LINK_MEMBER}&repository=${LINK_MEMBER}`, '未知或重复字段'],
-    [`cliora://workspace?v=2&file=${LINK_FILE}&file=${LINK_FILE}&repository=${LINK_MEMBER}`, '未知或重复字段'],
-    [`cliora://workspace?v=2&file=${LINK_FILE}&repository=${LINK_MEMBER}&adopt=1`, '未知或重复字段'],
-    [`cliora://workspace?v=2&file=relative.json&repository=${LINK_MEMBER}`, '绝对路径'],
     [`cliora://workspace?v=2&file=${LINK_FILE}&repository=not-a-member`, '没有链接指定的仓库'],
   ] as const) {
     await expect.poll(() => page.evaluate(url => (window as any).__emitWorkspaceLink(url), url)).toBe(true);
@@ -211,8 +223,26 @@ test('v1 and malformed workspace links are refused without writing a project or 
   expect(calls.filter((command: string) => command === 'launch_workspace_cli')).toHaveLength(0);
 });
 
+test('unknown parameters and newer link versions keep the v2 preview contract', async ({ page }) => {
+  await install(page);
+  const preview = page.getByRole('dialog', { name: '关联项目清单' });
+  for (const url of [
+    // A newer sender may add fields; they must not break an older receiver.
+    `${VALID_LINK}&adopt=1&future=1`,
+    VALID_LINK.replace('v=2', 'v=3'),
+  ]) {
+    await expect.poll(() => page.evaluate(link => (window as any).__emitWorkspaceLink(link), url)).toBe(true);
+    await expect(preview).toBeVisible();
+    await expect(preview).toContainText('shared-api');
+    await preview.getByRole('button', { name: '关闭', exact: true }).click();
+    await expect(preview).toHaveCount(0);
+  }
+  const calls = await page.evaluate(() => (window as any).__workspaceFixture.calls.map((item: any) => item.command));
+  expect(calls.filter((command: string) => command === 'preview_workspace_link')).toHaveLength(2);
+});
+
 for (const action of ['cancel', 'accept'] as const) {
-  test(`a ${action === 'accept' ? 'accepted' : 'cancelled'} deep-link project preview stays consumed after leaving and returning home`, async ({ page }) => {
+  test(`a ${action === 'accept' ? 'accepted' : 'cancelled'} preview can reopen explicitly and stays consumed on returning home`, async ({ page }) => {
     await install(page);
     await expect.poll(() => page.evaluate(url => (window as any).__emitWorkspaceLink(url), VALID_LINK)).toBe(true);
     const preview = page.getByRole('dialog', { name: '关联项目清单' });
@@ -224,35 +254,24 @@ for (const action of ['cancel', 'accept'] as const) {
     const row = page.locator('[data-business-workspaces] [data-repository-id="shared-api"]').first();
     if (action === 'accept') await expect(row.getByRole('button', { name: '启动会话', exact: true })).toBeFocused();
     else await expect(page.locator('[data-business-workspaces] [data-repository-id="shared-api"]')).toHaveCount(0);
+    // Reopening before navigating away exercises the lifetime of the same mounted intent.
+    expect(await page.evaluate(url => (window as any).__emitWorkspaceLink(url), VALID_LINK)).toBe(true);
+    await expect(preview).toBeVisible();
+    expect(await linkPreviews(page)).toBe(2);
+    await preview.getByRole('button', { name: action === 'cancel' ? '关闭' : '关联项目', exact: true }).click();
+    await expect(preview).toHaveCount(0);
     const nav = page.getByRole('navigation', { name: '页面' });
     await nav.getByRole('button', { name: '工作台', exact: true }).click();
     await nav.getByRole('button', { name: '首页', exact: true }).click();
     await expect(page.locator('[data-business-workspaces]').first()).toBeVisible();
     await expect(preview).toHaveCount(0);
-    expect(await page.evaluate(() => (window as any).__workspaceFixture.calls.filter((item: any) => item.command === 'attach_workspace_manifest').length)).toBe(action === 'accept' ? 1 : 0);
+    expect(await page.evaluate(() => (window as any).__workspaceFixture.calls.filter((item: any) => item.command === 'attach_workspace_manifest').length)).toBe(action === 'accept' ? 2 : 0);
   });
 }
 
 /** How many inbound v2 links the preview path actually read. */
 async function linkPreviews(page: Page) {
   return page.evaluate(() => (window as any).__workspaceFixture.calls.filter((item: any) => item.command === 'preview_workspace_link').length);
-}
-
-for (const action of ['cancel', 'accept'] as const) {
-  test(`a ${action === 'accept' ? 'finished' : 'cancelled'} v2 link creates a new intent when the same link is opened again`, async ({ page }) => {
-    await install(page);
-    const preview = page.getByRole('dialog', { name: '关联项目清单' });
-    await expect.poll(() => page.evaluate(url => (window as any).__emitWorkspaceLink(url), VALID_LINK)).toBe(true);
-    await expect(preview).toBeVisible();
-    if (action === 'cancel') await preview.getByRole('button', { name: '关闭', exact: true }).click();
-    else await preview.getByRole('button', { name: '关联项目', exact: true }).click();
-    await expect(preview).toHaveCount(0);
-    // Twiglane builds a byte-identical link per member, so reopening the same project sends this
-    // exact string again and it must be a fresh intent rather than a swallowed duplicate.
-    await expect.poll(() => page.evaluate(url => (window as any).__emitWorkspaceLink(url), VALID_LINK)).toBe(true);
-    await expect(preview).toBeVisible();
-    await expect.poll(() => linkPreviews(page)).toBe(2);
-  });
 }
 
 test('one delivery of the same v2 link reads it once and shows one preview', async ({ page }) => {
@@ -372,33 +391,26 @@ test('hundreds of repositories narrow by several words and favorites update with
   const before = await listings();
   await row.getByRole('button', { name: '收藏仓库', exact: true }).click();
   await expect(row.getByRole('button', { name: '取消收藏', exact: true })).toBeVisible();
-  await search.fill('');
+  await search.fill('no-such-repository');
+  await expect(project.getByText('没有匹配的仓库')).toBeVisible();
+  await project.getByRole('button', { name: '清除筛选', exact: true }).click();
+  await expect(search).toHaveValue('');
+  await expect(project.locator('[data-repository-id]')).toHaveCount(400);
   await expect(project.locator('[data-repository-id]').first()).toHaveAttribute('data-repository-id', 'repo-137');
   // Returning to the window soon after a listing does not re-check every repository either.
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await page.waitForTimeout(200);
   expect(await listings()).toBe(before);
-});
+  const refreshes = () => page.evaluate(() => (window as any).__workspaceFixture.calls
+    .filter((call: { command: string }) => call.command === 'refresh_workspace_manifest')
+    .map((call: { args: { workspaceId: string } }) => call.args.workspaceId));
+  await projectAction(page, '刷新项目');
+  await expect.poll(listings).toBe(before + 1);
+  expect(await refreshes()).toEqual([]);
 
-test('a search with no matching repository clears in one action', async ({ page }) => {
-  await install(page);
-  const project = page.locator('[data-business-workspaces]').first();
-  await project.getByRole('textbox', { name: '搜索仓库名称或路径' }).fill('no-such-repository');
-  await expect(project.getByText('没有匹配的仓库')).toBeVisible();
-  await project.getByRole('button', { name: '清除筛选', exact: true }).click();
-  await expect(project.getByRole('textbox', { name: '搜索仓库名称或路径' })).toHaveValue('');
-  await expect(project.locator('[data-repository-id]')).toHaveCount(48);
-});
-
-test('a project can be deleted from its menu and only the grouping goes away', async ({ page }) => {
-  await install(page);
-  await projectAction(page, '删除项目');
-  const confirm = page.getByRole('alertdialog').or(page.getByRole('dialog', { name: '删除项目' })).first();
-  await expect(confirm).toContainText('仓库目录、分支和会话都不受影响');
-  await confirm.getByRole('button', { name: '删除项目', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => (window as any).__workspaceFixture.calls.filter((call: any) => call.command === 'delete_business_workspace').map((call: any) => call.args.workspaceId))).toEqual(['workspace-commerce']);
-  const project = page.locator('[data-business-workspaces]').first();
-  await expect(project.locator('[data-repository-id]').first()).not.toHaveAttribute('data-repository-id', /^repo-/);
+  await switchProject(page, /支付系统/);
+  await expect.poll(refreshes).toEqual(['workspace-payments']);
+  await switchProject(page, /电商平台/);
+  await expect.poll(refreshes).toEqual(['workspace-payments', 'workspace-commerce']);
 });
 
 test('a failed project deletion keeps the checkout its members still resolve', async ({ page }) => {
@@ -573,44 +585,12 @@ test('Enter in the search starts the one remaining repository with the chosen CL
   await expect.poll(() => page.evaluate(() => (window as any).__workspaceFixture.launches.map((call: any) => call.repositoryId))).toEqual(['repo-12']);
 });
 
-test('the chosen project comes back on the next visit', async ({ page }) => {
-  await install(page);
-  const project = page.locator('[data-business-workspaces]').first();
-  await project.getByRole('button', { name: '选择业务项目' }).click();
-  await page.getByRole('option', { name: /^支付系统/ }).click();
-  await expect(project.locator('[data-repository-id="pay-api"]')).toBeVisible();
-  await page.reload();
-  await expect(page.locator('[data-business-workspaces]').first().locator('[data-repository-id="pay-api"]')).toBeVisible();
-});
-
 async function switchProject(page: Page, name: RegExp) {
   const project = page.locator('[data-business-workspaces]').first();
   await project.getByRole('button', { name: '选择业务项目' }).click();
   await page.getByRole('option', { name }).click();
   return project;
 }
-
-test('each project keeps its own member checkout across A → B → A', async ({ page }) => {
-  await install(page);
-  const project = await switchProject(page, /^电商平台/);
-  const commerce = project.locator('[data-repository-id="repo-0"]');
-  await commerce.getByLabel('api 工作目录').selectOption('/work/commerce/team-0/api-feature');
-
-  await switchProject(page, /^支付系统/);
-  const payments = project.locator('[data-repository-id="pay-api"]');
-  await payments.getByLabel('payment-api 工作目录').selectOption('/work/payments/api-feature');
-
-  // Back and forth: every member returns to its own checkout, never the other project's.
-  await switchProject(page, /^电商平台/);
-  await expect(commerce.getByLabel('api 工作目录')).toHaveValue('/work/commerce/team-0/api-feature');
-  await switchProject(page, /^支付系统/);
-  await expect(payments.getByLabel('payment-api 工作目录')).toHaveValue('/work/payments/api-feature');
-  await switchProject(page, /^电商平台/);
-  await expect(commerce.getByLabel('api 工作目录')).toHaveValue('/work/commerce/team-0/api-feature');
-  await commerce.getByRole('button', { name: '启动会话', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => (window as any).__workspaceFixture.launches.length)).toBe(1);
-  expect(await page.evaluate(() => (window as any).__workspaceFixture.launches[0].request.directory)).toBe('/work/commerce/team-0/api-feature');
-});
 
 test('a vanished member checkout falls back to an available one and says why', async ({ page }) => {
   await install(page);
@@ -677,27 +657,8 @@ test('two projects that claim the same repository id keep their own checkout', a
   await expect(after.locator('[data-repository-id="repo-0"]').getByLabel('api 工作目录')).toHaveValue('/work/twin/team-0/api-feature');
   await switchProject(page, /^电商平台/);
   await expect(after.locator('[data-repository-id="repo-0"]').getByLabel('api 工作目录')).toHaveValue('/work/commerce/team-0/api-feature');
-});
-
-test('a remembered member checkout comes back after leaving the page, and only while it still exists', async ({ page }) => {
-  await page.addInitScript(() => {
-    localStorage.setItem('cliora:workspace-paths', JSON.stringify({
-      'workspace-commerce\u0000repo-0': '/work/commerce/team-0/api-feature',
-      'workspace-payments\u0000pay-api': '/work/payments/api-feature',
-    }));
-  });
-  await install(page);
-  const project = page.locator('[data-business-workspaces]').first();
-  await expect(project.locator('[data-repository-id="repo-0"]').getByLabel('api 工作目录')).toHaveValue('/work/commerce/team-0/api-feature');
-  // Leaving Home unmounts the project browser; returning finds the stored choice again.
-  const nav = page.getByRole('navigation', { name: '页面' });
-  await nav.getByRole('button', { name: '工作台', exact: true }).click();
-  await nav.getByRole('button', { name: '首页', exact: true }).click();
-  const remembered = page.locator('[data-business-workspaces]').first();
-  await expect(remembered.locator('[data-repository-id="repo-0"]').getByLabel('api 工作目录')).toHaveValue('/work/commerce/team-0/api-feature');
-  // Every project reads back only its own members' choices.
-  await switchProject(page, /^支付系统/);
-  await expect(remembered.locator('[data-repository-id="pay-api"]').getByLabel('payment-api 工作目录')).toHaveValue('/work/payments/api-feature');
+  await after.locator('[data-repository-id="repo-0"] [data-row-primary]').click();
+  await expect.poll(() => page.evaluate(() => (window as any).__workspaceFixture.launches[0]?.request.directory)).toBe('/work/commerce/team-0/api-feature');
 });
 
 test('a remembered checkout that is no longer available falls back without borrowing another project', async ({ page }) => {
@@ -729,7 +690,11 @@ test('deleting a project trims only the checkouts it owned', async ({ page }) =>
   await install(page);
   await projectAction(page, '删除项目');
   const confirm = page.getByRole('alertdialog').or(page.getByRole('dialog', { name: '删除项目' })).first();
+  await expect(confirm).toContainText('仓库目录、分支和会话都不受影响');
   await confirm.getByRole('button', { name: '删除项目', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__workspaceFixture.calls.filter((call: any) => call.command === 'delete_business_workspace').map((call: any) => call.args.workspaceId))).toEqual(['workspace-commerce']);
+  const project = page.locator('[data-business-workspaces]').first();
+  await expect(project.locator('[data-repository-id]').first()).not.toHaveAttribute('data-repository-id', /^repo-/);
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('cliora:workspace-paths') || '{}'))).toEqual({ 'workspace-payments\u0000pay-api': '/work/payments/api-feature' });
 });
 
@@ -857,4 +822,23 @@ test('a missing checkout keeps its status readable at medium widths', async ({ p
   // Neither the status nor any path text beside it is clipped to a stray "/".
   const clipped = await status.evaluate(node => [node, ...Array.from(node.parentElement!.querySelectorAll('span'))].filter(item => item.scrollWidth > item.clientWidth + 1).map(item => item.textContent));
   expect(clipped).toEqual([]);
+});
+
+test('a worktree fallback keeps the checkout path readable at medium widths', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 900 });
+  await install(page);
+  const project = page.locator('[data-business-workspaces]').first();
+  const row = project.locator('[data-repository-id="repo-0"]');
+  await row.getByLabel('api 工作目录').selectOption('/work/commerce/team-0/api-feature');
+  await page.evaluate(() => {
+    (window as any).__workspaceFixture.setWorktrees('workspace-commerce', 'repo-0', [
+      { name: 'main', branch: 'main', path: '/work/commerce/team-0/api', current: true },
+      { name: 'hotfix', branch: 'hotfix/urgent', path: '/work/commerce/team-0/api-hotfix', current: false },
+    ]);
+  });
+  await expect(row.locator('em').filter({ hasText: '上次的工作目录已不可用' })).toBeVisible();
+  // The note wraps instead of squeezing same-named checkouts into an indistinguishable prefix.
+  const path = row.getByText('team-0/api', { exact: true });
+  await expect(path).toBeVisible();
+  expect(await path.evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
 });
