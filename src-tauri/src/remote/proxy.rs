@@ -336,7 +336,7 @@ pub fn parse_resolution(text: &str) -> Resolution {
     resolution
 }
 
-fn bounded_output(command: &mut Command, deadline: Duration) -> Option<Vec<u8>> {
+pub(super) fn bounded_output(command: &mut Command, deadline: Duration) -> Option<Vec<u8>> {
     super::hide_console_window(command);
     let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
     let mut stdout = child.stdout.take()?;

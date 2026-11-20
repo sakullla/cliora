@@ -1,12 +1,10 @@
 //! Headless bridge used by Twiglane. The desktop owns the SSH target and credentials.
-use super::{
-    connection_args, ensure_enabled, hide_console_window, list_targets, operations, password,
-    validate_target, RemoteTarget,
-};
+use super::{ensure_enabled, list_targets, password, twiglane_config::Snapshot, RemoteTarget};
 use crate::database::Database;
 use base64::Engine;
 use minisign_verify::{PublicKey, Signature};
 use serde_json::{json, Value};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -30,28 +28,30 @@ fn registered_targets(path: &Path) -> Result<Vec<RemoteTarget>> {
         .collect())
 }
 
-fn identity(target: &RemoteTarget) -> Value {
-    json!({
+fn identity(target: &RemoteTarget) -> Result<Value> {
+    let snapshot = Snapshot::resolve(target)?;
+    Ok(json!({
         "targetId": target.id,
-        "targetRevision": operations::target_identity(target),
+        "targetRevision": snapshot.revision, "effectiveHost":snapshot.hostname,
         "name": target.name, "host": target.host, "user": target.user, "port": target.port,
         "authMethod": target.auth_method, "defaultPath": target.default_path,
-    })
+    }))
 }
 
-fn resolve(targets: &[RemoteTarget], id: &str, revision: &str) -> Result<RemoteTarget> {
+fn resolve<'a>(
+    targets: &'a [RemoteTarget],
+    id: &str,
+    revision: &str,
+) -> Result<(&'a RemoteTarget, Snapshot)> {
     let target = targets
         .iter()
         .find(|target| target.enabled && target.id == id)
         .ok_or("target_unavailable")?;
-    if operations::target_identity(target) != revision {
+    let snapshot = Snapshot::resolve(target)?;
+    if snapshot.revision != revision {
         return Err("target_changed");
     }
-    validate_target(target).map_err(|_| "invalid_target")?;
-    if target.user.starts_with('-') {
-        return Err("invalid_target");
-    }
-    Ok(target.clone())
+    Ok((target, snapshot))
 }
 
 fn valid_digest(value: &str) -> bool {
@@ -90,26 +90,12 @@ fn verify_artifact(digest: &str, signature: &str) -> Result<()> {
     signed_digest(PUBLISHER, digest, signature)
 }
 
-fn ssh(target: &RemoteTarget, op: &str, artifact: Option<(&str, &str)>) -> Result<Command> {
-    let mut command = Command::new("ssh");
-    hide_console_window(&mut command);
-    // This SSH process is the long-lived agent transport. Reconnecting must recheck
-    // the host key and credentials even when Cliora has an older ControlMaster.
-    command.args([
-        "-T",
-        "-o",
-        "ControlMaster=no",
-        "-o",
-        "ControlPath=none",
-        "-o",
-        "ClearAllForwardings=yes",
-        "-o",
-        "ForwardAgent=no",
-        "-o",
-        "PermitLocalCommand=no",
-        "-o",
-        "NumberOfPasswordPrompts=1",
-    ]);
+fn configure_transport(
+    command: &mut Command,
+    target: &RemoteTarget,
+    op: &str,
+    artifact: Option<(&str, &str)>,
+) -> Result<()> {
     let saved_auth = password::askpass_environment(target);
     let ephemeral = std::env::var_os("SSH_ASKPASS")
         .map(PathBuf::from)
@@ -124,12 +110,17 @@ fn ssh(target: &RemoteTarget, op: &str, artifact: Option<(&str, &str)>) -> Resul
     command
         .env_remove(password::ASKPASS_ID_ENV)
         .envs(saved_auth);
-    let mut args = connection_args(target);
-    let destination = args.pop().ok_or("invalid_target")?;
-    command.args(args).arg("--").arg(destination);
+    command
+        .arg("--")
+        .arg(format!("{}@{}", target.user, target.host));
     // The action comes from the exact match below; the optional digest is lowercase hex only.
-    let source = SETUP.replace('\'', "'\\''");
-    let mut remote = format!("exec python3 -I -c '{source}' {op}");
+    let mut packed = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+    packed
+        .write_all(SETUP.as_bytes())
+        .map_err(|_| "bootstrap_unavailable")?;
+    let source = base64::engine::general_purpose::STANDARD
+        .encode(packed.finish().map_err(|_| "bootstrap_unavailable")?);
+    let mut remote = format!("exec python3 -I -c \"import base64,zlib;exec(zlib.decompress(base64.b64decode('{source}')))\" {op}");
     if let Some((digest, signature)) = artifact {
         remote.push(' ');
         remote.push_str(digest);
@@ -139,7 +130,7 @@ fn ssh(target: &RemoteTarget, op: &str, artifact: Option<(&str, &str)>) -> Resul
         }
     }
     command.arg(remote);
-    Ok(command)
+    Ok(())
 }
 
 fn run(args: &[String], database: impl FnOnce() -> Result<PathBuf>) -> Result<()> {
@@ -150,9 +141,18 @@ fn run(args: &[String], database: impl FnOnce() -> Result<PathBuf>) -> Result<()
     let (op, target, revision, digest) = match args {
         [op] if op == "list" => {
             let targets = registered_targets(&database()?)?;
+            let mut available = Vec::new();
+            let mut unavailable = Vec::new();
+            for target in targets {
+                match identity(&target) {
+                    Ok(value) => available.push(value),
+                    Err(reason) => unavailable
+                        .push(json!({"targetId":target.id, "name":target.name, "error":reason})),
+                }
+            }
             println!(
                 "{}",
-                json!({"protocol":1, "targets":targets.iter().map(identity).collect::<Vec<_>>()})
+                json!({"protocol":1, "targets":available, "unavailable":unavailable})
             );
             return Ok(());
         }
@@ -163,20 +163,13 @@ fn run(args: &[String], database: impl FnOnce() -> Result<PathBuf>) -> Result<()
         }
         _ => return Err("unsupported_action"),
     };
-    let target = resolve(&registered_targets(&database()?)?, target, revision)?;
-    let mut command = ssh(&target, op, digest)?;
-    #[cfg(unix)]
-    {
-        // SSH inherits the caller's three pipes and process ID, including cancellation.
-        use std::os::unix::process::CommandExt;
-        let _error = command.exec();
-        Err("ssh_unavailable")
-    }
-    #[cfg(not(unix))]
-    {
-        let status = command.status().map_err(|_| "ssh_unavailable")?;
-        std::process::exit(status.code().unwrap_or(1));
-    }
+    let targets = registered_targets(&database()?)?;
+    let (target, snapshot) = resolve(&targets, target, revision)?;
+    let (mut command, private_config) = snapshot.command()?;
+    configure_transport(&mut command, target, op, digest)?;
+    let status = command.status().map_err(|_| "ssh_unavailable")?;
+    drop(private_config);
+    std::process::exit(status.code().unwrap_or(1));
 }
 
 /// Called before initializing the single-instance plugin, webview, or background work.

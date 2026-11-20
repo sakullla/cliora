@@ -24,6 +24,7 @@ use crate::database::Database;
 use crate::native::profile::{RegisteredCommon, RegisteredProfile};
 
 pub mod twiglane;
+mod twiglane_config;
 pub mod password;
 pub mod proxy;
 pub mod operations;

@@ -40,6 +40,9 @@ fn desktop_exit_mode_resolves_only_current_enabled_targets_and_rejects_untrusted
     assert_eq!(error(call(&path, &["list"])), "remote_disabled");
     db.update_preferences(|prefs| prefs.remote_ssh_enabled = true)
         .unwrap();
+    let ssh_config = home.path().join("ssh_config");
+    let initial_config = "Host test.invalid\n  HostName first.invalid\n  HostKeyAlias first-key\n";
+    std::fs::write(&ssh_config, initial_config).unwrap();
     let mut target = RemoteTarget {
         id: "test-build".into(),
         name: "Build box".into(),
@@ -48,7 +51,7 @@ fn desktop_exit_mode_resolves_only_current_enabled_targets_and_rejects_untrusted
         user: "builder".into(),
         auth_method: "key".into(),
         identity_file: Some("/private/test-key".into()),
-        ssh_config: None,
+        ssh_config: Some(ssh_config.to_string_lossy().into_owned()),
         default_path: None,
         enabled: true,
         created_at: 0,
@@ -69,6 +72,18 @@ fn desktop_exit_mode_resolves_only_current_enabled_targets_and_rejects_untrusted
         )),
         "invalid_artifact"
     );
+    assert_eq!(first["effectiveHost"], "first.invalid");
+    for config in [
+        "Host test.invalid\n  HostName second.invalid\n  HostKeyAlias first-key\n",
+        "Host test.invalid\n  HostName first.invalid\n  HostKeyAlias second-key\n",
+    ] {
+        std::fs::write(&ssh_config, config).unwrap();
+        assert_eq!(
+            error(call(&path, &["probe", &target.id, revision])),
+            "target_changed"
+        );
+    }
+    std::fs::write(&ssh_config, initial_config).unwrap();
     target.host = "other.invalid".into();
     save_target(&db, target.clone()).unwrap();
     assert_eq!(
@@ -119,13 +134,13 @@ fn missing_and_cancelled_session_passwords_do_not_connect() {
     .unwrap();
     let app = env!("CARGO_BIN_EXE_cliora");
     let family = "--twiglane-remote-v1";
-    let revision = cliora_lib::remote::operations::target_identity(&target);
+
     let fake_ssh = home.path().join("ssh");
     let cancelled = home.path().join("cancel-prompt");
     // Exercise OpenSSH's cancellation exit, without a live login attempt or entering a password.
     fs::write(
         &fake_ssh,
-        "#!/bin/sh\n\"$SSH_ASKPASS\" 'Password:' || exit 255\nexit 1\n",
+        "#!/bin/sh\nif [ \"$1\" = -G ]; then exec /usr/bin/ssh \"$@\"; fi\n\"$SSH_ASKPASS\" 'Password:' || exit 255\nexit 1\n",
     )
     .unwrap();
     fs::write(&cancelled, "#!/bin/sh\nexit 1\n").unwrap();
@@ -135,16 +150,27 @@ fn missing_and_cancelled_session_passwords_do_not_connect() {
     let mut search_path = OsString::from(home.path());
     search_path.push(":");
     search_path.push(std::env::var_os("PATH").unwrap_or_default());
-    let mut command = Command::new(app);
-    command
-        .args([family, "probe", &target.id, &revision])
-        .env("CLIORA_TWIGLANE_TEST_DB", &path)
-        .env("HOME", home.path())
-        .env("XDG_DATA_HOME", home.path())
-        .env("CLIORA_SSH_PROXY", "off")
-        .env_remove("SSH_ASKPASS")
-        .env_remove("SSH_ASKPASS_REQUIRE")
-        .env("PATH", search_path);
+    let fixture_command = || {
+        let mut command = Command::new(app);
+        command
+            .arg(family)
+            .env("CLIORA_TWIGLANE_TEST_DB", &path)
+            .env("HOME", home.path())
+            .env("XDG_DATA_HOME", home.path())
+            .env("CLIORA_SSH_PROXY", "off")
+            .env_remove("SSH_ASKPASS")
+            .env_remove("SSH_ASKPASS_REQUIRE")
+            .env("PATH", &search_path);
+        command
+    };
+    let list = fixture_command().arg("list").output().unwrap();
+    let revision = serde_json::from_slice::<Value>(&list.stdout).unwrap()["targets"][0]
+        ["targetRevision"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut command = fixture_command();
+    command.args(["probe", &target.id, &revision]);
     assert_eq!(error(command.output().unwrap()), "password_required");
     let result = command
         .env("SSH_ASKPASS", cancelled)
