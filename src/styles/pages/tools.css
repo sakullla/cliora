@@ -41,6 +41,10 @@
     justify-content: flex-start;
   }
 
+  [data-tools-page] [data-tools-live] {
+    flex-wrap: wrap;
+  }
+
   /* Row actions drop below the profile name rather than clipping it. */
   [data-tools-page] [data-tools-row-head] {
     grid-template-columns: minmax(0, 1fr);

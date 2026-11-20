@@ -34,7 +34,7 @@
   background: var(--surface-3, var(--line));
 }
 .summaryMetric progress::-webkit-progress-bar { background: var(--surface-3, var(--line)); border-radius: var(--radius-pill); }
-.summaryMetric progress::-webkit-progress-value { background: var(--accent-bright, var(--accent)); border-radius: var(--radius-pill); transition: width var(--medium) var(--ease); }
+.summaryMetric progress::-webkit-progress-value { background: var(--accent); border-radius: var(--radius-pill); transition: width var(--medium) var(--ease); }
 .summaryMetric[data-warning="true"] > div > strong { color: var(--warning); }
 .summaryMetric[data-warning="true"] progress::-webkit-progress-value { background: var(--warning); }
 .summaryMetric small { overflow-wrap: anywhere; line-height: 1.45; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
@@ -42,7 +42,7 @@
 .burnDown svg { display: block; width: 100%; height: 34px; color: var(--accent); }
 .burnDown svg polyline { fill: none; stroke: currentColor; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .burnDown svg circle { fill: currentColor; stroke: none; }
-.burnDown figcaption small { color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-regular); }
+.burnDown figcaption small { color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .query:has(> .quotaDetails[open]) > .summaryMetrics { display: none; }
 .quotaDetails { font-size: var(--fs-caption); color: var(--text-2); }
 .quotaDetails > summary { cursor: pointer; display: inline-flex; align-items: center; gap: var(--space-1); width: fit-content; padding: 1px 0; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-medium); list-style: none; }
@@ -53,7 +53,7 @@
 .quotaDetails[open] > summary { margin-bottom: var(--space-2); }
 .quotaDetails > .metrics { color: var(--text); padding: var(--space-0_5) 0 0; border: 0; border-radius: 0; background: transparent; }
 .metadata { display: grid; gap: var(--space-1_5); padding-top: var(--space-3); overflow-wrap: anywhere; }
-.metadata small { font-size: var(--fs-body); font-weight: var(--fw-regular); }
+.metadata small { font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(215px, 100%), 1fr)); gap: var(--space-4) var(--space-6); }
 .metric { display: grid; align-content: start; gap: var(--space-1_5); min-width: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
 .metric .heading strong { font-size: var(--fs-body); font-weight: var(--fw-semibold); }
@@ -63,8 +63,8 @@
 .metric progress::-webkit-progress-value { background: var(--accent); border-radius: var(--radius-pill); }
 .metric[data-warning="true"] .heading span { color: var(--warning); }
 .metric[data-warning="true"] progress::-webkit-progress-value { background: var(--warning); }
-.values { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); font-size: var(--fs-body); font-weight: var(--fw-regular); }
-.metric > small { font-size: var(--fs-body); font-weight: var(--fw-regular); }
+.values { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); font-size: var(--fs-control); font-weight: var(--fw-regular); }
+.metric > small { font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .error { color: var(--danger); font-size: var(--fs-body); font-weight: var(--fw-regular); white-space: pre-wrap; margin: var(--space-1) 0; }
 .editor { display: grid; gap: var(--space-3); border: 0; padding: 0; min-width: 0; }
 .editor label { display: grid; gap: var(--space-1_5); font-size: var(--fs-body); font-weight: var(--fw-regular); }
@@ -75,7 +75,7 @@
 .editor small { font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .editor p { font-size: var(--fs-body); font-weight: var(--fw-regular); }
 section.quota > small,
-.quota .query > small { font-size: var(--fs-body); font-weight: var(--fw-regular); }
+.quota .query > small { font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .editor pre { overflow: auto; max-height: 260px; white-space: pre-wrap; }
 .editor > details { border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-3) var(--space-4); }
 .editor > details > summary { cursor: pointer; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); }

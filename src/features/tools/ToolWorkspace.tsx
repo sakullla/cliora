@@ -36,8 +36,7 @@ import { PageSkeleton, SkeletonRows } from '../../components/Skeleton';
 import { EmptyState } from '../../components/EmptyState';
 import { Icon } from '../../components/Icon';
 import { StatusBanner } from '../../components/StatusBanner';
-import { ToastScope } from '../../components/Toast';
-import { useToasts } from '../../lib/toast';
+import { useFeedback } from '../../lib/toast';
 import { FilterSelect, type FilterSelectOption } from '../../components/FilterSelect';
 import { SearchField } from '../../components/SearchField';
 import { GuideDialog } from '../../components/GuideDialog';
@@ -91,11 +90,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   const [scopedContext, setScopedContext] = useState<{ key: string; value: RegisteredToolContext } | null>(null);
   const [loading, setLoading] = useState(true);
   // Action results float as toasts; persistent problems stay inline below.
-  const toasts = useToasts();
-  const [{ setError, setNotice }] = useState(() => ({
-    setError: (text: string) => { if (text) toasts.showError(text); else toasts.dismiss('alert'); },
-    setNotice: (text: string) => { if (text) toasts.showNotice(text); else toasts.dismiss('status'); },
-  }));
+  const { setError, setNotice } = useFeedback();
   const [busy, setBusy] = useState(false);
   const [maintenance, setMaintenance] = useState<MaintenanceState | null>(null);
   const [applying, setApplying] = useState<string | null>(null);
@@ -273,7 +268,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     setCompareError('');
     setFilter('');
     setFilterPinned(false);
-    setNotice('');
+    if (active) setNotice('');
     setCustomPath('');
     setResourceDirty({ mcp: false, skills: false, agents: false, memory: false });
     setResourceEpoch(value => value + 1);
@@ -646,7 +641,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
   const toolHeading = <h2 className={styles.chromeTitle}>{managedTools.length > 1 && onPickTool
     ? <FilterSelect className={styles.toolPicker} variant="title" label={t('tools.workspace.switchTool', { name: descriptor.name })} searchLabel={t('tools.workspace.searchTool')} value={toolId} options={managedTools.map(item => ({ value: item.id, label: item.name, icon: <ToolIcon toolId={item.id} size={item.id === toolId ? 22 : 18} /> }))} onChange={id => { if (id !== toolId) onPickTool(id); }} />
     : <><ToolIcon toolId={toolId} size={22} /><strong>{descriptor.name}</strong></>}</h2>;
-  return <RemoteReadVisibility.Provider value={active}><section className={styles.workspace} aria-label={t('common.nav.connections')} data-host-target={remoteTargetId} data-tools-page><ToastScope toasts={toasts}>
+  return <RemoteReadVisibility.Provider value={active}><section className={styles.workspace} aria-label={t('common.nav.connections')} data-host-target={remoteTargetId} data-tools-page>
     <div className={styles.main}><RemoteReadStatus state={remoteReads} />
     <div className={styles.chrome} data-workspace-chrome>
     <div className={styles.chromeHead} data-tools-chrome-head>
@@ -701,5 +696,5 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     </Suspense>
     <MaintenanceDialog state={maintenance} busy={busy} canRetry={maintenance?.tool === toolId} onCancel={cancelMaintenance} onRetry={() => { if (maintenance) void maintain(maintenance.action, maintenance.source, true, maintenance.lineVersion, maintenance.target); }} onClose={() => setMaintenance(null)} onMinimize={() => setMaintenance(previous => previous ? { ...previous, minimized: true } : previous)} onRestore={() => setMaintenance(previous => previous ? { ...previous, minimized: false } : previous)} />
     </div>
-  {remotePicker.element}</ToastScope></section></RemoteReadVisibility.Provider>;
+  {remotePicker.element}</section></RemoteReadVisibility.Provider>;
 }
