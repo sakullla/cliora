@@ -4614,7 +4614,7 @@ test('a marked round reviews, and collapsing moves it without ending it', async 
   await expect(rail.locator('[data-group="review"] [data-drag-id="s1"]')).toHaveCount(1);
 });
 
-test('the task menu actions stay on a keyboard path with roving focus and focus return', async ({ page }) => {
+test('the task menu opens from the keyboard without the running terminal taking focus back', async ({ page }) => {
   await installWorkbenchMock(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
@@ -4623,20 +4623,38 @@ test('the task menu actions stay on a keyboard path with roving focus and focus 
   const stage = page.getByRole('region', { name: '当前会话' });
   const taskMenu = () => page.getByRole('menu', { name: '终端操作' });
   const more = stage.getByRole('button', { name: '更多终端操作' });
-  const openTaskMenu = async () => { await more.click(); await expect(taskMenu()).toBeVisible(); };
+  const markItem = taskMenu().getByRole('menuitem', { name: '标记待审阅', exact: true });
+  const changesItem = taskMenu().getByRole('menuitem', { name: '查看本次改动', exact: true });
+  const openTaskMenu = async (key: 'Enter' | 'Space' = 'Enter') => {
+    await more.focus();
+    await page.keyboard.press(key);
+    await expect(taskMenu()).toBeVisible();
+  };
   await row.locator('[data-session-id="s1"]').click();
 
-  // 菜单打开后焦点落在第一个任务动作上，方向键只在这份菜单内移动。
+  // Enter 和 Space 都是按钮的标准激活键。终端在选中会话后的激活帧里恢复焦点，那个帧
+  // 可能迟到最后一次渲染之后才跑，所以焦点必须等到它过去仍在菜单项上。
+  for (const key of ['Enter', 'Space'] as const) {
+    await openTaskMenu(key);
+    await page.waitForTimeout(250);
+    await expect(markItem).toBeFocused();
+    await page.keyboard.press('ArrowDown');
+    await expect(changesItem).toBeFocused();
+    await page.keyboard.press('ArrowUp');
+    await expect(markItem).toBeFocused();
+    // 键盘关闭把焦点交回打开菜单的按钮，而不是运行中的终端。
+    await page.keyboard.press('Escape');
+    await expect(taskMenu()).toHaveCount(0);
+    await expect(more).toBeFocused();
+  }
+
+  // 菜单项可以只用键盘执行：标记只改变任务展示，进程不变。
   await openTaskMenu();
-  const markItem = taskMenu().getByRole('menuitem', { name: '标记待审阅', exact: true });
-  await expect(markItem).toBeFocused();
-  await page.keyboard.press('ArrowDown');
-  await expect(taskMenu().getByRole('menuitem', { name: '查看本次改动', exact: true })).toBeFocused();
-  await page.keyboard.press('ArrowUp');
-  await expect(markItem).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(row).toHaveAttribute('data-task', 'readyReview');
   await expect(page.locator('[data-group="review"]')).toContainText('待审阅');
+  await expect(row).toHaveAttribute('data-running', 'true');
+  await expect(more).toBeFocused();
 
   // Collapse by keyboard: the mark and the process stay, only the list moves the row.
   await openTaskMenu();
@@ -4661,12 +4679,42 @@ test('the task menu actions stay on a keyboard path with roving focus and focus 
   await expect(taskMenu().getByRole('menuitem', { name: '恢复关注', exact: true })).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(rail.locator('[data-group="review"] [data-drag-id="s1"]')).toHaveCount(1);
+});
 
-  // Escape closes the menu and hands focus back to the terminal it acts on.
-  await openTaskMenu();
+test('Shift+F10 and the ContextMenu key open the same menus from the keyboard', async ({ page }) => {
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const rail = page.getByRole('complementary', { name: '会话列表' });
+  const rowTab = rail.locator('[data-session-id="s1"]');
+
+  // 会话行有标准键盘入口：焦点落在第一个菜单项，Escape 回到这一行。
+  await rowTab.click();
+  await rowTab.focus();
+  await page.keyboard.press('Shift+F10');
+  const rowMenu = page.getByRole('menu', { name: 'Codex 会话操作' });
+  await expect(rowMenu).toBeVisible();
+  const firstRowItem = rowMenu.getByRole('menuitem', { name: '置顶' }).first();
+  await expect(firstRowItem).toBeFocused();
+  await page.waitForTimeout(250);
+  await expect(firstRowItem).toBeFocused();
   await page.keyboard.press('Escape');
-  await expect(taskMenu()).toHaveCount(0);
-  await expect(page.locator('.xterm-helper-textarea:visible')).toBeFocused();
+  await expect(rowMenu).toHaveCount(0);
+  await expect(rowTab).toBeFocused();
+
+  // 终端聚焦时 ContextMenu 键打开同一份终端菜单，按键不写进运行中的 CLI。
+  const textarea = page.locator('.xterm-helper-textarea:visible');
+  await textarea.focus();
+  await resetWrites(page);
+  await page.keyboard.press('ContextMenu');
+  const taskMenu = page.getByRole('menu', { name: '终端操作' });
+  await expect(taskMenu).toBeVisible();
+  await page.waitForTimeout(250);
+  await expect(taskMenu.getByRole('menuitem').first()).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(taskMenu).toHaveCount(0);
+  await expect(textarea).toBeFocused();
+  expect(await writes(page)).toEqual([]);
 });
 
 test('the new-session dialog leads with the task and keeps folded drafts', async ({ page }) => {
@@ -4744,3 +4792,6 @@ test('an inherited workspace that is gone is named instead of replaced', async (
   // The launch stops and names the choice that needs fixing; it never picks another folder.
   await expect(dialog.getByRole('button', { name: '启动会话' })).toBeDisabled();
 });
+
+
+

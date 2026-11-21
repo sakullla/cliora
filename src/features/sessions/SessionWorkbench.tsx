@@ -30,7 +30,7 @@ import type { AdapterDescriptor } from '../../types/native';
 import type { TerminalSemantics } from '../../adapters/contract';
 import type { RemoteProject, RemoteTarget } from '../../types/remote';
 import { SessionTitle, stableTitle } from './SessionTitle';
-import { SessionTerminal, cleanTerminalTitle, encodeBase64, type OutputChunk, type TerminalBridge, type TerminalHandle, type TerminalMatch } from './SessionTerminal';
+import { SessionTerminal, cleanTerminalTitle, encodeBase64, popupOwnsFocus, type OutputChunk, type TerminalBridge, type TerminalHandle, type TerminalMatch } from './SessionTerminal';
 import { PendingTerminalOutput } from './pendingOutput';
 import { SessionActivityIcon, sessionBadgeTone } from './SessionActivityIcon';
 import type { TerminalTheme } from './terminalTheme';
@@ -289,9 +289,14 @@ function playWorkbenchChime(kind: 'bell' | 'exit') {
   } catch { /* Audio is unavailable in restricted contexts. */ }
 }
 
-type MenuState =
+type MenuState = (
   | { kind: 'session'; sessionId: string; x: number; y: number; besideId: string | null }
-  | { kind: 'terminal'; sessionId: string; x: number; y: number; hasSelection: boolean };
+  | { kind: 'terminal'; sessionId: string; x: number; y: number; hasSelection: boolean }
+) & {
+  /** The control the menu was opened from, when it had one. Closing the menu gives the
+   *  keyboard back to it, the same way a popup returns focus to its trigger. */
+  trigger: HTMLElement | null;
+};
 
 const MENU_ITEM = '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled)';
 /** A repository can carry hundreds of worktrees. The menu filters once the list is long, renders a
@@ -2838,6 +2843,20 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
 
   useEffect(() => { if (!menu) setMenuBox(null); }, [menu]);
+  // A menu that simply closes would leave focus on the body, one keypress away from nothing.
+  // Hand it back to the control that opened it; an item that moved focus itself (copy, clear,
+  // paste) keeps it.
+  const closedMenuRef = useRef<MenuState | null>(null);
+  if (menu) closedMenuRef.current = menu;
+  useEffect(() => {
+    if (menu) return;
+    const previous = closedMenuRef.current;
+    closedMenuRef.current = null;
+    const active = document.activeElement;
+    const lost = !active || active === document.body || !active.isConnected;
+    if (!lost || !document.hasFocus() || !previous?.trigger?.isConnected) return;
+    previous.trigger.focus({ preventScroll: true });
+  }, [menu]);
   useLayoutEffect(() => {
     if (!menu) return;
     const node = menuRef.current;
@@ -2859,6 +2878,12 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       event.stopPropagation();
       const current = menu;
       setMenu(null);
+      // The control that opened the menu gets the keyboard back; a menu opened from the
+      // terminal itself (a right-click or the ContextMenu key) returns to that session.
+      if (current.trigger?.isConnected) {
+        current.trigger.focus({ preventScroll: true });
+        return;
+      }
       if (current.kind === 'session') document.querySelector<HTMLElement>(`[data-session-id="${CSS.escape(current.sessionId)}"]`)?.focus();
       else handles.current.get(current.sessionId)?.focus();
     };
@@ -2877,20 +2902,26 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     };
   }, [menu]);
 
-  function openRowMenu(session: WorkbenchSession, x: number, y: number) {
+  function openRowMenu(session: WorkbenchSession, x: number, y: number, trigger: HTMLElement | null = null) {
     const previous = selectedIdRef.current;
     // The row stays unselected. Selecting it would fit its PTY and drop its unread mark.
     setAppearanceOpen(false);
     setShortcutsOpen(false);
     // Worktree setup opens in its own dialog; the ledger is read so its entry stays current.
     refreshLedger();
-    setMenu({ kind: 'session', sessionId: session.id, x, y, besideId: previous && previous !== session.id ? previous : null });
+    setMenu({ kind: 'session', sessionId: session.id, x, y, trigger, besideId: previous && previous !== session.id ? previous : null });
   }
 
-  function openTerminalMenu(session: WorkbenchSession, x: number, y: number) {
+  function openTerminalMenu(session: WorkbenchSession, x: number, y: number, trigger: HTMLElement | null = null) {
     setAppearanceOpen(false);
     refreshLedger();
-    setMenu({ kind: 'terminal', sessionId: session.id, x, y, hasSelection: !!handles.current.get(session.id)?.hasSelection() });
+    setMenu({ kind: 'terminal', sessionId: session.id, x, y, trigger, hasSelection: !!handles.current.get(session.id)?.hasSelection() });
+  }
+
+  /** Shift+F10 and the ContextMenu key reach the same menu a right-click opens. The terminal
+   *  would otherwise swallow both as CLI input, so the pane handles them in the capture phase. */
+  function menuKey(event: ReactKeyboardEvent<HTMLElement>): boolean {
+    return event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10');
   }
 
   function menuNavigate(event: ReactKeyboardEvent<HTMLDivElement>) {
@@ -3575,14 +3606,15 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setPeekSessionId(null);
     requestAnimationFrame(() => {
       const id = selectedIdRef.current;
-      if (id) handles.current.get(id)?.focus();
+      if (id && !popupOwnsFocus()) handles.current.get(id)?.focus();
     });
   }
   function selectSession(id: string, focusTerminal = true) {
     setPeekSessionId(null);
     setSelectedId(id);
     if (focusTerminal) requestAnimationFrame(() => {
-      if (selectedIdRef.current === id) handles.current.get(id)?.focus();
+      // The frame can run after a menu or dialog has taken the keyboard; it must not take it back.
+      if (selectedIdRef.current === id && !popupOwnsFocus()) handles.current.get(id)?.focus();
     });
   }
   const rail = <SessionRail sessions={railSessions} total={scopedSessions.length} running={runningCount} ended={endedCount} search={railSearch} selectedId={selectedId} narrow={!railDocked} slim={railDocked && railSlim} docked={railDocked} busy={!!busy} canLaunch={terminalTools.length > 0}
@@ -3769,7 +3801,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                     <IconButton size="sm" className={styles.toolButton} aria-label={t('sessions.findOutput')} aria-pressed={findOpen} title={t('sessions.findOutput') + ` (${modLabel}+Shift+F)`} onClick={openFind} icon={<Icon name="search" size={15} />} />
                     {splitRoom && <IconButton size="sm" className={styles.toolButton} data-tool="split" aria-label={t('sessions.splitView')} aria-pressed={!!split} disabled={!split && !canSplit} title={splitLabel + ` (${modLabel}+Shift+D)`} onClick={toggleSplit} icon={<Icon name="columns" size={15} />} />}
                     <IconButton size="sm" className={`${styles.toolButton} ${styles.focusBtn}`} aria-pressed={focusMode} aria-label={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')} title={(focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')) + ' · ' + t('sessions.focusHint')} onClick={() => setFocusMode((value) => !value)} icon={<Icon name={focusMode ? 'minimize' : 'maximize'} size={15} />} />
-                    <IconButton size="sm" className={styles.toolButton} aria-label={t('sessions.moreActions')} aria-haspopup="menu" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); openTerminalMenu(current, rect.right, rect.bottom + 6); }} icon={<Icon name="more" size={15} />} />
+                    <IconButton size="sm" className={styles.toolButton} aria-label={t('sessions.moreActions')} aria-haspopup="menu" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); openTerminalMenu(current, rect.right, rect.bottom + 6, event.currentTarget); }} onKeyDown={(event) => { if (!menuKey(event)) return; event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openTerminalMenu(current, rect.right, rect.bottom + 6, event.currentTarget); }} icon={<Icon name="more" size={15} />} />
                   </span>
                 </div>
                 <Button size="sm" className={styles.endBtn} data-running={current.running || undefined} onClick={() => void endSession(current)} disabled={!!busy} aria-label={current.running || remoteSessionMayExist(current) ? t('sessions.end') : t('sessions.closeTab')} title={current.running || remoteSessionMayExist(current) ? t('sessions.end') : t('sessions.closeTab')} icon={<span className={styles.endIcon}><Icon name={current.running || remoteSessionMayExist(current) ? 'square' : 'close'} size={current.running || remoteSessionMayExist(current) ? 11 : 13} /></span>}><span className={styles.statusLabel}><span>{endLabel}</span>{endReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></Button>
@@ -3793,6 +3825,18 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
               </div>}
 
               <div ref={canvasRef} className={styles.canvas} data-split={split ? 'true' : undefined} data-peek={peekSession ? '' : undefined}
+                onKeyDownCapture={(event) => {
+                  if (!menuKey(event)) return;
+                  // The keyboard path opens the same menu a right-click does, anchored on the pane it
+                  // acts on. Captured before xterm so the key never reaches the running CLI.
+                  const host = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-pane-session]') : null;
+                  const target = scopedSessions.find((item) => item.id === (host?.dataset.paneSession ?? selectedId)) ?? current;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (!target) return;
+                  const rect = (host ?? canvasRef.current)?.getBoundingClientRect();
+                  openTerminalMenu(target, rect ? rect.left + 24 : 0, rect ? rect.top + 24 : 0, null);
+                }}
                 onPointerDownCapture={(event) => {
                   const id = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-pane-session]')?.dataset.paneSession : undefined;
                   if (id && id !== selectedIdRef.current && visibleIdsRef.current.includes(id)) setSelectedId(id);

@@ -306,6 +306,14 @@ const ACTIVE_ACTIVITY_INSPECT_MS = 80;
 const HIDDEN_ACTIVITY_INSPECT_MS = 300;
 const APP_WHEEL_PACE_MS = 12;
 
+/** An open menu or dialog owns the keyboard for as long as it is up. A focus intent that is
+ *  only a frame or more away must check this first: the frame that opens a popup runs long
+ *  before the delayed activation frame, so an unconditional `term.focus()` lands inside a
+ *  menu the user is already navigating and the next keypress goes to the running CLI. */
+export function popupOwnsFocus(): boolean {
+  return !!document.querySelector('[role="menu"], dialog[open]');
+}
+
 export type TerminalBridge = {
   writeError: (error: unknown) => void;
   linkError: (error: unknown) => void;
@@ -1306,7 +1314,7 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       // the selected tab while React swaps the active terminal. Do not steal
       // it during that render; direct terminal activation still focuses here.
       const railTabFocused = document.activeElement?.matches('[role="tab"][data-session-id]');
-      if (running && focusedRef.current && !railTabFocused && !document.querySelector('dialog[open]')) term.focus();
+      if (running && focusedRef.current && !railTabFocused && !popupOwnsFocus()) term.focus();
     });
     return () => cancelAnimationFrame(frame);
   }, [active, keepRendererWarm, running, fontSize, lineHeight, sessionId, bridge]);
@@ -1324,7 +1332,7 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
     if (!gained || !active || !running) return;
     const frame = requestAnimationFrame(() => {
       const railTabFocused = document.activeElement?.matches('[role="tab"][data-session-id]');
-      if (!railTabFocused && !document.querySelector('dialog[open]')) termRef.current?.focus();
+      if (!railTabFocused && !popupOwnsFocus()) termRef.current?.focus();
     });
     return () => cancelAnimationFrame(frame);
   }, [focused, active, running]);
