@@ -10,9 +10,19 @@ import { SessionTitle, stableTitle } from './SessionTitle';
 import { placeParts, type PlaceParts } from './railTitle';
 import type { WorkbenchSession } from '../../types/launch';
 import { remoteSessionMayExist, sessionConfirmedEnded } from './sessionState';
+import { partitionCollapsed, type TaskBucket, type TaskState } from './sessionTaskState';
 import styles from './SessionWorkbench.module.css';
 
 export type SessionTone = 'live' | 'idle' | 'bell' | 'error' | 'ended';
+
+/** What one task row says about the next step, read from the shared task state. */
+export type RailTaskDetail = {
+  state: 'loading' | 'ready' | 'unknown';
+  text: string;
+  hint?: string;
+  /** One next step read from real Git and review facts; never an automatic write. */
+  action?: { label: string; run: () => void };
+};
 
 export type RailSession = {
   session: WorkbenchSession;
@@ -25,10 +35,19 @@ export type RailSession = {
   pinned: boolean;
   attention: boolean;
   unread: boolean;
+  /** The shared task state, computed once for the rail, the stage and the attention entry. */
+  task: TaskState;
+  bucket: TaskBucket;
+  taskLabel: string;
+  taskHint: string | null;
+  collapsed: boolean;
+  /** The user marked this round for review; a display mark only. */
+  marked: boolean;
+  /** Changes and the review next step, read only when this row is expanded. */
+  detail?: RailTaskDetail;
   /** 0 or 1 while the session is on screen in a split; null otherwise. */
   pane: number | null;
 };
-
 /** The search field only earns its room once the list is long enough to scan. */
 export const RAIL_SEARCH_MIN = 4;
 
@@ -59,7 +78,7 @@ function onIcon(event: MouseEvent<HTMLElement>): boolean {
   return event.target instanceof Element && !!event.target.closest('[data-rail-icon]');
 }
 
-export function SessionRail({ sessions, total, running, ended, search, selectedId, narrow, slim, docked = false, busy, canLaunch, endedCollapsed, onSearch, onSelect, onNewSession, onOpenMenu, onRemove, onClearEnded, onToggleSlim, onToggleEnded, onReorder }: {
+export function SessionRail({ sessions, total, running, ended, search, selectedId, narrow, slim, docked = false, busy, canLaunch, endedCollapsed, collapsedOpen, collapsedCount, onSearch, onSelect, onNewSession, onOpenMenu, onRemove, onClearEnded, onToggleSlim, onToggleEnded, onToggleCollapsedOpen, onReorder }: {
   sessions: RailSession[];
   total: number;
   running: number;
@@ -74,6 +93,10 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
   busy: boolean;
   canLaunch: boolean;
   endedCollapsed: boolean;
+  /** The collapsed section is open; its own preference never reopens itself. */
+  collapsedOpen: boolean;
+  /** Collapsed rows kept even while a search filter hides them, so the section stays honest. */
+  collapsedCount: number;
   onSearch: (query: string) => void;
   onSelect: (id: string, focusTerminal?: boolean) => void;
   onNewSession: () => void;
@@ -82,6 +105,7 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
   onClearEnded: () => void;
   onToggleSlim: () => void;
   onToggleEnded: () => void;
+  onToggleCollapsedOpen: () => void;
   /** A vertical list was rearranged inside one group; `ids` is the group's new order. */
   onReorder?: (group: string, ids: string[]) => void;
 }) {
@@ -99,12 +123,6 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
   const toggleTitle = `${toggleLabel} (${modLabel}+Shift+B) · ${t('sessions.railToggleHint')}`;
 
   const places = placeParts(sessions.map((item) => item.place));
-  const activityLabel = (item: RailSession) => {
-    if (!item.session.running && remoteSessionMayExist(item.session)) return t('sessions.activityUnknown');
-    if (item.attention) return t('sessions.bellBadge');
-    if (!item.session.running) return item.tone === 'error' ? t('sessions.stateError') : t('sessions.ended');
-    return item.tone === 'live' ? t('sessions.stateStreaming') : t('sessions.stateIdle');
-  };
 
   function onListKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key === 'Escape' && press.current?.active) { event.preventDefault(); cancelDrag(); return; }
@@ -137,18 +155,30 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
     target.focus();
   }
 
-  // Sessions that rang the bell and are not on screen: one click brings the next one up.
-  const waiting = sessions.filter((item) => item.attention && item.session.id !== selectedId);
-  const pinnedSessions = sessions.filter((item) => item.pinned);
-  const runningSessions = sessions.filter((item) => !item.pinned && item.session.running);
-  const pendingSessions = sessions.filter((item) => !item.pinned && !item.session.running && remoteSessionMayExist(item.session));
-  const endedSessions = sessions.filter((item) => !item.pinned && sessionConfirmedEnded(item.session));
+  // A collapsed row leaves this list but keeps its state, process and restore record.
+  const collapsedIds = new Set(sessions.filter((item) => item.collapsed).map((item) => item.session.id));
+  const { active: activeSessions, collapsed: collapsedSessions } = partitionCollapsed(sessions, (item) => item.session.id, collapsedIds);
+  // Tasks that need a person and are not on screen: one click brings the next one up.
+  const waiting = activeSessions.filter((item) => item.bucket === 'attention' && item.session.id !== selectedId);
+  const pinnedSessions = activeSessions.filter((item) => item.pinned);
+  // A remote transport that may still hold a session is its own group: the connection, not the CLI, is unconfirmed.
+  const pendingSessions = activeSessions.filter((item) => !item.pinned && !item.session.running && remoteSessionMayExist(item.session));
+  const pendingIds = new Set(pendingSessions.map((item) => item.session.id));
+  const bucketOf = (bucket: TaskBucket) => activeSessions.filter((item) => !item.pinned && !pendingIds.has(item.session.id) && item.bucket === bucket);
+  const attentionSessions = bucketOf('attention');
+  const reviewSessions = bucketOf('review');
+  const runningSessions = bucketOf('working');
+  const unknownSessions = bucketOf('unknown');
+  const endedSessions = bucketOf('ended');
   // A collapsed ended group still shows the session on screen, so the selection never vanishes.
   const endedVisible = endedCollapsed && !narrow ? endedSessions.filter((item) => item.session.id === selectedId) : endedSessions;
   const groups = [
     { key: 'pinned', label: t('sessions.pinSession'), items: pinnedSessions, count: pinnedSessions.length },
-    { key: 'running', label: t('sessions.running'), items: runningSessions, count: runningSessions.length },
     { key: 'pending', label: t('sessions.sshNeedsCheck'), items: pendingSessions, count: pendingSessions.length },
+    { key: 'attention', label: t('sessions.taskAttentionGroup'), items: attentionSessions, count: attentionSessions.length },
+    { key: 'review', label: t('sessions.taskReadyReview'), items: reviewSessions, count: reviewSessions.length },
+    { key: 'working', label: t('sessions.running'), items: runningSessions, count: runningSessions.length },
+    { key: 'unknown', label: t('sessions.taskUnknown'), items: unknownSessions, count: unknownSessions.length },
     { key: 'ended', label: t('sessions.ended'), items: endedVisible, count: endedSessions.length },
   ].filter((group) => group.count > 0);
 
@@ -213,15 +243,15 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
     const failed = sessionConfirmedEnded(session) && session.exitCode != null && session.exitCode !== 0;
     const yolo = session.mode === 'yolo';
     // YOLO stays discoverable in the tooltip and for assistive tech; the row itself spends its room on state.
-    const tooltip = [stableTitle(item.title), item.place, [item.name, yolo ? t('sessions.modeYolo') : ''].filter(Boolean).join(' · '), item.directory, activityLabel(item)].filter(Boolean).join('\n');
+    const tooltip = [stableTitle(item.title), item.place, [item.name, yolo ? t('sessions.modeYolo') : ''].filter(Boolean).join(' · '), item.directory, item.taskLabel, item.taskHint].filter(Boolean).join('\n');
     const pending = !session.running && remoteSessionMayExist(session);
-    const state = pending ? t('sessions.sshNeedsCheck') : activityLabel(item);
+    const state = pending ? t('sessions.sshNeedsCheck') : item.taskLabel;
     // A running session that is only waiting for input already reads that way from its tool icon
     // and quiet state dot; repeating the label on every row would spend the room titles need.
-    const quietState = !pending && item.tone === 'idle';
+    const quietState = !pending && item.task === 'unknown' && item.session.running && item.taskLabel === t('sessions.stateIdle');
     const dragging = drag?.id === session.id;
     const dropMark = drag && !dragging && drag.group === group && drag.target === session.id ? (drag.after ? 'after' : 'before') : undefined;
-    return <div key={session.id} className={styles.row} data-running={session.running || undefined} data-pending={pending || undefined} data-attention={item.attention || undefined} data-selected={selected || undefined} data-on-screen={item.pane != null || undefined}
+    return <div key={session.id} className={styles.row} data-running={session.running || undefined} data-pending={pending || undefined} data-attention={item.attention || undefined} data-task={item.task} data-bucket={item.bucket} data-collapsed={item.collapsed || undefined} data-marked={item.marked || undefined} data-selected={selected || undefined} data-on-screen={item.pane != null || undefined}
       data-drag-group={group} data-drag-id={session.id} data-dragging={dragging || undefined} data-drop={dropMark}
       style={dragging ? { transform: `translateY(${drag.offset}px)` } : undefined}>
       <button type="button" role="tab" data-session-id={session.id} className={styles.session} aria-selected={selected} aria-haspopup="menu" title={tooltip}
@@ -260,10 +290,11 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
             {item.pane != null && <span className={styles.paneTag} title={t('sessions.splitView')}><Icon name="columns" size={11} />{item.pane + 1}</span>}
             {failed && <span className={styles.exitTag}>{t('sessions.exitCode', { code: session.exitCode })}</span>}
           </span>
-          <span className={styles.srOnly}>{[item.title ? item.name : '', yolo ? t('sessions.modeYolo') : '', activityLabel(item)].filter(Boolean).join(' · ')}</span>
+          <span className={styles.srOnly}>{[item.title ? item.name : '', yolo ? t('sessions.modeYolo') : '', item.taskLabel, item.taskHint].filter(Boolean).join(' · ')}</span>
         </span>
         {/* What the session is doing now — only when it needs saying — then how long it has run. */}
-        <span className={styles.sessionMeta} data-tone={pending ? 'pending' : item.tone} data-quiet={quietState || undefined} aria-hidden="true">
+        <span className={styles.sessionMeta} data-tone={pending ? 'pending' : item.tone} data-task={item.task} data-quiet={quietState || undefined} aria-hidden="true">
+          {item.marked && <span className={styles.markBadge} title={t('sessions.taskReviewMarked')}><Icon name="eye" size={11} /></span>}
           {!quietState && <span className={styles.sessionState}>{state}</span>}
           {session.running && item.elapsed && <span className={styles.sessionTime}>{item.elapsed}</span>}
         </span>
@@ -275,6 +306,12 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
         }} />
         {!session.running && <IconButton size="sm" className={styles.rowRemove} aria-label={t('sessions.removeSessionLabel', { name: item.name })} title={t('sessions.removeSession')} disabled={busy} onClick={() => onRemove(session)} icon={<Icon name="close" size={12} />} />}
       </div>
+      {/* Changes and the next review step belong to this row and are read only when it is open. */}
+      {item.detail && <div className={styles.rowDetail} data-task-detail={item.detail.state} role="group" aria-label={t('sessions.taskDetailLabel', { name: item.name })}>
+        <p className={styles.rowDetailText} data-state={item.detail.state}>{item.detail.text}</p>
+        {item.detail.hint && <small className={styles.rowDetailHint}>{item.detail.hint}</small>}
+        {item.detail.action && <button type="button" className={styles.rowDetailAction} onClick={item.detail.action.run}>{item.detail.action.label}</button>}
+      </div>}
     </div>;
   };
 
@@ -310,11 +347,18 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
         {(groups.length > 1 || group.key === 'ended' || docked) && <div className={styles.groupLabel} role="presentation">
           {group.key === 'ended' && !compact && !narrow
             ? <button type="button" className={styles.groupToggle} aria-expanded={!endedCollapsed} title={endedCollapsed ? t('sessions.endedExpand') : t('sessions.endedCollapse')} onClick={onToggleEnded}><Icon name="chevronDown" size={12} /><span>{group.label}</span><em>{group.count}</em></button>
-            : <>{group.key === 'running' && !compact && <span className={styles.liveDot} data-live="" aria-hidden="true" />}<span>{group.label}</span>{!compact && <em>{group.count}</em>}</>}
+            : <>{group.key === 'working' && !compact && <span className={styles.liveDot} data-live="" aria-hidden="true" />}<span>{group.label}</span>{!compact && <em>{group.count}</em>}</>}
           {group.key === 'ended' && !compact && !narrow && <button type="button" className={styles.groupAction} disabled={busy} aria-label={t('sessions.clearEnded')} title={t('sessions.clearEndedTitle')} onClick={onClearEnded}><Icon name="trash" size={12} /><span>{t('sessions.clearEndedShort')}</span></button>}
         </div>}
         {group.items.map((item) => renderSession(item, group.key))}
       </div>)}
+      {/* Collapsed rows keep their state, their process and their restore record; only the list moves them. */}
+      {collapsedCount > 0 && <div className={styles.sessionGroup} role="presentation" data-group="collapsed">
+        <div className={styles.groupLabel} role="presentation">
+          <button type="button" className={styles.groupToggle} aria-expanded={collapsedOpen} title={collapsedOpen ? t('sessions.collapsedCollapse') : t('sessions.collapsedExpand')} onClick={onToggleCollapsedOpen}><Icon name="chevronDown" size={12} /><span>{t('sessions.collapsedGroup')}</span><em>{collapsedCount}</em></button>
+        </div>
+        {collapsedOpen && collapsedSessions.map((item) => renderSession(item, 'collapsed'))}
+      </div>}
       {total > 0 && sessions.length === 0 && <div className={styles.railNoMatch}><Icon name="search" size={20} /><p>{t('sessions.noFilterMatch')}</p><button type="button" className={styles.railNoMatchClear} onClick={() => onSearch('')}>{t('sessions.clearFilter')}</button></div>}
     </div>
 

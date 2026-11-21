@@ -5,6 +5,7 @@ import { CodexConfigurationEditor } from './ConfigurationEditor';
 import i18n from '../../i18n';
 import { quoteAttachmentPath } from '../attachments';
 import { codexTerminalActivity } from './terminalActivity';
+import { codexTerminalSemantics } from './terminalSemantics';
 
 const reasoningLine = /^\s*model_reasoning_effort\s*=\s*(?:"([^"\\]*)"|'([^']*)'|([A-Za-z0-9_-]+))\s*(?:#.*)?$/;
 
@@ -24,6 +25,7 @@ export const codexUiAdapter: ToolUiAdapter = {
   icon: { light: icon, tile: 'light', source: 'OpenAI.Codex 26.924.2738.0 / webview/assets/codex-new-f14177b03534.svg' },
   id: 'codex',
   terminalActivity: codexTerminalActivity,
+  terminalSemantics: codexTerminalSemantics,
   // Codex recognizes one image path per paste event; a joined list stays text.
   attachmentPastes: (paths) => paths.some((path) => /\.(png|jpe?g|gif|webp|bmp)$/i.test(path))
     ? paths.map(quoteAttachmentPath)

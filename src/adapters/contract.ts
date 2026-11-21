@@ -23,11 +23,27 @@ export type ModelMappingControl = {
   update: (text: string, role: string, value: ModelRoleValue) => Promise<string>;
   useModelForAll: (text: string, model: string, longContext?: boolean) => Promise<string>;
 };
+/**
+ * One screen's evidence, read by the CLI's own adapter. Absent or null fields mean unknown:
+ * shared UI must not infer an interface, an approval or a finished turn from these fields.
+ */
+export type TerminalSemantics = {
+  /** An interface that waits for a person: a question, an approval or another input request. */
+  attention?: 'question' | 'approval' | null;
+  /** The recognized screen accepts typed input (a composer), so a prompt may be delivered. */
+  inputReady?: boolean;
+  /** Identity of this screen; a changed key invalidates evidence read from an older one. */
+  screenKey?: string | null;
+};
+
 export type ToolUiAdapter = {
   id: string;
   /** Native TUI evidence after escape sequences are parsed. null means unknown;
       shared terminal activity then falls back to changing screen content. */
   terminalActivity?: (view: { title: string; lines: readonly string[] }) => boolean | null;
+  /** Optional screen semantics for the shared task state: whether this interface waits for a
+      person and whether it accepts typed input. Registered per CLI; shared code never parses. */
+  terminalSemantics?: (view: { title: string; lines: readonly string[] }) => TerminalSemantics | null;
   /** Prompt payloads, each delivered as a separate paste event. Owns native
       image-path parsing differences; never returns keyboard shortcuts. */
   attachmentPastes?: (paths: string[]) => string[];

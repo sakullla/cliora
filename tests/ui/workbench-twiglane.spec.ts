@@ -649,3 +649,41 @@ test('a superseded reviewId is reported and never overwrites the newer review', 
   expect(latest.status).toBe('opening');
   expect(latest.outcome).toBeNull();
 });
+
+test('a verified return drives the shared task state and its own next step', async ({ page }) => {
+  await installDesktop(page);
+  await openWorkbench(page);
+  const row = page.locator('[data-drag-id="s1"]');
+  // Nothing is verified yet: a running session with no evidence is not a review.
+  await expect(row).toHaveAttribute('data-task', 'unknown');
+  const menu = await openGitMenu(page, /^Git 分支 feature\/twiglane/);
+  const group = menu.getByRole('group', { name: '在 Twiglane 中审查' });
+  await group.getByRole('menuitem', { name: '在 Twiglane 中审查' }).click();
+  const started = await page.evaluate(() => (window as unknown as { __harness: { starts: Array<{ reviewId: string }> } }).__harness.starts);
+  await page.keyboard.press('Escape');
+
+  // Twiglane really committed: the worktree HEAD is the returned OID and nothing is left over.
+  await page.evaluate((oid) => {
+    const harness = (window as unknown as { __harness: { headOid: string; files: number } }).__harness;
+    harness.headOid = oid;
+    harness.files = 0;
+  }, NEXT);
+  await page.evaluate((reviewId) => (window as unknown as { __emitDeepLink: (url: string) => void }).__emitDeepLink(
+    'cliora://review?v=2&event=returned&reviewId=' + reviewId + '&sessionId=s1-0000-0000-0000-000000000000&outcome=committed&headOid=1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d&worktreeState=clean',
+  ), started[0].reviewId);
+  await expect(page.getByText('Twiglane 已提交 1a2b3c4。').first()).toBeVisible();
+
+  // The rail reads the same verified fact as the title bar and the review group.
+  await expect(row).toHaveAttribute('data-task', 'readyReview');
+  await expect(row).toHaveAttribute('data-bucket', 'review');
+  await expect(page.locator('[data-group="review"]')).toContainText('待审阅');
+
+  // Its next step is read on demand and stays on this session's own worktree.
+  await page.getByRole('region', { name: '当前会话' }).getByRole('button', { name: '更多终端操作' }).click();
+  await page.getByRole('menu', { name: '终端操作' }).getByRole('menuitem', { name: '查看本次改动', exact: true }).click();
+  const detail = row.locator('[data-task-detail]');
+  await expect(detail).toHaveAttribute('data-task-detail', 'ready');
+  await expect(detail).toContainText('没有未提交改动');
+  await detail.getByRole('button', { name: '查看审阅结果' }).click();
+  await expect(page.locator('[data-drag-id="s1"] [data-session-id="s1"]')).toHaveAttribute('aria-selected', 'true');
+});

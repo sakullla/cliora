@@ -35,3 +35,32 @@ for busy, idle, unknown, and repaints. Exercise it through the shared terminal;
 adapters without it retain the generic content-change fallback. The workbench
 tests cover Codex alongside a non-specialized CLI and the registry architecture
 test guards against concrete-ID dispatch in `SessionTerminal`.
+## Task evidence for the shared state
+
+`ToolUiAdapter.terminalSemantics({ title, lines })` is a second optional frontend capability
+from the same screen rows. It returns `{ attention, inputReady, screenKey }` or `null`:
+
+- `attention` is `'approval'` or `'question'` only when the screen shows an interface that
+  waits for a person. A bell or an unread failure supports "needs a look" without naming a kind.
+- `inputReady` is `true` only for a recognized composer. A menu that consumes keys is not one,
+  and neither is a screen whose interrupt hint shows an active turn.
+- `screenKey` identifies the evidence, so a repaint of the same screen is not new evidence.
+
+`src/features/sessions/sessionTaskState.ts` turns these facts, the native process and exit
+state, the shared activity result, a verified Twiglane result and an explicit user mark into
+one of `needsYou`, `readyReview`, `working`, `ended`, `error` or `unknown`. The rail, the
+stage title, the split panes and the attention jump all read that one result, so a session
+cannot read as working in one place and finished in another. The rules that keep it honest:
+
+- An idle prompt is `unknown` (worded as waiting for input), never `readyReview` and never a
+  success. `readyReview` needs an explicit mark or a returned review whose own key was re-read
+  against real Git.
+- A clean exit is `ended`; a non-zero exit is `error`. Neither claims that a task delivered.
+- A remote transport that may still hold the session is `unknown`: the connection state is not
+  a CLI failure and not a completion.
+- Resumed output outranks a mark, and an interface waiting for a person outranks both.
+
+Shared code never parses a screen by itself and never dispatches on a concrete CLI id. Codex
+publishes the composer and its numbered approval menu; other CLIs currently publish nothing and
+keep the generic `unknown` state with the manual paths, which is why the workbench can promise
+"needs you" only where an adapter actually saw it.

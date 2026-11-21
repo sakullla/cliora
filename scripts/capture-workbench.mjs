@@ -390,7 +390,8 @@ const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
 // Routine desktop review: one example of each distinct primary surface. The
 // exhaustive platform/error/large-list variants remain opt-in via --full/--only.
 const defaultScenes = ['workbench-active', 'workbench-worktrees-many', 'workbench-ended', 'workbench-composer',
-  'workbench-dialog', 'workbench-restore-mixed', 'workbench-remote-disconnected', 'workbench-empty'];
+  'workbench-dialog', 'workbench-task-dialog', 'workbench-task-states', 'workbench-restore-mixed',
+  'workbench-remote-disconnected', 'workbench-empty'];
 const curated = !process.argv.includes('--full') && !process.argv.includes('--only');
 const onlyPatterns = option('--only', '*').split(',').map((pattern) => new RegExp('^' + pattern.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$'));
 try {
@@ -564,6 +565,45 @@ for (const width of widths) {
       nativePlatform: 'unverified', note: 'Fixed workload observations; browser GC/DOM counters are not native CPU/memory or long-duration leak acceptance.' };
   }, false, 'connected');
   await shot('workbench-active-' + theme + '-' + width, theme, width);
+  // The task comes first; the context it will use is a compact summary under it, and the
+  // worktree base, branch and setup command stay folded until they are needed.
+  await shot('workbench-task-dialog-' + theme + '-' + width, theme, width, async (page) => {
+    await page.getByRole('button', { name: copy('新建会话', 'New session'), exact: true }).first().click();
+    const dialog = page.getByRole('dialog', { name: copy('新建工作台会话', 'New workbench session') });
+    await dialog.getByRole('button', { name: copy('工作目录 / 项目', 'Working directory / project'), exact: true }).click();
+    await page.getByRole('option', { name: /栖点/ }).click();
+    await dialog.getByRole('textbox', { name: copy('初始提示词（可选）', 'Initial prompt (optional)') }).fill('feat: 结算流程');
+    await dialog.getByRole('radiogroup', { name: copy('启动位置', 'Start in') }).getByRole('radio', { name: copy('新建工作树', 'New worktree') }).click();
+    await dialog.getByRole('button', { name: new RegExp('^' + copy('高级选项', 'Advanced options')) }).waitFor();
+  });
+  // Four task states from real evidence: an approval screen, a marked round, background work
+  // and a row the user moved out of the way. Nothing here is a completion claim.
+  await shot('workbench-task-states-' + theme + '-' + width, theme, width, async (page) => {
+    const rail = page.getByRole('complementary', { name: copy('会话列表', 'Session list') });
+    await rail.locator('[role="tab"][data-session-id="s2"]').click();
+    await page.evaluate(() => window.__output('s1', '\x1b[2J\x1b[H' + '\r\n'.repeat(40) + [
+      'Would you like to run the following command?',
+      '',
+      '  $ npm run build',
+      '',
+      '\u203a 1. Yes, proceed (y)',
+      '  2. Yes, and do not ask again',
+      '  3. No, and tell Codex what to do differently (esc)',
+    ].join('\r\n')));
+    await page.locator('[data-drag-id="s1"][data-task="needsYou"]').waitFor();
+    const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });
+    const taskMenu = async () => {
+      await stage.getByRole('button', { name: copy('更多终端操作', 'More terminal actions'), exact: true }).click();
+      return page.getByRole('menu', { name: copy('终端操作', 'Terminal actions'), exact: true });
+    };
+    await page.locator('[data-drag-id="s2"] [data-session-id="s2"]').click();
+    await (await taskMenu()).getByRole('menuitem', { name: copy('标记待审阅', 'Mark for review'), exact: true }).click();
+    await page.locator('[data-drag-id="s2"][data-task="readyReview"]').waitFor();
+    await page.locator('[data-drag-id="s4"] [data-session-id="s4"]').click();
+    await (await taskMenu()).getByRole('menuitem', { name: copy('收起为后台', 'Move to background'), exact: true }).click();
+    // A narrow window draws the rail as a horizontal strip, so the section only has to exist.
+    await page.locator('[data-group="collapsed"]').waitFor({ state: 'attached' });
+  });
   await shot('workbench-worktrees-' + theme + '-' + width, theme, width, async (page) => {
     // One git chip in the status line; its menu opens a new session in another checkout.
     const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });
@@ -576,6 +616,9 @@ for (const width of widths) {
     await dialog.getByRole('button', { name: copy('工作目录 / 项目', 'Working directory / project'), exact: true }).click();
     await page.getByRole('option', { name: /栖点/ }).click();
     await dialog.getByRole('radiogroup', { name: copy('启动位置', 'Start in') }).getByRole('radio', { name: copy('新建工作树', 'New worktree') }).click();
+    // The base, branch and setup command are the folded advanced options now.
+    await dialog.getByRole('button', { name: copy('高级选项', 'Advanced options'), exact: true }).click();
+    await dialog.locator('#new-session-advanced').waitFor({ state: 'visible' });
     return dialog;
   };
   // A new worktree: the repository default and its short commit are visible, and the

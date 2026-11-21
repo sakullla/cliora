@@ -397,7 +397,7 @@ test('terminal code loads on demand and an opening request survives the first mo
 async function installWorkbenchMock(page: Page, holdStartup = false) {
   await page.addInitScript((holdStartup) => {
     let language: string | null = null;
-    const bootstrap = () => ({ preferences: { schema_version: 1, managed_tools: ['codex', 'claude_code'], theme: 'light', language, remote_ssh_enabled: holdStartup }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }, { id: 'claude_code', name: 'Claude Code', installation: 'not_checked', configuration: 'not_checked' }] });
+    const bootstrap = () => ({ preferences: { schema_version: 1, managed_tools: ['codex', 'claude_code'], theme: 'light', language, remote_ssh_enabled: (window as unknown as { __sshEnabled?: boolean }).__sshEnabled ?? holdStartup }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }, { id: 'claude_code', name: 'Claude Code', installation: 'not_checked', configuration: 'not_checked' }] });
     let releaseStartup = () => {};
     const startupReady = new Promise<void>((resolve) => { releaseStartup = resolve; });
     const sessions = [{ id: 's1', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', running: true, exitCode: null, startedAt: (window as unknown as { __oldSessions?: boolean }).__oldSessions ? 1 : Date.now() }];
@@ -443,6 +443,8 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
           if (holdStartup && ['list_projects', 'get_launch_settings', 'list_remote_targets', 'list_remote_sessions'].includes(command)) await startupReady;
           if (command === 'get_bootstrap') return bootstrap();
           if (command === 'set_language') { language = args.language; return bootstrap(); }
+          // A Settings toggle changes a launch-relevant prop, so the workbench lists projects again.
+          if (command === 'set_remote_ssh_enabled') { (window as unknown as { __sshEnabled?: boolean }).__sshEnabled = args.enabled; return bootstrap(); }
           if (command === 'set_theme') return { preferences: { schema_version: 1, managed_tools: ['codex', 'claude_code'], theme: args.theme }, tools: [] };
           if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }, { id: 'claude_code', name: 'Claude Code', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }], managedIds: ['codex', 'claude_code'], preservedUnknown: [] };
           if (command === 'get_launch_settings') {
@@ -538,7 +540,12 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
             emit('succeeded', { worktreePath: directory, sessionId: result.sessionId });
             return result;
           }
-          if (command === 'list_projects') return (window as unknown as { __projects?: unknown[] }).__projects ?? [];
+          if (command === 'list_projects') {
+            const harness = window as unknown as { __projects?: unknown[]; __projectReads?: number };
+            harness.__projectReads = (harness.__projectReads ?? 0) + 1;
+            return harness.__projects ?? [];
+          }
+          if (command === 'list_remote_targets') return (window as unknown as { __remoteTargets?: unknown[] }).__remoteTargets ?? [];
           if (command === 'git_worktrees') {
             const harness = window as unknown as { __worktrees?: unknown[]; __worktreeReadFails?: boolean };
             if (harness.__worktreeReadFails) throw new Error('无法读取工作树列表');
@@ -3588,6 +3595,9 @@ test('a new worktree shows its base and is created without blocking other sessio
   // The repository default and its real short commit are visible before any write.
   await expect(dialog.locator('code').filter({ hasText: 'origin/main' })).toBeVisible();
   await expect(dialog.locator('code').filter({ hasText: 'c0ffee1' })).toBeVisible();
+  // Base, branch and the setup command are the folded advanced options; the summary above keeps
+  // the base readable while they are closed.
+  await dialog.getByRole('button', { name: '高级选项' }).click();
   // Base and branch are values edited in place; the default creation needs neither.
   await expect(dialog.getByLabel('基点 ref')).toHaveCount(0);
   await dialog.getByRole('button', { name: '更改基点' }).click();
@@ -3776,9 +3786,12 @@ test('the dialog shows the branch it will create and edits it in place', async (
   await dialog.getByRole('button', { name: '工作目录 / 项目' }).click();
   await page.getByRole('option', { name: /Shop/ }).click();
   await dialog.getByRole('radio', { name: '新建工作树' }).click();
-  // No field is open, yet the branch the creation would use is on screen.
+  // No editor is open, and the base the creation would use is on screen.
   await expect(dialog.getByLabel('基点 ref')).toHaveCount(0);
   await expect(dialog.getByLabel('分支名', { exact: true })).toHaveCount(0);
+  await expect(dialog.locator('code').filter({ hasText: 'origin/main' })).toBeVisible();
+  // Base, branch and setup command are the advanced values; they appear when those options open.
+  await dialog.getByRole('button', { name: '高级选项' }).click();
   const branch = dialog.locator('code[data-source]');
   await expect(branch).toBeVisible();
   await expect(branch).toHaveText('shop');
@@ -4505,4 +4518,174 @@ test('quick input sends a prompt secret reference verbatim without any secret co
   ]);
   expect(await page.evaluate(() => (window as unknown as { __secretCalls: string[] }).__secretCalls)).toEqual([]);
   await expect(composer.getByRole('textbox')).toHaveValue('');
+});
+
+// Task state is shared by the rail, the title bar and the attention jump; it comes only from
+// evidence (an adapter-recognized screen, a verified result, a mark), never from an idle prompt.
+const approvalScreen = [
+  'Would you like to run the following command?',
+  '',
+  '  $ rm -rf build',
+  '',
+  '\u203a 1. Yes, proceed (y)',
+  '  2. Yes, and do not ask again',
+  '  3. No, and tell Codex what to do differently (esc)',
+  '',
+  '  ? for shortcuts',
+].join('\r\n');
+
+async function writeScreen(page: Page, text: string, sessionId = 's1') {
+  await page.evaluate(({ text, sessionId }) => {
+    // Fill the screen so the last rows (what the adapter reads) hold the new content.
+    (window as unknown as { __output: (text: string, sessionId: string) => void }).__output('\x1b[2J\x1b[H' + '\r\n'.repeat(40) + text, sessionId);
+  }, { text, sessionId });
+}
+
+test('a Codex approval screen needs a person and the jump returns to that session', async ({ page }) => {
+  await page.addInitScript(() => Object.assign(window, { __twoSessions: true }));
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const rail = page.getByRole('complementary', { name: '会话列表' });
+  const codexRow = rail.locator('[data-drag-id="s1"]');
+  const claudeRow = rail.locator('[data-drag-id="s2"]');
+  // A CLI without screen evidence keeps the generic unknown state; nothing is invented for it.
+  await expect(claudeRow).toHaveAttribute('data-task', 'unknown');
+  await expect(claudeRow).toHaveAttribute('data-bucket', 'unknown');
+  // Work in the other session so the Codex one is in the background when its screen changes.
+  await claudeRow.getByRole('tab').click();
+  await writeScreen(page, approvalScreen);
+  await expect(codexRow).toHaveAttribute('data-task', 'needsYou');
+  const jump = page.getByRole('button', { name: /等你处理/ });
+  await expect(jump).toHaveCount(1);
+  await jump.click();
+  await expect(rail.locator('[data-drag-id="s1"] [role="tab"]')).toHaveAttribute('aria-selected', 'true');
+  // The jump only locates the task; it never answers the prompt for the user.
+  expect(await page.evaluate(() => (window as unknown as { __writes: string[] }).__writes)).toEqual([]);
+});
+
+test('an idle Codex prompt is unknown instead of a finished round', async ({ page }) => {
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await writeScreen(page, ['Worked for 1m 20s', '', '\u203a Ask Codex to do anything', '', 'gpt-6 \u00b7 cliora', '  ? for shortcuts'].join('\r\n'));
+  const rail = page.getByRole('complementary', { name: '会话列表' });
+  const row = rail.locator('[data-drag-id="s1"]');
+  // The composer is recognized, so the row is not working; no delivery exists, so it is not a review.
+  await expect(row).toHaveAttribute('data-task', 'unknown');
+  await expect(row).toHaveAttribute('data-bucket', 'unknown');
+  await expect(page.getByRole('button', { name: /等你处理/ })).toHaveCount(0);
+});
+
+test('a marked round reviews, and collapsing moves it without ending it', async ({ page }) => {
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const rail = page.getByRole('complementary', { name: '会话列表' });
+  const row = rail.locator('[data-drag-id="s1"]');
+  const stage = page.getByRole('region', { name: '当前会话' });
+  const taskMenu = () => page.getByRole('menu', { name: '终端操作' });
+  // The display actions live with the terminal's own menu, not next to its transport controls.
+  await row.locator('[data-session-id="s1"]').click();
+  await stage.getByRole('button', { name: '更多终端操作' }).click();
+  await taskMenu().getByRole('menuitem', { name: '标记待审阅', exact: true }).click();
+  await expect(row).toHaveAttribute('data-task', 'readyReview');
+  await expect(row).toHaveAttribute('data-bucket', 'review');
+  await expect(page.locator('[data-group="review"]')).toContainText('待审阅');
+  // The process is untouched: the mark is display only.
+  await expect(row).toHaveAttribute('data-running', 'true');
+
+  await stage.getByRole('button', { name: '更多终端操作' }).click();
+  await taskMenu().getByRole('menuitem', { name: '收起为后台', exact: true }).click();
+  await expect(rail.locator('[data-group="review"] [data-drag-id="s1"]')).toHaveCount(0);
+  const collapsed = rail.locator('[data-group="collapsed"]');
+  await expect(collapsed).toContainText('已收起');
+  await expect(collapsed.getByRole('button', { name: /已收起/ })).toHaveAttribute('aria-expanded', 'false');
+  // The terminal still runs and still shows the same session.
+  await expect(page.locator('[data-pane-session="s1"]')).toBeVisible();
+  await collapsed.getByRole('button', { name: /已收起/ }).click();
+  await expect(collapsed.getByRole('button', { name: /已收起/ })).toHaveAttribute('aria-expanded', 'true');
+  await expect(collapsed.locator('[data-drag-id="s1"]')).toHaveCount(1);
+  await expect(collapsed.locator('[data-drag-id="s1"]')).toHaveAttribute('data-task', 'readyReview');
+  await collapsed.locator('[data-session-id="s1"]').click();
+  await stage.getByRole('button', { name: '更多终端操作' }).click();
+  await taskMenu().getByRole('menuitem', { name: '恢复关注', exact: true }).click();
+  await expect(rail.locator('[data-group="collapsed"] [data-drag-id="s1"]')).toHaveCount(0);
+  await expect(rail.locator('[data-group="review"] [data-drag-id="s1"]')).toHaveCount(1);
+});
+
+test('the new-session dialog leads with the task and keeps folded drafts', async ({ page }) => {
+  await page.addInitScript(() => {
+    const project = { id: 'p1', name: 'Shop', path: 'C:/shop', available: true, preferredTool: null, lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {}, workspaceBacked: false };
+    Object.assign(window, { __projects: [project] });
+  });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await page.getByRole('button', { name: '新建会话', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
+  const task = dialog.getByRole('textbox', { name: '初始提示词（可选）' });
+  // The task is the first field: everything it needs is summarized below it.
+  const tools = dialog.getByRole('button', { name: 'CLI 工具' });
+  const taskBox = (await task.boundingBox())!;
+  const toolsBox = (await tools.boundingBox())!;
+  expect(taskBox.y).toBeLessThan(toolsBox.y);
+  await task.fill('feat: 结算流程');
+  await dialog.getByRole('button', { name: '工作目录 / 项目' }).click();
+  await page.getByRole('option', { name: /Shop/ }).click();
+  const advanced = dialog.getByRole('button', { name: '高级选项' });
+  await expect(advanced).toHaveAttribute('aria-expanded', 'false');
+  await expect(dialog.locator('#new-session-advanced')).toBeHidden();
+  // The launch place and its base stay readable while the details are folded.
+  await dialog.getByRole('radiogroup', { name: '启动位置' }).getByRole('radio', { name: /新建工作树/ }).click();
+  await expect(dialog.locator('[data-place-field]')).toContainText('基于');
+  await expect(dialog.locator('#worktree-setup-command')).toBeHidden();
+  await advanced.click();
+  await expect(advanced).toHaveAttribute('aria-expanded', 'true');
+  await dialog.locator('#worktree-setup-command').fill('npm ci');
+  await advanced.click();
+  await expect(dialog.locator('#new-session-advanced')).toBeHidden();
+  await advanced.click();
+  // Folding never loses an edited value.
+  await expect(dialog.locator('#worktree-setup-command')).toHaveValue('npm ci');
+  await expect(task).toHaveValue('feat: 结算流程');
+  // The secondary path opens a terminal with no task at all.
+  await dialog.getByRole('button', { name: '只打开终端' }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __launches: Array<Record<string, unknown>> }).__launches?.length ?? 0)).toBe(1);
+  const launches = await page.evaluate(() => (window as unknown as { __launches: Array<Record<string, unknown>> }).__launches);
+  expect(launches[0].toolId).toBe('codex');
+  expect(launches[0].initialPrompt).toBeUndefined();
+  expect(launches[0].taskText).toBeUndefined();
+});
+
+test('an inherited workspace that is gone is named instead of replaced', async ({ page }) => {
+  await page.addInitScript(() => {
+    const project = { id: 'p1', name: 'Shop', path: 'C:/shop', available: true, preferredTool: null, lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {}, workspaceBacked: false };
+    // The first list read fails, so the retry is a real reload of every list the workbench holds.
+    Object.assign(window, { __projects: [project], __failSessionList: true });
+  });
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('会话列表没有读出来');
+  await page.getByRole('button', { name: '新建会话', exact: true }).first().click();
+  const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
+  await dialog.getByRole('button', { name: '工作目录 / 项目' }).click();
+  await page.getByRole('option', { name: /Shop/ }).click();
+  await dialog.getByRole('button', { name: '取消' }).click();
+  // The project disappears while the workbench stays mounted; the dialog keeps its own value.
+  await page.evaluate(() => {
+    (window as unknown as { __failSessionList: boolean }).__failSessionList = false;
+    // A new array, so the re-read is a new value rather than the one already in state.
+    (window as unknown as { __projects: unknown[] }).__projects = [];
+  });
+  await page.getByRole('button', { name: '重试', exact: true }).click();
+  await page.getByRole('button', { name: '新建会话', exact: true }).first().click();
+  await expect(page.locator('[data-workspace-unavailable]')).toBeVisible();
+  const notice = page.locator('[data-workspace-unavailable]');
+  await expect(notice).toBeVisible();
+  await expect(notice).toContainText('继承的目录已不可用');
+  await expect(notice).toContainText('Shop');
+  // The launch stops and names the choice that needs fixing; it never picks another folder.
+  await expect(dialog.getByRole('button', { name: '启动会话' })).toBeDisabled();
 });

@@ -2149,3 +2149,24 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .root[data-compact] .baseRow { grid-template-columns: 44px minmax(0, 1fr) auto; }
 .root[data-compact] .baseCandidates { padding-left: 0 !important; }
 
+
+/* Task state in the rail. A marked round keeps a quiet badge outside the hover actions. */
+.markBadge { display: inline-flex; flex: none; align-items: center; color: var(--accent); }
+.rowDetail { display: grid; gap: var(--space-1); margin: 0 var(--space-2) var(--space-1_5); padding: var(--space-2) var(--space-2_5); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-2); font-size: var(--fs-caption); line-height: 1.5; }
+.rowDetailText { margin: 0; overflow-wrap: anywhere; }
+.rowDetailText[data-state='unknown'] { color: var(--warning); }
+.rowDetailHint { color: var(--text-3); font-size: var(--fs-micro); overflow-wrap: anywhere; }
+.rowDetailAction { justify-self: start; height: 24px; min-height: 24px; padding: 0 var(--space-2); border: 1px solid var(--line-strong); border-radius: var(--radius-pill); background: var(--surface); color: var(--text-2); font-size: var(--fs-micro); font-weight: var(--fw-medium); box-shadow: none; }
+.rowDetailAction:hover:not(:disabled) { border-color: var(--accent-line); color: var(--accent); box-shadow: none; }
+
+/* Advanced launch options fold away; the values inside them stay in the dialog's state. */
+.advancedRow { display: flex; }
+.advancedToggle { display: flex; flex: 1 1 auto; align-items: center; gap: var(--space-1_5); min-width: 0; padding: var(--space-1) 0; border: 0; background: none; color: var(--text-2); font-size: var(--fs-control); font-weight: var(--fw-semibold); text-align: left; box-shadow: none; }
+.advancedToggle:hover:not(:disabled) { color: var(--accent); box-shadow: none; }
+.advancedToggle small { overflow: hidden; color: var(--text-3); font-size: var(--fs-micro); font-weight: var(--fw-regular); text-overflow: ellipsis; white-space: nowrap; }
+.advancedPanel { display: grid; gap: var(--space-2); }
+.advancedPanel[hidden] { display: none; }
+/* The base a worktree launch will use stays visible while its details are folded. */
+.baseSummary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5); min-width: 0; padding: var(--space-1_5) var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-3); font-size: var(--fs-caption); }
+/* The secondary path opens a terminal with no task, so it sits apart from the primary action. */
+.dialogBlank { margin-right: auto; }

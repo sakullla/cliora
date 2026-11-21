@@ -7,6 +7,7 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { native, nativeAvailable } from '../../lib/native';
 import { uiAdapterFor } from '../../adapters';
+import type { TerminalSemantics } from '../../adapters/contract';
 import { writeClipboard } from '../../lib/clipboard';
 import { contrastFloor, terminalTheme, type TerminalTheme } from './terminalTheme';
 import { registerTerminalLinks, type TerminalLinks } from './terminalLinks';
@@ -311,6 +312,8 @@ export type TerminalBridge = {
   bell: (sessionId: string) => void;
   title: (sessionId: string, title: string) => void;
   outputActive: (sessionId: string, active: boolean) => void;
+  /** The adapter's own read of the current screen, or null when it recognizes nothing. */
+  semantics: (sessionId: string, value: TerminalSemantics | null) => void;
   outputWritten: (sessionId: string) => void;
   shortcut: (action: ShortcutAction) => void;
   canSwitch: () => boolean;
@@ -465,12 +468,14 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
     let liveStreaming = false;
     let liveTimer = 0;
     const activity = uiAdapterFor(toolId).terminalActivity;
+    const semantics = uiAdapterFor(toolId).terminalSemantics;
     let terminalTitle = '';
     let knownActivity: boolean | null = null;
     let pendingLiveOutput = false;
     let lastScreen = '';
     let activityTimer = 0;
     let publishedTitle = '';
+    let publishedSemantics = '';
     // Stream offset past the newest byte already written. Live events and the replay
     // overlap around mount; offsets let each byte reach xterm exactly once.
     let streamEnd: number | null = null;
@@ -862,8 +867,17 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       const previousActivity = knownActivity;
       // Only CLI-specific footer readers need these rows. Known states never
       // allocate a copy of the full viewport or inspect the scrollback buffer.
-      const footer = activity ? Array.from({ length: Math.min(term.rows, 12) }, (_, row) => buffer.getLine(buffer.baseY + Math.max(0, term.rows - 12) + row)?.translateToString(true) ?? '') : [];
+      const footer = activity || semantics ? Array.from({ length: Math.min(term.rows, 12) }, (_, row) => buffer.getLine(buffer.baseY + Math.max(0, term.rows - 12) + row)?.translateToString(true) ?? '') : [];
       knownActivity = activity?.({ title: terminalTitle, lines: footer }) ?? null;
+      if (semantics) {
+        const read = semantics({ title: terminalTitle, lines: footer });
+        // Publish changed evidence only: an identical repaint is not a new screen.
+        const key = read ? [read.attention ?? '', read.inputReady ?? '', read.screenKey ?? ''].join('|') : 'none';
+        if (key !== publishedSemantics) {
+          publishedSemantics = key;
+          if (!disposed) bridge.current.semantics(sessionId, read);
+        }
+      }
       if (knownActivity !== null || !runningRef.current) {
         lastScreen = '';
         window.clearTimeout(liveTimer);
@@ -1157,6 +1171,8 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       window.clearTimeout(gridTimer);
       disposed = true;
       lastScreen = '';
+      // The screen this evidence described is gone; the workbench must not keep it.
+      if (semantics) bridge.current.semantics(sessionId, null);
       ime.dispose();
       if (imeRef.current === ime) imeRef.current = null;
       replies.dispose();
