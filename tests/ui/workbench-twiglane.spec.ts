@@ -9,8 +9,8 @@ const NEXT = '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d';
  * reviewId rules as the Rust registry (only the latest review of a session is
  * accepted) and records every call the tests assert on.
  */
-async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair' | 'remote'; tool?: 'claude_code' | 'codex'; replay?: string; ended?: boolean } = {}) {
-  await page.addInitScript(({ base, pairing, tool, replay, ended }) => {
+async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair' | 'remote'; tool?: 'claude_code' | 'codex'; replay?: string; ended?: boolean; resume?: 'available' | 'unsupported' } = {}) {
+  await page.addInitScript(({ base, pairing, tool, replay, ended, resume }) => {
     type Review = {
       reviewId: string;
       sessionId: string;
@@ -94,7 +94,9 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
           if (command === 'list_remote_projects') return pairingRemote
             ? [{ id: 'p1', targetId: 'r1', name: 'alpha', path: '/srv/alpha', preferredTool: null, updatedAt: 1 }]
             : [];
-          if (command === 'list_cli_adapters') return { registered: Object.entries(names).map(([id, name]) => ({ id, name, interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } })), managedIds: Object.keys(names), preservedUnknown: [] };
+          // resume/history 端口就是「会话横幅能恢复」的依据；resume 为 unsupported 的 CLI（如 cursor 一类的
+          // 通用 CLI）只能重启新会话，界面不该提示去点不存在的恢复入口。
+          if (command === 'list_cli_adapters') return { registered: Object.entries(names).map(([id, name]) => ({ id, name, interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: resume, reason: resume === 'available' ? '' : '这个 CLI 没有可恢复的原会话记录' }, resources: { state: 'available', reason: '' }, history: { state: resume, reason: resume === 'available' ? '' : '这个 CLI 没有可恢复的原会话记录' } })), managedIds: Object.keys(names), preservedUnknown: [] };
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions') return harness.sessionClosed ? [] : sessions.map((item) => ({ ...item }));
@@ -246,7 +248,7 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
         },
       },
     });
-  }, { base: BASE, pairing: options.sessions ?? 'single', tool: options.tool ?? 'claude_code', replay: options.replay ?? 'ready', ended: options.ended === true });
+  }, { base: BASE, pairing: options.sessions ?? 'single', tool: options.tool ?? 'claude_code', replay: options.replay ?? 'ready', ended: options.ended === true, resume: options.resume ?? 'available' });
 }
 
 async function openWorkbench(page: Page) {
@@ -945,6 +947,33 @@ test('a restored session keeps the batch preview and sends only after a second c
   expect(result.feedbackSends).toEqual(['8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1']);
   expect(result.feedbackTargets).toEqual(['s1b']);
   expect(result.restoreCalls).toEqual(['s1']);
+  await expectNoSessionOrGitWrite(page);
+});
+
+test('an ended session whose CLI cannot resume is never pointed at a missing resume button', async ({ page }) => {
+  // 这个适配器声明 resume/history 不可用：会话横幅只有「重启会话」，根本没有恢复入口。
+  await installDesktop(page, { tool: 'codex', replay: CODEZ_COMPOSER, ended: true, resume: 'unsupported' });
+  await openWorkbench(page);
+  await page.evaluate((preview) => (window as unknown as { __setFeedback: (value: unknown) => void }).__setFeedback(preview), feedbackPreview());
+  await page.evaluate((url) => (window as unknown as { __emitDeepLink: (value: string) => void }).__emitDeepLink(url), FEEDBACK_LINK);
+
+  const panel = page.getByRole('region', { name: 'Twiglane 审阅意见' });
+  await expect(panel).toBeVisible();
+  // 页面上没有恢复按钮，提示也绝不指向它：只说这批意见只能复制、回原任务继续。
+  await expect(page.getByRole('button', { name: '恢复会话', exact: true })).toHaveCount(0);
+  await expect(panel).toContainText('原会话已经结束，Codex 不支持从工作台恢复');
+  await expect(panel).toContainText('只能复制');
+  await expect(panel).not.toContainText('恢复会话');
+  await expect(panel.getByRole('button', { name: '发送到终端', exact: true })).toHaveCount(0);
+
+  // 复制入口仍然可用，并且复制不会触发发送、恢复或任何会话写入。
+  const copy = panel.getByRole('button', { name: '复制意见', exact: true });
+  await expect(copy).toBeEnabled();
+  await copy.click();
+  await expect(page.getByText(/已复制意见|没有复制成功/).first()).toBeVisible();
+  const state = await page.evaluate(() => (window as unknown as { __harness: { feedbackSends: string[]; restoreCalls: string[] } }).__harness);
+  expect(state.feedbackSends).toEqual([]);
+  expect(state.restoreCalls).toEqual([]);
   await expectNoSessionOrGitWrite(page);
 });
 

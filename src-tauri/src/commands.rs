@@ -4164,9 +4164,11 @@ pub async fn twiglane_feedback_send(
             state.feedback.finish_send(&feedback_id, false);
             return Err(feedback::api_error("feedback_write_failed"));
         }
-        let preview = state.feedback.finish_send(&feedback_id, true)
-            .ok_or_else(|| feedback::api_error("feedback_unknown"))?;
-        Ok(feedback::FeedbackSendOutcome { feedback_id, session_id: target, state: preview.state })
+        // PTY 写入已经发生：即使条目刚被并发取消清掉，也不能反过来说"没有这批暂存"。
+        let state_text = state.feedback.finish_send(&feedback_id, true)
+            .map(|preview| preview.state)
+            .unwrap_or_else(|| feedback::STATE_WRITTEN.to_string());
+        Ok(feedback::FeedbackSendOutcome { feedback_id, session_id: target, state: state_text })
     })
     .await
 }

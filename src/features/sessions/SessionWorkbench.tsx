@@ -2614,13 +2614,30 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     return semantics?.inputReady === true && semantics.attention == null;
   }
 
+  /**
+   * 会话横幅里「恢复会话」按钮的真实条件：适配器同时发布了 resume 与 history 端口，并且这不是
+   * 远程会话（远程会话的进程在另一台机器上，本机没有可恢复记录）。提示文案复用同一判断，
+   * 这样界面不会把用户指向一个不存在的按钮。
+   */
+  function sessionResumable(session: WorkbenchSession): boolean {
+    if (session.projectId?.startsWith('remote:')) return false;
+    return tools.some((tool) => tool.id === session.toolId && tool.resume?.state === 'available' && tool.history?.state === 'available');
+  }
+
   /** 已结束或已离开工作台的会话仍保留预览与复制；是否可写由 feedbackCanSend 单独判定。 */
   function feedbackHint(preview: TwiglaneFeedbackPreview, session: WorkbenchSession | null, onTarget: boolean): string {
+    // 目标会话已经不在工作台里（可能已关闭或属于别的窗口）：此时连 CLI 都查不到，不指向任何
+    // 按钮，只说这批意见能做什么。
     if (!session) return t('sessions.feedbackDetached');
     // 远程会话不在本机 PTY 里，原因是远程而不是"界面不可输入"。
     if (session.projectId?.startsWith('remote:')) return t('sessions.feedbackRemoteCopy');
     if (!onTarget) return t('sessions.feedbackOtherWindow');
-    if (!session.running) return t('sessions.feedbackNeedsRestore');
+    // 已结束：只有真的能恢复时才提恢复入口；否则让用户回原任务手动继续。
+    if (!session.running) {
+      return sessionResumable(session)
+        ? t('sessions.feedbackNeedsRestore')
+        : t('sessions.feedbackEndedNoResume', { tool: toolName(session) });
+    }
     return feedbackCanSend(preview, session) ? '' : t('sessions.feedbackNeedsReady');
   }
 
@@ -3924,11 +3941,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                         : feedback.state === 'prepared'
                           ? <Button size="sm" disabled={feedbackBusy} aria-label={t('sessions.feedbackCopy')} onClick={() => copyFeedback(feedback)}>{t('sessions.feedbackCopy')}</Button>
                           : null}
-                      {feedback.state === 'sending' && <span className={styles.feedbackHint} role="status">{t('sessions.feedbackSending')}</span>}
+                      {/* 界面本身不产生 sending（原生在锁内占用批次），所以进行中的提示跟随本地 busy：
+                          它只说明这次请求还没回来，不声称停在哪一步。 */}
+                      {feedbackBusy && <span className={styles.feedbackHint} role="status">{t('sessions.feedbackSending')}</span>}
                       {feedback.state === 'written' && <span className={styles.feedbackHint} role="status">{t('sessions.feedbackSentHint')}</span>}
                       {feedback.state === 'uncertain' && <span className={styles.feedbackHint} role="status">{t('sessions.feedbackSendUncertain')}</span>}
                       {(feedback.state === 'written' || feedback.state === 'uncertain') && <Button size="sm" variant="ghost" aria-label={t('sessions.feedbackCopy')} onClick={() => copyFeedback(feedback)}>{t('sessions.feedbackCopy')}</Button>}
-                      <Button size="sm" variant="ghost" aria-label={t('sessions.feedbackClose')} onClick={() => void dismissFeedback(feedback)}>{t('sessions.feedbackClose')}</Button>
+                      {/* 请求在飞时不能取消暂存：条目已经被原生占用，删除会让结果无法落地。 */}
+                      <Button size="sm" variant="ghost" disabled={feedbackBusy} aria-label={t('sessions.feedbackClose')} onClick={() => void dismissFeedback(feedback)}>{t('sessions.feedbackClose')}</Button>
                     </div>
                   </header>
                   {feedback.state === 'prepared' && hint && <p className={styles.feedbackHint}>{hint}</p>}
@@ -3986,7 +4006,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   const failed = !session.running && session.exitCode != null && session.exitCode !== 0;
                   const remotePane = session.projectId?.startsWith('remote:') ? session.projectId : undefined;
                   // 适配器只在支持该能力时才带对应端口；缺少 resume 端口不能让整个工作台崩掉。
-                  const canResume = !remotePane && tools.some(tool => tool.id === session.toolId && tool.resume?.state === 'available' && tool.history?.state === 'available');
+                  const canResume = sessionResumable(session);
                   // Clipboard files use the same queue; local sessions retain staged files.
                   const peeking = peekSessionId === session.id;
                   return <SessionTerminal key={session.id} sessionId={session.id} toolId={session.toolId} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} suspendInput={!!peekSession && session.id === selectedId} peeking={peeking} keepRendererWarm={renderActive && scopedSessionIds.has(session.id)} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onFilesPaste={(inputs) => uploads.enqueueUpload(session.id, remotePane || null, inputs)} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={TERMINAL_LINE_HEIGHT[density]} scrollSpeed={scrollSpeed} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
