@@ -286,7 +286,7 @@ export function checkEvidenceConsistency({ docPath = path.join(ROOT, EVIDENCE_DO
     // Only the per-target matrix starts a row with a stable tool id.
     .filter(cells => cells.length >= 3 && /^[a-z0-9_]+$/.test(cells[0]));
   expect(rows.length > 0, '验收文档缺少逐目标矩阵');
-  const statuses = rows.map(cells => ({ tool: cells[0], mapping: cells[1], status: cells[cells.length - 1] }));
+  const statuses = rows.map(cells => ({ tool: cells[0], mapping: cells[1].replace(/^`+|`+$/g, ''), status: cells[cells.length - 1] }));
   const allowed = new Set(['verified', 'unverified', 'not-installed', 'unsupported', 'not-run']);
   for (const row of statuses) {
     expect(allowed.has(row.status), `${row.tool} 的状态不是约定取值：${row.status}`);
@@ -302,7 +302,7 @@ export function checkEvidenceConsistency({ docPath = path.join(ROOT, EVIDENCE_DO
   for (const [index, record] of recorded.entries()) {
     expect(record.tool, `第 ${index + 1} 条验收记录缺少 tool_id`);
     expect(record.mapping, `已记录的验收目标缺少 mapping：${record.tool}`);
-    expect(record.evidence && record.evidence.startsWith('docs/verification/'), `已记录的验收目标证据不在 docs/verification/ 下：${record.tool}`);
+    expect(record.evidence && record.evidence.startsWith('docs/verification/') && record.evidence.includes('#'), `已记录的验收目标证据不是 docs/verification/ 下的锚点：${record.tool}`);
     expect(/^\d{4}-\d{2}-\d{2}$/.test(record.recordedAt ?? ''), `已记录的验收目标日期不是 YYYY-MM-DD：${record.tool}`);
     const row = statuses.find(entry => entry.tool === record.tool);
     expect(row, `已记录的验收目标缺少文档行：${record.tool}`);
@@ -363,8 +363,8 @@ export function validateLivePlan(plan, canary) {
     expect(Array.isArray(target.printCommand) && target.printCommand.length > 0, `${target.toolId}: printCommand 必须是可执行文件加参数`);
     expect(target.printCommand.every(value => typeof value === 'string' && value), `${target.toolId}: printCommand 只能包含字符串`);
     expect(Array.isArray(target.versionCommand ?? []) && (target.versionCommand ?? []).every(value => typeof value === 'string'), `${target.toolId}: versionCommand 只能包含字符串`);
-    if (target.mcpConfigPath !== undefined) expect(path.isAbsolute(target.mcpConfigPath), `${target.toolId}: mcpConfigPath 需为绝对路径`);
-    if (target.mcpEntryName !== undefined) expect(typeof target.mcpEntryName === 'string' && target.mcpEntryName, `${target.toolId}: mcpEntryName 不能为空`);
+    expect(typeof target.mcpConfigPath === 'string' && path.isAbsolute(target.mcpConfigPath), `${target.toolId}: mcpConfigPath 需为绝对路径`);
+    expect(typeof target.mcpEntryName === 'string' && target.mcpEntryName, `${target.toolId}: mcpEntryName 不能为空`);
   }
   return plan;
 }
@@ -437,7 +437,7 @@ function protocolProbe(helper, installationId, canary, timeout = 20000) {
 
 function configObservation(target, plan, canary) {
   if (!target.mcpConfigPath || !target.mcpEntryName) {
-    return { written: null, detail: '未提供原生配置路径；映射由适配器写入，脚本不复制映射' };
+    return { written: false, detail: '计划缺少原生配置路径或条目名，不能证明写入' };
   }
   let text;
   try { text = readFileSync(target.mcpConfigPath, 'utf8'); } catch (error) {
@@ -448,24 +448,32 @@ function configObservation(target, plan, canary) {
   return { written, detail: written ? '原生条目已写入，只有 helper 与安装标识' : '原生条目缺失或与计划不一致' };
 }
 
+function runtimePlatform() {
+  return `${process.platform === 'darwin' ? 'macos' : process.platform}-${process.arch}`;
+}
+
 async function liveTarget(target, plan, canary) {
+  const platform = runtimePlatform();
   const result = {
     toolId: target.toolId,
     status: 'unverified',
     installed: null,
     cliVersion: '',
-    configWritten: null,
+    configWritten: false,
     initialize: false,
     toolsList: [],
     modelUse: false,
     cliFallback: false,
     valueDelivered: null,
     masked: null,
-    platform: target.platform ?? `${process.platform}-${process.arch}`,
+    platform,
     reason: '',
     evidence: EVIDENCE_DOC,
   };
   const reasons = [];
+  if (target.platform && target.platform !== platform) {
+    reasons.push(`计划声明的平台 ${target.platform} 与运行平台 ${platform} 不一致`);
+  }
   const versionCommand = target.versionCommand?.length ? target.versionCommand : null;
   if (versionCommand) {
     const version = await runCommand(versionCommand, { timeout: 20000 });
@@ -500,9 +508,12 @@ async function liveTarget(target, plan, canary) {
   const modelText = `${model.stdout}${model.stderr}`;
   if (modelText.includes(canary)) reasons.push('模型可见输出出现了合成值');
   const sentinel = fixtureMetadata().expected.executorSentinel;
-  result.modelUse = modelText.includes(sentinel);
-  if (!result.modelUse) reasons.push('模型可见输出没有执行入口哨兵，工具调用未完成');
-  result.masked = modelText.includes(fixtureMetadata().expected.maskedMarker);
+  const maskedMarker = fixtureMetadata().expected.maskedMarker;
+  result.masked = modelText.includes(maskedMarker);
+  // A prompt that names the sentinel could be echoed without any tool call, so the
+  // same model-visible text must carry the broker's masking marker too.
+  result.modelUse = modelText.includes(sentinel) && result.masked;
+  if (!result.modelUse) reasons.push('模型可见输出缺少执行入口哨兵或遮蔽标记，工具调用未完成');
   if (plan.receiptPath) result.valueDelivered = receiptMatches(plan.receiptPath, canary);
   else if (result.modelUse) reasons.push('未提供 receiptPath，执行入口是否收到原值未验证');
   if (result.valueDelivered === false) reasons.push('执行入口回执与计划中的合成值不一致');
@@ -529,7 +540,7 @@ async function liveTarget(target, plan, canary) {
   result.reason = reasons.join('；');
   // Any recorded gap, including a value that reached model-visible text, keeps the
   // target out of `verified`; a shorter success cannot override it.
-  const complete = result.installed === true && protocol.ok && result.modelUse && result.cliFallback && result.valueDelivered !== false && result.configWritten !== false && result.masked === true;
+  const complete = result.installed === true && protocol.ok && result.modelUse && result.cliFallback && result.valueDelivered === true && result.configWritten === true && result.masked === true;
   result.status = complete && reasons.length === 0 ? 'verified' : 'failed';
   return result;
 }
@@ -568,7 +579,7 @@ export async function verifyLive(environment = process.env) {
   const targets = [];
   for (const target of selected) targets.push(await liveTarget(target, plan, canary));
   for (const target of skipped) {
-    targets.push({ toolId: target.toolId, status: 'not-run', installed: null, cliVersion: '', configWritten: null, initialize: false, toolsList: [], modelUse: false, cliFallback: false, valueDelivered: null, masked: null, platform: target.platform ?? `${process.platform}-${process.arch}`, reason: `不在 ${TOOLS_ENV} 里，本次未运行`, evidence: EVIDENCE_DOC });
+    targets.push({ toolId: target.toolId, status: 'not-run', installed: null, cliVersion: '', configWritten: false, initialize: false, toolsList: [], modelUse: false, cliFallback: false, valueDelivered: null, masked: null, platform: runtimePlatform(), reason: `不在 ${TOOLS_ENV} 里，本次未运行`, evidence: EVIDENCE_DOC });
   }
   const documentValue = document('live', [
     { id: 'live-plan', status: 'passed', detail: `${targets.length} 个目标，计划完成校验` },
@@ -601,6 +612,12 @@ function print(documentValue) {
 }
 
 async function main() {
+  const unknown = process.argv.slice(2).filter(value => value !== '--live' && value !== '--json');
+  if (unknown.length) {
+    console.error(`secret access: 未知参数 ${unknown.join(' ')}；只接受 --live 和 --json`);
+    process.exitCode = 2;
+    return;
+  }
   const live = process.argv.includes('--live');
   if (live) {
     const result = await verifyLive();

@@ -102,6 +102,7 @@ impl CliAdapter for Codex {
         Some(self)
     }
     fn supports_mcp(&self) -> bool { true }
+    fn secret_mcp_mapping(&self) -> Option<&'static str> { Some(".codex/config.toml#mcp_servers") }
     fn supports_skills(&self) -> bool { true }
     fn official_usage(&self) -> Option<&dyn crate::adapters::official::OfficialUsageAdapter> {
         Some(self)

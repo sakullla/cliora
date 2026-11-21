@@ -21,7 +21,13 @@ const plan = {
   installationId: '4c2f8c9e-6b1a-4c44-9d5b-6f0a2b7c1234',
   secretId: '11111111-2222-4333-8444-555555555555',
   executorId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
-  targets: [{ toolId: 'claude_code', printCommand: ['claude', '-p'], printStdin: true }],
+  targets: [{
+    toolId: 'claude_code',
+    printCommand: ['claude', '-p'],
+    printStdin: true,
+    mcpConfigPath: '/tmp/cliora-live/.claude.json',
+    mcpEntryName: 'cliora-secrets-claude_code',
+  }],
 };
 
 test('the offline verification passes without a CLI or a model', async () => {
@@ -48,6 +54,11 @@ test('a live plan is refused unless it names synthetic values and real commands'
   assert.throws(() => validateLivePlan({ ...plan, targets: [] }, CANARY), /没有目标/);
   assert.throws(() => validateLivePlan({ ...plan, targets: [{ toolId: 'claude_code' }] }, CANARY), /printCommand/);
   assert.throws(() => validateLivePlan({ ...plan, targets: [{ toolId: 'claude_code', printCommand: [], }] }, CANARY), /printCommand/);
+  // A target without the native config path cannot prove the mapping was written.
+  const target = plan.targets[0];
+  assert.throws(() => validateLivePlan({ ...plan, targets: [{ ...target, mcpConfigPath: undefined }] }, CANARY), /mcpConfigPath/);
+  assert.throws(() => validateLivePlan({ ...plan, targets: [{ ...target, mcpConfigPath: 'relative/config.toml' }] }, CANARY), /mcpConfigPath/);
+  assert.throws(() => validateLivePlan({ ...plan, targets: [{ ...target, mcpEntryName: '' }] }, CANARY), /mcpEntryName/);
 });
 
 const HEADER = '| 目标 | 映射 | 协议 | 模型 | 回退 | 平台 | 状态 |\n| --- | --- | --- | --- | --- | --- | --- |\n';
@@ -57,7 +68,7 @@ const record = (fields = {}) => {
     tool_id: 'claude_code',
     mapping: '.claude.json#mcpServers',
     recorded_at: '2026-11-21',
-    evidence: 'docs/verification/secret-access.md',
+    evidence: 'docs/verification/secret-access.md#claude_code-2026-11-21',
     ...fields,
   };
   const body = Object.entries(values).map(([key, value]) => `        ${key}: "${value}",`).join('\n');
@@ -97,7 +108,7 @@ test('a record is only trusted when it names the mapping the document lists', ()
   writeFileSync(gatePath, record({ recorded_at: '2026/11/21' }));
   assert.throws(() => checkEvidenceConsistency({ docPath, gatePath }), /日期不是 YYYY-MM-DD/);
   writeFileSync(gatePath, record({ evidence: 'README.md' }));
-  assert.throws(() => checkEvidenceConsistency({ docPath, gatePath }), /证据不在 docs\/verification\//);
+  assert.throws(() => checkEvidenceConsistency({ docPath, gatePath }), /证据不是 docs\/verification\//);
 });
 
 test('the CLI fallback command is taken from the documented text, never guessed', () => {

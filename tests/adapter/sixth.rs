@@ -573,19 +573,32 @@ fn management_descriptors_follow_adapter_ports_and_default_to_absent() {
             crate::adapters::secret_access::published(
                 crate::adapters::secret_access::ACCEPTANCES,
                 adapter.supports_mcp(),
+                adapter.secret_mcp_mapping(),
                 adapter.id(),
             ),
             "{}: secret MCP capability disagrees with its acceptance record",
             adapter.id()
         );
-        // No live acceptance is recorded today, so nothing may publish support.
-        assert!(!secret_mcp.is_supported(), "{}: a live acceptance would be needed to publish support", adapter.id());
-        if adapter.supports_mcp() {
-            assert_eq!(secret_mcp.state, "unverified", "{}", adapter.id());
-            assert_eq!(secret_mcp.reason, crate::adapters::SECRET_MCP_UNVERIFIED_REASON);
-        } else {
-            assert_eq!(secret_mcp.state, "unsupported", "{}", adapter.id());
-            assert_eq!(secret_mcp.reason, crate::adapters::SECRET_MCP_UNSUPPORTED_REASON);
+        // Only an adapter with a matching complete record publishes support; every
+        // other target keeps the CLI fallback.
+        let recorded = crate::adapters::secret_access::ACCEPTANCES
+            .iter()
+            .find(|record| record.tool_id == adapter.id());
+        match recorded {
+            Some(record) => {
+                assert_eq!(adapter.secret_mcp_mapping(), Some(record.mapping), "{}: mapping label disagrees", adapter.id());
+                assert!(secret_mcp.is_supported(), "{}: a complete record should publish support", adapter.id());
+            }
+            None => {
+                assert!(!secret_mcp.is_supported(), "{}: a live acceptance would be needed to publish support", adapter.id());
+                if adapter.supports_mcp() {
+                    assert_eq!(secret_mcp.state, "unverified", "{}", adapter.id());
+                    assert_eq!(secret_mcp.reason, crate::adapters::SECRET_MCP_UNVERIFIED_REASON);
+                } else {
+                    assert_eq!(secret_mcp.state, "unsupported", "{}", adapter.id());
+                    assert_eq!(secret_mcp.reason, crate::adapters::SECRET_MCP_UNSUPPORTED_REASON);
+                }
+            }
         }
     }
     assert!(!registry.get("grok").unwrap().descriptor().management.accounts);
@@ -624,25 +637,29 @@ fn secret_mcp_support_requires_a_complete_acceptance_record() {
     let unverified = SecretMcpCapability::unverified(SECRET_MCP_UNVERIFIED_REASON);
     // A configuration mapping alone never publishes support, and a record for a CLI
     // without a mapping cannot publish it either.
-    assert_eq!(secret_access::published(&[], true, record.tool_id), unverified);
-    assert_eq!(secret_access::published(&[record], false, record.tool_id), SecretMcpCapability::unsupported(SECRET_MCP_UNSUPPORTED_REASON));
-    // A complete record is the only route to `supported`.
-    assert!(secret_access::published(&[record], true, record.tool_id).is_supported());
-    // A record for another target does not carry over.
-    assert_eq!(secret_access::published(&[record], true, "another_target"), unverified);
+    assert_eq!(secret_access::published(&[], true, Some(record.mapping), record.tool_id), unverified);
+    assert_eq!(secret_access::published(&[record], false, Some(record.mapping), record.tool_id), SecretMcpCapability::unsupported(SECRET_MCP_UNSUPPORTED_REASON));
+    // A complete record for the same mapping is the only route to `supported`.
+    assert!(secret_access::published(&[record], true, Some(record.mapping), record.tool_id).is_supported());
+    // A changed or undeclared mapping, or a record for another target, does not carry over.
+    assert_eq!(secret_access::published(&[record], true, None, record.tool_id), unverified);
+    assert_eq!(secret_access::published(&[record], true, Some("another.json#mcpServers"), record.tool_id), unverified);
+    assert_eq!(secret_access::published(&[record], true, Some(record.mapping), "another_target"), unverified);
 
     // Each placeholder below is an unobserved fact, so none may publish support.
-    let placeholders: [SecretMcpAcceptance; 7] = [
+    let placeholders: [SecretMcpAcceptance; 9] = [
         SecretMcpAcceptance { recorded_at: "", ..record },
         SecretMcpAcceptance { recorded_at: "2026-13-45", ..record },
         SecretMcpAcceptance { recorded_at: "2026-11-32", ..record },
+        SecretMcpAcceptance { recorded_at: "2026-02-30", ..record },
+        SecretMcpAcceptance { recorded_at: "1999-12-31", ..record },
         SecretMcpAcceptance { protocol: "", ..record },
         SecretMcpAcceptance { model_use: "  ", ..record },
         SecretMcpAcceptance { cli_fallback: "", ..record },
         SecretMcpAcceptance { evidence: "tests/fixtures/secret-access/synthetic-metadata.json", ..record },
     ];
     for placeholder in placeholders {
-        assert_eq!(secret_access::published(&[placeholder], true, record.tool_id), unverified, "{placeholder:?}");
+        assert_eq!(secret_access::published(&[placeholder], true, Some(record.mapping), record.tool_id), unverified, "{placeholder:?}");
     }
 
     // Every shipped record has to name a registered adapter, a mapping label and an
@@ -654,11 +671,15 @@ fn secret_mcp_support_requires_a_complete_acceptance_record() {
         let adapter = registry.get(recorded.tool_id).unwrap_or_else(|| panic!("{}: acceptance names an unregistered target", recorded.tool_id));
         assert!(adapter.supports_mcp(), "{}: acceptance names a CLI without an MCP mapping", recorded.tool_id);
         assert!(!recorded.mapping.trim().is_empty(), "{}: acceptance needs the mapping it covered", recorded.tool_id);
-        assert!(recorded.evidence.starts_with("docs/verification/"), "{}: evidence must live under docs/verification", recorded.tool_id);
+        assert_eq!(adapter.secret_mcp_mapping(), Some(recorded.mapping), "{}: the adapter must declare the recorded mapping", recorded.tool_id);
+        assert!(recorded.evidence.starts_with("docs/verification/") && recorded.evidence.contains('#'), "{}: evidence must be an anchor under docs/verification", recorded.tool_id);
     }
-    // Nothing is recorded yet, so no shipped adapter publishes support.
-    assert!(secret_access::ACCEPTANCES.is_empty());
-    assert!(registry.iter().all(|adapter| !adapter.secret_mcp_capability().is_supported()));
+    // Every shipped adapter either has a complete record and publishes support, or
+    // keeps the CLI fallback.
+    for adapter in registry.iter() {
+        let recorded = secret_access::ACCEPTANCES.iter().any(|record| record.tool_id == adapter.id());
+        assert_eq!(adapter.secret_mcp_capability().is_supported(), recorded, "{}", adapter.id());
+    }
 }
 
 #[test]
@@ -676,7 +697,7 @@ fn the_verification_document_lists_exactly_the_targets_that_declare_a_mapping() 
         // Only per-target rows start with an adapter id.
         if cells.len() < 3 || !cells[0].chars().all(|value| value.is_ascii_lowercase() || value.is_ascii_digit() || value == '_') { continue; }
         let tool = cells[0].to_owned();
-        let mapping = cells[1].to_owned();
+        let mapping = cells[1].trim_matches('`').to_owned();
         let status = cells[cells.len() - 1].to_owned();
         assert!(!mapping.is_empty() && mapping != "—", "{tool}: 配置映射列不能为空");
         assert!(
@@ -692,14 +713,18 @@ fn the_verification_document_lists_exactly_the_targets_that_declare_a_mapping() 
     let mut listed: Vec<String> = documented.iter().map(|(tool, _, _)| tool.clone()).collect();
     listed.sort();
     assert_eq!(listed, declared, "验收文档的目标集合必须与声明 MCP 映射的适配器一致");
-    // No recorded pass means no row may claim one, and every shipped adapter keeps
-    // the CLI fallback instead.
-    assert!(crate::adapters::secret_access::ACCEPTANCES.is_empty());
-    assert!(documented.iter().all(|(tool, _, status)| {
-        assert_ne!(status, "verified", "{tool}: 没有验收记录时文档不能标为 verified");
-        true
-    }));
-    assert!(registry.iter().all(|adapter| !adapter.secret_mcp_capability().is_supported()));
+    // A `verified` row needs a record that names the same mapping, and a record
+    // needs a `verified` row. Nothing else may claim a live pass.
+    for (tool, mapping, status) in &documented {
+        let record = crate::adapters::secret_access::ACCEPTANCES.iter().find(|record| record.tool_id == *tool);
+        if status == "verified" {
+            let record = record.unwrap_or_else(|| panic!("{tool}: verified without an acceptance record"));
+            assert_eq!(&record.mapping, mapping, "{tool}: 文档映射与验收记录不一致");
+        } else {
+            assert!(record.is_none(), "{tool}: recorded acceptance must be verified in the document");
+        }
+    }
+    assert!(documented.iter().any(|(tool, _, status)| tool == "codex" && status == "verified"));
 }
 
 #[test]

@@ -48,21 +48,41 @@ pub struct SecretMcpAcceptance {
     pub evidence: &'static str,
 }
 
+/// A real calendar date. Shape checks alone accept `2026-13-45`, which would let
+/// an unrecorded placeholder publish support.
+fn valid_date(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    if bytes.len() != 10
+        || !bytes.iter().enumerate().all(|(index, byte)| match index {
+            4 | 7 => *byte == b'-',
+            _ => byte.is_ascii_digit(),
+        })
+    {
+        return false;
+    }
+    let (Ok(year), Ok(month), Ok(day)) =
+        (text[0..4].parse::<u32>(), text[5..7].parse::<u32>(), text[8..10].parse::<u32>())
+    else {
+        return false;
+    };
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (2020..=2100).contains(&year) && (1..=days).contains(&day)
+}
+
 impl SecretMcpAcceptance {
     /// A record publishes support only when every fact was observed. A placeholder
     /// date, an unrecorded tool call or a missing evidence anchor keeps the target
     /// unverified, which is why the gate checks completeness instead of trusting an
     /// entry that merely exists.
     fn is_complete(self) -> bool {
-        let date = self.recorded_at.as_bytes();
-        let day = |slice: &[u8]| std::str::from_utf8(slice).ok().and_then(|text| text.parse::<u8>().ok());
-        date.len() == 10
-            && date.iter().enumerate().all(|(index, byte)| match index {
-                4 | 7 => *byte == b'-',
-                _ => byte.is_ascii_digit(),
-            })
-            && day(&date[5..7]).is_some_and(|month| (1..=12).contains(&month))
-            && day(&date[8..10]).is_some_and(|value| (1..=31).contains(&value))
+        valid_date(self.recorded_at)
             && !self.tool_id.trim().is_empty()
             && !self.mapping.trim().is_empty()
             && !self.platform.trim().is_empty()
@@ -71,28 +91,41 @@ impl SecretMcpAcceptance {
             && !self.model_use.trim().is_empty()
             && !self.cli_fallback.trim().is_empty()
             && self.evidence.starts_with("docs/verification/")
-            && self.evidence.len() > "docs/verification/".len()
+            && self.evidence.contains('#')
     }
 }
 
-/// Accepted targets. Empty means no live CLI acceptance has been recorded yet, so
-/// every adapter that owns a mapping publishes `unverified` and keeps the CLI
-/// fallback. Adding a record is the only way to publish `supported`.
-pub const ACCEPTANCES: &[SecretMcpAcceptance] = &[];
+/// Accepted targets. A target without a record publishes `unverified` and keeps
+/// the CLI fallback. Adding a record is the only way to publish `supported`, and
+/// the mapping label it names must equal the adapter's own declaration.
+pub const ACCEPTANCES: &[SecretMcpAcceptance] = &[SecretMcpAcceptance {
+    tool_id: "codex",
+    mapping: ".codex/config.toml#mcp_servers",
+    recorded_at: "2026-11-21",
+    platform: "macos-arm64",
+    cli_version: "codex-cli 0.171.0",
+    protocol: "initialize + tools/list + tools/call over MCP stdio; four tools listed",
+    model_use: "use_secret with the referenced secretId/executorId; result carried the sentinel and [redacted]",
+    cli_fallback: "cliora --cliora-internal-secret-cli-v1 --installation <id> use --secret <id> --executor <id>",
+    evidence: "docs/verification/secret-access.md#codex-2026-11-21",
+}];
 
 /// The capability an adapter publishes. A target without a mapping can never be
-/// supported; a mapping without a complete acceptance record stops at `unverified`
-/// with the mapping-only reason.
+/// supported; a mapping without a complete acceptance record for that exact
+/// mapping label stops at `unverified` with the mapping-only reason.
 pub fn published(
     acceptances: &[SecretMcpAcceptance],
     declares_mapping: bool,
+    mapping: Option<&str>,
     tool_id: &str,
 ) -> SecretMcpCapability {
     if !declares_mapping {
         return SecretMcpCapability::unsupported(SECRET_MCP_UNSUPPORTED_REASON);
     }
     match acceptance(acceptances, tool_id) {
-        Some(record) if record.is_complete() => SecretMcpCapability::supported(),
+        Some(record) if mapping == Some(record.mapping) && record.is_complete() => {
+            SecretMcpCapability::supported()
+        }
         _ => SecretMcpCapability::unverified(SECRET_MCP_UNVERIFIED_REASON),
     }
 }

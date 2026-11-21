@@ -9,10 +9,10 @@
 | 目标 | 配置映射 | 协议 | 模型调用 | CLI 回退 | 平台 | 验证状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | antigravity | `.gemini/config/mcp_config.json#mcpServers` | 未实机运行 | 未实机运行 | 未实机运行 | 未验证 | unverified |
-| claude_code | `.claude.json#mcpServers` | 未实机运行 | 未实机运行 | 未实机运行 | macOS arm64（记录环境）；Windows 未验证 | unverified |
+| claude_code | `.claude.json#mcpServers` | 真实会话观察到协议与四工具，未纳入记录 | 未通过（网关配额 429） | 真实会话观察到回退通过，未纳入记录 | macOS arm64（记录环境）；Windows 未验证 | unverified |
 | cline | `.cline/cline_mcp_settings.json#mcpServers` | 未实机运行 | 未实机运行 | 未实机运行 | 未验证 | unverified |
 | codebuddy | `.codebuddy/.mcp.json#mcpServers` | 未实机运行 | 未实机运行 | 未实机运行 | 未验证 | unverified |
-| codex | `.codex/config.toml#mcp_servers` | 未实机运行 | 未实机运行 | 未实机运行 | macOS arm64（记录环境）；Windows 未验证 | unverified |
+| codex | `.codex/config.toml#mcp_servers` | 通过（`initialize` + `tools/list`，4 个工具） | 通过（`use_secret`，输出含哨兵与 `[redacted]`） | 通过（同一执行入口收到同一合成值） | macOS arm64（记录环境）；Windows/Linux 未验证 | verified |
 | command_code | `.commandcode/mcp.json#mcpServers` | 未实机运行 | 未实机运行 | 未实机运行 | 未验证 | unverified |
 | cursor | `.cursor/mcp.json#mcpServers` | 未实机运行 | 未实机运行 | 未实机运行 | 未验证 | unverified |
 | deepseek | `.dsh/profiles/desktop/cordis.patch.yml#insert` | 未实机运行 | 未实机运行 | 未实机运行 | 未验证 | unverified |
@@ -28,7 +28,7 @@
 | qoder_cn | `.qoder-cn/settings.json#mcpServers` | 未实机运行 | 未实机运行 | 未实机运行 | 未验证 | unverified |
 | zcode | `.zcode/cli/config.json#mcp.servers` | 未实机运行 | 未实机运行 | 未实机运行 | 未验证 | unverified |
 
-`unverified` 的含义：适配器拥有可写的 MCP 配置映射，但**真实 CLI 的 `initialize`、`tools/list` 和模型 `use_secret` 调用尚未被观察**。因此 `SecretMcpCapability` 保持 `unverified`，界面同时给出 CLI 回退说明；`supported` 只能由 `src-tauri/src/adapters/secret_access.rs` 里一条完整的验收记录发布，目前该记录列表为空。映射存在、写入成功或工具契约离线检查通过，都不升级为兼容性证据。
+`verified` 的含义：该目标在真实 CLI 会话中完成了原生条目落盘、`initialize`/`tools/list`、只含引用的提示词下的 `use_secret` 调用与同一执行入口的 CLI 回退，模型可见文本只有哨兵与 `[redacted]`，执行入口回执与合成值摘要一致。`unverified` 的含义：适配器拥有可写的 MCP 配置映射，但这些事实尚未全部被观察，`SecretMcpCapability` 保持 `unverified`，界面同时给出 CLI 回退说明。`supported` 只能由 `src-tauri/src/adapters/secret_access.rs` 里一条完整验收记录发布；目前只有 `codex` 一条记录，其余 18 个目标维持 `unverified`。映射存在、写入成功或工具契约离线检查通过，都不升级为兼容性证据。
 
 数据目录尚未存在的目标（`minimax_code` 需要 `~/.minimax` 已存在，`open_code` 的 `mcp` 子表形状随主版本变化）在真机验收前要先确认目录与版本：缺少目录或版本不支持时 `mcp_location` 返回空，安装步骤应报「该目标未提供配置映射」，而不是写入别处。
 
@@ -39,7 +39,7 @@
 3. **模型调用**：在只含 `{{cliora-secret:<id>}}` 引用与执行入口标识的提示词下，模型选择 `use_secret` 并生成 `secretId`/`executorId` 参数；固定测试执行入口收到合成值，模型可见输出只有业务结果与遮蔽标记。原值读取仍触发 Cliora 逐次确认。
 4. **CLI 回退**：同一提示词下，`--cliora-internal-secret-cli-v1 --installation <id> use --secret <id> --executor <id>` 让同一个测试执行入口收到同一合成值，输出同样遮蔽。
 
-只有四类事实全部观察到的目标才能在 `src-tauri/src/adapters/secret_access.rs` 的 `ACCEPTANCES` 增加验收记录并发布 `supported`。记录必须写明 `tool_id`、`mapping`、日期（`YYYY-MM-DD`）、平台、CLI 版本、协议、模型调用、CLI 回退和证据锚点；证据锚点必须位于 `docs/verification/` 下，`mapping` 必须与上表该目标的映射标签逐字一致（`node scripts/verify-secret-access.mjs` 的 `evidence-consistency` 检查会比对）。缺任何一项时 `published()` 仍返回 `unverified`；未声明映射的适配器即使被记录也发布 `unsupported`。当前 `ACCEPTANCES` 为空，所以任何目标都不能以 `supported` 发布。
+只有四类事实全部观察到的目标才能在 `src-tauri/src/adapters/secret_access.rs` 的 `ACCEPTANCES` 增加验收记录并发布 `supported`。记录必须写明 `tool_id`、`mapping`、真实日历日期（`YYYY-MM-DD`）、平台、CLI 版本、协议、模型调用、CLI 回退和带锚点的证据；证据必须在 `docs/verification/` 下并带 `#` 锚点，`mapping` 必须同时与上表该目标的映射标签、适配器 `secret_mcp_mapping()` 的声明逐字一致（Rust 契约测试与 `node scripts/verify-secret-access.mjs` 的 `evidence-consistency` 都会比对）。缺任何一项时 `published()` 仍返回 `unverified`；未声明映射的适配器即使被记录也发布 `unsupported`。目前 `ACCEPTANCES` 只有 `codex` 一条，其余目标仍使用 CLI 回退。
 
 ## 验证命令
 
@@ -62,7 +62,7 @@ export CLIORA_LIVE_SECRET_CANARY=canary-<synthetic>   # 只接受 canary- 前缀
 node scripts/verify-secret-access.mjs --live
 ```
 
-计划文件由操作者按目标提供，脚本不复制适配器的原生路径或启动命令：
+计划文件由操作者按目标提供，脚本不复制适配器的原生路径或启动命令。每个目标必须给出 `mcpConfigPath`（绝对路径）与 `mcpEntryName`，否则无法证明原生条目已写入，目标不会被判为通过：
 
 ```json
 {
@@ -105,11 +105,28 @@ node scripts/verify-secret-access.mjs --live
 | `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 无告警 | 新增/修改 Rust 代码 |
 | `npm run build` | 通过（仅既有 chunk 体积提示） | 前端类型与构建未被文档或类型改动破坏 |
 
-`--live` 驱动本身只在本地合成替身（假 MCP helper、假 CLI、临时配置目录）上跑通过一次：通过时退出码 0，缺 `CLIORA_LIVE_SECRET_TESTS` 或非 `canary-` 取值时退出码 3，合成值进入模型可见输出时判为失败、退出码 1 且证据文件里没有原值。**这是脚本分支的管道验证，不是任何真实 CLI 或模型的验收**，因此上表仍全部是 `unverified`。
+`--live` 驱动另在本地合成替身上验证过失败分支：缺 `CLIORA_LIVE_SECRET_TESTS` 或非 `canary-` 取值时退出码 3，合成值进入模型可见输出时判为失败、退出码 1 且证据文件里没有原值。该分支验证不是验收。
+
+### codex 实机记录（2026-11-21）
+
+| 命令 | 结果 | 能证明什么 |
+| --- | --- | --- |
+| `node scripts/verify-secret-access.mjs --live`（计划目标 `codex`，隔离 HOME/`CODEX_HOME`） | `VERIFIED codex`，退出码 0 | 真实 `codex-cli 0.171.0`：原生 `.codex/config.toml#mcp_servers` 条目、真实 `initialize`/`tools/list`（4 个工具）、模型 `use_secret` 调用、`[redacted]` 遮蔽、执行入口回执、CLI 回退全部通过 |
+| `claude` 同场景尝试（同一隔离代理，真实登录） | 协议与回退通过；模型调用 429 | 第三方网关当日额度耗尽（`500,305,967 / 500,000,000`，次日 00:00 CST 重置），未产生费用；未纳入验收，`claude_code` 保持 `unverified` |
+
+运行条件与边界：
+
+- 平台 macOS arm64；`codex-cli 0.171.0`；模型 `gpt-6.2-sol` 经本机已配置的网关调用。CLI 进程使用隔离 `HOME` 与 `CODEX_HOME`，模型凭据只经环境变量传入，未写入沙箱。
+- 原生条目只含 helper 绝对路径、`--cliora-internal-secret-mcp-v1 --installation <uuid>` 与沙箱 `HOME`/`PATH`；不含任何秘密值。
+- 提示词只有 `{{cliora-secret:<uuid>}}` 引用与执行入口标识；模型生成的 `use_secret` 参数与引用、绑定一致；工具结果携带执行入口哨兵与 `[redacted]`，模型可见输出、JSONL、stderr 与回执中都没有合成值（只比较摘要与长度）。
+- 同一次运行随后用 `--cliora-internal-secret-cli-v1 --installation <uuid> use …` 回退，同一执行入口收到同一合成值并输出遮蔽。
+- 机器可读结果：[`secret-access-live-2026-11-21.json`](secret-access-live-2026-11-21.json)。
+- `ACCEPTANCES` 记录的 `mapping`、日期、平台、CLI 版本、协议、模型调用、回退与锚点均来自这次运行；适配器 `codex` 的 `secret_mcp_mapping()` 必须与记录逐字一致，否则 `published()` 仍为 `unverified`。
 
 ## 限制
 
-- 本记录只有代码事实与合成验证；**没有任何真实 CLI 或真实模型的通过证据**，包括 macOS。Windows 与 Linux 的原生配置写入、CLI 启动与协议均未验证。
+- 实机证据只覆盖 macOS arm64 上的 `codex-cli 0.171.0` 一次运行；模型工具选择稳定性、其它版本与 `claude_code` 等其余 18 个目标都没有通过记录。Windows 与 Linux 的原生配置写入、CLI 启动与协议均未验证。
+- `claude_code` 的协议与回退曾在真实会话中观察到，但模型调用被第三方网关当日额度阻断（429，零费用），因此按规则不升级为验收；额度重置或更换凭据后需重跑并回填记录。
 - 模型可能选择其他工具、改写参数或在输出里复述别的内容；一次成功不能证明稳定可用，失败也不自动等于适配器缺陷，需要按目标重复观察。
 - 遮蔽是文本层面的保护，不阻止获授权脚本主动外发（R9）。工具发现不等于授权：每次执行仍受绑定与授权约束，原值读取仍逐次确认（R3、R4）。
 - 矩阵按当前注册表的 19 个 CLI 统计（全部声明 `supports_mcp`）。新增适配器只要声明 MCP 映射，默认能力就是 `unverified`，必须另有一条完整验收记录才能发布 `supported`；`tests/adapter/sixth.rs` 的 `the_verification_document_lists_exactly_the_targets_that_declare_a_mapping` 会要求本表与注册表同步增删。

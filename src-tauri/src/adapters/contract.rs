@@ -945,16 +945,22 @@ pub trait CliAdapter: Sync {
 
     fn configuration(&self) -> Option<&dyn super::configuration::ConfigurationAdapter> { None }
     fn supports_mcp(&self) -> bool { false }
+    /// The native mapping label this adapter owns, in the verification document's
+    /// form (relative home path plus the top-level table). A record only publishes
+    /// support when it names this exact label, so a changed mapping cannot inherit
+    /// an older observation. An adapter without a mapping leaves this `None`.
+    fn secret_mcp_mapping(&self) -> Option<&'static str> { None }
     /// Secret MCP capability. The gate in `secret_access` publishes `unverified`
     /// for an adapter that owns a native MCP mapping and `unsupported` without one;
     /// `supported` additionally needs a complete live acceptance record for this
-    /// target. A configuration write, a protocol probe or a CLI name cannot
-    /// substitute for that record, and the declaration comes from the adapter rather
-    /// than from its id.
+    /// target and mapping. A configuration write, a protocol probe or a CLI name
+    /// cannot substitute for that record, and the declaration comes from the
+    /// adapter rather than from its id.
     fn secret_mcp_capability(&self) -> SecretMcpCapability {
         super::secret_access::published(
             super::secret_access::ACCEPTANCES,
             self.supports_mcp(),
+            self.secret_mcp_mapping(),
             self.id(),
         )
     }
