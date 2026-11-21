@@ -57,6 +57,14 @@ export default {
     collapse: 'Hide {{count}}',
     matchCount: '{{count}} found',
   },
+  secretApproval: {
+    title: 'Allow reading the secret value?',
+    message: '"{{alias}}" asks to read its value. Source: {{source}}.',
+    risk: 'Once allowed, the value is written to this command stdout and may enter the model context and CLI session history.',
+    timeout: 'The request expires in {{seconds}} seconds. An expiry, a repeated answer or a closed window returns no value.',
+    decline: 'Decline',
+    accept: 'Allow this read',
+  },
   dialog: {
     back: 'Back to list',
     close: 'Close',

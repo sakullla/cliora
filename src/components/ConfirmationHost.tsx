@@ -1,17 +1,40 @@
 import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
-import { answerConfirmation, confirmationSnapshot, subscribeConfirmation } from '../lib/confirm';
+import { listen } from '@tauri-apps/api/event';
+import { answerConfirmation, answerSecretApproval, confirmationSnapshot, dismissSecretApproval, presentSecretApproval, secretApprovalSnapshot, subscribeConfirmation, subscribeSecretApproval } from '../lib/confirm';
+import { nativeAvailable, SECRET_APPROVAL_EVENT } from '../lib/native';
+import type { PromptSecretApprovalRequest } from '../types/secrets';
 import { Icon } from './Icon';
 import { Button } from './ui';
 
+/**
+ * The application dialog host. It owns two queues: ordinary confirmations requested
+ * by a window action, and secret read approvals requested by the broker. An approval
+ * shows the alias and the request source only; the value is never sent to the window.
+ */
 export function ConfirmationHost() {
   const { t } = useTranslation();
   const request = useSyncExternalStore(subscribeConfirmation, confirmationSnapshot);
+  const approval = useSyncExternalStore(subscribeSecretApproval, secretApprovalSnapshot);
   const dialog = useRef<HTMLDialogElement>(null);
+  const approvalDialog = useRef<HTMLDialogElement>(null);
 
   useEffect(() => () => {
     const pending = confirmationSnapshot();
     if (pending) answerConfirmation(pending.id, false);
+    dismissSecretApproval();
+  }, []);
+
+  // The broker emits one event per raw read. Only the alias and the source travel.
+  useEffect(() => {
+    if (!nativeAvailable || typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+    const pending = listen<PromptSecretApprovalRequest>(SECRET_APPROVAL_EVENT, event => {
+      presentSecretApproval(event.payload);
+    });
+    void pending.catch(() => {});
+    return () => {
+      void pending.then(unlisten => unlisten()).catch(() => {});
+    };
   }, []);
 
   useLayoutEffect(() => {
@@ -26,24 +49,50 @@ export function ConfirmationHost() {
     };
   }, [request]);
 
-  if (!request) return null;
-  return <dialog ref={dialog} className="confirmation-dialog" aria-labelledby="confirmation-title" aria-describedby="confirmation-message"
-    onCancel={event => { event.preventDefault(); answerConfirmation(request.id, false); }}>
-    <div className="confirmation-head">
-      <span className="confirmation-icon" data-destructive={!!request.destructive} aria-hidden="true"><Icon name={request.destructive ? 'trash' : 'info'} size={18} /></span>
-      <div><h2 id="confirmation-title">{request.title ?? t('common.dialog.confirmTitle')}</h2>
-      <p id="confirmation-message">{request.message}</p></div>
-    </div>
-    <div className="confirmation-actions" onKeyDown={(event) => {
-      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
-      const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
-      const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
-      if (current < 0 || buttons.length < 2) return;
-      event.preventDefault();
-      buttons[(current + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length].focus();
-    }}>
-      <Button autoFocus onClick={() => answerConfirmation(request.id, false)}>{t('common.dialog.cancel')}</Button>
-      <Button variant={request.destructive ? 'danger' : 'primary'} onClick={() => answerConfirmation(request.id, true)}>{request.confirmLabel ?? t('common.dialog.confirm')}</Button>
-    </div>
-  </dialog>;
+  useLayoutEffect(() => {
+    if (!approval || !approvalDialog.current) return;
+    const element = approvalDialog.current;
+    try { element.showModal(); }
+    catch { void answerSecretApproval(approval.approvalId, false); }
+    return () => { element.close(); };
+  }, [approval]);
+
+  return <>
+    {request && <dialog ref={dialog} className="confirmation-dialog" aria-labelledby="confirmation-title" aria-describedby="confirmation-message"
+      onCancel={event => { event.preventDefault(); answerConfirmation(request.id, false); }}>
+      <div className="confirmation-head">
+        <span className="confirmation-icon" data-destructive={!!request.destructive} aria-hidden="true"><Icon name={request.destructive ? 'trash' : 'info'} size={18} /></span>
+        <div><h2 id="confirmation-title">{request.title ?? t('common.dialog.confirmTitle')}</h2>
+        <p id="confirmation-message">{request.message}</p></div>
+      </div>
+      <div className="confirmation-actions" onKeyDown={(event) => {
+        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+        const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+        const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+        if (current < 0 || buttons.length < 2) return;
+        event.preventDefault();
+        buttons[(current + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length].focus();
+      }}>
+        <Button autoFocus onClick={() => answerConfirmation(request.id, false)}>{t('common.dialog.cancel')}</Button>
+        <Button variant={request.destructive ? 'danger' : 'primary'} onClick={() => answerConfirmation(request.id, true)}>{request.confirmLabel ?? t('common.dialog.confirm')}</Button>
+      </div>
+    </dialog>}
+    {approval && <dialog ref={approvalDialog} className="confirmation-dialog" aria-labelledby="secret-approval-title" aria-describedby="secret-approval-message"
+      data-secret-approval={approval.approvalId}
+      onCancel={event => { event.preventDefault(); void answerSecretApproval(approval.approvalId, false); }}>
+      <div className="confirmation-head">
+        <span className="confirmation-icon" data-destructive="true" aria-hidden="true"><Icon name="lock" size={18} /></span>
+        <div>
+          <h2 id="secret-approval-title">{t('common.secretApproval.title')}</h2>
+          <p id="secret-approval-message">{t('common.secretApproval.message', { alias: approval.alias, source: approval.source })}</p>
+          <p data-secret-approval-risk>{t('common.secretApproval.risk')}</p>
+          <p data-secret-approval-timeout>{t('common.secretApproval.timeout', { seconds: approval.expiresInSeconds })}</p>
+        </div>
+      </div>
+      <div className="confirmation-actions">
+        <Button autoFocus data-secret-approval-decline onClick={() => void answerSecretApproval(approval.approvalId, false)}>{t('common.secretApproval.decline')}</Button>
+        <Button variant="danger" data-secret-approval-accept onClick={() => void answerSecretApproval(approval.approvalId, true)}>{t('common.secretApproval.accept')}</Button>
+      </div>
+    </dialog>}
+  </>;
 }

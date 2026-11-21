@@ -175,6 +175,11 @@
 .secretRefs { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1_5); min-width: 0; }
 .secretRef { display: inline-flex; align-items: center; gap: var(--space-1); max-width: 100%; min-width: 0; padding: 0 var(--space-1_5); border-radius: var(--radius-pill); background: var(--surface); color: var(--text-2); font-size: var(--fs-micro); }
 .secretRef > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.secretBroker { display: flex; flex-direction: column; gap: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--line); min-width: 0; }
+.secretBroker .secretForm { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-2); align-items: end; }
+.secretBroker select { width: 100%; padding: var(--space-1) var(--space-1_5); border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; }
+.secretBroker textarea { width: 100%; resize: vertical; padding: var(--space-1) var(--space-1_5); border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; }
+.secretId { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); font-size: var(--fs-micro); }
 
 @media (max-width: 760px) {
   .browser, .scopeRow { grid-template-columns: 1fr; }

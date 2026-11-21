@@ -23,7 +23,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 34 {
+        if version > 35 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -719,6 +719,57 @@ impl Database {
             )?;
             tx.commit()?;
         }
+        if version < 35 {
+            // The secret broker keeps only opaque identifiers, fixed executor
+            // definitions and decisions. Values stay in the credential store, and
+            // no sync trigger registers these tables, so none of it enters WebDAV,
+            // a portable bundle or the remote library.
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS secret_executors (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   label TEXT NOT NULL UNIQUE,
+                   description TEXT NOT NULL DEFAULT '',
+                   executable TEXT NOT NULL,
+                   args_json TEXT NOT NULL CHECK(json_valid(args_json)),
+                   cwd TEXT,
+                   channel TEXT NOT NULL CHECK(channel IN ('env','stdin')),
+                   env_name TEXT,
+                   digest TEXT NOT NULL,
+                   created_at INTEGER NOT NULL,
+                   updated_at INTEGER NOT NULL
+                 );
+                 CREATE TABLE IF NOT EXISTS secret_installations (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   label TEXT NOT NULL,
+                   kind TEXT NOT NULL CHECK(kind IN ('cli','mcp')),
+                   target_id TEXT,
+                   revoked INTEGER NOT NULL DEFAULT 0,
+                   created_at INTEGER NOT NULL,
+                   revoked_at INTEGER
+                 );
+                 CREATE TABLE IF NOT EXISTS secret_grants (
+                   installation_id TEXT NOT NULL REFERENCES secret_installations(id) ON DELETE CASCADE,
+                   secret_id TEXT NOT NULL REFERENCES prompt_secrets(id) ON DELETE CASCADE,
+                   executor_id TEXT NOT NULL REFERENCES secret_executors(id) ON DELETE CASCADE,
+                   created_at INTEGER NOT NULL,
+                   PRIMARY KEY(installation_id, secret_id, executor_id)
+                 );
+                 CREATE TABLE IF NOT EXISTS secret_audit (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   at INTEGER NOT NULL,
+                   operation TEXT NOT NULL,
+                   decision TEXT NOT NULL,
+                   result_code TEXT NOT NULL,
+                   secret_id TEXT,
+                   installation_id TEXT,
+                   executor_id TEXT
+                 );
+                 CREATE INDEX IF NOT EXISTS secret_audit_time ON secret_audit(at DESC, id DESC);
+                 PRAGMA user_version = 35;",
+            )?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection: Mutex::new(connection),
             read_path: (path != Path::new(":memory:") && !path.as_os_str().is_empty())
@@ -802,6 +853,11 @@ impl Database {
 /// strict CREATE TABLE checks and never repair a contradictory user_version.
 #[cfg(test)]
 pub(crate) fn remove_later_fixture_tables(conn: &Connection, target_version: u32) -> rusqlite::Result<()> {
+    if target_version < 35 {
+        for table in ["secret_audit", "secret_grants", "secret_installations", "secret_executors"] {
+            conn.execute_batch(&format!("DROP TABLE IF EXISTS {table};"))?;
+        }
+    }
     if target_version < 34 {
         conn.execute_batch("DROP TABLE IF EXISTS prompt_secrets;")?;
     }
@@ -1006,7 +1062,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 34);
+            assert_eq!(version, 35);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
@@ -1057,7 +1113,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|error| error.to_string())?;
-            assert_eq!(version, 34);
+            assert_eq!(version, 35);
             let secrets: i64 = conn
                 .query_row("SELECT COUNT(*) FROM prompt_secrets", [], |row| row.get(0))
                 .map_err(|error| error.to_string())?;
@@ -1079,7 +1135,64 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|error| error.to_string())?;
-            assert_eq!(version, 34);
+            assert_eq!(version, 35);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn v34_database_gains_broker_tables_without_losing_secret_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cliora.db");
+        {
+            let db = Database::open(&path).unwrap();
+            db.with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO prompt_secrets(id,alias,credential_id,version,created_at,updated_at)
+                     VALUES('11111111-2222-4333-8444-555555555555','kept alias',
+                       'prompt-secret-11111111-2222-4333-8444-555555555555',1,1,1)",
+                    [],
+                )
+                .map_err(|error| error.to_string())?;
+                super::remove_later_fixture_tables(conn, 34).map_err(|error| error.to_string())?;
+                conn.execute_batch("PRAGMA user_version = 34;").map_err(|error| error.to_string())?;
+                Ok(())
+            })
+            .unwrap();
+        }
+        let db = Database::open(&path).unwrap();
+        db.with_connection(|conn| {
+            let version: u32 = conn
+                .query_row("PRAGMA user_version", [], |row| row.get(0))
+                .map_err(|error| error.to_string())?;
+            assert_eq!(version, 35);
+            // Pre-existing secret metadata survives; grants start empty because a
+            // database from v34 never recorded one.
+            let (alias, grants): (String, i64) = (
+                conn.query_row("SELECT alias FROM prompt_secrets", [], |row| row.get(0))
+                    .map_err(|error| error.to_string())?,
+                conn.query_row("SELECT COUNT(*) FROM secret_grants", [], |row| row.get(0))
+                    .map_err(|error| error.to_string())?,
+            );
+            assert_eq!(alias, "kept alias");
+            assert_eq!(grants, 0);
+            for table in ["secret_executors", "secret_installations", "secret_audit"] {
+                let count: i64 = conn
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
+                    .map_err(|error| error.to_string())?;
+                assert_eq!(count, 0);
+            }
+            Ok(())
+        })
+        .unwrap();
+        // Reopening a v35 database is a no-op.
+        let db = Database::open(&path).unwrap();
+        db.with_connection(|conn| {
+            let version: u32 = conn
+                .query_row("PRAGMA user_version", [], |row| row.get(0))
+                .map_err(|error| error.to_string())?;
+            assert_eq!(version, 35);
             Ok(())
         })
         .unwrap();

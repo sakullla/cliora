@@ -12,5 +12,10 @@ fn main() {
     if cliora_lib::usage::helper_entry() {
         return;
     }
+    // AI CLIs call the same binary as a thin secret helper; it reaches the running
+    // broker over the per-user local IPC address.
+    if cliora_lib::secrets::cli::helper_entry() {
+        return;
+    }
     cliora_lib::run();
 }

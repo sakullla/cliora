@@ -134,6 +134,15 @@ fn read_one(db: &Database, store: &dyn CredentialStore, id: &str) -> Result<Prom
         .ok_or_else(|| "秘密已不存在，请重新选择引用".to_string())
 }
 
+/// Metadata existence without touching the credential store. Grant creation only
+/// needs the reference to resolve, not whether the value is readable.
+pub fn exists(db: &Database, id: &str) -> Result<bool, String> {
+    if uuid::Uuid::parse_str(id).is_err() {
+        return Ok(false);
+    }
+    Ok(db.with_read_connection(|conn| read_row(conn, id))?.is_some())
+}
+
 /// Local secrets with their reference status. Only aliases and reference ids cross
 /// this boundary; values stay in the credential store.
 pub fn list(db: &Database, store: &dyn CredentialStore) -> Result<Vec<PromptSecret>, String> {
