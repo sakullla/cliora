@@ -1,7 +1,7 @@
 {
   "name": "cliora",
   "private": true,
-  "version": "0.4.162",
+  "version": "0.4.163",
   "type": "module",
   "scripts": {
     "dev": "vite",
