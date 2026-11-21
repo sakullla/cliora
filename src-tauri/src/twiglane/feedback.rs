@@ -126,6 +126,13 @@ pub struct FeedbackSendOutcome {
     pub state: String,
 }
 
+/// 一次发送的四个状态。`sending` 只在写 PTY 期间存在，它让并发的第二次调用来不及再写一遍；
+/// `uncertain` 表示已经尝试写入但结果未知，此后这批意见只能复制，不能再发。
+pub(crate) const STATE_PREPARED: &str = "prepared";
+pub(crate) const STATE_SENDING: &str = "sending";
+pub(crate) const STATE_WRITTEN: &str = "written";
+pub(crate) const STATE_UNCERTAIN: &str = "uncertain";
+
 /// 已暂存的一批意见。
 #[derive(Clone, Debug)]
 pub(crate) struct StagedFeedback {
@@ -422,6 +429,43 @@ pub(crate) fn check_source(file: &FeedbackFile, source: Option<&ReviewState>) ->
     Ok(())
 }
 
+/// 一个可能的写入目标：本地、正在运行的会话及其当前目录。
+pub(crate) struct SendCandidate {
+    pub(crate) id: String,
+    pub(crate) directory: Option<PathBuf>,
+}
+
+fn same_worktree(directory: Option<&PathBuf>, worktree_path: &str) -> bool {
+    let Some(directory) = directory else { return false };
+    // 任一侧无法解析时按字面比较，失败闭合而不是放宽成"都可能"。
+    let left = directory.canonicalize().unwrap_or_else(|_| directory.clone());
+    let right = Path::new(worktree_path).canonicalize().unwrap_or_else(|_| PathBuf::from(worktree_path));
+    left == right
+}
+
+/// 恢复会创建新的会话 id 并忘记旧 id，所以发送目标不能只看批次里的 sessionId。
+///
+/// 批次仍然绑定原会话的审查来源（reviewId、结果版本、起点），这里只解析"写到哪一个正在运行的
+/// 本地会话"：界面显式指定的会话优先，其次是原会话，最后是同一个 canonical 工作树里唯一的
+/// 运行会话（恢复出来的那一个）。多于一个候选时不猜，宁可拒绝也不写错终端。
+pub(crate) fn choose_target(file: &FeedbackFile, requested: Option<&str>, candidates: &[SendCandidate]) -> Result<String, &'static str> {
+    let find = |id: &str| candidates.iter().find(|candidate| candidate.id == id);
+    for id in [requested, Some(file.session_id.as_str())].into_iter().flatten() {
+        if let Some(candidate) = find(id) {
+            if !same_worktree(candidate.directory.as_ref(), &file.worktree_path) {
+                return Err("feedback_worktree_changed");
+            }
+            return Ok(candidate.id.clone());
+        }
+    }
+    let mut matching = candidates.iter().filter(|candidate| same_worktree(candidate.directory.as_ref(), &file.worktree_path));
+    match (matching.next(), matching.next()) {
+        (Some(only), None) => Ok(only.id.clone()),
+        (None, _) => Err("feedback_session_ended"),
+        (Some(_), Some(_)) => Err("feedback_target_ambiguous"),
+    }
+}
+
 fn preview_of(file: &FeedbackFile, state: &str) -> FeedbackPreview {
     FeedbackPreview {
         feedback_id: file.feedback_id.clone(),
@@ -458,8 +502,8 @@ impl FeedbackStore {
             return Err("feedback_duplicate");
         }
         data.seen.insert(file.feedback_id.clone());
-        let preview = preview_of(&file, "prepared");
-        data.entries.insert(file.feedback_id.clone(), StagedFeedback { file, state: "prepared" });
+        let preview = preview_of(&file, STATE_PREPARED);
+        data.entries.insert(file.feedback_id.clone(), StagedFeedback { file, state: STATE_PREPARED });
         Ok(preview)
     }
 
@@ -468,16 +512,41 @@ impl FeedbackStore {
         self.lock().seen.contains(feedback_id)
     }
 
-    pub(crate) fn entry(&self, feedback_id: &str) -> Option<StagedFeedback> {
-        self.lock().entries.get(feedback_id).cloned()
+    /// 在 store 锁内把 prepared 原子切成 sending，并交出这一批意见。
+    ///
+    /// 检查与占用是同一个临界区，所以两个并发调用里只有一个能拿到 `Ok`，另一个只会得到
+    /// 明确的拒绝，绝不会写第二次。已发送（written）、结果未知（uncertain）和正在写入
+    /// （sending）都不是可发送状态。
+    pub(crate) fn begin_send(&self, feedback_id: &str) -> Result<FeedbackFile, &'static str> {
+        let mut data = self.lock();
+        let entry = data.entries.get_mut(feedback_id).ok_or("feedback_unknown")?;
+        match entry.state {
+            STATE_PREPARED => {
+                entry.state = STATE_SENDING;
+                Ok(entry.file.clone())
+            }
+            STATE_SENDING => Err("feedback_send_in_progress"),
+            STATE_UNCERTAIN => Err("feedback_send_uncertain"),
+            _ => Err("feedback_already_sent"),
+        }
     }
 
-    /// 记录一次成功写入。重复调用不改变状态，也不会再次写入。
-    pub(crate) fn mark_written(&self, feedback_id: &str) -> Option<FeedbackPreview> {
+    /// 写入结束：成功记为 written，失败或结果未知记为 uncertain。两者都不能再发。
+    pub(crate) fn finish_send(&self, feedback_id: &str, written: bool) -> Option<FeedbackPreview> {
         let mut data = self.lock();
         let entry = data.entries.get_mut(feedback_id)?;
-        if entry.state == "prepared" {
-            entry.state = "written";
+        if entry.state == STATE_SENDING {
+            entry.state = if written { STATE_WRITTEN } else { STATE_UNCERTAIN };
+        }
+        Some(preview_of(&entry.file, entry.state))
+    }
+
+    /// 写入之前的复核失败（会话已结束、目录变了等）没有碰过 PTY，退回 prepared 让用户恢复后重试。
+    pub(crate) fn abort_send(&self, feedback_id: &str) -> Option<FeedbackPreview> {
+        let mut data = self.lock();
+        let entry = data.entries.get_mut(feedback_id)?;
+        if entry.state == STATE_SENDING {
+            entry.state = STATE_PREPARED;
         }
         Some(preview_of(&entry.file, entry.state))
     }
@@ -517,10 +586,13 @@ pub(crate) fn api_error(code: &'static str) -> ApiError {
         "feedback_stale" => ("这批审阅意见对应的结果已经过期。", "回到 Twiglane 重新准备，不要发送旧意见。"),
         "feedback_worktree_changed" => ("会话所在的工作树与这批意见不符。", "确认原会话的工作树后重新准备。"),
         "feedback_unknown" => ("没有找到这批审阅意见的暂存内容。", "重新从 Twiglane 准备送回原任务。"),
-        "feedback_already_sent" => ("这批审阅意见已经写入过终端一次。", "如需再次反馈，请在 Twiglane 重新准备。"),
-        "feedback_session_closed" => ("原会话已经关闭，无法发送。", "重新开始一个会话并说明需要处理的意见。"),
-        "feedback_session_ended" => ("原会话已经结束，不会自动恢复。", "使用现有恢复入口继续会话，再重新确认发送。"),
-        "feedback_write_failed" => ("意见没有写入终端。", "确认会话仍在运行；不要自动重试，回到 Twiglane 重新准备。"),
+        "feedback_already_sent" => ("这批审阅意见已经写入过终端一次。", "不会重复写入；需要再反馈时在 Twiglane 重新准备。"),
+        "feedback_send_in_progress" => ("这批审阅意见正在写入终端。", "等这次写入结束后再看结果，不会重复写入。"),
+        "feedback_send_uncertain" => ("上次写入的结果未知，这批意见不会再发送。", "复制意见后确认终端是否已收到；不要重复发送，需要新一批时在 Twiglane 重新准备。"),
+        "feedback_target_ambiguous" => ("同一个工作树里有多个运行中的会话，无法确定写到哪一个。", "关闭多余会话后重试，或复制意见粘贴到目标终端。"),
+        "feedback_session_closed" => ("原会话已经关闭，无法发送。", "恢复原会话后再确认发送，或复制意见粘贴到终端。"),
+        "feedback_session_ended" => ("原会话已经结束，不会自动恢复。", "先用会话下方的恢复入口继续原会话，恢复后可以再次确认发送；也可以直接复制意见。"),
+        "feedback_write_failed" => ("意见没有写入终端，结果未知。", "不要重复发送；复制意见后确认终端是否已收到，需要新一批时在 Twiglane 重新准备。"),
         _ => ("反馈操作没有完成。", "确认会话和工作树状态后重试。"),
     };
     ApiError { code, message: message.into(), action, data_directory: None, remote: None }
@@ -688,17 +760,89 @@ mod tests {
     }
 
     #[test]
-    fn marking_written_is_idempotent_and_keeps_the_batch_readable() {
+    fn a_written_batch_stays_readable_and_refuses_a_second_send() {
         let store = FeedbackStore::default();
         store.stage(sample()).unwrap();
-        let written = store.mark_written(FEEDBACK_ID).expect("staged batch is found");
-        assert_eq!(written.state, "written");
-        assert_eq!(store.mark_written(FEEDBACK_ID).unwrap().state, "written");
+        assert!(store.begin_send(FEEDBACK_ID).is_ok());
+        let written = store.finish_send(FEEDBACK_ID, true).expect("staged batch is found");
+        assert_eq!(written.state, STATE_WRITTEN);
+        // 已经写过一次：第二次发送在写 PTY 之前就被拒绝。
+        assert_eq!(store.begin_send(FEEDBACK_ID).unwrap_err(), "feedback_already_sent");
         assert_eq!(store.len(), 1);
         assert!(store.dismiss(FEEDBACK_ID));
         assert_eq!(store.len(), 0);
         // 取消之后同一标识仍然不能被重新暂存。
         assert_eq!(store.stage(sample()).unwrap_err(), "feedback_duplicate");
+    }
+
+    #[test]
+    fn an_unknown_write_result_keeps_the_batch_and_blocks_every_retry() {
+        let store = FeedbackStore::default();
+        store.stage(sample()).unwrap();
+        assert!(store.begin_send(FEEDBACK_ID).is_ok());
+        let uncertain = store.finish_send(FEEDBACK_ID, false).expect("staged batch is found");
+        assert_eq!(uncertain.state, STATE_UNCERTAIN);
+        // 结果未知不是"没写过"：同一批意见绝不能再写一次，只能复制。
+        assert_eq!(store.begin_send(FEEDBACK_ID).unwrap_err(), "feedback_send_uncertain");
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn a_rejected_preflight_check_returns_the_batch_to_prepared() {
+        let store = FeedbackStore::default();
+        store.stage(sample()).unwrap();
+        assert!(store.begin_send(FEEDBACK_ID).is_ok());
+        // 会话已结束这类复核失败没有碰过 PTY，恢复并再次确认仍然可用。
+        assert_eq!(store.abort_send(FEEDBACK_ID).expect("staged batch is found").state, STATE_PREPARED);
+        assert!(store.begin_send(FEEDBACK_ID).is_ok());
+        assert_eq!(store.finish_send(FEEDBACK_ID, true).unwrap().state, STATE_WRITTEN);
+    }
+
+    #[test]
+    fn two_concurrent_sends_claim_the_batch_once() {
+        use std::sync::Arc;
+        let store = Arc::new(FeedbackStore::default());
+        store.stage(sample()).unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let store = Arc::clone(&store);
+            let barrier = Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                store.begin_send(FEEDBACK_ID)
+            }));
+        }
+        let claims: Vec<_> = handles.into_iter().map(|handle| handle.join().unwrap()).collect();
+        let winners = claims.iter().filter(|claim| claim.is_ok()).count();
+        assert_eq!(winners, 1, "只有一个调用能占用这次写入");
+        let loser = claims.iter().find_map(|claim| claim.as_ref().err()).copied().expect("另一个调用被拒绝");
+        assert!(matches!(loser, "feedback_send_in_progress" | "feedback_already_sent"), "unexpected {loser}");
+    }
+
+    #[test]
+    fn a_restored_session_in_the_same_worktree_is_the_send_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let mut file = sample();
+        file.worktree_path = root.to_string_lossy().into_owned();
+        let candidate = |id: &str, path: Option<PathBuf>| SendCandidate { id: id.to_owned(), directory: path };
+
+        // 原会话仍在：直接用界面指定的那一个。
+        let live = vec![candidate(&file.session_id, Some(root.clone())), candidate("restored-id", Some(root.clone()))];
+        assert_eq!(choose_target(&file, Some(&file.session_id), &live).unwrap(), file.session_id);
+        // 恢复后旧 id 消失：同一个工作树里唯一的运行会话就是恢复出来的那一个。
+        let only = vec![candidate("restored-id", Some(root.clone()))];
+        assert_eq!(choose_target(&file, Some("restored-id"), &only).unwrap(), "restored-id");
+        // 界面没指定也不猜：唯一候选仍可解析，多个候选与零候选都拒绝。
+        assert_eq!(choose_target(&file, None, &only).unwrap(), "restored-id");
+        assert_eq!(choose_target(&file, None, &[]).unwrap_err(), "feedback_session_ended");
+        let many = vec![candidate("a", Some(root.clone())), candidate("b", Some(root.clone()))];
+        assert_eq!(choose_target(&file, None, &many).unwrap_err(), "feedback_target_ambiguous");
+        // 指定会话跑在别的工作树时只说明目录变了，不换一个会话写。
+        let elsewhere = tempfile::tempdir().unwrap();
+        let moved = vec![candidate("other", Some(elsewhere.path().canonicalize().unwrap()))];
+        assert_eq!(choose_target(&file, Some("other"), &moved).unwrap_err(), "feedback_worktree_changed");
     }
 
     #[test]

@@ -4118,51 +4118,55 @@ pub async fn twiglane_feedback_link(
     .await
 }
 
-/// 用户确认后把一批意见写入原会话终端。以 feedbackId 为一次性键，复核会话、来源、目录与
-/// running，在同一 writer 锁内完成一次 write/flush；成功只表示已写入终端。
+/// 用户确认后把一批意见写入终端一次。以 feedbackId 为一次性键：先在 store 锁内把 prepared
+/// 原子切成 sending，再复核来源与目标会话，最后写一次 PTY。成功记为 written；写入失败或结果
+/// 未知记为 uncertain 并且此后拒绝再次发送。成功只表示已写入终端，不代表 Agent 已接受。
 #[tauri::command]
 pub async fn twiglane_feedback_send(
     app: AppHandle,
     feedback_id: String,
+    session_id: Option<String>,
 ) -> Result<crate::twiglane::feedback::FeedbackSendOutcome, ApiError> {
+    use crate::twiglane::feedback::{self, SendCandidate};
     blocking(move || {
         let state = app.state::<AppState>();
-        let staged = state.feedback.entry(&feedback_id).ok_or_else(|| crate::twiglane::feedback::api_error("feedback_unknown"))?;
-        if staged.state != "prepared" {
-            return Err(crate::twiglane::feedback::api_error("feedback_already_sent"));
-        }
-        let file = staged.file;
-        // 来源、结果版本与 canonical worktree 必须仍是接收时的那一份。
-        let source = state.reviews.feedback_source(&file.review_id, &file.session_id);
-        crate::twiglane::feedback::check_source(&file, source.as_ref()).map_err(crate::twiglane::feedback::api_error)?;
-        // 已结束或已关闭的会话不自动恢复：只拒绝，由用户走现有恢复入口后重新确认。
-        let session = crate::session_host::list().into_iter().find(|item| item.id == file.session_id)
-            .ok_or_else(|| crate::twiglane::feedback::api_error("feedback_session_closed"))?;
-        if !session.running {
-            return Err(crate::twiglane::feedback::api_error("feedback_session_ended"));
-        }
-        let directory = crate::session_host::local_directory(&file.session_id)
-            .map_err(|_| crate::twiglane::feedback::api_error("feedback_session_closed"))?
-            .ok_or_else(|| crate::twiglane::feedback::api_error("feedback_session_closed"))?;
-        let actual = directory.canonicalize().unwrap_or(directory);
-        let expected = std::fs::canonicalize(&file.worktree_path)
-            .map_err(|_| crate::twiglane::feedback::api_error("feedback_worktree_changed"))?;
-        if actual != expected {
-            return Err(crate::twiglane::feedback::api_error("feedback_worktree_changed"));
-        }
-        let mut payload = crate::twiglane::feedback::prompt_text(&file).into_bytes();
+        // 检查与占用是同一个临界区：并发或重复点击只有一个能走到写入。
+        let file = state.feedback.begin_send(&feedback_id).map_err(feedback::api_error)?;
+        // 写入之前的所有复核：失败时没有碰过 PTY，退回 prepared 让用户恢复后重试。
+        let preflight = || -> Result<String, &'static str> {
+            // 来源、结果版本与 canonical worktree 必须仍是接收时的那一份。
+            let source = state.reviews.feedback_source(&file.review_id, &file.session_id);
+            feedback::check_source(&file, source.as_ref())?;
+            // 恢复会换掉会话 id，所以目标按"界面指定的会话 → 原会话 → 同一工作树里唯一的运行
+            // 本地会话"解析；已结束的会话绝不自动恢复，远程会话不在本机 PTY 里。
+            let candidates: Vec<SendCandidate> = crate::session_host::list()
+                .into_iter()
+                .filter(|session| session.running)
+                .filter_map(|session| {
+                    let directory = crate::session_host::local_directory(&session.id).ok().flatten();
+                    directory.map(|directory| SendCandidate { id: session.id, directory: Some(directory) })
+                })
+                .collect();
+            feedback::choose_target(&file, session_id.as_deref(), &candidates)
+        };
+        let target = match preflight() {
+            Ok(target) => target,
+            Err(code) => {
+                state.feedback.abort_send(&feedback_id);
+                return Err(feedback::api_error(code));
+            }
+        };
+        let mut payload = feedback::prompt_text(&file).into_bytes();
         payload.push(b'\r');
         let encoded = base64::engine::general_purpose::STANDARD.encode(&payload);
-        // 写入失败或结果未知都保持未发送状态，不自动重试。
-        crate::session_host::write(&file.session_id, &encoded)
-            .map_err(|_| crate::twiglane::feedback::api_error("feedback_write_failed"))?;
-        let preview = state.feedback.mark_written(&feedback_id)
-            .ok_or_else(|| crate::twiglane::feedback::api_error("feedback_unknown"))?;
-        Ok(crate::twiglane::feedback::FeedbackSendOutcome {
-            feedback_id,
-            session_id: file.session_id,
-            state: preview.state,
-        })
+        // 只有这里的失败是"可能已经写进去"的：标记 uncertain，绝不自动重试。
+        if crate::session_host::write(&target, &encoded).is_err() {
+            state.feedback.finish_send(&feedback_id, false);
+            return Err(feedback::api_error("feedback_write_failed"));
+        }
+        let preview = state.feedback.finish_send(&feedback_id, true)
+            .ok_or_else(|| feedback::api_error("feedback_unknown"))?;
+        Ok(feedback::FeedbackSendOutcome { feedback_id, session_id: target, state: preview.state })
     })
     .await
 }

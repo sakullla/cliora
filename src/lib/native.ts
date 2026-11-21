@@ -508,7 +508,9 @@ export const native = {
   /** Read and validate one feedback-v1 handoff; resolves to a preview only, never a write. */
   twiglaneFeedbackLink: (url: string) => command<TwiglaneFeedbackPreview>('twiglane_feedback_link', { url }),
   /** Send one already-received batch to its original session; the native side writes at most once. */
-  twiglaneFeedbackSend: (feedbackId: string) => command<TwiglaneFeedbackSendOutcome>('twiglane_feedback_send', { feedbackId }),
+  /** One confirmed write of a staged batch; `sessionId` names the session on screen, and native
+   *  still resolves and re-checks the real target (a restore replaces the saved session id). */
+  twiglaneFeedbackSend: (feedbackId: string, sessionId?: string) => command<TwiglaneFeedbackSendOutcome>('twiglane_feedback_send', { feedbackId, sessionId }),
   /** Drop the runtime preview of a batch; nothing is written and the id stays consumed. */
   twiglaneFeedbackDismiss: (feedbackId: string) => command<boolean>('twiglane_feedback_dismiss', { feedbackId }),
   worktreePrepare: (directory: string) => command<string | null>('worktree_prepare', { directory }),

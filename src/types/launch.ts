@@ -246,9 +246,14 @@ export type TwiglaneFeedbackPreview = {
   rangeVersion: string;
   commentCount: number;
   comments: TwiglaneFeedbackComment[];
-  state: 'prepared' | 'written';
+  /**
+   * `prepared`: nothing written yet. `sending`: one write is in flight. `written`: written to the
+   * terminal once. `uncertain`: a write was attempted with an unknown result, so the batch can only
+   * be copied from then on and never sent again.
+   */
+  state: 'prepared' | 'sending' | 'written' | 'uncertain';
 };
 
 /** The result of one confirmed send; `written` is a PTY fact, not an agent acceptance. */
-export type TwiglaneFeedbackSendOutcome = { feedbackId: string; sessionId: string; state: 'prepared' | 'written' };
+export type TwiglaneFeedbackSendOutcome = { feedbackId: string; sessionId: string; state: 'written' | 'uncertain' };
 

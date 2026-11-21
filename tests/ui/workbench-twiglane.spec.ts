@@ -9,8 +9,8 @@ const NEXT = '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d';
  * reviewId rules as the Rust registry (only the latest review of a session is
  * accepted) and records every call the tests assert on.
  */
-async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair' | 'remote'; tool?: 'claude_code' | 'codex'; replay?: string } = {}) {
-  await page.addInitScript(({ base, pairing, tool, replay }) => {
+async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair' | 'remote'; tool?: 'claude_code' | 'codex'; replay?: string; ended?: boolean } = {}) {
+  await page.addInitScript(({ base, pairing, tool, replay, ended }) => {
     type Review = {
       reviewId: string;
       sessionId: string;
@@ -41,8 +41,8 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
             { id: 's1', toolId: 'claude_code', projectId: 'remote:p1', directory: '/srv/alpha', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() - 60_000, connectionState: 'connected' },
           ]
         : [
-          { id: 's1', toolId: tool, projectId: null, directory: 'C:/work/alpha', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() - 60_000 },
-        ]).map((item) => ({ ...item }));
+            { id: 's1', toolId: tool, projectId: null, directory: 'C:/work/alpha', mode: 'normal', running: !ended, exitCode: ended ? 0 : null, startedAt: Date.now() - 60_000 },
+          ]).map((item) => ({ ...item }));
     const harness = {
       reviews: {} as Record<string, Review>,
       latest: {} as Record<string, string>,
@@ -60,7 +60,14 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
       feedbackStaged: {} as Record<string, Record<string, any>>,
       feedbackLinks: [] as string[],
       feedbackSends: [] as string[],
+      // 每次发送请求的目标会话：恢复换了会话 id 之后必须写新 id。
+      feedbackTargets: [] as Array<string | null>,
       feedbackDismissed: [] as string[],
+      // 写入失败或结果未知：原生会把批次记成 uncertain，此后只允许复制。
+      feedbackWriteFails: false,
+      // 恢复：旧会话 id 换成新 id，和原生一样不再保留旧 id。
+      restoredId: 's1b',
+      restoreCalls: [] as string[],
     };
     const bridge: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } = { handlers: [], listens: {} };
     const names: Record<string, string> = { claude_code: 'Claude Code', codex: 'Codex' };
@@ -104,11 +111,34 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
           }
           if (command === 'twiglane_feedback_send') {
             harness.feedbackSends.push(String(args.feedbackId));
+            harness.feedbackTargets.push(args.sessionId == null ? null : String(args.sessionId));
             const staged = harness.feedbackStaged[String(args.feedbackId)];
             if (!staged) throw { code: 'feedback_unknown', message: '没有找到这批审阅意见的暂存内容。' };
-            if (staged.state === 'written') throw { code: 'feedback_already_sent', message: '这批审阅意见已经写入过终端一次。' };
+            // 同原生 store：只有 prepared 能被占用，written/uncertain/sending 都直接拒绝。
+            if (staged.state !== 'prepared') {
+              throw staged.state === 'written'
+                ? { code: 'feedback_already_sent', message: '这批审阅意见已经写入过终端一次。' }
+                : staged.state === 'uncertain'
+                  ? { code: 'feedback_send_uncertain', message: '上次写入的结果未知，这批意见不会再发送。' }
+                  : { code: 'feedback_send_in_progress', message: '这批审阅意见正在写入终端。' };
+            }
+            if (harness.feedbackWriteFails) {
+              staged.state = 'uncertain';
+              throw { code: 'feedback_write_failed', message: '意见没有写入终端，结果未知。', action: '不要重复发送；复制意见后确认终端是否已收到，需要新一批时在 Twiglane 重新准备。' };
+            }
             staged.state = 'written';
-            return { feedbackId: staged.feedbackId, sessionId: staged.sessionId, state: 'written' };
+            return { feedbackId: staged.feedbackId, sessionId: args.sessionId ?? staged.sessionId, state: 'written' };
+          }
+          // 恢复：一个已结束的会话换成新 id，原 id 从此不在列表里。
+          if (command === 'restore_workbench_sessions' || command === 'restore_workbench_session') {
+            const savedId = command === 'restore_workbench_sessions' ? 's1' : String(args.sessionId);
+            harness.restoreCalls.push(savedId);
+            const restored = harness.restoredId;
+            const index = sessions.findIndex((item) => item.id === savedId);
+            if (index < 0 || restored === savedId) return { restored: {}, failures: [] };
+            const previous = sessions[index];
+            sessions.splice(index, 1, { ...previous, id: restored, running: true, exitCode: null });
+            return { restored: { [savedId]: restored }, failures: [] };
           }
           if (command === 'twiglane_feedback_dismiss') {
             harness.feedbackDismissed.push(String(args.feedbackId));
@@ -216,7 +246,7 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
         },
       },
     });
-  }, { base: BASE, pairing: options.sessions ?? 'single', tool: options.tool ?? 'claude_code', replay: options.replay ?? 'ready' });
+  }, { base: BASE, pairing: options.sessions ?? 'single', tool: options.tool ?? 'claude_code', replay: options.replay ?? 'ready', ended: options.ended === true });
 }
 
 async function openWorkbench(page: Page) {
@@ -854,5 +884,83 @@ test('a rejected or repeated feedback link is reported without opening a preview
   await expectNoSessionOrGitWrite(page);
   const links = await page.evaluate(() => (window as unknown as { __harness: { feedbackLinks: string[] } }).__harness.feedbackLinks);
   expect(links).toEqual([FEEDBACK_LINK]);
+});
+
+test('an unknown write result keeps the batch copy-only and never sends it again', async ({ page }) => {
+  // Codex 报告了可输入提示框，所以这是唯一可能写入的界面；让原生这一次写入失败。
+  await installDesktop(page, { tool: 'codex', replay: CODEZ_COMPOSER });
+  await openWorkbench(page);
+  await page.evaluate((preview) => (window as unknown as { __setFeedback: (value: unknown) => void }).__setFeedback(preview), feedbackPreview());
+  await page.evaluate((url) => (window as unknown as { __emitDeepLink: (value: string) => void }).__emitDeepLink(url), FEEDBACK_LINK);
+  await page.evaluate(() => { (window as unknown as { __harness: { feedbackWriteFails: boolean } }).__harness.feedbackWriteFails = true; });
+
+  const panel = page.getByRole('region', { name: 'Twiglane 审阅意见' });
+  await expect(panel).toBeVisible();
+  await panel.getByRole('button', { name: '发送到终端', exact: true }).click();
+
+  // 结果未知不是"没写过"：面板只剩复制入口，重试按钮不再出现。
+  await expect(panel).toContainText('上次写入的结果未知');
+  await expect(panel.getByRole('button', { name: '发送到终端', exact: true })).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: '复制意见', exact: true })).toBeVisible();
+  const attempts = await page.evaluate(() => (window as unknown as { __harness: { feedbackSends: string[]; feedbackStaged: Record<string, { state: string }> } }).__harness);
+  expect(attempts.feedbackSends).toEqual(['8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1']);
+  expect(attempts.feedbackStaged['8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1'].state).toBe('uncertain');
+
+  // 再发一次只会被原生拒绝：同一批意见不会第二次写进终端。
+  const second = await page.evaluate(async (id) => {
+    const invoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__.invoke;
+    try { await invoke('twiglane_feedback_send', { feedbackId: id, sessionId: 's1' }); return 'sent'; }
+    catch (error) { return (error as { code?: string }).code; }
+  }, '8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1');
+  expect(second).toBe('feedback_send_uncertain');
+  await expectNoSessionOrGitWrite(page);
+});
+
+test('a restored session keeps the batch preview and sends only after a second confirmation', async ({ page }) => {
+  // 会话已经结束：预览仍在，但只能恢复后再确认，或直接复制。
+  await installDesktop(page, { tool: 'codex', replay: CODEZ_COMPOSER, ended: true });
+  await openWorkbench(page);
+  await page.evaluate((preview) => (window as unknown as { __setFeedback: (value: unknown) => void }).__setFeedback(preview), feedbackPreview());
+  await page.evaluate((url) => (window as unknown as { __emitDeepLink: (value: string) => void }).__emitDeepLink(url), FEEDBACK_LINK);
+
+  const panel = page.getByRole('region', { name: 'Twiglane 审阅意见' });
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText('原会话已经结束');
+  await expect(panel.getByRole('button', { name: '发送到终端', exact: true })).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: '复制意见', exact: true })).toBeVisible();
+
+  // 恢复用的是会话横幅里真实存在的入口，恢复过程本身不发送。
+  await page.getByRole('button', { name: '恢复会话', exact: true }).click();
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText('src/lib/api.ts:13');
+  let sends = await page.evaluate(() => (window as unknown as { __harness: { feedbackSends: string[] } }).__harness.feedbackSends);
+  expect(sends).toEqual([]);
+
+  // 恢复后的新会话有了可输入证据，用户再确认一次才会写入，且写到新会话 id。
+  const send = panel.getByRole('button', { name: '发送到终端', exact: true });
+  await expect(send).toBeVisible();
+  await send.click();
+  await expect(panel).toContainText('已写入终端一次');
+  const result = await page.evaluate(() => (window as unknown as { __harness: { feedbackSends: string[]; feedbackTargets: Array<string | null>; restoreCalls: string[] } }).__harness);
+  expect(result.feedbackSends).toEqual(['8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1']);
+  expect(result.feedbackTargets).toEqual(['s1b']);
+  expect(result.restoreCalls).toEqual(['s1']);
+  await expectNoSessionOrGitWrite(page);
+});
+
+test('a remote session only offers a copy with the reason, never a native send', async ({ page }) => {
+  await installDesktop(page, { sessions: 'remote', tool: 'codex', replay: CODEZ_COMPOSER });
+  await openWorkbench(page);
+  await page.evaluate((preview) => (window as unknown as { __setFeedback: (value: unknown) => void }).__setFeedback(preview), feedbackPreview({ worktreePath: '/srv/alpha' }));
+  await page.evaluate((url) => (window as unknown as { __emitDeepLink: (value: string) => void }).__emitDeepLink(url), FEEDBACK_LINK);
+
+  const panel = page.getByRole('region', { name: 'Twiglane 审阅意见' });
+  await expect(panel).toBeVisible();
+  // 远程会话不在本机 PTY 里：只说明原因并给复制入口。
+  await expect(panel).toContainText('远程会话不在本机终端里');
+  await expect(panel.getByRole('button', { name: '发送到终端', exact: true })).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: '复制意见', exact: true })).toBeVisible();
+  const sends = await page.evaluate(() => (window as unknown as { __harness: { feedbackSends: string[] } }).__harness.feedbackSends);
+  expect(sends).toEqual([]);
 });
 
