@@ -164,6 +164,46 @@ mod tests {
     use crate::twiglane::{new_review, CodeStatus, ReviewRegistry};
 
     #[test]
+    fn shared_remote_review_request_and_event_fixtures() {
+        let fixtures: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/reviews/remote-protocol-v1.json"
+        ))
+        .unwrap();
+        for case in fixtures["events"].as_array().unwrap() {
+            let result = event(case["url"].as_str().unwrap());
+            assert_eq!(
+                result.is_ok(),
+                case["valid"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
+        let expected = url::Url::parse(fixtures["requests"][0]["url"].as_str().unwrap()).unwrap();
+        let fields: BTreeMap<_, _> = expected.query_pairs().collect();
+        let mut state = new_review(
+            &fields["sessionId"],
+            &fields["worktreePath"],
+            Some(fields["baseline"].to_string()),
+        );
+        state.review_id = fields["reviewId"].to_string();
+        state.protocol_version = 1;
+        state.remote_binding = Some(crate::remote::twiglane_review::Binding {
+            target_id: fields["targetId"].to_string(),
+            target_revision: fields["targetRevision"].to_string(),
+            peer_revision: fields["peerRevision"].to_string(),
+            peer_identity: fields["peerIdentity"].to_string(),
+            worktree_identity: fields["worktreeIdentity"].to_string(),
+            remote_session: "cliora-fixture".into(),
+            project_id: "fixture-project".into(),
+            directory: fields["worktreePath"].to_string(),
+            worktree_key: "f".repeat(64),
+        });
+        let actual = url::Url::parse(&request(&state).unwrap()).unwrap();
+        assert_eq!(actual.host_str(), expected.host_str());
+        assert_eq!(actual.query_pairs().collect::<BTreeMap<_, _>>(), fields);
+    }
+
+    #[test]
     fn remote_source_checks_identity_ordering_and_the_revision_of_a_completed_read() {
         let session = "998aaaaa-1111-4222-8333-444444444444";
         let mut state = new_review(session, "/srv/仓库 #one", Some("a".repeat(64)));

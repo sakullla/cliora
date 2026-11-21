@@ -1,0 +1,102 @@
+{
+  "format": "twiglane-remote-review/v1",
+  "requests": [
+    {
+      "name": "unicode path and literal plus",
+      "url": "twiglane://remote-review?v=1&reviewId=d769617e-6dde-4897-a23c-9d67612bcb8a&sessionId=eabf0da2-3dcf-4078-8f25-3c2eebe153d7&targetId=fixture-host&targetRevision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&peerRevision=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&peerIdentity=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc&worktreePath=%2Fsrv%2F%E4%BB%BB%E5%8A%A1+%2B+Git&baseline=dddddddddddddddddddddddddddddddddddddddd&worktreeIdentity=1111111111111111111111111111111111111111111111111111111111111111",
+      "valid": true
+    },
+    {
+      "name": "existing session without a baseline",
+      "url": "twiglane://remote-review?v=1&reviewId=d769617e-6dde-4897-a23c-9d67612bcb8a&sessionId=eabf0da2-3dcf-4078-8f25-3c2eebe153d7&targetId=fixture-host&targetRevision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&peerRevision=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&peerIdentity=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc&worktreePath=%2Fsrv%2F%E4%BB%BB%E5%8A%A1+%2B+Git&worktreeIdentity=1111111111111111111111111111111111111111111111111111111111111111",
+      "valid": true
+    },
+    {
+      "name": "duplicate host binding",
+      "url": "twiglane://remote-review?v=1&reviewId=d769617e-6dde-4897-a23c-9d67612bcb8a&sessionId=eabf0da2-3dcf-4078-8f25-3c2eebe153d7&targetId=fixture-host&targetRevision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&peerRevision=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&peerIdentity=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc&worktreePath=%2Fsrv%2F%E4%BB%BB%E5%8A%A1+%2B+Git&baseline=dddddddddddddddddddddddddddddddddddddddd&peerRevision=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff&worktreeIdentity=1111111111111111111111111111111111111111111111111111111111111111",
+      "valid": false
+    },
+    {
+      "name": "missing worktree identity",
+      "url": "twiglane://remote-review?v=1&reviewId=d769617e-6dde-4897-a23c-9d67612bcb8a&sessionId=eabf0da2-3dcf-4078-8f25-3c2eebe153d7&targetId=fixture-host&targetRevision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&peerRevision=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&peerIdentity=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc&worktreePath=%2Fsrv%2F%E4%BB%BB%E5%8A%A1+%2B+Git&baseline=dddddddddddddddddddddddddddddddddddddddd",
+      "valid": false
+    },
+    {
+      "name": "mismatched protocol version",
+      "url": "twiglane://remote-review?v=2&reviewId=d769617e-6dde-4897-a23c-9d67612bcb8a&sessionId=eabf0da2-3dcf-4078-8f25-3c2eebe153d7&targetId=fixture-host&targetRevision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&peerRevision=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&peerIdentity=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc&worktreePath=%2Fsrv%2F%E4%BB%BB%E5%8A%A1+%2B+Git&baseline=dddddddddddddddddddddddddddddddddddddddd&worktreeIdentity=1111111111111111111111111111111111111111111111111111111111111111",
+      "valid": false
+    },
+    {
+      "name": "relative worktree",
+      "url": "twiglane://remote-review?v=1&reviewId=d769617e-6dde-4897-a23c-9d67612bcb8a&sessionId=eabf0da2-3dcf-4078-8f25-3c2eebe153d7&targetId=fixture-host&targetRevision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&peerRevision=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&peerIdentity=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc&worktreePath=srv%2Fgit&baseline=dddddddddddddddddddddddddddddddddddddddd&worktreeIdentity=1111111111111111111111111111111111111111111111111111111111111111",
+      "valid": false
+    },
+    {
+      "name": "noncanonical remote path",
+      "url": "twiglane://remote-review?v=1&reviewId=d769617e-6dde-4897-a23c-9d67612bcb8a&sessionId=eabf0da2-3dcf-4078-8f25-3c2eebe153d7&targetId=fixture-host&targetRevision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&peerRevision=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&peerIdentity=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc&worktreePath=%2Frepo%2F..%2Fanother&baseline=dddddddddddddddddddddddddddddddddddddddd&worktreeIdentity=1111111111111111111111111111111111111111111111111111111111111111",
+      "valid": false
+    },
+    {
+      "name": "percent-decode controls",
+      "url": "twiglane://remote-review?v=1&reviewId=d769617e-6dde-4897-a23c-9d67612bcb8a&sessionId=eabf0da2-3dcf-4078-8f25-3c2eebe153d7&targetId=fixture-host&targetRevision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&peerRevision=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&peerIdentity=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc&worktreePath=%2Fsrv%2F%E4%BB%BB%E5%8A%A1+%2B+Git&baseline=dddddddddddddddddddddddddddddddddddddddd%00&worktreeIdentity=1111111111111111111111111111111111111111111111111111111111111111",
+      "valid": false
+    },
+    {
+      "name": "origin scheme does not match",
+      "url": "cliora://remote-review?v=1&reviewId=d769617e-6dde-4897-a23c-9d67612bcb8a&sessionId=eabf0da2-3dcf-4078-8f25-3c2eebe153d7&targetId=fixture-host&targetRevision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&peerRevision=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&peerIdentity=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc&worktreePath=%2Fsrv%2F%E4%BB%BB%E5%8A%A1+%2B+Git&baseline=dddddddddddddddddddddddddddddddddddddddd&worktreeIdentity=1111111111111111111111111111111111111111111111111111111111111111",
+      "valid": false
+    }
+  ],
+  "events": [
+    {
+      "name": "opening acknowledgement",
+      "url": "cliora://remote-review?v=1&reviewId=d769617e-6dde-4897-a23c-9d67612bcb8a&sessionId=eabf0da2-3dcf-4078-8f25-3c2eebe153d7&event=opening",
+      "valid": true
+    },
+    {
+      "name": "accepted acknowledgement",
+      "url": "cliora://remote-review?v=1&reviewId=d769617e-6dde-4897-a23c-9d67612bcb8a&sessionId=eabf0da2-3dcf-4078-8f25-3c2eebe153d7&event=accepted",
+      "valid": true
+    },
+    {
+      "name": "host changed",
+      "url": "cliora://remote-review?v=1&reviewId=d769617e-6dde-4897-a23c-9d67612bcb8a&sessionId=eabf0da2-3dcf-4078-8f25-3c2eebe153d7&event=rejected&reason=target_changed",
+      "valid": true
+    },
+    {
+      "name": "committed with full HEAD",
+      "url": "cliora://remote-review?v=1&reviewId=d769617e-6dde-4897-a23c-9d67612bcb8a&sessionId=eabf0da2-3dcf-4078-8f25-3c2eebe153d7&event=returned&resultRevision=1&outcome=committed&headOid=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee&worktreeState=dirty",
+      "valid": true
+    },
+    {
+      "name": "reviewed without HEAD",
+      "url": "cliora://remote-review?v=1&reviewId=d769617e-6dde-4897-a23c-9d67612bcb8a&sessionId=eabf0da2-3dcf-4078-8f25-3c2eebe153d7&event=returned&resultRevision=2&outcome=reviewed&worktreeState=unknown",
+      "valid": true
+    },
+    {
+      "name": "commit without HEAD",
+      "url": "cliora://remote-review?v=1&reviewId=d769617e-6dde-4897-a23c-9d67612bcb8a&sessionId=eabf0da2-3dcf-4078-8f25-3c2eebe153d7&event=returned&resultRevision=1&outcome=committed&worktreeState=dirty",
+      "valid": false
+    },
+    {
+      "name": "zero sequence",
+      "url": "cliora://remote-review?v=1&reviewId=d769617e-6dde-4897-a23c-9d67612bcb8a&sessionId=eabf0da2-3dcf-4078-8f25-3c2eebe153d7&event=returned&resultRevision=0&outcome=committed&headOid=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee&worktreeState=dirty",
+      "valid": false
+    },
+    {
+      "name": "duplicate outcome",
+      "url": "cliora://remote-review?v=1&reviewId=d769617e-6dde-4897-a23c-9d67612bcb8a&sessionId=eabf0da2-3dcf-4078-8f25-3c2eebe153d7&event=returned&resultRevision=1&outcome=committed&headOid=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee&worktreeState=dirty&outcome=reviewed",
+      "valid": false
+    },
+    {
+      "name": "untrusted fragment",
+      "url": "cliora://remote-review?v=1&reviewId=d769617e-6dde-4897-a23c-9d67612bcb8a&sessionId=eabf0da2-3dcf-4078-8f25-3c2eebe153d7&event=returned&resultRevision=1&outcome=committed&headOid=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee&worktreeState=dirty#fragment",
+      "valid": false
+    },
+    {
+      "name": "origin scheme does not match",
+      "url": "twiglane://remote-review?v=1&reviewId=d769617e-6dde-4897-a23c-9d67612bcb8a&sessionId=eabf0da2-3dcf-4078-8f25-3c2eebe153d7&event=returned&resultRevision=1&outcome=committed&headOid=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee&worktreeState=dirty",
+      "valid": false
+    }
+  ]
+}
