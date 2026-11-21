@@ -57,7 +57,7 @@ import { useToasts } from './lib/toast';
 import { browserBootstrap } from './types/domain';
 import type { ApiError, Bootstrap, Theme } from './types/domain';
 import type { HistorySession } from './types/history';
-import type { Project, TrayRepairTarget, TwiglaneReviewSignal, WorkbenchSession } from './types/launch';
+import type { Project, TrayRepairTarget, TwiglaneFeedbackPreview, TwiglaneReviewSignal, WorkbenchSession } from './types/launch';
 import { preferredLaunchMode } from './types/launch';
 import type { LibraryItem, LibraryKind } from './types/library';
 import type { AdapterCatalog } from './types/native';
@@ -233,6 +233,8 @@ export default function App() {
     setIncomingManifest(current => current === preview ? null : current);
   }, []);
   const [reviewSignal, setReviewSignal] = useState<TwiglaneReviewSignal | null>(null);
+  // 收到的一批审阅意见只用于预览；发送必须由用户在原任务里再次确认。
+  const [feedbackPreview, setFeedbackPreview] = useState<TwiglaneFeedbackPreview | null>(null);
   const [remoteTargets, setRemoteTargets] = useState<RemoteTarget[]>([]);
   const [remoteTargetId, setRemoteTargetId] = useState(() => { try { return localStorage.getItem('cliora:remote-target') ?? 'local'; } catch { return 'local'; } });
   const remoteIdentity = useRemoteIdentity(remoteTargetId);
@@ -418,6 +420,8 @@ export default function App() {
     // 已经按 reviewId 与结果版本拒绝重放，所以这里继续按串去重。v2 workspace 链接不是这样：它对同一
     // 成员是字节相同的固定输出，去重只能覆盖“这次意图尚未结算”的窗口（见 handle 内的说明）。
     const handledReviews = new Set<string>();
+    // 一批意见的深链只携带标识；同一串重复投递由这里和原生暂存共同拒绝。
+    const handledFeedback = new Set<string>();
     // 原审查关联失效时明确说明无法返回：不创建替代会话，不改动任何会话或仓库。
     const showReviewExpired = () => {
       setError({
@@ -446,6 +450,26 @@ export default function App() {
         }).catch(value => {
           settle();
           if (active) setError({ code: 'workspace_link_failed', message: formatFailure(value, t('workspaces.failed'), t('workspaces.retry')), action: t('workspaces.openManifest') });
+        });
+        return;
+      }
+      if (url.startsWith('cliora://review-feedback')) {
+        if (handledFeedback.has(url)) return;
+        handledFeedback.add(url);
+        // 读取只生成预览：不启动 CLI、不写 PTY、不写 Git。
+        void native.twiglaneFeedbackLink(url).then(async (preview) => {
+          if (!active) return;
+          if (!await transitionRef.current('sessions', 'local')) return;
+          openWorkbenchSession(preview.sessionId);
+          setFeedbackPreview(preview);
+        }).catch((value) => {
+          handledFeedback.delete(url);
+          if (!active) return;
+          setError({
+            code: 'feedback_link_failed',
+            message: formatFailure(value, t('sessions.feedbackFailed'), t('sessions.feedbackRetry')),
+            action: t('sessions.feedbackFailedAction'),
+          });
         });
         return;
       }
@@ -1193,7 +1217,7 @@ export default function App() {
         </div>}
         <div hidden={page !== 'library'}>{hasVisited('library') && <Suspense fallback={<PageSkeleton />}><LibraryPage key={remoteIdentity} managedTools={visibleDescriptors} remoteTargetId={remoteTargetId} active={page === 'library'} spotlight={page === 'library' && spotlight?.target === 'library' ? spotlight : null} mcpSpotlight={page === 'library' && spotlight?.target === 'mcp' ? spotlight : null} sectionIntent={page === 'library' ? librarySectionIntent : null} onOpenConnections={() => { setSpotlight(null); void go('connections'); }} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
         <div className="records-shell" hidden={page !== 'records'}>{hasVisited('records') && <Suspense fallback={<PageSkeleton />}><RecordsPage key={remoteIdentity} active={page === 'records'} remoteTargetId={remoteTargetId} tools={visibleDescriptors} tabIntent={page === 'records' ? recordsTabIntent : null} onOpenProjects={() => go('home')} onOpenConnections={() => { void go('connections'); }} onWorkbenchSession={openWorkbenchSession} onWorkbenchFailure={openWorkbenchFailure} /></Suspense>}</div>
-        <div className={sessionStyles.shell} hidden={page !== 'sessions'}>{(page === 'sessions' || hasVisited('sessions')) && <Suspense fallback={<PageSkeleton />}><SessionWorkbench remoteIntent={remoteWorkbenchIntent} active={page === 'sessions'} tools={visibleDescriptors} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} syncedRemoteTargets={remoteTargets} onRemoteTargetChange={changeRemoteTarget} focusSessionId={workbenchFocus} focusToken={workbenchToken} reviewSignal={reviewSignal} failure={workbenchFailure} onFailure={setWorkbenchFailure} onOpenHome={() => { void go('home'); }} railHost={page === 'sessions' && wideShell ? railHost : null} railSlim={navCollapsed.workbench} onToggleRailSlim={toggleNavCollapsed} onRailLayout={onRailLayout} onLiveCountChange={setLiveSessionCount} railToggleRef={workbenchRailToggle} windowChrome={windowChrome} captionSlotRef={windowChrome && wideShell ? setCaptionSlot : undefined} /></Suspense>}</div>
+        <div className={sessionStyles.shell} hidden={page !== 'sessions'}>{(page === 'sessions' || hasVisited('sessions')) && <Suspense fallback={<PageSkeleton />}><SessionWorkbench remoteIntent={remoteWorkbenchIntent} active={page === 'sessions'} tools={visibleDescriptors} remoteSshEnabled={bootstrap.preferences.remote_ssh_enabled} remoteTargetId={remoteTargetId} syncedRemoteTargets={remoteTargets} onRemoteTargetChange={changeRemoteTarget} focusSessionId={workbenchFocus} focusToken={workbenchToken} reviewSignal={reviewSignal} feedback={feedbackPreview} onFeedbackChange={setFeedbackPreview} failure={workbenchFailure} onFailure={setWorkbenchFailure} onOpenHome={() => { void go('home'); }} railHost={page === 'sessions' && wideShell ? railHost : null} railSlim={navCollapsed.workbench} onToggleRailSlim={toggleNavCollapsed} onRailLayout={onRailLayout} onLiveCountChange={setLiveSessionCount} railToggleRef={workbenchRailToggle} windowChrome={windowChrome} captionSlotRef={windowChrome && wideShell ? setCaptionSlot : undefined} /></Suspense>}</div>
       </>}
     </div></main>
   </div>

@@ -9,8 +9,8 @@ const NEXT = '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d';
  * reviewId rules as the Rust registry (only the latest review of a session is
  * accepted) and records every call the tests assert on.
  */
-async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair' | 'remote' } = {}) {
-  await page.addInitScript(({ base, pairing }) => {
+async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair' | 'remote'; tool?: 'claude_code' | 'codex'; replay?: string } = {}) {
+  await page.addInitScript(({ base, pairing, tool, replay }) => {
     type Review = {
       reviewId: string;
       sessionId: string;
@@ -41,8 +41,8 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
             { id: 's1', toolId: 'claude_code', projectId: 'remote:p1', directory: '/srv/alpha', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() - 60_000, connectionState: 'connected' },
           ]
         : [
-            { id: 's1', toolId: 'claude_code', projectId: null, directory: 'C:/work/alpha', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() - 60_000 },
-          ]).map((item) => ({ ...item }));
+          { id: 's1', toolId: tool, projectId: null, directory: 'C:/work/alpha', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() - 60_000 },
+        ]).map((item) => ({ ...item }));
     const harness = {
       reviews: {} as Record<string, Review>,
       latest: {} as Record<string, string>,
@@ -54,6 +54,13 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
       files: 46,
       startFails: false,
       sessionClosed: false,
+      replayText: replay ?? 'ready',
+      // feedback-v1：一次接收一个可用预览，发送按 feedbackId 只成功一次。
+      feedbackNext: null as Record<string, unknown> | null,
+      feedbackStaged: {} as Record<string, Record<string, any>>,
+      feedbackLinks: [] as string[],
+      feedbackSends: [] as string[],
+      feedbackDismissed: [] as string[],
     };
     const bridge: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } = { handlers: [], listens: {} };
     const names: Record<string, string> = { claude_code: 'Claude Code', codex: 'Codex' };
@@ -63,6 +70,7 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
       __emitDeepLink: (url: string) => {
         bridge.handlers[bridge.listens['deep-link://new-url']]?.({ payload: [url] });
       },
+      __setFeedback: (preview: Record<string, unknown> | null) => { harness.feedbackNext = preview; },
       __seedReview: (review: Review) => {
         harness.reviews[review.reviewId] = { ...review };
         harness.latest[review.sessionId] = review.reviewId;
@@ -84,7 +92,28 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions') return harness.sessionClosed ? [] : sessions.map((item) => ({ ...item }));
           if (command === 'launch_cli') throw { code: 'unexpected_launch', message: 'the review link must never start a session' };
-          if (command === 'replay_workbench_session') return btoa('ready');
+          if (command === 'replay_workbench_session') return btoa(String.fromCharCode(...new TextEncoder().encode(harness.replayText)));
+          // feedback-v1 接收只产生预览：这里同步记录它没有启动会话、没有写终端、没有写 Git。
+          if (command === 'twiglane_feedback_link') {
+            harness.feedbackLinks.push(String(args.url));
+            const next = harness.feedbackNext;
+            if (!next) throw { code: 'feedback_duplicate', message: '这批审阅意见已经接收过。', action: '在 Twiglane 中重新准备一批新的意见。' };
+            harness.feedbackNext = null;
+            harness.feedbackStaged[String(next.feedbackId)] = { ...next };
+            return { ...next };
+          }
+          if (command === 'twiglane_feedback_send') {
+            harness.feedbackSends.push(String(args.feedbackId));
+            const staged = harness.feedbackStaged[String(args.feedbackId)];
+            if (!staged) throw { code: 'feedback_unknown', message: '没有找到这批审阅意见的暂存内容。' };
+            if (staged.state === 'written') throw { code: 'feedback_already_sent', message: '这批审阅意见已经写入过终端一次。' };
+            staged.state = 'written';
+            return { feedbackId: staged.feedbackId, sessionId: staged.sessionId, state: 'written' };
+          }
+          if (command === 'twiglane_feedback_dismiss') {
+            harness.feedbackDismissed.push(String(args.feedbackId));
+            return true;
+          }
           if (command === 'workbench_git_context') return args.sessionId === 's1'
             ? { branch: 'feature/twiglane', commit: null, worktree: null, repository: 'alpha' }
             : args.sessionId === 's2'
@@ -187,7 +216,7 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
         },
       },
     });
-  }, { base: BASE, pairing: options.sessions ?? 'single' });
+  }, { base: BASE, pairing: options.sessions ?? 'single', tool: options.tool ?? 'claude_code', replay: options.replay ?? 'ready' });
 }
 
 async function openWorkbench(page: Page) {
@@ -729,3 +758,101 @@ test('a verified return drives the shared task state and its own next step', asy
   await detail.getByRole('button', { name: '查看审阅结果' }).click();
   await expect(page.locator('[data-drag-id="s1"] [data-session-id="s1"]')).toHaveAttribute('aria-selected', 'true');
 });
+
+// Codex 的输入框与其快捷键脚注落在终端最后几行；适配器只读这部分屏幕。
+const CODEZ_COMPOSER = '\r\n'.repeat(20) + '\u203a \r\n? for shortcuts';
+const FEEDBACK_LINK = 'cliora://review-feedback?v=1&feedbackId=8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=s1&resultRevision=2&digest=082476955cbba23ba6e82c2eacfff6d59f82c347b088fdb2df0f426ee62c56fc';
+
+function feedbackPreview(overrides: Record<string, unknown> = {}) {
+  return {
+    feedbackId: '8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1',
+    reviewId: '6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8',
+    sessionId: 's1',
+    resultRevision: 2,
+    worktreePath: 'C:/work/alpha',
+    rangeVersion: 'range-7',
+    commentCount: 2,
+    comments: [
+      { path: 'src/lib/api.ts', kind: 'add', oldNo: null, newNo: 13, body: '这里要在读取失败时保留上一份结果。' },
+      { path: 'src/lib/api.ts', kind: 'add', oldNo: null, newNo: 14, body: '补一句 title 的回退说明。' },
+    ],
+    state: 'prepared',
+    ...overrides,
+  };
+}
+
+test('a received feedback batch is previewed and written to the terminal only once', async ({ page }) => {
+  // Codex's own screen reader reports a composer, so this is the one case that may write.
+  await installDesktop(page, { tool: 'codex', replay: CODEZ_COMPOSER });
+  await openWorkbench(page);
+  await page.evaluate((preview) => (window as unknown as { __setFeedback: (value: unknown) => void }).__setFeedback(preview), feedbackPreview());
+
+  await page.evaluate((url) => (window as unknown as { __emitDeepLink: (value: string) => void }).__emitDeepLink(url), FEEDBACK_LINK);
+
+  const panel = page.getByRole('region', { name: 'Twiglane 审阅意见' });
+  await expect(panel).toBeVisible();
+  // 预览只显示来源、数量与只读正文，不启动会话也不写 Git。
+  await expect(panel).toContainText('来自审查 6f1a2b3c · 第 2 次结果 · 2 条');
+  await expect(panel).toContainText('src/lib/api.ts:13');
+  await expect(panel).toContainText('这里要在读取失败时保留上一份结果。');
+  await expectNoSessionOrGitWrite(page);
+
+  const send = panel.getByRole('button', { name: '发送到终端', exact: true });
+  await expect(send).toBeVisible();
+  await send.click();
+  await page.evaluate(() => { /* 状态在原生侧已经是 written */ });
+  await expect(panel).toContainText('已写入终端一次，不代表 Agent 已处理。');
+  await expect(panel.getByRole('button', { name: '发送到终端', exact: true })).toHaveCount(0);
+  await expect(panel.getByRole('status')).toContainText('已写入终端一次');
+  const sends = await page.evaluate(() => (window as unknown as { __harness: { feedbackSends: string[] } }).__harness.feedbackSends);
+  expect(sends).toEqual(['8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1']);
+  await expectNoSessionOrGitWrite(page);
+});
+
+test('without inputReady evidence the batch offers a copy instead of a native send', async ({ page }) => {
+  // A CLI with no screen reader keeps the generic unknown interface: no native send.
+  await installDesktop(page);
+  await openWorkbench(page);
+  await page.evaluate((preview) => (window as unknown as { __setFeedback: (value: unknown) => void }).__setFeedback(preview), feedbackPreview());
+  await page.evaluate((url) => (window as unknown as { __emitDeepLink: (value: string) => void }).__emitDeepLink(url), FEEDBACK_LINK);
+
+  const panel = page.getByRole('region', { name: 'Twiglane 审阅意见' });
+  await expect(panel).toBeVisible();
+  await expect(panel.getByRole('button', { name: '发送到终端', exact: true })).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: '复制意见', exact: true })).toBeVisible();
+  await expect(panel).toContainText('当前终端界面没有可输入提示框');
+  const sends = await page.evaluate(() => (window as unknown as { __harness: { feedbackSends: string[] } }).__harness.feedbackSends);
+  expect(sends).toEqual([]);
+});
+
+test('cancelling a preview writes nothing and dries the staged batch', async ({ page }) => {
+  await installDesktop(page, { tool: 'codex', replay: CODEZ_COMPOSER });
+  await openWorkbench(page);
+  await page.evaluate((preview) => (window as unknown as { __setFeedback: (value: unknown) => void }).__setFeedback(preview), feedbackPreview());
+  await page.evaluate((url) => (window as unknown as { __emitDeepLink: (value: string) => void }).__emitDeepLink(url), FEEDBACK_LINK);
+
+  const panel = page.getByRole('region', { name: 'Twiglane 审阅意见' });
+  await expect(panel).toBeVisible();
+  await panel.getByRole('button', { name: '关闭预览', exact: true }).click();
+  await expect(panel).toHaveCount(0);
+
+  const state = await page.evaluate(() => (window as unknown as { __harness: { feedbackDismissed: string[]; feedbackSends: string[] } }).__harness);
+  expect(state.feedbackDismissed).toEqual(['8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1']);
+  expect(state.feedbackSends).toEqual([]);
+  await expectNoSessionOrGitWrite(page);
+});
+
+test('a rejected or repeated feedback link is reported without opening a preview or a session', async ({ page }) => {
+  await installDesktop(page);
+  await openWorkbench(page);
+  // 同一个 feedbackId 只能暂存一次：原生层已经拒绝，这里不应出现预览。
+  await page.evaluate((url) => (window as unknown as { __emitDeepLink: (value: string) => void }).__emitDeepLink(url), FEEDBACK_LINK);
+
+  const alert = page.getByRole('alert').first();
+  await expect(alert).toContainText('这批审阅意见已经接收过。');
+  await expect(page.getByRole('region', { name: 'Twiglane 审阅意见' })).toHaveCount(0);
+  await expectNoSessionOrGitWrite(page);
+  const links = await page.evaluate(() => (window as unknown as { __harness: { feedbackLinks: string[] } }).__harness.feedbackLinks);
+  expect(links).toEqual([FEEDBACK_LINK]);
+});
+

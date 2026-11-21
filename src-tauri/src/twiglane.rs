@@ -10,6 +10,7 @@
 //! 只被保存，不执行、不影响核心解析与复核。
 
 mod remote_review;
+pub(crate) mod feedback;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -528,6 +529,15 @@ impl ReviewRegistry {
             }
             None => UpdateOutcome::Unknown,
         }
+    }
+
+    /// 反馈接收只认这条会话当前的最新审查：被新链接取代或从未见过的 reviewId 都返回 None。
+    pub(crate) fn feedback_source(&self, review_id: &str, session_id: &str) -> Option<ReviewState> {
+        let data = self.lock();
+        if data.latest.get(session_id).map(String::as_str) != Some(review_id) {
+            return None;
+        }
+        data.entries.get(review_id).filter(|entry| entry.session_id == session_id).cloned()
     }
 
     pub(crate) fn latest_for_session(&self, session_id: &str) -> Option<ReviewState> {

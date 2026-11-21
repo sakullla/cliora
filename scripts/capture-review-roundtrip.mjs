@@ -17,7 +17,7 @@ const themeOption = value('--theme', argv.includes('--full') ? 'all' : 'light');
 if (!['all', 'light', 'dark'].includes(themeOption)) throw new Error('--theme accepts all, light or dark');
 const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
 const curated = !argv.includes('--full');
-const representative = new Set(['cliora-repository-prompt', 'twiglane-source-manager', 'cliora-returned-original-session']);
+const representative = new Set(['cliora-repository-prompt', 'twiglane-source-manager', 'cliora-returned-original-session', 'cliora-feedback-preview', 'cliora-feedback-written']);
 fs.mkdirSync(out, { recursive: true });
 const prune = previousCaptureCleanup(out, 'manifest.json');
 const report = { kind: 'two-frontends-synthetic-ipc-and-scheme', nativePlatform: 'unverified', realGit: false, systemScheme: false, input: { projects: 2, repositoryMembers: 49, prompts: 124, reviewSources: 2, viewport: '1360x900' }, captures: [], observations: [], pageErrors: [] };
@@ -117,12 +117,37 @@ try {
     });
     if (results[0].review.status !== 'returned' || results[1].review.status !== 'accepted') throw new Error('Independent source results were not retained');
     report.observations.push({ theme, sourceA: a.id, sourceB: b.id, baselineA: new URL(a.url).searchParams.get('baseline'), baselineB: new URL(b.url).searchParams.get('baseline'), returnedSession: results[0].sessionId, bStatus: results[1].review.status, originalDraftRetained: true, promptNotSent: await cliora.evaluate(() => !window.__reviewCalls.some(call => call.command === 'write_workbench_session')) });
+    // feedback-v1：接收只生成预览，用户确认后原生侧写入一次；浏览器只证明交互与布局。
+    await cliora.evaluate(({ sessionId }) => window.__setReviewFeedback({
+      feedbackId: '8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1',
+      reviewId: '6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8',
+      sessionId,
+      resultRevision: 2,
+      worktreePath: '/work/commerce/team-0/api',
+      rangeVersion: 'range-7',
+      commentCount: 2,
+      comments: [
+        { path: 'src/lib/api.ts', kind: 'add', oldNo: null, newNo: 13, body: '这里要在读取失败时保留上一份结果，不要显示零改动。' },
+        { path: 'src/lib/api.ts', kind: 'add', oldNo: null, newNo: 14, body: '这个分支缺少 title 的回退说明，请在恢复入口里补一句。' },
+      ],
+      state: 'prepared',
+    }), { sessionId: REVIEW_SESSION_A });
+    await cliora.evaluate(({ sessionId }) => window.__emitReviewLink('cliora://review-feedback?v=1&feedbackId=8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=' + sessionId + '&resultRevision=2&digest=082476955cbba23ba6e82c2eacfff6d59f82c347b088fdb2df0f426ee62c56fc'), { sessionId: REVIEW_SESSION_A });
+    const feedbackPanel = cliora.getByRole('region', { name: 'Twiglane 审阅意见' });
+    await expect(feedbackPanel).toBeVisible();
+    await expect(feedbackPanel).toContainText('来自审查');
+    await expect(feedbackPanel).toContainText('src/lib/api.ts:13');
+    await shot(cliora, 'cliora-feedback-preview');
+    await feedbackPanel.getByRole('button', { name: '发送到终端', exact: true }).click();
+    await expect(feedbackPanel).toContainText('已写入终端一次，不代表 Agent 已处理。');
+    await shot(cliora, 'cliora-feedback-written');
+    report.observations.push({ theme, feedback: await cliora.evaluate(() => window.__feedbackCalls) });
     await context.close();
   }
   if (report.pageErrors.length) throw new Error(JSON.stringify(report.pageErrors));
   fs.writeFileSync(path.join(out, 'manifest.json'), JSON.stringify(report, null, 2) + '\n');
   fs.writeFileSync(path.join(out, 'index.html'), '<!doctype html><meta charset="utf-8"><title>双端审查浏览器交互</title><p>合成 IPC / scheme；不是原生平台验收。</p>' + report.captures.map(capture => `<figure><figcaption>${capture.file}</figcaption><img style="max-width:100%" src="${capture.file}"></figure>`).join(''));
-  fs.writeFileSync(path.join(out, 'README.md'), '# 双端审查浏览器捕获\n\n合成 IPC 和链接投递，不代表真实 Git、macOS WebView 或系统 scheme 已通过。\n\n两项目、49 个仓库成员、124 条提示词、两个独立来源；A → B → A → 原 Cliora 会话，草稿保留且没有自动发送。详见 manifest.json。\n');
+  fs.writeFileSync(path.join(out, 'README.md'), '# 双端审查浏览器捕获\n\n合成 IPC 和链接投递，不代表真实 Git、macOS WebView 或系统 scheme 已通过。\n\n两项目、49 个仓库成员、124 条提示词、两个独立来源；A → B → A → 原 Cliora 会话，草稿保留且没有自动发送；随后接收一批 feedback-v1 意见，只读预览后确认写入一次。详见 manifest.json。\n');
   prune(report.captures.map(capture => capture.file));
   console.log(JSON.stringify({ out, captures: report.captures.length, pageErrors: report.pageErrors.length, observations: report.observations }, null, 2));
 } finally { await browser.close(); }

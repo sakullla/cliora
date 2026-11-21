@@ -222,3 +222,33 @@ export type WorkbenchCodeStatus = {
 
 /** A routed receipt for a pending review; the workbench re-reads that session. */
 export type TwiglaneReviewSignal = { sessionId: string; token: number };
+
+/** One prepared line-anchored comment from Twiglane feedback-v1; read-only until the user confirms. */
+export type TwiglaneFeedbackComment = {
+  path: string;
+  kind: 'add' | 'del' | 'context';
+  oldNo: number | null;
+  newNo: number | null;
+  body: string;
+};
+
+/**
+ * A batch of review comments received through cliora://review-feedback. Receiving only produces
+ * this preview: no CLI launch, no PTY write and no Git. `written` means the batch was written to
+ * the terminal once, never that the agent accepted it.
+ */
+export type TwiglaneFeedbackPreview = {
+  feedbackId: string;
+  reviewId: string;
+  sessionId: string;
+  resultRevision: number;
+  worktreePath: string;
+  rangeVersion: string;
+  commentCount: number;
+  comments: TwiglaneFeedbackComment[];
+  state: 'prepared' | 'written';
+};
+
+/** The result of one confirmed send; `written` is a PTY fact, not an agent acceptance. */
+export type TwiglaneFeedbackSendOutcome = { feedbackId: string; sessionId: string; state: 'prepared' | 'written' };
+

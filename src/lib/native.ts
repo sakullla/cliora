@@ -11,7 +11,7 @@ import type { AccountCapability, AccountImpact, AccountReapplyRequest, AuthAccou
 import type { AgentSnapshot, AgentRequest, AgentResult, PluginTarget, PluginRequest, PluginSnapshot, PluginResult, PluginContents, PluginFile } from '../types/resources';
 import type { Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, MemoryAggregate, MemoryReadRequest, MemoryReadResult, MemoryDelete, MemoryDocument, MemoryEnable, MemoryList, MemorySave, MemoryTarget, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
-import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, SavedWorkbenchSession, TerminalId, TrayStatus, TwiglaneLinkOutcome, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchGitContext, WorkbenchWorktree, WorkbenchReplay, WorkbenchSession, WorkbenchTerminalSize, RemoteSessionIndexEntry, WorktreeBase, WorktreeBasePreview, WorktreeCleanupReport, WorktreeLedgerEntry, WorktreeMenuStatus, WorktreePrepareCommand } from '../types/launch';
+import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, SavedWorkbenchSession, TerminalId, TrayStatus, TwiglaneFeedbackPreview, TwiglaneFeedbackSendOutcome, TwiglaneLinkOutcome, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchGitContext, WorkbenchWorktree, WorkbenchReplay, WorkbenchSession, WorkbenchTerminalSize, RemoteSessionIndexEntry, WorktreeBase, WorktreeBasePreview, WorktreeCleanupReport, WorktreeLedgerEntry, WorktreeMenuStatus, WorktreePrepareCommand } from '../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
 import type { NewSecretExecutor, PromptSecret, PromptSecretReference, SecretAuditEntry, SecretBrokerStatus, SecretCliContext, SecretExecutor, SecretGrant, SecretInstallation, SecretInstallationKind, SecretMcpState, SecretMcpTarget } from '../types/secrets';
 import type { McpDefinition, McpDraft, McpDraftPreview, McpDraftTargetRequest, McpCommitResult, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpStore, NativeRuleFile, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue, SkillManifest, SkillFileListing, SkillFilePreview } from '../types/resources';
@@ -505,6 +505,12 @@ export const native = {
   twiglaneReviewState: (sessionId: string) => command<TwiglaneReviewState | null>('twiglane_review_state', { sessionId }),
   /** Hand one inbound cliora://review link to native; invalid links are ignored there. */
   twiglaneReviewLink: (url: string) => command<TwiglaneLinkOutcome>('twiglane_review_link', { url }),
+  /** Read and validate one feedback-v1 handoff; resolves to a preview only, never a write. */
+  twiglaneFeedbackLink: (url: string) => command<TwiglaneFeedbackPreview>('twiglane_feedback_link', { url }),
+  /** Send one already-received batch to its original session; the native side writes at most once. */
+  twiglaneFeedbackSend: (feedbackId: string) => command<TwiglaneFeedbackSendOutcome>('twiglane_feedback_send', { feedbackId }),
+  /** Drop the runtime preview of a batch; nothing is written and the id stays consumed. */
+  twiglaneFeedbackDismiss: (feedbackId: string) => command<boolean>('twiglane_feedback_dismiss', { feedbackId }),
   worktreePrepare: (directory: string) => command<string | null>('worktree_prepare', { directory }),
   saveWorktreePrepare: (directory: string, commandText: string) => command<WorktreePrepareCommand>('save_worktree_prepare', { directory, command: commandText }),
   listWorktreeLedger: () => command<WorktreeLedgerEntry[]>('list_worktree_ledger'),

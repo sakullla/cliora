@@ -19,7 +19,7 @@ export async function installReviewDesktop(page, theme = 'light') {
       { id: sessionA, toolId: 'codex', projectId: null, directory: '/work/commerce/team-0/api', running: true, mode: 'normal', exitCode: null },
       { id: sessionB, toolId: 'codex', projectId: null, directory: '/work/payments/api', running: true, mode: 'normal', exitCode: null },
     ];
-    Object.assign(window, { isTauri: true, __reviewSessions: sessions, __reviewCalls: [], __emitReviewLink: url => {
+    Object.assign(window, { isTauri: true, __reviewSessions: sessions, __reviewCalls: [], __feedbackCalls: [], __reviewFeedback: null, __reviewFeedbackPending: null, __setReviewFeedback: preview => { window.__reviewFeedbackPending = preview; }, __emitReviewLink: url => {
       const active = [...listeners.entries()].filter(([, listener]) => listener.event === 'deep-link://new-url');
       const params = new URL(url).searchParams;
       bridge.emits.push({ listeners: active.map(([eventId, listener]) => ({ eventId, handler: listener.handler })), event: params.get('event'), reviewId: params.get('reviewId') });
@@ -34,7 +34,8 @@ export async function installReviewDesktop(page, theme = 'light') {
         if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], worktreeLaunch: 'direct' };
         if (command === 'get_tray_status') return { available: false, error: null };
         if (command === 'list_workbench_sessions') return structuredClone(sessions);
-        if (command === 'replay_workbench_session') return btoa('Synthetic review fixture\r\n');
+        // A Codex composer at the bottom of the screen: the one interface that may receive a send.
+        if (command === 'replay_workbench_session') return btoa('\r\n'.repeat(20) + '> \r\n? for shortcuts');
         if (command === 'plugin:event|listen') {
           const eventId = nextListenerId++; listeners.set(eventId, { event: args.event, handler: args.handler });
           bridge.listens.push({ event: args.event, handler: args.handler, eventId });
@@ -97,6 +98,26 @@ export async function installReviewDesktop(page, theme = 'light') {
         Object.assign(review, { status: event, reason: params.get('reason'), outcome: params.get('outcome'), headOid: params.get('headOid'), worktreeState: params.get('worktreeState'), resultRevision: event === 'returned' ? revision : review.resultRevision });
         fixture.incoming.push({ reviewId: id, sessionId, event, kind: event, revision: review.resultRevision });
         return { kind: event, reviewId: id, sessionId, outcome: review.outcome, headOid: review.headOid, worktreeState: review.worktreeState, reason: review.reason };
+      }
+      // feedback-v1：接收只产生预览，发送由用户确认后记录一次。
+      if (command === 'twiglane_feedback_link') {
+        const preview = window.__reviewFeedbackPending;
+        window.__feedbackCalls.push({ command, url: args.url });
+        if (!preview) throw { code: 'feedback_invalid', message: '审阅意见文件的结构不符合协议。', action: '在 Twiglane 中重新准备送回原任务。' };
+        window.__reviewFeedbackPending = null;
+        window.__reviewFeedback = { ...preview };
+        return structuredClone(window.__reviewFeedback);
+      }
+      if (command === 'twiglane_feedback_send') {
+        const preview = window.__reviewFeedback;
+        window.__feedbackCalls.push({ command, feedbackId: args.feedbackId });
+        if (!preview || preview.state !== 'prepared') throw { code: 'feedback_already_sent', message: '这批审阅意见已经写入过终端一次。' };
+        window.__reviewFeedback = { ...preview, state: 'written' };
+        return { feedbackId: preview.feedbackId, sessionId: preview.sessionId, state: 'written' };
+      }
+      if (command === 'twiglane_feedback_dismiss') {
+        window.__feedbackCalls.push({ command, feedbackId: args.feedbackId });
+        return true;
       }
       return original(command, args);
     };

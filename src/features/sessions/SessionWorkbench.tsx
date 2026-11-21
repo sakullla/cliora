@@ -22,7 +22,7 @@ import { Icon } from '../../components/Icon';
 import { Badge, Button, IconButton } from '../../components/ui';
 import rowMenuStyles from '../../components/RowMenu.module.css';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
-import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, SavedWorkbenchSession, TwiglaneReviewSignal, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchExit, WorkbenchGitContext, WorkbenchWorktree, WorkbenchOutput, WorkbenchRestoreCandidate, WorkbenchRestoreEvent, WorkbenchRestoreStage, WorkbenchSession, WorktreeBase, WorktreeBasePreview, WorktreeLaunchEvent, WorktreeLaunchIntent, WorktreeLaunchStage, WorktreeLedgerEntry, WorktreeMenuStatus } from '../../types/launch';
+import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, SavedWorkbenchSession, TwiglaneFeedbackPreview, TwiglaneReviewSignal, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchExit, WorkbenchGitContext, WorkbenchWorktree, WorkbenchOutput, WorkbenchRestoreCandidate, WorkbenchRestoreEvent, WorkbenchRestoreStage, WorkbenchSession, WorktreeBase, WorktreeBasePreview, WorktreeLaunchEvent, WorktreeLaunchIntent, WorktreeLaunchStage, WorktreeLedgerEntry, WorktreeMenuStatus } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
 import type { PromptContext } from '../../types/prompts';
 import { inferWorkspaceScope } from '../../lib/workspaceScope';
@@ -411,7 +411,7 @@ function SessionUploadNotice({ task, progressLabel, progressText, failedTitle, r
   </div>;
 }
 
-export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remoteTargetId = 'local', syncedRemoteTargets = [], onRemoteTargetChange, focusSessionId, focusToken, reviewSignal = null, failure, onFailure, onOpenHome, remoteIntent, railHost = null, railSlim = false, onToggleRailSlim, onRailLayout, onLiveCountChange, railToggleRef, windowChrome = null, captionSlotRef }: {
+export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remoteTargetId = 'local', syncedRemoteTargets = [], onRemoteTargetChange, focusSessionId, focusToken, reviewSignal = null, feedback = null, onFeedbackChange, failure, onFailure, onOpenHome, remoteIntent, railHost = null, railSlim = false, onToggleRailSlim, onRailLayout, onLiveCountChange, railToggleRef, windowChrome = null, captionSlotRef }: {
   remoteIntent?: RemoteWorkbenchIntent | null;
   /** The native window frame; set, the session title bar is also the window's title bar. */
   windowChrome?: WindowChrome | null;
@@ -437,6 +437,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   focusToken: number;
   /** A routed cliora://review receipt for one session; a new token means re-read it. */
   reviewSignal?: TwiglaneReviewSignal | null;
+  /** One received feedback-v1 batch, already validated and staged by native. Preview only. */
+  feedback?: TwiglaneFeedbackPreview | null;
+  /** Replaces or clears the preview after a send, a cancel or an expiry. */
+  onFeedbackChange?: (feedback: TwiglaneFeedbackPreview | null) => void;
   failure: WorkbenchFailure | null;
   onFailure: (failure: WorkbenchFailure | null) => void;
   onOpenHome: () => void;
@@ -567,6 +571,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   // 审查状态只在 native 注册表里判定；这里是它的展示副本，按 sessionId 索引。
   const [reviewStates, setReviewStates] = useState<Map<string, TwiglaneReviewState>>(() => new Map());
   const [reviewBusy, setReviewBusy] = useState<string | null>(null);
+  /** One feedback batch at a time: sending is a single explicit action, never retried on its own. */
+  const [feedbackBusy, setFeedbackBusy] = useState(false);
+  const [feedbackError, setFeedbackError] = useState('');
   const [reviewError, setReviewError] = useState('');
   const [codeStatuses, setCodeStatuses] = useState<Map<string, WorkbenchCodeStatus>>(() => new Map());
   const [codeStatusUnknown, setCodeStatusUnknown] = useState<Map<string, boolean>>(() => new Map());
@@ -2590,6 +2597,52 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
    * unanswered attempt) asks native for a new reviewId, so an old result can never be
    * mistaken for this one. Nothing here writes to the repository.
    */
+
+  /**
+   * 只有当前屏幕版本被适配器判定为可输入时才允许写入：通用/未知界面、问题或批准界面都
+   * 只提供复制意见，不把「PTY 可写」当成「发送安全」。
+   */
+  function feedbackCanSend(preview: TwiglaneFeedbackPreview, running: boolean): boolean {
+    if (!running || preview.state !== 'prepared') return false;
+    const semantics = semanticsById.get(preview.sessionId) ?? null;
+    return semantics?.inputReady === true && semantics.attention == null;
+  }
+
+  function feedbackText(preview: TwiglaneFeedbackPreview): string {
+    const head = t('sessions.feedbackCopyHeader', { count: preview.commentCount });
+    const items = preview.comments.map((comment) => comment.path + ':' + (comment.newNo ?? comment.oldNo ?? '-') + ' (' + comment.kind + ')\n' + comment.body);
+    return [head, ...items].join('\n\n');
+  }
+
+  function copyFeedback(preview: TwiglaneFeedbackPreview) {
+    void writeClipboard(feedbackText(preview)).then((copied) => setNotice(copied ? t('sessions.feedbackCopied') : t('sessions.feedbackCopyFailed')));
+  }
+
+  /** 一次性发送：原生写入成功才显示「已写入终端」，失败或未知都不自动重试。 */
+  async function sendFeedback(preview: TwiglaneFeedbackPreview) {
+    if (feedbackBusy || preview.state !== 'prepared') return;
+    setFeedbackError('');
+    setFeedbackBusy(true);
+    try {
+      const outcome = await native.twiglaneFeedbackSend(preview.feedbackId);
+      onFeedbackChange?.({ ...preview, state: outcome.state });
+      setNotice(t('sessions.feedbackSent'));
+    } catch (error) {
+      setFeedbackError(formatFailure(error, t('sessions.feedbackSendFailed'), t('sessions.feedbackSendFailedAction')));
+    } finally {
+      setFeedbackBusy(false);
+    }
+  }
+
+  /** 取消只清掉这次预览与运行期暂存；不写终端、不写 Git。 */
+  async function dismissFeedback(preview: TwiglaneFeedbackPreview) {
+    try {
+      await native.twiglaneFeedbackDismiss(preview.feedbackId);
+    } catch { /* 预览仍然可以本地关闭 */ }
+    setFeedbackError('');
+    onFeedbackChange?.(null);
+  }
+
   async function startReview(session: WorkbenchSession) {
     setReviewError('');
     setReviewBusy(session.id);
@@ -3810,6 +3863,34 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
             </header>}
 
             <div className={styles.screen}>
+              {/* 收到的一批审阅意见先只读展示；写入终端必须由用户在原任务里再次确认。 */}
+              {current && feedback && feedback.sessionId === current.id && (() => {
+                const canSend = feedbackCanSend(feedback, current.running);
+                return <section className={styles.feedbackPanel} aria-label={t('sessions.feedbackTitle')} data-state={feedback.state}>
+                  <header className={styles.feedbackHead}>
+                    <div className={styles.feedbackIdentity}>
+                      <strong className={styles.feedbackTitle}>{t('sessions.feedbackTitle')}</strong>
+                      <span className={styles.feedbackMeta}>{t('sessions.feedbackSource', { review: feedback.reviewId.slice(0, 8), revision: feedback.resultRevision, count: feedback.commentCount })}</span>
+                      <span className={styles.feedbackMeta} title={feedback.worktreePath}>{displayPath(feedback.worktreePath)}</span>
+                    </div>
+                    <div className={styles.feedbackActions}>
+                      {feedback.state === 'prepared' && (canSend
+                        ? <Button size="sm" variant="primary" disabled={feedbackBusy} aria-label={t('sessions.feedbackSend')} onClick={() => void sendFeedback(feedback)}>{t('sessions.feedbackSend')}</Button>
+                        : <Button size="sm" disabled={feedbackBusy} aria-label={t('sessions.feedbackCopy')} onClick={() => copyFeedback(feedback)}>{t('sessions.feedbackCopy')}</Button>)}
+                      {feedback.state === 'written' && <span className={styles.feedbackHint} role="status">{t('sessions.feedbackSentHint')}</span>}
+                      <Button size="sm" variant="ghost" aria-label={t('sessions.feedbackClose')} onClick={() => void dismissFeedback(feedback)}>{t('sessions.feedbackClose')}</Button>
+                    </div>
+                  </header>
+                  {feedback.state === 'prepared' && !canSend && <p className={styles.feedbackHint}>{t('sessions.feedbackNeedsReady')}</p>}
+                  {feedbackError && <p className={styles.feedbackError} role="alert">{feedbackError}</p>}
+                  <ol className={styles.feedbackList}>
+                    {feedback.comments.map((comment, index) => <li key={comment.path + ':' + index} className={styles.feedbackItem}>
+                      <span className={styles.feedbackPath}>{comment.path}:{comment.newNo ?? comment.oldNo ?? '-'} <em>{comment.kind}</em></span>
+                      <pre className={styles.feedbackBody}>{comment.body}</pre>
+                    </li>)}
+                  </ol>
+                </section>;
+              })()}
               {current && findOpen && <div className={styles.findLayer} data-split={split ? 'true' : undefined} data-pane={split ? split.indexOf(current.id) : undefined}>
                 <div className={styles.findPanel} role="search">
                   <div className={styles.findField} data-field-frame=""><Icon name="search" size={14} /><input ref={findInputRef} type="search" value={findQuery} placeholder={t('sessions.findPlaceholder')} aria-label={t('sessions.findPlaceholder')} onChange={(event) => setFindQuery(event.target.value)} onKeyDown={(event) => {

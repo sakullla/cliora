@@ -189,6 +189,8 @@ pub struct AppState {
     workspace: crate::native::workspace::DraftSessions,
     /// 内存态审查关联：按 reviewId 记录 session、worktree 与最新状态，不持久化。
     reviews: crate::twiglane::ReviewRegistry,
+    /// 已接收的审阅意见批次：只存在运行期，重启后来源失效，不自动消费或发送。
+    feedback: crate::twiglane::feedback::FeedbackStore,
     /// The running secret broker owns the per-user IPC address for this process.
     broker: Mutex<Option<crate::secrets::ipc::Broker>>,
 }
@@ -4086,6 +4088,92 @@ pub async fn twiglane_review_link(
         }
         Ok(outcome)
     }).await
+}
+
+/// 接收一批 feedback-v1 审阅意见：校验 URL、文件 schema、digest、当前来源与 canonical
+/// worktree，把有界意见读入内存供预览并删除一次性文件。它不启动 CLI、不写 PTY、不写 Git。
+#[tauri::command]
+pub async fn twiglane_feedback_link(
+    app: AppHandle,
+    url: String,
+) -> Result<crate::twiglane::feedback::FeedbackPreview, ApiError> {
+    blocking(move || {
+        let link = crate::twiglane::feedback::parse_feedback_url(&url).map_err(crate::twiglane::feedback::api_error)?;
+        let state = app.state::<AppState>();
+        // 同一 feedbackId 只暂存一次：在读取文件之前就拒绝重复投递。
+        if state.feedback.is_known(&link.feedback_id) {
+            return Err(crate::twiglane::feedback::api_error("feedback_duplicate"));
+        }
+        let source = state.reviews.feedback_source(&link.review_id, &link.session_id);
+        let file = crate::twiglane::feedback::receive_file(&link).map_err(crate::twiglane::feedback::api_error)?;
+        crate::twiglane::feedback::check_source(&file, source.as_ref()).map_err(crate::twiglane::feedback::api_error)?;
+        let preview = state.feedback.stage(file).map_err(crate::twiglane::feedback::api_error)?;
+        // 一次性消费：删除失败就不保留暂存，避免同一文件被读第二次。
+        if let Err(code) = crate::twiglane::feedback::consume_file(&link.feedback_id) {
+            state.feedback.dismiss(&link.feedback_id);
+            return Err(crate::twiglane::feedback::api_error(code));
+        }
+        Ok(preview)
+    })
+    .await
+}
+
+/// 用户确认后把一批意见写入原会话终端。以 feedbackId 为一次性键，复核会话、来源、目录与
+/// running，在同一 writer 锁内完成一次 write/flush；成功只表示已写入终端。
+#[tauri::command]
+pub async fn twiglane_feedback_send(
+    app: AppHandle,
+    feedback_id: String,
+) -> Result<crate::twiglane::feedback::FeedbackSendOutcome, ApiError> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let staged = state.feedback.entry(&feedback_id).ok_or_else(|| crate::twiglane::feedback::api_error("feedback_unknown"))?;
+        if staged.state != "prepared" {
+            return Err(crate::twiglane::feedback::api_error("feedback_already_sent"));
+        }
+        let file = staged.file;
+        // 来源、结果版本与 canonical worktree 必须仍是接收时的那一份。
+        let source = state.reviews.feedback_source(&file.review_id, &file.session_id);
+        crate::twiglane::feedback::check_source(&file, source.as_ref()).map_err(crate::twiglane::feedback::api_error)?;
+        // 已结束或已关闭的会话不自动恢复：只拒绝，由用户走现有恢复入口后重新确认。
+        let session = crate::session_host::list().into_iter().find(|item| item.id == file.session_id)
+            .ok_or_else(|| crate::twiglane::feedback::api_error("feedback_session_closed"))?;
+        if !session.running {
+            return Err(crate::twiglane::feedback::api_error("feedback_session_ended"));
+        }
+        let directory = crate::session_host::local_directory(&file.session_id)
+            .map_err(|_| crate::twiglane::feedback::api_error("feedback_session_closed"))?
+            .ok_or_else(|| crate::twiglane::feedback::api_error("feedback_session_closed"))?;
+        let actual = directory.canonicalize().unwrap_or(directory);
+        let expected = std::fs::canonicalize(&file.worktree_path)
+            .map_err(|_| crate::twiglane::feedback::api_error("feedback_worktree_changed"))?;
+        if actual != expected {
+            return Err(crate::twiglane::feedback::api_error("feedback_worktree_changed"));
+        }
+        let mut payload = crate::twiglane::feedback::prompt_text(&file).into_bytes();
+        payload.push(b'\r');
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&payload);
+        // 写入失败或结果未知都保持未发送状态，不自动重试。
+        crate::session_host::write(&file.session_id, &encoded)
+            .map_err(|_| crate::twiglane::feedback::api_error("feedback_write_failed"))?;
+        let preview = state.feedback.mark_written(&feedback_id)
+            .ok_or_else(|| crate::twiglane::feedback::api_error("feedback_unknown"))?;
+        Ok(crate::twiglane::feedback::FeedbackSendOutcome {
+            feedback_id,
+            session_id: file.session_id,
+            state: preview.state,
+        })
+    })
+    .await
+}
+
+/// 取消只清理这次运行期的暂存；不写 PTY、不写 Git，标识仍不可被再次暂存。
+#[tauri::command]
+pub async fn twiglane_feedback_dismiss(
+    app: AppHandle,
+    feedback_id: String,
+) -> Result<bool, ApiError> {
+    blocking(move || Ok(app.state::<AppState>().feedback.dismiss(&feedback_id))).await
 }
 
 #[tauri::command]
