@@ -15,5 +15,15 @@ fn main() {
     if cliora_lib::usage::helper_entry() {
         return;
     }
+    // AI CLIs call the same binary as a thin secret helper; it reaches the running
+    // broker over the per-user local IPC address.
+    if cliora_lib::secrets::cli::helper_entry() {
+        return;
+    }
+    // An MCP client starts the same binary as its stdio secret server; it forwards
+    // everything to the same broker and never opens local storage itself.
+    if cliora_lib::secrets::mcp::helper_entry() {
+        return;
+    }
     cliora_lib::run();
 }

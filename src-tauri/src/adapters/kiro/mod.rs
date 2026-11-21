@@ -519,6 +519,7 @@ impl CliAdapter for Kiro {
     fn descriptor(&self) -> AdapterDescriptor {
         AdapterDescriptor {
             remote: self.remote_capabilities(),
+            secret_mcp: self.secret_mcp_capability(),
             id: self.id(),
             configuration: None,
             name: self.name(),

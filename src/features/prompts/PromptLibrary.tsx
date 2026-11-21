@@ -19,6 +19,7 @@ import type { BusinessWorkspace } from '../../types/workspaces';
 import type { LibraryItem } from '../../types/library';
 import type { PromptBatch, PromptBatchResultItem, PromptContext, PromptDocument, PromptDraft, PromptSummary, PromptPage } from '../../types/prompts';
 import { PromptImportDialog } from './PromptImportDialog';
+import { PromptSecrets, insertReference } from './PromptSecrets';
 import { parseScope, scopeLabel, scopeOptions, scopeTone, scopeValue } from './promptScope';
 import { notifyPromptsChanged, promptContextKey, usePromptQuery } from './usePromptQuery';
 import styles from './Prompts.module.css';
@@ -289,6 +290,8 @@ export function PromptLibrary({ context, active, createSignal, discardSignal, sp
         </div>
         {draft.scope.kind === 'unresolved' && <p className={styles.warning}>{t('prompts.oldScope')}</p>}
         <label><span className={styles.labelRow}>{t('prompts.body')}<span className={styles.hint}>{t('prompts.chars', { count: draft.body.length })}</span></span><textarea aria-label={t('library.page.bodyEditorLabel')} rows={14} value={draft.body} onChange={event => setDraft({ ...draft, body: event.target.value })} /></label>
+        {/* Secret values never enter the draft: only the canonical reference text does. */}
+        <PromptSecrets local={!context.targetId || context.targetId === 'local'} body={draft.body} disabled={busy} onInsert={reference => setDraft(current => current ? { ...current, body: insertReference(current.body, reference) } : current)} />
         <div className="dialog-footer">
           <Badge tone={dirty ? 'warning' : 'neutral'} dot={dirty}>{dirty ? t('prompts.unsaved') : t('prompts.saved')}</Badge>
           <span className="dialog-footer-gap" />

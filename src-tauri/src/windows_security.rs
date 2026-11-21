@@ -9,7 +9,7 @@ use windows_sys::Win32::Security::Authorization::{
 };
 use windows_sys::Win32::Security::{
     GetSecurityDescriptorDacl, GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER,
-    DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+    DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, SECURITY_ATTRIBUTES,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -18,7 +18,39 @@ impl Drop for LocalAllocation {
     fn drop(&mut self) { unsafe { LocalFree(self.0); } }
 }
 
-fn current_sid() -> Result<String, String> {
+/// A restricted descriptor that only grants the current user and the system
+/// account. A named pipe must be created with it, because a pipe has no path to
+/// apply `restrict` to after creation.
+pub(crate) struct PrivateDescriptor(*mut core::ffi::c_void);
+
+impl PrivateDescriptor {
+    pub(crate) fn attributes(&self) -> SECURITY_ATTRIBUTES {
+        SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: self.0,
+            bInheritHandle: 0,
+        }
+    }
+}
+
+impl Drop for PrivateDescriptor {
+    fn drop(&mut self) { unsafe { LocalFree(self.0); } }
+}
+
+/// Only the current user and the system account may reach the caller's secret
+/// broker; there is no inheritance to child objects.
+pub(crate) fn pipe_security() -> Result<PrivateDescriptor, String> {
+    let sid = current_sid()?;
+    let sddl: Vec<u16> = format!("D:P(A;;GA;;;{sid})(A;;GA;;;SY)")
+        .encode_utf16().chain([0]).collect();
+    let mut descriptor = std::ptr::null_mut();
+    if unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(), 1, &mut descriptor, std::ptr::null_mut()) } == 0 {
+        return Err("无法创建受限 Windows ACL".into());
+    }
+    Ok(PrivateDescriptor(descriptor))
+}
+
+pub(crate) fn current_sid() -> Result<String, String> {
     let mut token = std::ptr::null_mut();
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
         return Err("无法检查当前 Windows 用户身份".into());

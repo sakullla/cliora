@@ -57,6 +57,14 @@ export default {
     collapse: '收起 {{count}} 项',
     matchCount: '{{count}} 项',
   },
+  secretApproval: {
+    title: '允许读取秘密原值？',
+    message: '「{{alias}}」请求读取原值。来源：{{source}}。',
+    risk: '批准后原值会写入本次命令的 stdout，可能进入模型上下文与 CLI 会话记录。',
+    timeout: '请求将在 {{seconds}} 秒后过期；过期、重复回答或窗口关闭都不会返回原值。',
+    decline: '拒绝',
+    accept: '允许本次读取',
+  },
   dialog: {
     back: '返回列表',
     close: '关闭',

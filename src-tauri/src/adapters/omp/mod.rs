@@ -613,6 +613,7 @@ impl CliAdapter for Omp {
         let plugins = self.plugins();
         AdapterDescriptor {
             remote: self.remote_capabilities(),
+            secret_mcp: self.secret_mcp_capability(),
             id: ID,
             name: NAME,
             interface_formats: self.interface_formats(),

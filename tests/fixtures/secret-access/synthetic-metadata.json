@@ -1,0 +1,83 @@
+{
+  "kind": "synthetic-secret-access-fixture",
+  "note": "Identifiers, aliases, references and one synthetic canary only. No real or realistic secret value: the canary exists so a check can prove that metadata, tool discovery, tool output and the CLI fallback never carry a value. Every id and label here is invented.",
+  "canary": "canary-synthetic-access-5b1e9d",
+  "context": {
+    "executable": "/opt/cliora-fixture/Cliora",
+    "entry": "--cliora-internal-secret-cli-v1"
+  },
+  "installation": {
+    "id": "4c2f8c9e-6b1a-4c44-9d5b-6f0a2b7c1234",
+    "label": "秘密 MCP · fixture",
+    "kind": "mcp",
+    "revoked": false
+  },
+  "secrets": [
+    {
+      "id": "11111111-2222-4333-8444-555555555555",
+      "alias": "合成部署口令",
+      "status": "available",
+      "reference": "{{cliora-secret:11111111-2222-4333-8444-555555555555}}",
+      "executors": [
+        { "id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "label": "合成测试替身", "digestOk": true }
+      ]
+    },
+    {
+      "id": "99999999-8888-4777-8666-555555555555",
+      "alias": "未授权合成秘密",
+      "status": "available",
+      "reference": "{{cliora-secret:99999999-8888-4777-8666-555555555555}}",
+      "executors": []
+    }
+  ],
+  "executors": [
+    {
+      "id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "label": "合成测试替身",
+      "digestOk": true,
+      "secretIds": ["11111111-2222-4333-8444-555555555555"]
+    },
+    {
+      "id": "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+      "label": "已登记但未绑定",
+      "digestOk": true,
+      "secretIds": []
+    }
+  ],
+  "grants": [
+    {
+      "installationId": "4c2f8c9e-6b1a-4c44-9d5b-6f0a2b7c1234",
+      "secretId": "11111111-2222-4333-8444-555555555555",
+      "executorId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    }
+  ],
+  "ungranted": {
+    "secretId": "99999999-8888-4777-8666-555555555555",
+    "executorId": "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+    "reason": "执行入口已登记但没有授权给这个秘密，使用必须被拒绝且不启动目标进程"
+  },
+  "prompt": {
+    "file": "prompt-reference.md",
+    "references": [
+      "{{cliora-secret:11111111-2222-4333-8444-555555555555}}",
+      "{{cliora-secret:99999999-8888-4777-8666-555555555555}}"
+    ]
+  },
+  "expected": {
+    "maskedMarker": "[redacted]",
+    "executorSentinel": "CLIORA_TEST_EXECUTOR_OK",
+    "missingValueSentinel": "CLIORA_TEST_EXECUTOR_MISSING",
+    "valueChannels": ["env", "stdin"],
+    "useCall": {
+      "tool": "use_secret",
+      "arguments": {
+        "secretId": "11111111-2222-4333-8444-555555555555",
+        "executorId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+      }
+    },
+    "readCall": {
+      "tool": "read_secret",
+      "arguments": { "secretId": "11111111-2222-4333-8444-555555555555" }
+    }
+  }
+}

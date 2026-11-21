@@ -13,6 +13,7 @@ import type { Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, MemoryAggregate, MemoryReadRequest, MemoryReadResult, MemoryDelete, MemoryDocument, MemoryEnable, MemoryList, MemorySave, MemoryTarget, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, SavedWorkbenchSession, TerminalId, TrayStatus, TwiglaneLinkOutcome, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchGitContext, WorkbenchWorktree, WorkbenchReplay, WorkbenchSession, WorkbenchTerminalSize, RemoteSessionIndexEntry, WorktreeBase, WorktreeBasePreview, WorktreeCleanupReport, WorktreeLedgerEntry, WorktreeMenuStatus, WorktreePrepareCommand } from '../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
+import type { NewSecretExecutor, PromptSecret, PromptSecretReference, SecretAuditEntry, SecretBrokerStatus, SecretCliContext, SecretExecutor, SecretGrant, SecretInstallation, SecretInstallationKind, SecretMcpState, SecretMcpTarget } from '../types/secrets';
 import type { McpDefinition, McpDraft, McpDraftPreview, McpDraftTargetRequest, McpCommitResult, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpStore, NativeRuleFile, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue, SkillManifest, SkillFileListing, SkillFilePreview } from '../types/resources';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, RemoteHistorySnapshot, ScanStatus, UsageReport } from '../types/history';
 import { markOnboardingLaunched } from './onboarding';
@@ -24,6 +25,8 @@ import i18n, { bindLanguagePersist } from '../i18n';
 export const nativeAvailable = isTauri();
 
 export const LAUNCH_SETTINGS_EVENT = 'cliora:launch-settings-changed';
+/** Emitted by the broker for every raw read; the payload carries no value. */
+export const SECRET_APPROVAL_EVENT = 'cliora:secret-approval-request';
 function notifyLaunchSettings(settings: LaunchSettings) {
   window.dispatchEvent(new CustomEvent<LaunchSettings>(LAUNCH_SETTINGS_EVENT, { detail: settings }));
 }
@@ -243,6 +246,37 @@ export const native = {
   previewPromptImport: (context: PromptContext, input: PromptImportInput, options?: RemoteOperationOptions) => promptCommand<PromptImportPreview>('preview_prompt_import', context, { input }, 'read', options),
   deletePrompt: (context: PromptContext, id: string, expectedVersion: number, options?: RemoteOperationOptions) => promptCommand<void>('delete_prompt', context, { id, expectedVersion }, 'write', options),
   recordPromptUsage: (context: PromptContext, id: string, favorite: boolean | null, used: boolean) => command<void>('record_prompt_usage', { targetId: context.targetId && context.targetId !== 'local' ? context.targetId : null, id, favorite, used }),
+  // Prompt secrets are device-local: these wrappers never carry a target id, so a
+  // remote library context cannot create, list or resolve a local secret.
+  listPromptSecrets: () => command<PromptSecret[]>('list_prompt_secrets'),
+  createPromptSecret: (alias: string, value: string) => command<PromptSecret>('create_prompt_secret', { alias, value }),
+  renamePromptSecret: (id: string, expectedVersion: number, alias: string) => command<PromptSecret>('rename_prompt_secret', { id, expectedVersion, alias }),
+  updatePromptSecretValue: (id: string, expectedVersion: number, value: string) => command<PromptSecret>('update_prompt_secret_value', { id, expectedVersion, value }),
+  deletePromptSecret: (id: string, expectedVersion: number) => command<void>('delete_prompt_secret', { id, expectedVersion }),
+  resolvePromptSecretReferences: (body: string) => command<PromptSecretReference[]>('resolve_prompt_secret_references', { body }),
+  // Broker registry. Executors, installations and grants are local metadata; none
+  // of these wrappers takes or returns a secret value.
+  listSecretExecutors: () => command<SecretExecutor[]>('list_secret_executors'),
+  saveSecretExecutor: (executor: NewSecretExecutor) => command<SecretExecutor>('save_secret_executor', { executor }),
+  deleteSecretExecutor: (id: string) => command<void>('delete_secret_executor', { id }),
+  listSecretInstallations: () => command<SecretInstallation[]>('list_secret_installations'),
+  createSecretInstallation: (label: string, kind: SecretInstallationKind, targetId: string | null) => command<SecretInstallation>('create_secret_installation', { label, kind, targetId }),
+  revokeSecretInstallation: (id: string) => command<void>('revoke_secret_installation', { id }),
+  listSecretGrants: () => command<SecretGrant[]>('list_secret_grants'),
+  grantSecretUsage: (installationId: string, secretId: string, executorId: string) => command<void>('grant_secret_usage', { installationId, secretId, executorId }),
+  revokeSecretUsage: (installationId: string, secretId: string, executorId: string) => command<void>('revoke_secret_usage', { installationId, secretId, executorId }),
+  secretBrokerStatus: () => command<SecretBrokerStatus>('secret_broker_status'),
+  /** Answers one read approval by id. A repeated or unknown id answers nothing. */
+  answerPromptSecretApproval: (approvalId: string, accepted: boolean) => command<void>('answer_prompt_secret_approval', { approvalId, accepted }),
+  listSecretAudit: (limit: number) => command<SecretAuditEntry[]>('list_secret_audit', { limit }),
+  secretCliContext: () => command<SecretCliContext>('secret_cli_context'),
+  // The secret MCP entry is per target and goes through the shared MCP preview,
+  // commit and compare-and-swap flow. Status keeps placement, protocol health and
+  // registry capability apart, so no wrapper turns a written entry into a claim.
+  secretMcpStatus: (target: SecretMcpTarget) => command<SecretMcpState>('secret_mcp_status', { target }),
+  setSecretMcpEnabled: (target: SecretMcpTarget, enabled: boolean) => command<SecretMcpState>('set_secret_mcp_enabled', { target, enabled }),
+  checkSecretMcpHealth: (target: SecretMcpTarget) => command<SecretMcpState>('check_secret_mcp_health', { target }),
+  revokeSecretMcpInstallation: (target: SecretMcpTarget) => command<SecretMcpState>('revoke_secret_mcp_installation', { target }),
   previewWorkspaceLink: (url: string) => command<WorkspaceManifestPreview>('preview_workspace_link', { url }),
   listBusinessWorkspaces: () => command<BusinessWorkspace[]>('list_business_workspaces'),
   createBusinessWorkspace: (name: string) => command<BusinessWorkspace>('create_business_workspace', { name }),

@@ -2119,3 +2119,68 @@ fn multi_repository_delete_legacy_row_without_metadata_preserves_history_barrier
     assert!(keys.contains("library:legacy-only"));
     assert!(status(&db).unwrap().local_only.iter().any(|item|item.key=="library:legacy-only"&&item.label=="Legacy only"));
 }
+
+#[test]
+fn webdav_publication_keeps_prompt_secret_references_without_secret_metadata() {
+    const CANARY: &str = "canary-webdav-62b4e8";
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(&temp.path().join("db"));
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let secret = crate::secrets::create(&db, &store, "云端口令", CANARY).unwrap();
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO workspace_projects(id,name) VALUES('workspace-1','Work')", []).unwrap();
+        Ok(())
+    })
+    .unwrap();
+    let save = |scope: crate::prompts::PromptScope| {
+        crate::prompts::save(
+            &db,
+            &crate::prompts::PromptDraft {
+                id: None,
+                title: "同步提示词".into(),
+                body: format!("使用 {} 连接", secret.reference),
+                scope,
+                tags: vec![],
+                expected_version: None,
+            },
+        )
+        .unwrap()
+    };
+    let global = save(crate::prompts::PromptScope::Global);
+    let scoped = save(crate::prompts::PromptScope::Workspace { workspace_id: "workspace-1".into() });
+    // The secret metadata exists locally, so the snapshot assertions below are meaningful.
+    db.with_connection(|conn| {
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM prompt_secrets", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+        Ok(())
+    })
+    .unwrap();
+
+    let snapshot = collect_snapshot(&db, &store, &registry).unwrap();
+    let text = serde_json::to_string(&snapshot).unwrap();
+    assert!(text.contains(&secret.reference), "the prompt body keeps the reference text");
+    for absent in [CANARY, "云端口令", "prompt-secret-"] {
+        assert!(!text.contains(absent), "sync payload must not carry {absent}");
+    }
+    // Prompt scope alone decides publication; the reference never widens it.
+    let published: Vec<&PortableEntity> =
+        snapshot.entities.iter().filter(|entity| webdav_entity(entity)).collect();
+    let bodies: Vec<&str> = published
+        .iter()
+        .filter_map(|entity| match &entity.payload {
+            PortablePayload::Prompt(value) => Some(value.item.body.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(bodies, vec![format!("使用 {} 连接", secret.reference).as_str()]);
+    assert!(published
+        .iter()
+        .any(|entity| matches!(&entity.payload, PortablePayload::Prompt(value) if value.item.id == global.id)));
+    assert!(published.iter().all(|entity| match &entity.payload {
+        PortablePayload::Prompt(value) => value.item.id != scoped.id,
+        _ => true,
+    }));
+}

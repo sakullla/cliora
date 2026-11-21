@@ -348,6 +348,101 @@ fn encrypted_bundle_restores_on_fresh_device_without_identity_or_paths_and_is_id
 }
 
 #[test]
+fn portable_migration_keeps_prompt_secret_references_without_secret_metadata() {
+    const CANARY: &str = "canary-portable-5e17c2";
+    let root = tempfile::tempdir().unwrap();
+    let source = database(&root.path().join("source"));
+    let source_store = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let secret = crate::secrets::create(&source, &source_store, "迁移口令", CANARY).unwrap();
+    let document = crate::prompts::save(
+        &source,
+        &crate::prompts::PromptDraft {
+            id: None,
+            title: "部署步骤".into(),
+            body: format!("使用 {} 登录部署机", secret.reference),
+            scope: crate::prompts::PromptScope::Global,
+            tags: vec![],
+            expected_version: None,
+        },
+    )
+    .unwrap();
+    let bundle = root.path().join("migration.cliora");
+    export_bundle(
+        &source,
+        &source_store,
+        &registry,
+        "correct-password",
+        None,
+        &bundle,
+    )
+    .unwrap();
+    // Neither the sealed bundle nor its plaintext carries the value or the alias.
+    let sealed = fs::read(&bundle).unwrap();
+    assert!(!sealed
+        .windows(CANARY.len())
+        .any(|window| window == CANARY.as_bytes()));
+    let text = serde_json::to_string(&unlock_bundle(&bundle, "correct-password").unwrap()).unwrap();
+    assert!(text.contains(&secret.reference), "the body keeps the reference text");
+    for absent in [CANARY, "迁移口令", "prompt-secret-"] {
+        assert!(!text.contains(absent), "portable payload must not carry {absent}");
+    }
+    let prompt_entity = unlock_bundle(&bundle, "correct-password")
+        .unwrap()
+        .entities
+        .into_iter()
+        .find(|entity| matches!(entity.payload, PortablePayload::Prompt(_)))
+        .unwrap();
+    let PortablePayload::Prompt(portable) = &prompt_entity.payload else {
+        unreachable!()
+    };
+    assert_eq!(portable.item.body, document.body);
+
+    // A device without the secret keeps the reference text and stays unresolved; the
+    // import never mints a local secret to bind the old reference to.
+    let fresh = database(&root.path().join("fresh"));
+    let fresh_store = MemoryCredentials::default();
+    let draft = preview_import(
+        &fresh,
+        &fresh_store,
+        &registry,
+        unlock_bundle(&bundle, "correct-password").unwrap(),
+    )
+    .unwrap();
+    let keys: BTreeSet<String> = draft.items.iter().map(|item| item.key.clone()).collect();
+    assert!(keys.contains(&format!("library:{}", document.id)));
+    apply_import(&fresh, &fresh_store, &registry, &draft, &keys).unwrap();
+    assert!(
+        fresh_store.0.lock().unwrap().is_empty(),
+        "importing prompts must not create credential entries"
+    );
+    let restored = crate::prompts::get(&fresh, &document.id, None).unwrap();
+    assert_eq!(restored.body, document.body);
+    let resolved = crate::secrets::resolve(&fresh, &fresh_store, &restored.body).unwrap();
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].status, crate::secrets::SecretStatus::Unknown);
+    assert_eq!(resolved[0].alias, None, "no alias travels with the reference");
+    fresh
+        .with_connection(|conn| {
+            let count: i64 = conn
+                .query_row("SELECT count(*) FROM prompt_secrets", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(count, 0);
+            Ok(())
+        })
+        .unwrap();
+    // Re-importing the same bundle stays a no-op rather than duplicating metadata.
+    let again = preview_import(
+        &fresh,
+        &fresh_store,
+        &registry,
+        unlock_bundle(&bundle, "correct-password").unwrap(),
+    )
+    .unwrap();
+    assert!(again.items.iter().all(|item| item.status == "same"));
+}
+
+#[test]
 fn portable_snapshot_rejects_duplicate_entities() {
     let entity = PortableEntity {
         id: "managed".into(),

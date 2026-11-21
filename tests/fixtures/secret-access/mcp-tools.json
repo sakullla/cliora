@@ -1,0 +1,32 @@
+{
+  "kind": "synthetic-mcp-tool-contract",
+  "note": "The tool contract a model has to see. A Rust test compares this file with the tools the real helper publishes over rmcp, and the offline verification reads it, so a copy cannot drift from the server without a failing check.",
+  "tools": [
+    {
+      "name": "list_secrets",
+      "required": [],
+      "properties": [],
+      "descriptionContains": ["alias", "{{cliora-secret:<secret-id>}}", "status", "use_secret"]
+    },
+    {
+      "name": "list_secret_executors",
+      "required": [],
+      "properties": [],
+      "descriptionContains": ["label", "digest", "No secret value"]
+    },
+    {
+      "name": "use_secret",
+      "required": ["executorId", "secretId"],
+      "properties": ["executorId", "secretId"],
+      "descriptionContains": ["never argv", "masked", "refused", "{{cliora-secret:<secret-id>}}"]
+    },
+    {
+      "name": "read_secret",
+      "required": ["secretId"],
+      "properties": ["secretId"],
+      "descriptionContains": ["approval", "model context", "session history", "use_secret"]
+    }
+  ],
+  "noInputNamed": ["value", "secretValue", "raw", "env", "stdin", "command", "path"],
+  "noMetadataSubstring": ["canary-", "sk-", "Bearer "]
+}

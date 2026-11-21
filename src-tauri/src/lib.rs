@@ -95,6 +95,7 @@ pub mod portable;
 mod process_environment;
 pub mod projects;
 pub mod prompts;
+pub mod secrets;
 pub mod workspaces;
 pub mod remote;
 pub mod resources;
@@ -144,6 +145,9 @@ pub fn run() {
                 let _ = window.set_shadow(true);
             }
             tray::setup(app);
+            // The secret broker serves the CLI (and later MCP) helper for this user
+            // session; every request is authorized and audited here.
+            commands::start_secret_broker(app.handle());
             let usage_handle = app.handle().clone();
             std::thread::spawn(move || loop {
                 let _ = commands::usage_background_tick(&usage_handle);
@@ -267,6 +271,29 @@ pub fn run() {
             commands::preview_prompt_import,
             commands::delete_prompt,
             commands::record_prompt_usage,
+            commands::list_prompt_secrets,
+            commands::create_prompt_secret,
+            commands::rename_prompt_secret,
+            commands::update_prompt_secret_value,
+            commands::delete_prompt_secret,
+            commands::resolve_prompt_secret_references,
+            commands::list_secret_executors,
+            commands::save_secret_executor,
+            commands::delete_secret_executor,
+            commands::list_secret_installations,
+            commands::create_secret_installation,
+            commands::revoke_secret_installation,
+            commands::list_secret_grants,
+            commands::grant_secret_usage,
+            commands::revoke_secret_usage,
+            commands::secret_broker_status,
+            commands::answer_prompt_secret_approval,
+            commands::list_secret_audit,
+            commands::secret_cli_context,
+            commands::secret_mcp_status,
+            commands::set_secret_mcp_enabled,
+            commands::check_secret_mcp_health,
+            commands::revoke_secret_mcp_installation,
             commands::list_library_items,
             commands::save_library_item,
             commands::delete_library_item,

@@ -4482,3 +4482,27 @@ test('mouse-tracking TUI accelerates wheel scrolling into multiple atomic SGR re
   const reports = await writeLog(page);
   expect(reports.every((item) => /^\x1b\[<64;\d+;\d+M$/.test(item.text))).toBe(true);
 });
+
+test('quick input sends a prompt secret reference verbatim without any secret command', async ({ page }) => {
+  await openWorkbench(page);
+  await page.evaluate(() => {
+    const app = window as unknown as { __secretCalls: string[]; __TAURI_INTERNALS__: { invoke: (command: string, args?: unknown) => Promise<unknown> } };
+    app.__secretCalls = [];
+    const invoke = app.__TAURI_INTERNALS__.invoke;
+    app.__TAURI_INTERNALS__.invoke = (command: string, args?: unknown) => {
+      if (command.includes('secret')) app.__secretCalls.push(command);
+      return invoke(command, args);
+    };
+  });
+  await page.getByRole('button', { name: '快捷输入', exact: true }).click();
+  const composer = page.getByRole('region', { name: '多行输入与提示词投递' });
+  const reference = '{{cliora-secret:1f1f1f1f-aaaa-4bbb-8ccc-dddddddddddd}}';
+  await composer.getByRole('textbox').fill(`部署前读取 ${reference}\n其余步骤照旧。`);
+  await page.evaluate(() => { (window as unknown as { __writeLog: unknown[] }).__writeLog.length = 0; });
+  await composer.getByRole('button', { name: '发送', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __writeLog: Array<{ sessionId: string; text: string }> }).__writeLog)).toEqual([
+    { sessionId: 's1', text: `部署前读取 ${reference}\n其余步骤照旧。\r` },
+  ]);
+  expect(await page.evaluate(() => (window as unknown as { __secretCalls: string[] }).__secretCalls)).toEqual([]);
+  await expect(composer.getByRole('textbox')).toHaveValue('');
+});

@@ -77,6 +77,40 @@ pub struct Facet {
     pub reason: &'static str,
 }
 
+/// Why secret MCP is unavailable to an adapter that has no verified native MCP
+/// configuration mapping. The shared UI shows this instead of an empty panel.
+pub const SECRET_MCP_UNSUPPORTED_REASON: &str = "此 CLI 没有已确认的原生 MCP 配置映射，秘密使用只提供 CLI 回退";
+/// A mapping proves the configuration half only. Real model `initialize`/
+/// `tools/list`/tool-call acceptance is recorded per adapter, so the published
+/// state stays unverified until that evidence exists.
+pub const SECRET_MCP_UNVERIFIED_REASON: &str = "已确认 MCP 配置映射；真实模型工具发现与调用尚未验收";
+
+/// Secret MCP support as the registry declares it. `supported` is only published
+/// after both the native mapping and the real protocol acceptance are recorded;
+/// a written native entry is placement, not evidence, and is reported separately.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretMcpCapability {
+    /// `supported`, `unverified` or `unsupported`.
+    pub state: &'static str,
+    pub reason: &'static str,
+}
+
+impl SecretMcpCapability {
+    pub fn supported() -> Self {
+        Self { state: "supported", reason: "原生 MCP 映射与真实模型工具调用均已验收" }
+    }
+    pub fn unverified(reason: &'static str) -> Self {
+        Self { state: "unverified", reason }
+    }
+    pub fn unsupported(reason: &'static str) -> Self {
+        Self { state: "unsupported", reason }
+    }
+    pub fn is_supported(self) -> bool {
+        self.state == "supported"
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct McpLocation {
     pub path: PathBuf,
@@ -108,6 +142,9 @@ pub struct AdapterDescriptor {
     pub history: Facet,
     pub login: Option<LoginCapability>,
     pub management: ManagementCapabilities,
+    /// Secret MCP capability for this CLI. Published even when unsupported so the
+    /// library shows a reason and the CLI fallback instead of hiding the choice.
+    pub secret_mcp: SecretMcpCapability,
     pub configuration: Option<super::configuration::ConfigurationDescriptor>,
     pub remote: RemoteCapabilities,
 }
@@ -908,6 +945,25 @@ pub trait CliAdapter: Sync {
 
     fn configuration(&self) -> Option<&dyn super::configuration::ConfigurationAdapter> { None }
     fn supports_mcp(&self) -> bool { false }
+    /// The native mapping label this adapter owns, in the verification document's
+    /// form (relative home path plus the top-level table). A record only publishes
+    /// support when it names this exact label, so a changed mapping cannot inherit
+    /// an older observation. An adapter without a mapping leaves this `None`.
+    fn secret_mcp_mapping(&self) -> Option<&'static str> { None }
+    /// Secret MCP capability. The gate in `secret_access` publishes `unverified`
+    /// for an adapter that owns a native MCP mapping and `unsupported` without one;
+    /// `supported` additionally needs a complete live acceptance record for this
+    /// target and mapping. A configuration write, a protocol probe or a CLI name
+    /// cannot substitute for that record, and the declaration comes from the
+    /// adapter rather than from its id.
+    fn secret_mcp_capability(&self) -> SecretMcpCapability {
+        super::secret_access::published(
+            super::secret_access::ACCEPTANCES,
+            self.supports_mcp(),
+            self.secret_mcp_mapping(),
+            self.id(),
+        )
+    }
     fn supports_skills(&self) -> bool { false }
     fn official_usage(&self) -> Option<&dyn super::official::OfficialUsageAdapter> {
         None
@@ -1890,6 +1946,7 @@ pub trait CliAdapter: Sync {
                 memory: self.published_memory(),
                 memory_reason: "",
             },
+            secret_mcp: self.secret_mcp_capability(),
             login: self.login_args().map(|_| LoginCapability {
                 hint: self.login_hint(),
             }),

@@ -114,6 +114,12 @@ export type AdapterDescriptor = {
   login?: { hint: string } | null;
   management?: { accounts: boolean; mcp: boolean; skills: boolean; agents: boolean; plugins: boolean; projectPlugins: boolean; rules?: { global: boolean; project: boolean; globalReason?: string; projectReason?: string; catalog?: boolean; catalogGlobal?: boolean }; memory?: MemoryManagement; memoryReason?: string };
   remote?: RemoteCapabilities;
+  /**
+   * The adapter's own declaration of secret-MCP support. `supported` is only
+   * published after real tool acceptance; a written native entry is placement and
+   * is reported by the secret MCP status instead of this field.
+   */
+  secretMcp?: { state: 'supported' | 'unverified' | 'unsupported'; reason: string };
   remoteNativeFiles?: RemoteNativeDocument[];
   remoteResources?: import('./remote').RemoteResourceLayout;
   remoteSkillDirectories?: import('./remote').RemoteSkillDirectory[];

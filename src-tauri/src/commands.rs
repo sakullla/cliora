@@ -189,6 +189,8 @@ pub struct AppState {
     workspace: crate::native::workspace::DraftSessions,
     /// 内存态审查关联：按 reviewId 记录 session、worktree 与最新状态，不持久化。
     reviews: crate::twiglane::ReviewRegistry,
+    /// The running secret broker owns the per-user IPC address for this process.
+    broker: Mutex<Option<crate::secrets::ipc::Broker>>,
 }
 
 async fn usage_blocking<T: Send + 'static>(
@@ -917,6 +919,14 @@ impl AppState {
             data_directory: None,
             remote: None,
         })
+    }
+
+    /// Holds the broker for the application lifetime; dropping it removes the
+    /// rendezvous so a later start does not find a stale address.
+    pub(crate) fn hold_broker(&self, broker: crate::secrets::ipc::Broker) {
+        if let Ok(mut current) = self.broker.lock() {
+            *current = Some(broker);
+        }
     }
 
     pub(crate) fn with_database<T>(
@@ -7680,6 +7690,400 @@ pub async fn record_prompt_usage(
             "local".into()
         };
         crate::prompts::record_usage(&db, &host, &id, favorite, used).map_err(native_error)
+    })
+    .await
+}
+
+// Prompt secrets are local-only: metadata and reference status never travel with a
+// remote target, and the value enters the native credential store only.
+#[tauri::command]
+pub async fn list_prompt_secrets(
+    app: AppHandle,
+) -> Result<Vec<crate::secrets::PromptSecret>, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::list(&db, &AppCredentialStore).map_err(native_error)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn create_prompt_secret(
+    app: AppHandle,
+    alias: String,
+    value: String,
+) -> Result<crate::secrets::PromptSecret, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::create(&db, &AppCredentialStore, &alias, &value).map_err(native_error)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn rename_prompt_secret(
+    app: AppHandle,
+    id: String,
+    expected_version: u64,
+    alias: String,
+) -> Result<crate::secrets::PromptSecret, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::rename(&db, &AppCredentialStore, &id, expected_version, &alias)
+            .map_err(native_error)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn update_prompt_secret_value(
+    app: AppHandle,
+    id: String,
+    expected_version: u64,
+    value: String,
+) -> Result<crate::secrets::PromptSecret, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::update_value(&db, &AppCredentialStore, &id, expected_version, &value)
+            .map_err(native_error)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn delete_prompt_secret(
+    app: AppHandle,
+    id: String,
+    expected_version: u64,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::delete(&db, &AppCredentialStore, &id, expected_version)
+            .map_err(native_error)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn resolve_prompt_secret_references(
+    app: AppHandle,
+    body: String,
+) -> Result<Vec<crate::secrets::PromptSecretReference>, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::resolve(&db, &AppCredentialStore, &body).map_err(native_error)
+    })
+    .await
+}
+
+// The secret broker owns every decision for controlled use and raw reads. These
+// commands only manage the local registry (executors, installations, grants) and
+// answer an approval that the broker created; none of them returns a value.
+
+/// Forwards a read approval to the application's own confirmation host. Only the
+/// alias, the request source and the risk notice reach the window.
+pub struct TauriApprovals {
+    pub app: AppHandle,
+}
+
+impl crate::secrets::approval::Host for TauriApprovals {
+    fn ask(&self, prompt: &crate::secrets::approval::Prompt) -> Result<(), String> {
+        if self.app.get_webview_window("main").is_none() {
+            return Err("确认窗口不可用".into());
+        }
+        // A request nobody can see must not silently expire as an approval.
+        crate::tray::show_main(&self.app);
+        self.app
+            .emit("cliora:secret-approval-request", prompt)
+            .map_err(|_| "无法显示确认请求".to_string())
+    }
+}
+
+/// Runs one IPC request against the shared database and credential store.
+pub struct SecretBrokerHandler {
+    pub app: AppHandle,
+}
+
+impl crate::secrets::ipc::Handler for SecretBrokerHandler {
+    fn handle(
+        &self,
+        request: crate::secrets::ipc::Request,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> crate::secrets::ipc::Response {
+        use crate::secrets::{broker, ipc};
+        let approvals = TauriApprovals { app: self.app.clone() };
+        let outcome = self
+            .app
+            .state::<AppState>()
+            .with_database(&self.app, |db| {
+                Ok(match request.operation {
+                    ipc::Operation::List => broker::list(db, &AppCredentialStore, &request.installation),
+                    ipc::Operation::Use => match (request.secret_id.as_deref(), request.executor_id.as_deref()) {
+                        (Some(secret_id), Some(executor_id)) => broker::use_secret(
+                            db,
+                            &AppCredentialStore,
+                            &request.installation,
+                            secret_id,
+                            executor_id,
+                            cancel,
+                        ),
+                        _ => ipc::Response::failure(
+                            crate::secrets::audit::code::INVALID_REQUEST,
+                            "use 需要 secretId 和 executorId",
+                        ),
+                    },
+                    ipc::Operation::Read => match request.secret_id.as_deref() {
+                        Some(secret_id) => {
+                            broker::read_secret(db, &AppCredentialStore, &approvals, &request.installation, secret_id)
+                        }
+                        None => ipc::Response::failure(
+                            crate::secrets::audit::code::INVALID_REQUEST,
+                            "read 需要 secretId",
+                        ),
+                    },
+                })
+            })
+            .unwrap_or_else(|_| {
+                ipc::Response::failure(crate::secrets::audit::code::STORAGE_FAILED, "本机秘密数据暂时不可用")
+            });
+        outcome
+    }
+}
+
+/// Starts the broker for this user session and keeps it for the app lifetime.
+pub(crate) fn start_secret_broker(app: &AppHandle) {
+    let handler = std::sync::Arc::new(SecretBrokerHandler { app: app.clone() });
+    let started = crate::secrets::ipc::serve(handler);
+    match started {
+        Ok(broker) => {
+            crate::secrets::ipc::record_start(Ok(()));
+            app.state::<AppState>().hold_broker(broker);
+        }
+        Err(error) => {
+            // Keeping the window usable is more important than failing startup: the
+            // helper reports the proxy as offline and no value is served.
+            crate::secrets::ipc::record_start(Err(error.clone()));
+            eprintln!("秘密代理未启动：{error}");
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn list_secret_executors(
+    app: AppHandle,
+) -> Result<Vec<crate::secrets::executor::SecretExecutor>, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::executor::list(&db).map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn save_secret_executor(
+    app: AppHandle,
+    executor: crate::secrets::executor::NewExecutor,
+) -> Result<crate::secrets::executor::SecretExecutor, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::executor::register(&db, executor).map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn delete_secret_executor(app: AppHandle, id: String) -> Result<(), ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::executor::remove(&db, &id).map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_secret_installations(
+    app: AppHandle,
+) -> Result<Vec<crate::secrets::broker::Installation>, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::broker::list_installations(&db).map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn create_secret_installation(
+    app: AppHandle,
+    label: String,
+    kind: crate::secrets::broker::Kind,
+    target_id: Option<String>,
+) -> Result<crate::secrets::broker::Installation, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::broker::create_installation(&db, &label, kind, target_id.as_deref())
+            .map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn revoke_secret_installation(app: AppHandle, id: String) -> Result<(), ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::broker::revoke_installation(&db, &id).map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_secret_grants(
+    app: AppHandle,
+) -> Result<Vec<crate::secrets::broker::Grant>, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::broker::list_grants(&db).map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn grant_secret_usage(
+    app: AppHandle,
+    installation_id: String,
+    secret_id: String,
+    executor_id: String,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::broker::grant(&db, &installation_id, &secret_id, &executor_id)
+            .map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn revoke_secret_usage(
+    app: AppHandle,
+    installation_id: String,
+    secret_id: String,
+    executor_id: String,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::broker::revoke_grant(&db, &installation_id, &secret_id, &executor_id)
+            .map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn secret_broker_status() -> crate::secrets::broker::BrokerStatus {
+    crate::secrets::broker::status()
+}
+
+/// Answers one read approval with its id. The window never learns which secret it
+/// authorized beyond the alias it already showed, and a repeated answer finds no
+/// pending request.
+#[tauri::command]
+pub fn answer_prompt_secret_approval(approval_id: String, accepted: bool) -> Result<(), ApiError> {
+    crate::secrets::approval::answer(&approval_id, accepted).map_err(native_error)
+}
+
+#[tauri::command]
+pub async fn list_secret_audit(app: AppHandle, limit: u32) -> Result<Vec<crate::secrets::audit::Entry>, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::audit::list(&db, limit).map_err(native_error)
+    })
+    .await
+}
+
+/// Non-secret facts a command description needs: the running executable and the
+/// installation it belongs to. The value and the secret text never appear here.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretCliContext {
+    pub executable: String,
+    pub entry: String,
+}
+
+#[tauri::command]
+pub async fn secret_cli_context() -> Result<SecretCliContext, ApiError> {
+    let executable = std::env::current_exe()
+        .map_err(|_| native_error("无法定位栖点可执行文件".into()))?
+        .to_string_lossy()
+        .into_owned();
+    Ok(SecretCliContext {
+        executable,
+        entry: crate::secrets::cli::CLI_ARGUMENT.into(),
+    })
+}
+
+// The secret MCP entry is per target and installed by the shared MCP preview,
+// commit and compare-and-swap flow. Placement comes from the native files and
+// protocol health from an actual helper probe; neither is inferred from the other.
+
+#[tauri::command]
+pub async fn secret_mcp_status(
+    app: AppHandle,
+    target: crate::secrets::mcp::SecretMcpTarget,
+) -> Result<crate::secrets::mcp::SecretMcpState, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        let registry = crate::adapters::Registry::builtins();
+        crate::secrets::mcp::status(&db, &registry, &target).map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_secret_mcp_enabled(
+    app: AppHandle,
+    target: crate::secrets::mcp::SecretMcpTarget,
+    enabled: bool,
+) -> Result<crate::secrets::mcp::SecretMcpState, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        let registry = crate::adapters::Registry::builtins();
+        let home = home()?;
+        crate::secrets::mcp::set_enabled(&db, &AppCredentialStore, &registry, &home, &target, enabled)
+            .map_err(native_error)
+    })
+    .await
+}
+
+/// Spawns the distributed helper and asks it for `initialize` and `tools/list`.
+/// The state returned afterwards still separates placement from protocol health.
+#[tauri::command]
+pub async fn check_secret_mcp_health(
+    app: AppHandle,
+    target: crate::secrets::mcp::SecretMcpTarget,
+) -> Result<crate::secrets::mcp::SecretMcpState, ApiError> {
+    let lookup = target.clone();
+    let handle = app.clone();
+    let installation = blocking(move || {
+        let db = handle.state::<AppState>().database(&handle)?;
+        crate::secrets::mcp::installation_for(&db, &lookup.tool_id).map_err(native_error)
+    })
+    .await?;
+    let Some(installation) = installation else {
+        return Err(native_error("尚未创建此 CLI 的秘密 MCP 安装".into()));
+    };
+    crate::secrets::mcp::verify(&target.tool_id, &installation.id).await;
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        let registry = crate::adapters::Registry::builtins();
+        crate::secrets::mcp::status(&db, &registry, &target).map_err(native_error)
+    })
+    .await
+}
+
+/// Revokes this target's installation so a reconnect starts without the grants of
+/// the old one. The native entry stays until it is disabled or rewritten.
+#[tauri::command]
+pub async fn revoke_secret_mcp_installation(
+    app: AppHandle,
+    target: crate::secrets::mcp::SecretMcpTarget,
+) -> Result<crate::secrets::mcp::SecretMcpState, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        let registry = crate::adapters::Registry::builtins();
+        crate::secrets::mcp::revoke(&db, &registry, &target).map_err(native_error)
     })
     .await
 }
