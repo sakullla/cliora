@@ -62,13 +62,14 @@ test('a live plan is refused unless it names synthetic values and real commands'
 });
 
 const HEADER = '| 目标 | 映射 | 协议 | 模型 | 回退 | 平台 | 状态 |\n| --- | --- | --- | --- | --- | --- | --- |\n';
+const ANCHOR = '<a id="claude_code"></a>\n';
 const row = (status, mapping = '.claude.json#mcpServers') => `| claude_code | ${mapping} | - | - | - | darwin | ${status} |\n`;
 const record = (fields = {}) => {
   const values = {
     tool_id: 'claude_code',
     mapping: '.claude.json#mcpServers',
     recorded_at: '2026-11-21',
-    evidence: 'docs/verification/secret-access.md#claude_code-2026-11-21',
+    evidence: 'docs/verification/secret-access.md#claude_code',
     ...fields,
   };
   const body = Object.entries(values).map(([key, value]) => `        ${key}: "${value}",`).join('\n');
@@ -80,16 +81,16 @@ test('a documented pass without an adapter record is a failed consistency check'
   const docPath = path.join(directory, 'secret-access.md');
   const gatePath = path.join(directory, 'secret_access.rs');
   writeFileSync(gatePath, 'pub const ACCEPTANCES: &[SecretMcpAcceptance] = &[];\n');
-  writeFileSync(docPath, `${HEADER}${row('verified')}`);
+  writeFileSync(docPath, `${ANCHOR}${HEADER}${row('verified')}`);
   assert.throws(() => checkEvidenceConsistency({ docPath, gatePath }), /没有对应验收记录/);
   // A record the document does not confirm is a failure too.
   writeFileSync(gatePath, record());
-  writeFileSync(docPath, `${HEADER}${row('unverified')}`);
+  writeFileSync(docPath, `${ANCHOR}${HEADER}${row('unverified')}`);
   assert.throws(() => checkEvidenceConsistency({ docPath, gatePath }), /不是 verified/);
   // Matching facts pass, and an unknown status word is never accepted.
-  writeFileSync(docPath, `${HEADER}${row('verified')}`);
+  writeFileSync(docPath, `${ANCHOR}${HEADER}${row('verified')}`);
   assert.match(checkEvidenceConsistency({ docPath, gatePath }), /1 个目标行/);
-  writeFileSync(docPath, `${HEADER}${row('probably')}`);
+  writeFileSync(docPath, `${ANCHOR}${HEADER}${row('probably')}`);
   assert.throws(() => checkEvidenceConsistency({ docPath, gatePath }), /状态不是约定取值/);
 });
 
@@ -97,16 +98,19 @@ test('a record is only trusted when it names the mapping the document lists', ()
   const directory = mkdtempSync(path.join(tmpdir(), 'cliora-secret-evidence-'));
   const docPath = path.join(directory, 'secret-access.md');
   const gatePath = path.join(directory, 'secret_access.rs');
-  writeFileSync(docPath, `${HEADER}${row('verified')}`);
+  writeFileSync(docPath, `${ANCHOR}${HEADER}${row('verified')}`);
   // A mapping label that does not match the matrix row is not acceptance evidence.
   writeFileSync(gatePath, record({ mapping: '.codex/config.toml#mcp_servers' }));
   assert.throws(() => checkEvidenceConsistency({ docPath, gatePath }), /映射标签与验收记录不一致/);
   // The remaining fields are required as well.
-  writeFileSync(docPath, `${HEADER}${row('verified')}`);
+  writeFileSync(docPath, `${ANCHOR}${HEADER}${row('verified')}`);
   writeFileSync(gatePath, record({ mapping: undefined }));
   assert.throws(() => checkEvidenceConsistency({ docPath, gatePath }), /缺少 mapping|映射/);
   writeFileSync(gatePath, record({ recorded_at: '2026/11/21' }));
   assert.throws(() => checkEvidenceConsistency({ docPath, gatePath }), /日期不是 YYYY-MM-DD/);
+  // An anchor that the document does not contain is not evidence either.
+  writeFileSync(gatePath, record({ evidence: 'docs/verification/secret-access.md#missing' }));
+  assert.throws(() => checkEvidenceConsistency({ docPath, gatePath }), /锚点在文档中不存在/);
   writeFileSync(gatePath, record({ evidence: 'README.md' }));
   assert.throws(() => checkEvidenceConsistency({ docPath, gatePath }), /证据不是 docs\/verification\//);
 });

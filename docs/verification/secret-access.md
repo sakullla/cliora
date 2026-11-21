@@ -39,7 +39,7 @@
 3. **模型调用**：在只含 `{{cliora-secret:<id>}}` 引用与执行入口标识的提示词下，模型选择 `use_secret` 并生成 `secretId`/`executorId` 参数；固定测试执行入口收到合成值，模型可见输出只有业务结果与遮蔽标记。原值读取仍触发 Cliora 逐次确认。
 4. **CLI 回退**：同一提示词下，`--cliora-internal-secret-cli-v1 --installation <id> use --secret <id> --executor <id>` 让同一个测试执行入口收到同一合成值，输出同样遮蔽。
 
-只有四类事实全部观察到的目标才能在 `src-tauri/src/adapters/secret_access.rs` 的 `ACCEPTANCES` 增加验收记录并发布 `supported`。记录必须写明 `tool_id`、`mapping`、真实日历日期（`YYYY-MM-DD`）、平台、CLI 版本、协议、模型调用、CLI 回退和带锚点的证据；证据必须在 `docs/verification/` 下并带 `#` 锚点，`mapping` 必须同时与上表该目标的映射标签、适配器 `secret_mcp_mapping()` 的声明逐字一致（Rust 契约测试与 `node scripts/verify-secret-access.mjs` 的 `evidence-consistency` 都会比对）。缺任何一项时 `published()` 仍返回 `unverified`；未声明映射的适配器即使被记录也发布 `unsupported`。目前 `ACCEPTANCES` 只有 `codex` 一条，其余目标仍使用 CLI 回退。
+只有四类事实全部观察到的目标才能在 `src-tauri/src/adapters/secret_access.rs` 的 `ACCEPTANCES` 增加验收记录并发布 `supported`。记录必须写明 `tool_id`、`mapping`、真实日历日期（`YYYY-MM-DD`）、平台、CLI 版本、协议、模型调用、CLI 回退和带锚点的证据；证据必须在 `docs/verification/` 下并带 `#` 锚点，锚点必须真实存在于文档（标题 slug 或显式 `<a id>`，离线 `evidence-consistency` 会解析），`mapping` 必须同时与上表该目标的映射标签、适配器 `secret_mcp_mapping()` 的声明逐字一致（Rust 契约测试与 `node scripts/verify-secret-access.mjs` 的 `evidence-consistency` 都会比对）。缺任何一项时 `published()` 仍返回 `unverified`；未声明映射的适配器即使被记录也发布 `unsupported`。目前 `ACCEPTANCES` 只有 `codex` 一条，其余目标仍使用 CLI 回退。
 
 ## 验证命令
 
@@ -85,7 +85,7 @@ node scripts/verify-secret-access.mjs --live
 }
 ```
 
-退出码：`0` 全部通过；`1` 有检查或目标失败；`2` 用法错误；`3` 请求了 `--live` 但没有 `CLIORA_LIVE_SECRET_TESTS=1` 或计划不可用。`CLIORA_SECRET_EVIDENCE_OUT` 可指定写入的机器可读结果路径；结果只含目标、步骤、平台、状态与原因，不含合成值。
+退出码：`0` 选中的目标全部通过（用 `CLIORA_LIVE_SECRET_TOOLS` 限定子集时，未选中的目标标为 `not-run`，不计为失败）；`1` 有选中的目标失败；`2` 用法错误；`3` 请求了 `--live` 但没有 `CLIORA_LIVE_SECRET_TESTS=1`、计划不可用或所选目标与计划不匹配。`CLIORA_SECRET_EVIDENCE_OUT` 可指定写入的机器可读结果路径；结果只含目标、步骤、平台、状态与原因，不含合成值。
 
 运行实机前置（均在真实桌面环境完成，不在普通单元或浏览器测试里）：
 
@@ -107,6 +107,8 @@ node scripts/verify-secret-access.mjs --live
 
 `--live` 驱动另在本地合成替身上验证过失败分支：缺 `CLIORA_LIVE_SECRET_TESTS` 或非 `canary-` 取值时退出码 3，合成值进入模型可见输出时判为失败、退出码 1 且证据文件里没有原值。该分支验证不是验收。
 
+<a id="codex-2026-11-21"></a>
+
 ### codex 实机记录（2026-11-21）
 
 | 命令 | 结果 | 能证明什么 |
@@ -125,6 +127,7 @@ node scripts/verify-secret-access.mjs --live
 
 ## 限制
 
+- 机器可读结果只记录目标、步骤、平台、布尔值、工具名与版本，不含配置路径、`mapping` 标签、合成值或请求/响应体；配置写入对象需与本文档的 codex 记录和 `ACCEPTANCES.mapping` 对照阅读。
 - 实机证据只覆盖 macOS arm64 上的 `codex-cli 0.171.0` 一次运行；模型工具选择稳定性、其它版本与 `claude_code` 等其余 18 个目标都没有通过记录。Windows 与 Linux 的原生配置写入、CLI 启动与协议均未验证。
 - `claude_code` 的协议与回退曾在真实会话中观察到，但模型调用被第三方网关当日额度阻断（429，零费用），因此按规则不升级为验收；额度重置或更换凭据后需重跑并回填记录。
 - 模型可能选择其他工具、改写参数或在输出里复述别的内容；一次成功不能证明稳定可用，失败也不自动等于适配器缺陷，需要按目标重复观察。

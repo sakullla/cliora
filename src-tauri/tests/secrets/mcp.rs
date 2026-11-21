@@ -490,7 +490,8 @@ fn an_unsupported_adapter_reports_a_reason_and_no_written_entry() {
 fn a_supported_mapping_stays_unverified_and_claims_nothing_before_a_write() {
     let database = Database::open(std::path::Path::new(":memory:")).unwrap();
     let registry = Registry::builtins();
-    let Some(adapter) = registry.iter().find(|adapter| adapter.supports_mcp()) else { return };
+    // A mapping without a complete acceptance record is the unverified case.
+    let Some(adapter) = registry.iter().find(|adapter| adapter.supports_mcp() && !adapter.secret_mcp_capability().is_supported()) else { return };
     let target = SecretMcpTarget { tool_id: adapter.id().to_string(), scope: Scope::Global, project_path: None, context_id: None };
     let state = status(&database, &registry, &target).unwrap();
     // T3 publishes the mapping only: real model acceptance is separate evidence.

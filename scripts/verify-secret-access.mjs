@@ -277,8 +277,24 @@ async function checkExecutorDouble(metadata) {
 }
 
 /** The doc matrix and the recorded acceptances have to describe the same targets. */
-export function checkEvidenceConsistency({ docPath = path.join(ROOT, EVIDENCE_DOC), gatePath = path.join(ROOT, 'src-tauri/src/adapters/secret_access.rs') } = {}) {
-  const text = readFileSync(docPath, 'utf8');
+function documentAnchorExists(text, anchor) {
+  const escaped = anchor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (new RegExp(`(?:id|name)\\s*=\\s*["']${escaped}["']`).test(text)) return true;
+  for (const line of text.split('\n')) {
+    const heading = line.match(/^#{1,6}\s+(.*)$/)?.[1];
+    if (!heading) continue;
+    const slug = heading
+      .replace(/`/g, '')
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s-]/gu, '')
+      .trim()
+      .replace(/\s+/g, '-');
+    if (slug === anchor.toLowerCase()) return true;
+  }
+  return false;
+}
+
+export function checkEvidenceConsistency({ docPath = path.join(ROOT, EVIDENCE_DOC), gatePath = path.join(ROOT, 'src-tauri/src/adapters/secret_access.rs') } = {}) {  const text = readFileSync(docPath, 'utf8');
   const rows = text.split('\n')
     .map(line => line.trim())
     .filter(line => line.startsWith('|'))
@@ -303,6 +319,11 @@ export function checkEvidenceConsistency({ docPath = path.join(ROOT, EVIDENCE_DO
     expect(record.tool, `第 ${index + 1} 条验收记录缺少 tool_id`);
     expect(record.mapping, `已记录的验收目标缺少 mapping：${record.tool}`);
     expect(record.evidence && record.evidence.startsWith('docs/verification/') && record.evidence.includes('#'), `已记录的验收目标证据不是 docs/verification/ 下的锚点：${record.tool}`);
+    const anchor = record.evidence?.split('#')[1] ?? '';
+    expect(anchor, `已记录的验收目标证据缺少锚点：${record.tool}`);
+    if (path.basename(record.evidence.split('#')[0]) === path.basename(docPath)) {
+      expect(documentAnchorExists(text, anchor), `已记录的验收目标证据锚点在文档中不存在：${record.tool}#${anchor}`);
+    }
     expect(/^\d{4}-\d{2}-\d{2}$/.test(record.recordedAt ?? ''), `已记录的验收目标日期不是 YYYY-MM-DD：${record.tool}`);
     const row = statuses.find(entry => entry.tool === record.tool);
     expect(row, `已记录的验收目标缺少文档行：${record.tool}`);
@@ -531,7 +552,10 @@ async function liveTarget(target, plan, canary) {
   const fallback = await runCommand(fallbackArgv, { timeout });
   const fallbackTextOutput = `${fallback.stdout}${fallback.stderr}`;
   result.cliFallback = fallback.code === 0 && fallbackTextOutput.includes(sentinel) && !fallbackTextOutput.includes(canary);
-  if (!result.cliFallback) reasons.push(`CLI 回退未通过（退出码 ${fallback.code}，${fallbackTextOutput.includes(sentinel) ? '缺少原始输出' : '没有哨兵'}）`);
+  if (!result.cliFallback) {
+    const why = !fallbackTextOutput.includes(sentinel) ? '没有哨兵' : fallbackTextOutput.includes(canary) ? '输出出现合成值' : `退出码 ${fallback.code}`;
+    reasons.push(`CLI 回退未通过（${why}）`);
+  }
   if (plan.receiptPath) {
     const delivered = receiptMatches(plan.receiptPath, canary);
     if (delivered === false) reasons.push('CLI 回退没有让执行入口收到同一个合成值');
@@ -575,6 +599,9 @@ export async function verifyLive(environment = process.env) {
   }
   const wanted = (environment[TOOLS_ENV] ?? '').split(',').map(value => value.trim()).filter(Boolean);
   const selected = wanted.length ? plan.targets.filter(target => wanted.includes(target.toolId)) : plan.targets;
+  if (!selected.length) {
+    return { status: 'invalid', documentValue: document('live', [{ id: 'live-plan', status: 'failed', detail: `${TOOLS_ENV} 没有匹配计划里的任何目标` }]) };
+  }
   const skipped = plan.targets.filter(target => !selected.includes(target));
   const targets = [];
   for (const target of selected) targets.push(await liveTarget(target, plan, canary));
@@ -590,7 +617,9 @@ export async function verifyLive(environment = process.env) {
     return { status: 'leaked', documentValue: document('live', [{ id: 'value-hygiene', status: 'failed', detail: '结果文档包含合成值，已拒绝写出' }], targets) };
   }
   if (environment[EVIDENCE_OUT_ENV]) writeFileSync(path.resolve(ROOT, environment[EVIDENCE_OUT_ENV]), `${JSON.stringify(documentValue, null, 2)}\n`);
-  const failed = targets.some(target => target.status !== 'verified');
+  // An explicit subset reports the other targets as not-run; only a selected
+  // target that failed can fail the command.
+  const failed = targets.some(target => target.status !== 'verified' && target.status !== 'not-run');
   return { status: failed ? 'failed' : 'verified', documentValue };
 }
 
