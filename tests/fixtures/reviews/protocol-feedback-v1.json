@@ -1,0 +1,1720 @@
+{
+  "schemaVersion": 1,
+  "batches": [
+    {
+      "name": "valid-two-comments",
+      "valid": true,
+      "reject": null,
+      "file": {
+        "v": 1,
+        "feedbackId": "8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1",
+        "reviewId": "6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8",
+        "sessionId": "0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0",
+        "resultRevision": 2,
+        "worktreePath": "/work/team/demo",
+        "rangeVersion": "range-7",
+        "baselineOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headOid": "cccccccccccccccccccccccccccccccccccccccc",
+        "comments": [
+          {
+            "id": "33333333-3333-4333-8333-000000000001",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 13,
+            "body": "这里要在读取失败时保留上一份结果，不要显示零改动。"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000002",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 14,
+            "body": "这个分支缺少 title 的回退说明，请在恢复入口里补一句。"
+          }
+        ],
+        "digest": "082476955cbba23ba6e82c2eacfff6d59f82c347b088fdb2df0f426ee62c56fc"
+      }
+    },
+    {
+      "name": "valid-single-context-line",
+      "valid": true,
+      "reject": null,
+      "file": {
+        "v": 1,
+        "feedbackId": "8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1",
+        "reviewId": "6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8",
+        "sessionId": "0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0",
+        "resultRevision": 0,
+        "worktreePath": "/work/team/demo",
+        "rangeVersion": "range-7",
+        "baselineOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headOid": "cccccccccccccccccccccccccccccccccccccccc",
+        "comments": [
+          {
+            "id": "33333333-3333-4333-8333-000000000009",
+            "path": "docs/guide.md",
+            "hunkIndex": 3,
+            "kind": "context",
+            "oldNo": 7,
+            "newNo": 7,
+            "body": "这一段的说明要和实现一致。"
+          }
+        ],
+        "digest": "c1d93338380669f32e88d7136bd602df48591bb4b427dd0f4de3900e59ed3b2b"
+      }
+    },
+    {
+      "name": "valid-max-64-comments",
+      "valid": true,
+      "reject": null,
+      "file": {
+        "v": 1,
+        "feedbackId": "8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1",
+        "reviewId": "6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8",
+        "sessionId": "0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0",
+        "resultRevision": 2,
+        "worktreePath": "/work/team/demo",
+        "rangeVersion": "range-7",
+        "baselineOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headOid": "cccccccccccccccccccccccccccccccccccccccc",
+        "comments": [
+          {
+            "id": "33333333-3333-4333-8333-000000000001",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 13,
+            "body": "第 1 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000002",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 14,
+            "body": "第 2 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000003",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 15,
+            "body": "第 3 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000004",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 16,
+            "body": "第 4 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000005",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 17,
+            "body": "第 5 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000006",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 18,
+            "body": "第 6 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000007",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 19,
+            "body": "第 7 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000008",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 20,
+            "body": "第 8 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000009",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 21,
+            "body": "第 9 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000010",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 22,
+            "body": "第 10 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000011",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 23,
+            "body": "第 11 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000012",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 24,
+            "body": "第 12 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000013",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 25,
+            "body": "第 13 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000014",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 26,
+            "body": "第 14 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000015",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 27,
+            "body": "第 15 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000016",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 28,
+            "body": "第 16 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000017",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 29,
+            "body": "第 17 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000018",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 30,
+            "body": "第 18 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000019",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 31,
+            "body": "第 19 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000020",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 32,
+            "body": "第 20 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000021",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 33,
+            "body": "第 21 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000022",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 34,
+            "body": "第 22 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000023",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 35,
+            "body": "第 23 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000024",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 36,
+            "body": "第 24 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000025",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 37,
+            "body": "第 25 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000026",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 38,
+            "body": "第 26 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000027",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 39,
+            "body": "第 27 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000028",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 40,
+            "body": "第 28 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000029",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 41,
+            "body": "第 29 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000030",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 42,
+            "body": "第 30 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000031",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 43,
+            "body": "第 31 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000032",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 44,
+            "body": "第 32 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000033",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 45,
+            "body": "第 33 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000034",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 46,
+            "body": "第 34 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000035",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 47,
+            "body": "第 35 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000036",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 48,
+            "body": "第 36 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000037",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 49,
+            "body": "第 37 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000038",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 50,
+            "body": "第 38 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000039",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 51,
+            "body": "第 39 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000040",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 52,
+            "body": "第 40 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000041",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 53,
+            "body": "第 41 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000042",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 54,
+            "body": "第 42 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000043",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 55,
+            "body": "第 43 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000044",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 56,
+            "body": "第 44 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000045",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 57,
+            "body": "第 45 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000046",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 58,
+            "body": "第 46 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000047",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 59,
+            "body": "第 47 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000048",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 60,
+            "body": "第 48 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000049",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 61,
+            "body": "第 49 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000050",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 62,
+            "body": "第 50 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000051",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 63,
+            "body": "第 51 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000052",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 64,
+            "body": "第 52 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000053",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 65,
+            "body": "第 53 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000054",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 66,
+            "body": "第 54 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000055",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 67,
+            "body": "第 55 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000056",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 68,
+            "body": "第 56 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000057",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 69,
+            "body": "第 57 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000058",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 70,
+            "body": "第 58 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000059",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 71,
+            "body": "第 59 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000060",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 72,
+            "body": "第 60 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000061",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 73,
+            "body": "第 61 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000062",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 74,
+            "body": "第 62 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000063",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 75,
+            "body": "第 63 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000064",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 76,
+            "body": "第 64 条意见"
+          }
+        ],
+        "digest": "64392fb31544c134156763570fe7888b5009769a0d1323416bcfe274b85eff7f"
+      }
+    },
+    {
+      "name": "reject-extra-field",
+      "valid": false,
+      "reject": "schema",
+      "file": {
+        "v": 1,
+        "feedbackId": "8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1",
+        "reviewId": "6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8",
+        "sessionId": "0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0",
+        "resultRevision": 2,
+        "worktreePath": "/work/team/demo",
+        "rangeVersion": "range-7",
+        "baselineOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headOid": "cccccccccccccccccccccccccccccccccccccccc",
+        "comments": [
+          {
+            "id": "33333333-3333-4333-8333-000000000001",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 13,
+            "body": "这里要在读取失败时保留上一份结果，不要显示零改动。"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000002",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 14,
+            "body": "这个分支缺少 title 的回退说明，请在恢复入口里补一句。"
+          }
+        ],
+        "digest": "082476955cbba23ba6e82c2eacfff6d59f82c347b088fdb2df0f426ee62c56fc",
+        "extra": true
+      }
+    },
+    {
+      "name": "reject-missing-field",
+      "valid": false,
+      "reject": "schema",
+      "file": {
+        "v": 1,
+        "feedbackId": "8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1",
+        "reviewId": "6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8",
+        "sessionId": "0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0",
+        "resultRevision": 2,
+        "worktreePath": "/work/team/demo",
+        "baselineOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headOid": "cccccccccccccccccccccccccccccccccccccccc",
+        "comments": [
+          {
+            "id": "33333333-3333-4333-8333-000000000001",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 13,
+            "body": "这里要在读取失败时保留上一份结果，不要显示零改动。"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000002",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 14,
+            "body": "这个分支缺少 title 的回退说明，请在恢复入口里补一句。"
+          }
+        ],
+        "digest": "e3ae0b4a0749303dcf4e0f9afa8c6e46c9b1dd2be85ce3cf84303a7b5b77e218"
+      }
+    },
+    {
+      "name": "reject-digest-mismatch",
+      "valid": false,
+      "reject": "digest",
+      "file": {
+        "v": 1,
+        "feedbackId": "8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1",
+        "reviewId": "6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8",
+        "sessionId": "0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0",
+        "resultRevision": 2,
+        "worktreePath": "/work/team/demo",
+        "rangeVersion": "range-7",
+        "baselineOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headOid": "cccccccccccccccccccccccccccccccccccccccc",
+        "comments": [
+          {
+            "id": "33333333-3333-4333-8333-000000000001",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 13,
+            "body": "这里要在读取失败时保留上一份结果，不要显示零改动。"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000002",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 14,
+            "body": "这个分支缺少 title 的回退说明，请在恢复入口里补一句。"
+          }
+        ],
+        "digest": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "reject-duplicate-comment-id",
+      "valid": false,
+      "reject": "validation",
+      "file": {
+        "v": 1,
+        "feedbackId": "8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1",
+        "reviewId": "6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8",
+        "sessionId": "0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0",
+        "resultRevision": 2,
+        "worktreePath": "/work/team/demo",
+        "rangeVersion": "range-7",
+        "baselineOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headOid": "cccccccccccccccccccccccccccccccccccccccc",
+        "comments": [
+          {
+            "id": "33333333-3333-4333-8333-000000000004",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 16,
+            "body": "第一条"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000004",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 16,
+            "body": "第二条"
+          }
+        ],
+        "digest": "96ae328a79616e11d8c193da28e8686746218c910e2819392ba6cef4594fbd11"
+      }
+    },
+    {
+      "name": "reject-too-many-comments",
+      "valid": false,
+      "reject": "validation",
+      "file": {
+        "v": 1,
+        "feedbackId": "8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1",
+        "reviewId": "6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8",
+        "sessionId": "0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0",
+        "resultRevision": 2,
+        "worktreePath": "/work/team/demo",
+        "rangeVersion": "range-7",
+        "baselineOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headOid": "cccccccccccccccccccccccccccccccccccccccc",
+        "comments": [
+          {
+            "id": "33333333-3333-4333-8333-000000000001",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 13,
+            "body": "第 1 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000002",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 14,
+            "body": "第 2 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000003",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 15,
+            "body": "第 3 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000004",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 16,
+            "body": "第 4 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000005",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 17,
+            "body": "第 5 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000006",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 18,
+            "body": "第 6 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000007",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 19,
+            "body": "第 7 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000008",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 20,
+            "body": "第 8 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000009",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 21,
+            "body": "第 9 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000010",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 22,
+            "body": "第 10 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000011",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 23,
+            "body": "第 11 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000012",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 24,
+            "body": "第 12 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000013",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 25,
+            "body": "第 13 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000014",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 26,
+            "body": "第 14 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000015",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 27,
+            "body": "第 15 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000016",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 28,
+            "body": "第 16 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000017",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 29,
+            "body": "第 17 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000018",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 30,
+            "body": "第 18 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000019",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 31,
+            "body": "第 19 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000020",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 32,
+            "body": "第 20 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000021",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 33,
+            "body": "第 21 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000022",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 34,
+            "body": "第 22 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000023",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 35,
+            "body": "第 23 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000024",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 36,
+            "body": "第 24 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000025",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 37,
+            "body": "第 25 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000026",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 38,
+            "body": "第 26 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000027",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 39,
+            "body": "第 27 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000028",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 40,
+            "body": "第 28 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000029",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 41,
+            "body": "第 29 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000030",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 42,
+            "body": "第 30 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000031",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 43,
+            "body": "第 31 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000032",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 44,
+            "body": "第 32 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000033",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 45,
+            "body": "第 33 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000034",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 46,
+            "body": "第 34 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000035",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 47,
+            "body": "第 35 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000036",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 48,
+            "body": "第 36 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000037",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 49,
+            "body": "第 37 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000038",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 50,
+            "body": "第 38 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000039",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 51,
+            "body": "第 39 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000040",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 52,
+            "body": "第 40 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000041",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 53,
+            "body": "第 41 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000042",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 54,
+            "body": "第 42 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000043",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 55,
+            "body": "第 43 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000044",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 56,
+            "body": "第 44 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000045",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 57,
+            "body": "第 45 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000046",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 58,
+            "body": "第 46 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000047",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 59,
+            "body": "第 47 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000048",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 60,
+            "body": "第 48 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000049",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 61,
+            "body": "第 49 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000050",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 62,
+            "body": "第 50 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000051",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 63,
+            "body": "第 51 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000052",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 64,
+            "body": "第 52 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000053",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 65,
+            "body": "第 53 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000054",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 66,
+            "body": "第 54 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000055",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 67,
+            "body": "第 55 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000056",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 68,
+            "body": "第 56 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000057",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 69,
+            "body": "第 57 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000058",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 70,
+            "body": "第 58 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000059",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 71,
+            "body": "第 59 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000060",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 72,
+            "body": "第 60 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000061",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 73,
+            "body": "第 61 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000062",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 74,
+            "body": "第 62 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000063",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 75,
+            "body": "第 63 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000064",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 76,
+            "body": "第 64 条意见"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000065",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 77,
+            "body": "第 65 条"
+          }
+        ],
+        "digest": "13550c163813e5da8fef0465ff996d9761ae66c4b8ccc5f933095122f3110d9b"
+      }
+    },
+    {
+      "name": "reject-body-too-large",
+      "valid": false,
+      "reject": "validation",
+      "file": {
+        "v": 1,
+        "feedbackId": "8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1",
+        "reviewId": "6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8",
+        "sessionId": "0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0",
+        "resultRevision": 2,
+        "worktreePath": "/work/team/demo",
+        "rangeVersion": "range-7",
+        "baselineOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headOid": "cccccccccccccccccccccccccccccccccccccccc",
+        "comments": [
+          {
+            "id": "33333333-3333-4333-8333-000000000006",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 18,
+            "body": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          }
+        ],
+        "digest": "f81b1ce64d4f1a63892626f604d3dad21a668f0853f5d55199531a2b557ca1d7"
+      }
+    },
+    {
+      "name": "reject-empty-body",
+      "valid": false,
+      "reject": "validation",
+      "file": {
+        "v": 1,
+        "feedbackId": "8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1",
+        "reviewId": "6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8",
+        "sessionId": "0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0",
+        "resultRevision": 2,
+        "worktreePath": "/work/team/demo",
+        "rangeVersion": "range-7",
+        "baselineOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headOid": "cccccccccccccccccccccccccccccccccccccccc",
+        "comments": [
+          {
+            "id": "33333333-3333-4333-8333-000000000007",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 19,
+            "body": "   "
+          }
+        ],
+        "digest": "c240cabad4d6877ce97d16dbcef59c51a16700b88477efd5d2f7d0add1224682"
+      }
+    },
+    {
+      "name": "reject-bad-kind",
+      "valid": false,
+      "reject": "validation",
+      "file": {
+        "v": 1,
+        "feedbackId": "8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1",
+        "reviewId": "6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8",
+        "sessionId": "0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0",
+        "resultRevision": 2,
+        "worktreePath": "/work/team/demo",
+        "rangeVersion": "range-7",
+        "baselineOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headOid": "cccccccccccccccccccccccccccccccccccccccc",
+        "comments": [
+          {
+            "id": "33333333-3333-4333-8333-000000000008",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "meta",
+            "oldNo": null,
+            "newNo": 20,
+            "body": "元数据不能当意见"
+          }
+        ],
+        "digest": "a48ece6ae191652d29d27b962b27710efa80b4154bac561f3b70c56d00dd9c4d"
+      }
+    },
+    {
+      "name": "reject-absolute-path",
+      "valid": false,
+      "reject": "validation",
+      "file": {
+        "v": 1,
+        "feedbackId": "8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1",
+        "reviewId": "6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8",
+        "sessionId": "0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0",
+        "resultRevision": 2,
+        "worktreePath": "/work/team/demo",
+        "rangeVersion": "range-7",
+        "baselineOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headOid": "cccccccccccccccccccccccccccccccccccccccc",
+        "comments": [
+          {
+            "id": "33333333-3333-4333-8333-000000000010",
+            "path": "/etc/passwd",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 22,
+            "body": "绝对路径不接受"
+          }
+        ],
+        "digest": "63d80d8cf1e39b89055586b7738b2bd947ff24b316af53043fe7c2261a585222"
+      }
+    },
+    {
+      "name": "reject-traversal-path",
+      "valid": false,
+      "reject": "validation",
+      "file": {
+        "v": 1,
+        "feedbackId": "8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1",
+        "reviewId": "6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8",
+        "sessionId": "0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0",
+        "resultRevision": 2,
+        "worktreePath": "/work/team/demo",
+        "rangeVersion": "range-7",
+        "baselineOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headOid": "cccccccccccccccccccccccccccccccccccccccc",
+        "comments": [
+          {
+            "id": "33333333-3333-4333-8333-000000000011",
+            "path": "src/../../outside.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 23,
+            "body": "越界路径不接受"
+          }
+        ],
+        "digest": "e4b11a5e505a0f08e324b1737ec06fb06fc6ed11e30b33287257df93d479969d"
+      }
+    },
+    {
+      "name": "reject-unsupported-version",
+      "valid": false,
+      "reject": "validation",
+      "file": {
+        "v": 2,
+        "feedbackId": "8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1",
+        "reviewId": "6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8",
+        "sessionId": "0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0",
+        "resultRevision": 2,
+        "worktreePath": "/work/team/demo",
+        "rangeVersion": "range-7",
+        "baselineOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headOid": "cccccccccccccccccccccccccccccccccccccccc",
+        "comments": [
+          {
+            "id": "33333333-3333-4333-8333-000000000001",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 13,
+            "body": "这里要在读取失败时保留上一份结果，不要显示零改动。"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000002",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 14,
+            "body": "这个分支缺少 title 的回退说明，请在恢复入口里补一句。"
+          }
+        ],
+        "digest": "ea72914325eb8f28a16c3fb43b7a285352c3e3486046245157a1416607595cf5"
+      }
+    },
+    {
+      "name": "reject-revision-beyond-safe-integer",
+      "valid": false,
+      "reject": "validation",
+      "file": {
+        "v": 1,
+        "feedbackId": "8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1",
+        "reviewId": "6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8",
+        "sessionId": "0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0",
+        "resultRevision": 9007199254740992,
+        "worktreePath": "/work/team/demo",
+        "rangeVersion": "range-7",
+        "baselineOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headOid": "cccccccccccccccccccccccccccccccccccccccc",
+        "comments": [
+          {
+            "id": "33333333-3333-4333-8333-000000000001",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 13,
+            "body": "这里要在读取失败时保留上一份结果，不要显示零改动。"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000002",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 14,
+            "body": "这个分支缺少 title 的回退说明，请在恢复入口里补一句。"
+          }
+        ],
+        "digest": "b4c21647578332c598ca210388dc690a3c4e185995a277b8be8ef94befe5b206"
+      }
+    },
+    {
+      "name": "reject-short-head",
+      "valid": false,
+      "reject": "validation",
+      "file": {
+        "v": 1,
+        "feedbackId": "8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1",
+        "reviewId": "6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8",
+        "sessionId": "0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0",
+        "resultRevision": 2,
+        "worktreePath": "/work/team/demo",
+        "rangeVersion": "range-7",
+        "baselineOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headOid": "ccccccc",
+        "comments": [
+          {
+            "id": "33333333-3333-4333-8333-000000000001",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 13,
+            "body": "这里要在读取失败时保留上一份结果，不要显示零改动。"
+          },
+          {
+            "id": "33333333-3333-4333-8333-000000000002",
+            "path": "src/lib/api.ts",
+            "hunkIndex": 0,
+            "kind": "add",
+            "oldNo": null,
+            "newNo": 14,
+            "body": "这个分支缺少 title 的回退说明，请在恢复入口里补一句。"
+          }
+        ],
+        "digest": "3baa6b54e6433152aba8c9d36d1c6f949fb1e2763bb310444d2dd27b511fc703"
+      }
+    }
+  ],
+  "urls": [
+    {
+      "name": "valid",
+      "url": "cliora://review-feedback?v=1&feedbackId=8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&resultRevision=2&digest=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": true
+    },
+    {
+      "name": "valid-revision-zero",
+      "url": "cliora://review-feedback?v=1&feedbackId=8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&resultRevision=0&digest=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "valid": true
+    },
+    {
+      "name": "extra-body-param",
+      "url": "cliora://review-feedback?v=1&feedbackId=8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&resultRevision=2&digest=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&body=hello",
+      "valid": false
+    },
+    {
+      "name": "duplicate-feedback-id",
+      "url": "cliora://review-feedback?v=1&feedbackId=8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1&feedbackId=8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&resultRevision=2&digest=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": false
+    },
+    {
+      "name": "unsupported-version",
+      "url": "cliora://review-feedback?v=2&feedbackId=8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&resultRevision=2&digest=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": false
+    },
+    {
+      "name": "leading-zero-revision",
+      "url": "cliora://review-feedback?v=1&feedbackId=8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&resultRevision=02&digest=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": false
+    },
+    {
+      "name": "missing-digest",
+      "url": "cliora://review-feedback?v=1&feedbackId=8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&resultRevision=2",
+      "valid": false
+    },
+    {
+      "name": "uppercase-digest",
+      "url": "cliora://review-feedback?v=1&feedbackId=8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&resultRevision=2&digest=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "valid": false
+    },
+    {
+      "name": "wrong-host",
+      "url": "cliora://review?v=1&feedbackId=8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&resultRevision=2&digest=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": false
+    },
+    {
+      "name": "path-in-query",
+      "url": "cliora://review-feedback?v=1&feedbackId=8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=0b1c2d3e-4f50-4172-8394-a5b6c7d8e9f0&resultRevision=2&digest=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&worktreePath=%2Fwork%2Fdemo",
+      "valid": false
+    }
+  ]
+}
