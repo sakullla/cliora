@@ -429,21 +429,30 @@ pub fn use_secret(
     };
     // The grant must match exactly: an unknown secret, an unknown executor or a
     // different pairing is refused before any value is read.
-    let Ok(grants) = list_grants(db) else {
+    let Ok(granted) = db.with_read_connection(|conn| {
+        conn.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM secret_grants g
+               JOIN prompt_secrets s ON s.id = g.secret_id
+               JOIN secret_executors e ON e.id = g.executor_id
+               WHERE g.installation_id=?1 AND g.secret_id=?2 AND g.executor_id=?3
+             )",
+            params![installation.id, secret_id, executor_id],
+            |row| row.get::<_, bool>(0),
+        )
+        .map_err(sql)
+    }) else {
         return fail(audit::code::STORAGE_FAILED, "本机秘密数据暂时不可用");
     };
-    if !grants
-        .iter()
-        .any(|grant| grant.installation_id == installation.id && grant.secret_id == secret_id && grant.executor_id == executor_id)
-    {
+    if !granted {
         return fail(audit::code::GRANT_MISSING, "该安装标识未获授权使用这个执行入口和秘密");
     }
-    let Ok(secret) = store::list(db, store) else {
+    let Ok(exists) = store::exists(db, secret_id) else {
         return fail(audit::code::STORAGE_FAILED, "本机秘密数据暂时不可用");
     };
-    let Some(secret) = secret.into_iter().find(|secret| secret.id == secret_id) else {
+    if !exists {
         return fail(audit::code::SECRET_UNKNOWN, "秘密已不存在，请重新选择引用");
-    };
+    }
     let executor = match executor::load(db, executor_id) {
         Ok(executor) => executor,
         Err(_) => return fail(audit::code::EXECUTOR_UNKNOWN, "执行入口已不存在，请重新登记"),
@@ -466,7 +475,7 @@ pub fn use_secret(
                     operation: audit::Operation::Use,
                     decision: audit::Decision::Allowed,
                     code,
-                    secret_id: Some(&secret.id),
+                    secret_id: Some(secret_id),
                     installation_id: Some(&installation.id),
                     executor_id: Some(&executor.id),
                 },
@@ -489,7 +498,7 @@ pub fn use_secret(
                     operation: audit::Operation::Error,
                     decision: audit::Decision::Denied,
                     code: failure.code,
-                    secret_id: Some(&secret.id),
+                    secret_id: Some(secret_id),
                     installation_id: Some(&installation.id),
                     executor_id: Some(&executor.id),
                 },
@@ -513,10 +522,10 @@ pub fn read_secret(
         Ok(installation) => installation,
         Err(response) => return *response,
     };
-    let Ok(secrets) = store::list(db, store) else {
+    let Ok(alias) = store::metadata_alias(db, secret_id) else {
         return denied(audit::code::STORAGE_FAILED, "本机秘密数据暂时不可用");
     };
-    let Some(secret) = secrets.into_iter().find(|secret| secret.id == secret_id) else {
+    let Some(alias) = alias else {
         record(
             db,
             audit::Event {
@@ -531,7 +540,7 @@ pub fn read_secret(
         return denied(audit::code::SECRET_UNKNOWN, "秘密已不存在，请重新选择引用");
     };
     let source = source_label(&installation);
-    let verdict = approval::request(host, &secret.alias, &source);
+    let verdict = approval::request(host, &alias, &source);
     let (response, decision, code) = match verdict {
         approval::Verdict::Accepted => {
             record(
@@ -540,7 +549,7 @@ pub fn read_secret(
                     operation: audit::Operation::Approve,
                     decision: audit::Decision::Allowed,
                     code: audit::code::OK,
-                    secret_id: Some(&secret.id),
+                    secret_id: Some(secret_id),
                     installation_id: Some(&installation.id),
                     executor_id: None,
                 },
@@ -552,11 +561,11 @@ pub fn read_secret(
                     let code = recheck_code(&response.code);
                     (*response, audit::Decision::Denied, code)
                 }
-                Ok(_) => match read_value(store, &secret.id) {
+                Ok(_) => match read_value(store, secret_id) {
                     Ok(Some(value)) => (
                         ipc::Response::success(
                             audit::code::OK,
-                            serde_json::json!(ReadResult { alias: secret.alias.clone(), value }),
+                            serde_json::json!(ReadResult { alias, value }),
                         ),
                         audit::Decision::Allowed,
                         audit::code::OK,
@@ -581,7 +590,7 @@ pub fn read_secret(
                     operation: audit::Operation::Decline,
                     decision: audit::Decision::Denied,
                     code: audit::code::DECLINED,
-                    secret_id: Some(&secret.id),
+                    secret_id: Some(secret_id),
                     installation_id: Some(&installation.id),
                     executor_id: None,
                 },
@@ -605,7 +614,7 @@ pub fn read_secret(
             operation: audit::Operation::Read,
             decision,
             code,
-            secret_id: Some(&secret.id),
+            secret_id: Some(secret_id),
             installation_id: Some(&installation.id),
             executor_id: None,
         },

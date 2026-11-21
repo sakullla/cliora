@@ -210,6 +210,31 @@ fn executable_file(executable: &str) -> Result<Option<PathBuf>, String> {
     Ok(Some(path.to_path_buf()))
 }
 
+fn hash_file(hasher: &mut Sha256, path: &Path, limit: u64, message: &str) -> Result<(), String> {
+    let file = std::fs::File::open(path).map_err(|_| message.to_owned())?;
+    let metadata = file.metadata().map_err(|_| message.to_owned())?;
+    let size = metadata.len();
+    if !metadata.is_file() || size > limit {
+        return Err(message.to_owned());
+    }
+    hasher.update(size.to_le_bytes());
+    let mut reader = file.take(size + 1);
+    let mut buffer = [0; 32 * 1024];
+    let mut total = 0;
+    loop {
+        let count = reader.read(&mut buffer).map_err(|_| message.to_owned())?;
+        if count == 0 {
+            break;
+        }
+        total += count as u64;
+        hasher.update(&buffer[..count]);
+    }
+    if total != size {
+        return Err(message.to_owned());
+    }
+    Ok(())
+}
+
 /// Digest of the whole definition: the executable string, the argument vector,
 /// the working directory, the content of an absolute executable and the content
 /// of every argument that points at a script file. Recomputing it before a run is
@@ -230,9 +255,7 @@ fn digest_of(executable: &str, args: &[String], cwd: Option<&str>) -> Result<Str
         hasher.update(b"script\0");
         hasher.update(file.as_os_str().to_string_lossy().as_bytes());
         hasher.update([0]);
-        let bytes = std::fs::read(&file).map_err(|_| "无法读取执行入口脚本内容".to_string())?;
-        hasher.update((bytes.len() as u64).to_le_bytes());
-        hasher.update(&bytes);
+        hash_file(&mut hasher, &file, MAX_SCRIPT_BYTES, "无法读取执行入口脚本内容")?;
     }
     // The executable's own content is hashed last, under its own domain marker and
     // length, so it can never be confused with an argument script.
@@ -240,9 +263,7 @@ fn digest_of(executable: &str, args: &[String], cwd: Option<&str>) -> Result<Str
         hasher.update(b"executable\0");
         hasher.update(file.as_os_str().to_string_lossy().as_bytes());
         hasher.update([0]);
-        let bytes = std::fs::read(&file).map_err(|_| "无法读取执行入口程序内容".to_string())?;
-        hasher.update((bytes.len() as u64).to_le_bytes());
-        hasher.update(&bytes);
+        hash_file(&mut hasher, &file, MAX_EXECUTABLE_BYTES, "无法读取执行入口程序内容")?;
     }
     Ok(hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
 }

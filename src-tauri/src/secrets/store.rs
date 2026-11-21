@@ -143,6 +143,10 @@ pub fn exists(db: &Database, id: &str) -> Result<bool, String> {
     Ok(db.with_read_connection(|conn| read_row(conn, id))?.is_some())
 }
 
+pub(super) fn metadata_alias(db: &Database, id: &str) -> Result<Option<String>, String> {
+    Ok(db.with_read_connection(|conn| read_row(conn, id))?.map(|row| row.alias))
+}
+
 /// Local secrets with their reference status. Only aliases and reference ids cross
 /// this boundary; values stay in the credential store.
 pub fn list(db: &Database, store: &dyn CredentialStore) -> Result<Vec<PromptSecret>, String> {

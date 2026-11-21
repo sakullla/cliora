@@ -5,7 +5,7 @@ use super::*;
 use crate::secrets::approval::{Host, Prompt, Verdict};
 use crate::secrets::executor::{Channel, NewExecutor};
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -15,6 +15,7 @@ const OTHER: &str = "canary-other-value-4f81";
 #[derive(Default)]
 struct MemoryCredentials {
     values: Mutex<BTreeMap<String, String>>,
+    lookups: AtomicUsize,
 }
 
 impl CredentialStore for MemoryCredentials {
@@ -26,6 +27,7 @@ impl CredentialStore for MemoryCredentials {
         self.lookup(id)?.ok_or_else(|| "missing".into())
     }
     fn lookup(&self, id: &str) -> Result<Option<String>, String> {
+        self.lookups.fetch_add(1, Ordering::Relaxed);
         Ok(self.values.lock().unwrap().get(id).cloned())
     }
     fn delete(&self, id: &str) -> Result<(), String> {
@@ -170,7 +172,7 @@ fn a_grant_is_required_before_a_value_reaches_an_executor() {
     let database = db();
     let store = MemoryCredentials::default();
     let secret = create_secret(&database, &store, "部署口令", CANARY);
-    let executor = register(&database, "env 读取", "/usr/bin/env", &[], Channel::Env, Some("CLIORATEST"));
+    let executor = register(&database, "env 读取", "env", &[], Channel::Env, Some("CLIORATEST"));
     let installation = installation(&database);
     let response = use_request(&database, &store, &installation.id, &secret.id, &executor.id);
     assert!(!response.ok);
@@ -185,11 +187,14 @@ fn the_env_channel_delivers_the_value_and_masks_every_returned_byte() {
     let database = db();
     let store = MemoryCredentials::default();
     let secret = create_secret(&database, &store, "env 口令", CANARY);
+    create_secret(&database, &store, "无关执行口令", OTHER);
     let executor = register(&database, "env 读取", "/usr/bin/env", &[], Channel::Env, Some("CLIORATEST"));
     let installation = installation(&database);
     grant(&database, &installation.id, &secret.id, &executor.id).unwrap();
+    store.lookups.store(0, Ordering::Relaxed);
     let response = use_request(&database, &store, &installation.id, &secret.id, &executor.id);
     assert!(response.ok, "{}", response.message);
+    assert_eq!(store.lookups.load(Ordering::Relaxed), 1);
     let data = response.data.unwrap();
     let stdout = data["stdout"].as_str().unwrap();
     // The child printed its environment, so the masked line proves it received the
@@ -280,6 +285,7 @@ fn an_edited_script_invalidates_the_registered_digest() {
 #[cfg(unix)]
 #[test]
 fn an_edited_absolute_executable_invalidates_the_registered_digest() {
+    use sha2::{Digest, Sha256};
     use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().unwrap();
     let script = directory.path().join("deploy.sh");
@@ -287,13 +293,19 @@ fn an_edited_absolute_executable_invalidates_the_registered_digest() {
         std::fs::write(&script, body).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     };
-    write("#!/bin/sh\nprintf 'first'\n");
+    let initial = "#!/bin/sh\nprintf 'first'\n";
+    write(initial);
     let database = db();
     let store = MemoryCredentials::default();
     let secret = create_secret(&database, &store, "入口脚本口令", CANARY);
     // The script is the executable itself, not an argument: its bytes are the code
     // that receives the value, so they belong to the registered definition.
     let executor = register(&database, "脚本入口", script.to_str().unwrap(), &[], Channel::Env, Some("CLIORATEST"));
+    let mut legacy = Sha256::new();
+    legacy.update(format!("cliora-secret-executor-v1\0{}\0\0executable\0{}\0", script.display(), script.display()));
+    legacy.update((initial.len() as u64).to_le_bytes());
+    legacy.update(initial.as_bytes());
+    assert_eq!(executor.digest, format!("{:x}", legacy.finalize()));
     let installation = installation(&database);
     grant(&database, &installation.id, &secret.id, &executor.id).unwrap();
     let first = use_request(&database, &store, &installation.id, &secret.id, &executor.id);
@@ -391,6 +403,8 @@ fn every_read_needs_its_own_approval() {
     let database = db();
     let store = MemoryCredentials::default();
     let secret = create_secret(&database, &store, "读取口令", CANARY);
+    create_secret(&database, &store, "无关口令", OTHER);
+    store.lookups.store(0, Ordering::Relaxed);
     let installation = installation(&database);
     let host = FakeHost::new(Answer::Accept);
     for _ in 0..2 {
@@ -401,6 +415,7 @@ fn every_read_needs_its_own_approval() {
         assert_eq!(data["alias"], "读取口令");
     }
     let asked = host.asked();
+    assert_eq!(store.lookups.load(Ordering::Relaxed), 2, "each approval reads only the selected credential once");
     assert_eq!(asked.len(), 2, "each read must create its own request");
     // Accepting is audited on its own, once per accepted read.
     let rows = audit::list(&database, 20).unwrap();
@@ -421,12 +436,14 @@ fn a_declined_read_returns_no_value_and_authorizes_nothing_later() {
     let database = db();
     let store = MemoryCredentials::default();
     let secret = create_secret(&database, &store, "拒绝口令", CANARY);
+    store.lookups.store(0, Ordering::Relaxed);
     let installation = installation(&database);
     let host = FakeHost::new(Answer::Decline);
     let response = read_secret(&database, &store, &host, &installation.id, &secret.id);
     assert!(!response.ok);
     assert_eq!(response.code, audit::code::DECLINED);
     assert!(response.data.is_none());
+    assert_eq!(store.lookups.load(Ordering::Relaxed), 0);
     assert!(!body(&response).contains(CANARY));
     let rows = audit::list(&database, 10).unwrap();
     assert!(rows.iter().any(|row| row.operation == "decline" && row.decision == "denied"));

@@ -1,5 +1,8 @@
 //! Headless bridge used by Twiglane. The desktop owns the SSH target and credentials.
-use super::{ensure_enabled, list_targets, password, twiglane_config::Snapshot, RemoteTarget};
+use super::{
+    ensure_enabled, list_targets, password, twiglane_config::Snapshot,
+    twiglane_trust::DefaultTrust, RemoteTarget,
+};
 use crate::database::Database;
 use base64::Engine;
 use minisign_verify::{PublicKey, Signature};
@@ -28,8 +31,8 @@ fn registered_targets(path: &Path) -> Result<Vec<RemoteTarget>> {
         .collect())
 }
 
-fn identity(target: &RemoteTarget) -> Result<Value> {
-    let snapshot = Snapshot::resolve(target)?;
+fn identity(target: &RemoteTarget, defaults: &DefaultTrust) -> Result<Value> {
+    let snapshot = Snapshot::resolve_with_defaults(target, defaults)?;
     Ok(json!({
         "targetId": target.id,
         "targetRevision": snapshot.revision, "effectiveHost":snapshot.hostname,
@@ -193,8 +196,9 @@ fn run(args: &[String], database: impl FnOnce() -> Result<PathBuf>) -> Result<()
             let targets = registered_targets(&database()?)?;
             let mut available = Vec::new();
             let mut unavailable = Vec::new();
+            let defaults = DefaultTrust::new();
             for target in targets {
-                match identity(&target) {
+                match identity(&target, &defaults) {
                     Ok(value) => available.push(value),
                     Err(reason) => unavailable
                         .push(json!({"targetId":target.id, "name":target.name, "error":reason})),

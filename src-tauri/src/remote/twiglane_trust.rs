@@ -1,6 +1,7 @@
 //! Capture OpenSSH's actual trust operands before any operation receives its revision.
 use super::proxy::bounded_output;
 use sha2::{Digest, Sha256};
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
@@ -9,6 +10,7 @@ use std::process::Command;
 use std::time::Duration;
 
 pub(super) type Result<T> = std::result::Result<T, &'static str>;
+pub(super) type DefaultTrust = OnceCell<Result<String>>;
 const MARK: &str = "__CLIORA_SSH_OPERAND_v1__";
 
 pub(super) struct Profile {
@@ -70,7 +72,7 @@ impl Profile {
         })
     }
 
-    fn paths(&self, key: &str, value: &str) -> Result<Vec<PathBuf>> {
+    fn paths(&self, key: &str, value: &str, defaults: &DefaultTrust) -> Result<Vec<PathBuf>> {
         if value == "none" {
             return Ok(Vec::new());
         }
@@ -116,9 +118,14 @@ impl Profile {
         if let Some(parts) = candidates.into_iter().next() {
             return Ok(parts);
         }
-        let mut defaults = Command::new("ssh");
-        defaults.args(["-G", "-F", "none", "--", "cliora-default.invalid"]);
-        let defaults = evaluate(&mut defaults)?;
+        let defaults = defaults
+            .get_or_init(|| {
+                let mut command = Command::new("ssh");
+                command.args(["-G", "-F", "none", "--", "cliora-default.invalid"]);
+                evaluate(&mut command)
+            })
+            .as_ref()
+            .map_err(|error| *error)?;
         if !defaults
             .lines()
             .any(|line| line.strip_prefix(&format!("{key} ")) == Some(value))
@@ -196,7 +203,7 @@ pub(super) struct Trust {
 }
 
 impl Trust {
-    pub fn directive(&mut self, profile: &Profile, key: &str, value: &str) -> Result<String> {
+    pub fn directive(&mut self, profile: &Profile, key: &str, value: &str, defaults: &DefaultTrust) -> Result<String> {
         let paths = if key == "revokedhostkeys" {
             if value == "none" {
                 Vec::new()
@@ -204,7 +211,7 @@ impl Trust {
                 vec![PathBuf::from(value)]
             }
         } else {
-            profile.paths(key, value)?
+            profile.paths(key, value, defaults)?
         };
         let mut names = Vec::new();
         for path in paths {

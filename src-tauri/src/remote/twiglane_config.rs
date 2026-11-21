@@ -2,7 +2,7 @@
 //! An SSH operation consumes this snapshot, never the mutable input file a second time.
 use super::{
     connection_args, hide_console_window, operations, twiglane_peer,
-    twiglane_trust::{Profile, Trust},
+    twiglane_trust::{DefaultTrust, Profile, Trust},
     validate_target, RemoteTarget,
 };
 use sha2::{Digest, Sha256};
@@ -72,6 +72,13 @@ fn option(key: &str, value: &str) -> Result<String, &'static str> {
 
 impl Snapshot {
     pub(super) fn resolve(target: &RemoteTarget) -> Result<Self, &'static str> {
+        Self::resolve_with_defaults(target, &DefaultTrust::new())
+    }
+
+    pub(super) fn resolve_with_defaults(
+        target: &RemoteTarget,
+        defaults: &DefaultTrust,
+    ) -> Result<Self, &'static str> {
         validate_target(target).map_err(|_| "invalid_target")?;
         if target.user.starts_with('-') {
             return Err("invalid_target");
@@ -111,7 +118,7 @@ impl Snapshot {
                     }
                     "hostname" => host = Some(value),
                     "userknownhostsfile" | "globalknownhostsfile" | "revokedhostkeys" => {
-                        body.push_str(&trust.directive(profile, key, value)?);
+                        body.push_str(&trust.directive(profile, key, value, defaults)?);
                         continue;
                     }
                     "proxyjump" if value != "none" => {

@@ -4,7 +4,9 @@
 //! broker fails closed, an invalid frame does not break the endpoint, and a caller
 //! that stops waiting cancels the run it started.
 use super::*;
-use crate::secrets::ipc::{self, Handler, Request, Response};
+#[cfg(unix)]
+use crate::secrets::ipc::{self, Handler, Request};
+use crate::secrets::ipc::Response;
 use serde_json::json;
 
 fn args(values: &[&str]) -> Vec<String> {

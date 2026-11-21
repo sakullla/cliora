@@ -8,15 +8,24 @@
 //! without a broker fails closed and no tool result carries a value unless an
 //! approved `read_secret` returned one.
 use super::*;
+#[cfg(unix)]
 use crate::secrets::approval::{Host, Prompt};
+#[cfg(unix)]
 use crate::secrets::audit;
+#[cfg(unix)]
 use crate::secrets::executor::{self, Channel, NewExecutor};
-use serde_json::{json, Value};
+use serde_json::json;
+#[cfg(unix)]
+use serde_json::Value;
 use std::collections::BTreeMap;
+#[cfg(unix)]
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+#[cfg(unix)]
+use std::sync::Arc;
+use std::sync::Mutex;
 
 const CANARY: &str = "canary-synthetic-mcp-51fa7c";
+#[cfg(unix)]
 const OTHER: &str = "canary-other-mcp-b3d2";
 
 fn args(values: &[&str]) -> Vec<String> {
@@ -49,6 +58,7 @@ impl CredentialStore for MemoryCredentials {
     }
 }
 
+#[cfg(unix)]
 struct Uses {
     database: Arc<Database>,
     credentials: Arc<MemoryCredentials>,
@@ -57,6 +67,7 @@ struct Uses {
     executor: executor::SecretExecutor,
 }
 
+#[cfg(unix)]
 fn uses() -> Uses {
     let database = Arc::new(Database::open(std::path::Path::new(":memory:")).unwrap());
     let credentials = Arc::new(MemoryCredentials::default());
