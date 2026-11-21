@@ -565,7 +565,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [reviewError, setReviewError] = useState('');
   const [codeStatuses, setCodeStatuses] = useState<Map<string, WorkbenchCodeStatus>>(() => new Map());
   const [codeStatusUnknown, setCodeStatusUnknown] = useState<Map<string, boolean>>(() => new Map());
+  /** Review keys a real Git re-read confirmed: the only input of the "verified" label. */
   const [codeStatusReviews, setCodeStatusReviews] = useState<Map<string, string>>(() => new Map());
+  /** Review keys whose status read finished; evidence that a read ran, never that it passed. */
+  const [reviewReadKeys, setReviewReadKeys] = useState<Map<string, string>>(() => new Map());
   const [codeReadSeq, setCodeReadSeq] = useState(0);
   const [reviewClock, setReviewClock] = useState(() => Date.now());
   const announcedReviews = useRef(new Set<string>());
@@ -1167,6 +1170,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setCodeStatuses(retain);
     setCodeStatusUnknown(retain);
     setCodeStatusReviews(retain);
+    setReviewReadKeys(retain);
     setReviewStates(retain);
   }, [sessions]);
   useEffect(() => {
@@ -1250,7 +1254,18 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   useEffect(() => {
     if (!nativeAvailable || !reviewTarget || !codeStatusNeeded) return;
     let alive = true;
-    const markReviewRead = () => {
+    // A read settling is not a review passing: only a ready state records the review key.
+    const markReadSettled = () => {
+      if (!returnedReviewId) return;
+      setReviewReadKeys((current) => {
+        if (current.get(reviewTarget) === returnedReviewId) return current;
+        const map = new Map(current);
+        map.set(reviewTarget, returnedReviewId);
+        return map;
+      });
+    };
+    // The verified key is written only after workbench_code_status answered state=ready.
+    const markReviewVerified = () => {
       if (!returnedReviewId) return;
       setCodeStatusReviews((current) => {
         if (current.get(reviewTarget) === returnedReviewId) return current;
@@ -1265,12 +1280,19 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       const pending = native.workbenchCodeStatus(reviewTarget).then((value) => {
         if (!alive || !value || value.sessionId !== reviewTarget || (value.state !== 'ready' && value.state !== 'unknown')) return;
         setCodeStatuses((current) => { const map = new Map(current); map.set(reviewTarget, value); return map; });
-        setCodeStatusUnknown((current) => { if (!current.get(reviewTarget)) return current; const map = new Map(current); map.delete(reviewTarget); return map; });
-        markReviewRead();
+        if (value.state === 'ready') {
+          setCodeStatusUnknown((current) => { if (!current.get(reviewTarget)) return current; const map = new Map(current); map.delete(reviewTarget); return map; });
+          markReviewVerified();
+        } else {
+          // An unknown state leaves the review unverified and the retry available.
+          setCodeStatusUnknown((current) => { if (current.get(reviewTarget)) return current; const map = new Map(current); map.set(reviewTarget, true); return map; });
+        }
+        markReadSettled();
       }).catch(() => {
         if (!alive) return;
+        // A failed read is unknown, never a confirmed review or "no changes".
         setCodeStatusUnknown((current) => { if (current.get(reviewTarget)) return current; const map = new Map(current); map.set(reviewTarget, true); return map; });
-        markReviewRead();
+        markReadSettled();
       });
       codeReadPending.current = pending;
       await pending;
@@ -1403,13 +1425,15 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       setNotice(describeReview(review, review.remoteCheck, false).text);
       return;
     }
-    if (codeStatusReviews.get(reviewTarget) !== reviewResultKey(review)) return;
+    // The notice may report an unconfirmed result, so a settled read is enough here;
+    // the verified label itself is still written only by a ready state.
+    if (reviewReadKeys.get(reviewTarget) !== reviewResultKey(review)) return;
     const status = codeStatuses.get(reviewTarget) ?? null;
     const unknownStatus = !!codeStatusUnknown.get(reviewTarget);
     if (!status && !unknownStatus) return;
     announcedReviews.current.add(reviewResultKey(review));
     setNotice(describeReview(review, status, unknownStatus).text);
-  }, [reviewTarget, reviewStates, codeStatuses, codeStatusUnknown, codeStatusReviews]);
+  }, [reviewTarget, reviewStates, codeStatuses, codeStatusUnknown, reviewReadKeys]);
   function sessionPromptContext(session: WorkbenchSession): PromptContext | null {
     const host = libraryHostId(session.projectId, remoteProjects);
     if (!host) return null;
@@ -2012,6 +2036,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setCodeStatuses((current) => { if (!current.has(id)) return current; const next = new Map(current); next.delete(id); return next; });
     setCodeStatusUnknown((current) => { if (!current.has(id)) return current; const next = new Map(current); next.delete(id); return next; });
     setCodeStatusReviews((current) => { if (!current.has(id)) return current; const next = new Map(current); next.delete(id); return next; });
+    setReviewReadKeys((current) => { if (!current.has(id)) return current; const next = new Map(current); next.delete(id); return next; });
     setComposerDrafts((current) => {
       if (!(id in current)) return current;
       const next = { ...current };
@@ -3965,9 +3990,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       return createPortal(<div ref={menuRef} className={`${rowMenuStyles.rowMenuList} ${styles.contextMenu}`} role="menu" aria-label={menu.kind === 'session' ? t('sessions.sessionMenu', { name }) : t('sessions.terminalMenu')} style={menuBox ?? { top: 0, left: -10000 }} onKeyDown={menuNavigate} onContextMenu={(event) => event.preventDefault()} onClick={() => setMenu(null)}>
         {menu.kind === 'terminal' ? <>
           {/* Task display actions: none of them ends a process, writes a repository or approves a review. */}
-          <button role="menuitem" aria-pressed={arrangement.reviewMarks.includes(session.id)} onClick={() => toggleReviewMark(session.id)}><Icon name="eye" size={14} /><span>{arrangement.reviewMarks.includes(session.id) ? t('sessions.taskClearReview') : t('sessions.taskMarkReview')}</span>{arrangement.reviewMarks.includes(session.id) && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}</button>
+          <button role="menuitem" aria-pressed={arrangement.reviewMarks.includes(session.id)} title={arrangement.reviewMarks.includes(session.id) ? t('sessions.taskClearReviewHint') : t('sessions.taskMarkReviewHint')} onClick={() => toggleReviewMark(session.id)}><Icon name="eye" size={14} /><span>{arrangement.reviewMarks.includes(session.id) ? t('sessions.taskClearReview') : t('sessions.taskMarkReview')}</span>{arrangement.reviewMarks.includes(session.id) && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}</button>
           <button role="menuitem" aria-expanded={detailIds.has(session.id)} onClick={() => toggleSessionDetail(session.id)}><Icon name="branch" size={14} /><span>{t('sessions.taskChanges')}</span></button>
-          <button role="menuitem" onClick={() => toggleCollapseSession(session.id)}><Icon name="archive" size={14} /><span>{collapsedIds.has(session.id) ? t('sessions.taskRestore') : t('sessions.taskCollapse')}</span></button>
+          <button role="menuitem" title={collapsedIds.has(session.id) ? undefined : t('sessions.taskCollapseHint')} onClick={() => toggleCollapseSession(session.id)}><Icon name="archive" size={14} /><span>{collapsedIds.has(session.id) ? t('sessions.taskRestore') : t('sessions.taskCollapse')}</span></button>
           <span className={styles.menuDivider} role="separator" />
           <button role="menuitem" disabled={!menu.hasSelection} onClick={() => { handle?.copySelection(); handle?.focus(); }}><Icon name="copy" size={14} /><span>{t('sessions.copySelection')}</span><kbd>{modLabel}+C</kbd></button>
           <button role="menuitem" disabled={!session.running} onClick={() => void pasteIntoSession(session)}><Icon name="clipboard" size={14} /><span>{t('sessions.pasteClipboard')}</span><kbd>{modLabel}+V</kbd></button>
@@ -4138,7 +4163,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           <button type="button" role="radio" aria-checked={launchMode === 'normal'} className={styles.modeCard} onClick={() => { launchModeTouched.current = true; setLaunchMode('normal'); }}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="shield" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeNormal')}</strong><small>{t('sessions.modeNormalDesc')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
           <button type="button" role="radio" aria-checked={launchMode === 'yolo'} disabled={!selectedLaunchTool?.yoloAvailable} title={!selectedLaunchTool?.yoloAvailable ? t('sessions.yoloUnsupported') : undefined} className={styles.modeCard} onClick={() => { launchModeTouched.current = true; setLaunchMode('yolo'); }}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="sparkle" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeYolo')}</strong><small>{selectedLaunchTool?.yoloAvailable ? t('sessions.modeYoloDesc') : t('sessions.yoloUnsupported')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
         </div></div>
-        <div className={styles.dialogSummary}>{effectiveLaunchToolId && <span className={styles.dialogSummaryIcon}><ToolIcon toolId={effectiveLaunchToolId} size={20} /></span>}<span>{(() => {
+        <div className={styles.dialogSummary} role="group" aria-label={t('sessions.newSessionContextLabel')}>{effectiveLaunchToolId && <span className={styles.dialogSummaryIcon}><ToolIcon toolId={effectiveLaunchToolId} size={20} /></span>}<span>{(() => {
           const place = workspaceValue.startsWith('project:') ? availableProjects.find((item) => 'project:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('remote:') ? availableRemoteProjects.find((item) => 'remote:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('custom:') ? shortPath(displayPath(workspaceValue.slice('custom:'.length))) : workspaceValue.startsWith('rpath:') ? remoteBaseName(workspaceValue.slice('rpath:'.length)) || workspaceValue.slice('rpath:'.length) : t('sessions.workspaceHome');
           const values = { tool: selectedLaunchTool?.name ?? '', place, mode: modeLabel(launchMode) };
           // The summary names the worktree only once its base is confirmed, so it never

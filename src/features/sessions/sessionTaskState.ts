@@ -30,8 +30,6 @@ export type TaskEvidence = {
   outputActive?: boolean;
   /** The adapter recognized a resting screen (its composer at a prompt): it is not working. */
   resting?: boolean;
-  /** The newest screen evidence is older than the last observed output. */
-  stale?: boolean;
   /** The user marked this round as something to review. */
   marked?: boolean;
   /** A returned review that a real Git re-read confirmed. */
@@ -60,7 +58,6 @@ export function taskStateFor(evidence: TaskEvidence): TaskState {
   // A mark or a verified result outranks an idle screen, but not a turn that is producing output:
   // resumed work invalidates the "round is ready" premise on its own.
   if ((evidence.marked || evidence.verified) && !evidence.outputActive) return 'readyReview';
-  if (evidence.stale) return 'unknown';
   if (evidence.outputActive) return 'working';
   return 'unknown';
 }
@@ -100,12 +97,8 @@ export function taskStateHintKey(state: TaskState, evidence: TaskEvidence): stri
   if (state === 'readyReview' && evidence.verified) return 'sessions.taskReviewVerified';
   if (state === 'readyReview' && evidence.marked) return 'sessions.taskReviewMarked';
   if (state === 'unknown' && evidence.remoteUnconfirmed) return 'sessions.sshUnknownShort';
-  if (state === 'unknown' && evidence.stale) return 'sessions.taskStale';
   return null;
 }
-
-/** Attention, review, working, ended and unknown in one stable order. */
-export const TASK_BUCKET_ORDER: readonly TaskBucket[] = ['attention', 'review', 'working', 'ended', 'unknown'];
 
 /**
  * Collapsed rows leave the active list but keep their own state: collapsing is display only and
@@ -122,14 +115,10 @@ export function partitionCollapsed<T>(
   return { active, collapsed: hidden };
 }
 
-/** True only when a returned review's own key was already re-read against real Git. */
+/**
+ * True only when a returned review's own key was already re-read against real Git: the caller
+ * records that key after a status read answered state=ready, never merely when a read started.
+ */
 export function reviewEvidenceVerified(reviewKey: string | null, readKey: string | null | undefined): boolean {
   return !!reviewKey && reviewKey === readKey;
-}
-
-/** Ids that stay ordered by their previous rank while new ones join the end. */
-export function withRankedIds(current: readonly string[], incoming: readonly string[], limit = 200): string[] {
-  const next = [...current];
-  for (const id of incoming) if (!next.includes(id)) next.push(id);
-  return next.slice(Math.max(0, next.length - limit));
 }

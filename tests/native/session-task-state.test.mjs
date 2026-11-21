@@ -7,7 +7,6 @@ import {
   taskStateFor,
   taskStateHintKey,
   taskStateLabelKey,
-  withRankedIds,
 } from '../../src/features/sessions/sessionTaskState.ts';
 
 const running = { running: true };
@@ -38,13 +37,12 @@ test('an idle prompt is not a finished round, a delivery or a review', () => {
   assert.equal(taskStateLabelKey('unknown', running), 'sessions.stateIdle');
 });
 
-test('output activity is working; stale evidence is unknown', () => {
+test('output activity is working, and a quiet running session stays unknown', () => {
   assert.equal(taskStateFor({ ...running, outputActive: true }), 'working');
   assert.equal(taskStateLabelKey('working', { ...running, outputActive: true }), 'sessions.stateStreaming');
-  assert.equal(taskStateFor({ ...running, outputActive: true, stale: true }), 'unknown');
-  assert.equal(taskStateHintKey('unknown', { ...running, stale: true }), 'sessions.taskStale');
-  // A bell heard before the last screen still needs the person.
-  assert.equal(taskStateFor({ ...running, bell: true, stale: true }), 'needsYou');
+  // Nothing describes a running session that is neither waiting nor producing output.
+  assert.equal(taskStateFor({ ...running, outputActive: false }), 'unknown');
+  assert.equal(taskStateHintKey('unknown', { ...running }), null);
 });
 
 test('exit codes are process facts: a clean exit is ended, a failed one is error', () => {
@@ -92,9 +90,4 @@ test('collapsing moves a row out of the active list without changing its state',
   assert.deepEqual(collapsed.map((row) => row.id), ['b']);
   // An id that is not present in the list never appears in either side.
   assert.deepEqual(partitionCollapsed(rows, (row) => row.id, new Set(['zzz'])).collapsed, []);
-});
-
-test('ranks stay bounded and keep their order while new ids join the end', () => {
-  assert.deepEqual(withRankedIds(['a', 'b'], ['b', 'c']), ['a', 'b', 'c']);
-  assert.deepEqual(withRankedIds(['a', 'b', 'c'], [], 2), ['b', 'c']);
 });

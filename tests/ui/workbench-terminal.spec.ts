@@ -4614,6 +4614,61 @@ test('a marked round reviews, and collapsing moves it without ending it', async 
   await expect(rail.locator('[data-group="review"] [data-drag-id="s1"]')).toHaveCount(1);
 });
 
+test('the task menu actions stay on a keyboard path with roving focus and focus return', async ({ page }) => {
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const rail = page.getByRole('complementary', { name: '会话列表' });
+  const row = rail.locator('[data-drag-id="s1"]');
+  const stage = page.getByRole('region', { name: '当前会话' });
+  const taskMenu = () => page.getByRole('menu', { name: '终端操作' });
+  const more = stage.getByRole('button', { name: '更多终端操作' });
+  const openTaskMenu = async () => { await more.click(); await expect(taskMenu()).toBeVisible(); };
+  await row.locator('[data-session-id="s1"]').click();
+
+  // 菜单打开后焦点落在第一个任务动作上，方向键只在这份菜单内移动。
+  await openTaskMenu();
+  const markItem = taskMenu().getByRole('menuitem', { name: '标记待审阅', exact: true });
+  await expect(markItem).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(taskMenu().getByRole('menuitem', { name: '查看本次改动', exact: true })).toBeFocused();
+  await page.keyboard.press('ArrowUp');
+  await expect(markItem).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(row).toHaveAttribute('data-task', 'readyReview');
+  await expect(page.locator('[data-group="review"]')).toContainText('待审阅');
+
+  // Collapse by keyboard: the mark and the process stay, only the list moves the row.
+  await openTaskMenu();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await expect(taskMenu().getByRole('menuitem', { name: '收起为后台', exact: true })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(rail.locator('[data-group="review"] [data-drag-id="s1"]')).toHaveCount(0);
+  const collapsed = rail.locator('[data-group="collapsed"]');
+  await expect(collapsed).toContainText('已收起');
+  // 收起只移动列表项：展开后同一行的任务状态和进程都还在。
+  await collapsed.getByRole('button', { name: /已收起/ }).click();
+  const collapsedRow = collapsed.locator('[data-drag-id="s1"]');
+  await expect(collapsedRow).toHaveAttribute('data-task', 'readyReview');
+  await expect(collapsedRow).toHaveAttribute('data-running', 'true');
+
+  // Restore by keyboard marks nothing new and returns the row to the review list.
+  await collapsed.locator('[data-session-id="s1"]').click();
+  await openTaskMenu();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await expect(taskMenu().getByRole('menuitem', { name: '恢复关注', exact: true })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(rail.locator('[data-group="review"] [data-drag-id="s1"]')).toHaveCount(1);
+
+  // Escape closes the menu and hands focus back to the terminal it acts on.
+  await openTaskMenu();
+  await page.keyboard.press('Escape');
+  await expect(taskMenu()).toHaveCount(0);
+  await expect(page.locator('.xterm-helper-textarea:visible')).toBeFocused();
+});
+
 test('the new-session dialog leads with the task and keeps folded drafts', async ({ page }) => {
   await page.addInitScript(() => {
     const project = { id: 'p1', name: 'Shop', path: 'C:/shop', available: true, preferredTool: null, lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {}, workspaceBacked: false };

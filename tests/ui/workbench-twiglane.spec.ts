@@ -490,6 +490,48 @@ test('a returned review whose real status cannot be read is unconfirmed, never c
   await expect(group).not.toContainText('没有未提交文件');
 });
 
+test('a read that never reached Git cannot put a returned review in the review list', async ({ page }) => {
+  await installDesktop(page);
+  await page.addInitScript(() => {
+    const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, any>) => Promise<unknown> } }).__TAURI_INTERNALS__;
+    const original = internals.invoke;
+    internals.invoke = async (command: string, args: Record<string, any> = {}) => {
+      if (command !== 'workbench_code_status') return original(command, args);
+      const flags = window as unknown as { __failStatus?: boolean; __unknownStatus?: boolean };
+      if (flags.__failStatus) throw { code: 'read_failed', message: 'x' };
+      if (flags.__unknownStatus) {
+        // 扩展宿主能回答，但明确说这次没读到 Git：同样不是真实复核。
+        return { sessionId: args.sessionId, worktreePath: 'C:/work/alpha', branch: 'feature/twiglane', headOid: null, uncommittedFiles: null, state: 'unknown', reason: 'git_missing' };
+      }
+      return original(command, args);
+    };
+  });
+  await openWorkbench(page);
+  const rail = page.getByRole('complementary', { name: '会话列表' });
+  const row = rail.locator('[data-drag-id="s1"]');
+  const { group, reviewId } = await startOnS1(page);
+
+  // 读取失败：菜单如实说未确认，侧栏不能把这次读取当成“审阅结果已核对”。
+  await page.evaluate(() => { (window as unknown as { __failStatus?: boolean }).__failStatus = true; });
+  await emit(page, 'cliora://review?v=2&event=returned&reviewId=' + reviewId + S1 + '&outcome=reviewed&worktreeState=clean');
+  await expect(group.getByRole('status')).toHaveText('已返回，但这次没有读到真实 Git 状态，结果未确认。');
+  await expect(row).not.toHaveAttribute('data-task', 'readyReview');
+  await expect(row).not.toContainText('审阅结果已核对');
+  await expect(rail.locator('[data-bucket="review"]')).toHaveCount(0);
+
+  // state=unknown：重试仍然只得到未知，会话不得因此进入待审阅。
+  await page.evaluate(() => {
+    const flags = window as unknown as { __failStatus?: boolean; __unknownStatus?: boolean };
+    flags.__failStatus = false;
+    flags.__unknownStatus = true;
+  });
+  await group.getByRole('menuitem', { name: '重新读取状态' }).click();
+  await expect(group.getByRole('status')).toHaveText('已返回，但这次没有读到真实 Git 状态，结果未确认。');
+  await expect(row).not.toHaveAttribute('data-task', 'readyReview');
+  await expect(row).not.toContainText('审阅结果已核对');
+  await expect(rail.locator('[data-bucket="review"]')).toHaveCount(0);
+});
+
 test('bounded meta is kept without changing the verdict, and v1 or malformed extensions write nothing', async ({ page }) => {
   await installDesktop(page);
   await openWorkbench(page);
