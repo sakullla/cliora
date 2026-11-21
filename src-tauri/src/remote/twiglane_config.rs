@@ -38,6 +38,16 @@ fn quoted(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+fn jump_host(destination: &str) -> Option<&str> {
+    // The destination has already been accepted by ssh -G as an SSH URI.
+    let authority = destination.strip_prefix("ssh://")?;
+    let address = authority.rsplit('@').next()?;
+    if let Some(bracketed) = address.strip_prefix('[') {
+        return bracketed.split_once(']').map(|(host, _)| host);
+    }
+    address.split(':').next()
+}
+
 fn option(key: &str, value: &str) -> Result<String, &'static str> {
     // ssh -G prints these single operands without source quotes. Restore their token boundary.
     let value = match key {
@@ -74,14 +84,14 @@ impl Snapshot {
             .args(args)
             .arg("--")
             .arg(dst);
-        let mut profiles = vec![Profile::read(&ssh)?];
+        let mut profiles = vec![(None, Profile::read(&ssh)?)];
         let mut trust = Trust::default();
         let mut seen = HashMap::new();
         let mut index = 0;
         let mut config = String::new();
         let mut hostname = None;
         while index < profiles.len() {
-            let profile = &profiles[index];
+            let (jump_destination, profile) = &profiles[index];
             index += 1;
             let mut alias = None;
             let mut host = None;
@@ -117,7 +127,15 @@ impl Snapshot {
                 }
                 body.push_str(&option(key, value)?);
             }
-            let alias = alias.ok_or("ssh_configuration_unavailable")?;
+            // OpenSSH 8.9 prints the effective hostname but omits the requested host.
+            // Frozen Host sections still need to match the original alias on reconnect.
+            let alias = match (alias, jump_destination.as_deref()) {
+                (Some(alias), _) => alias,
+                (None, Some(destination)) => {
+                    jump_host(destination).ok_or("ssh_configuration_unavailable")?
+                }
+                (None, None) => target.host.as_str(),
+            };
             let host = host.ok_or("ssh_configuration_unavailable")?;
             if alias.is_empty()
                 || alias.contains(['*', '?', '!', '\\', '"'])
@@ -150,8 +168,8 @@ impl Snapshot {
                 } else {
                     format!("ssh://{jump}")
                 };
-                args.arg("--").arg(dest);
-                profiles.push(Profile::read(&args)?);
+                args.arg("--").arg(&dest);
+                profiles.push((Some(dest), Profile::read(&args)?));
             }
         }
         let mut digest = Sha256::new();

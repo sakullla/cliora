@@ -49,7 +49,10 @@ fn desktop_exit_mode_resolves_only_current_enabled_targets_and_rejects_untrusted
     let second_trust = home.path().join("extra trust");
     std::fs::write(&trust, "# initial trust\n").unwrap();
     std::fs::write(&second_trust, "").unwrap();
-    let initial_config = format!("Host test.invalid\n  HostName first.invalid\n  HostKeyAlias first-key\n  UserKnownHostsFile \"{}\" \"{}\"\n", trust.display(), second_trust.display());
+    let initial_config = format!(
+        "Host test.invalid\n  HostName first.invalid\n  HostKeyAlias first-key\n  UserKnownHostsFile \"{}\" \"{}\"\n  ProxyJump relay@jump:2222\nHost jump\n  HostName first-hop.invalid\n",
+        trust.display(), second_trust.display()
+    );
     std::fs::write(&ssh_config, &initial_config).unwrap();
     let mut target = RemoteTarget {
         id: "test-build".into(),
@@ -69,6 +72,7 @@ fn desktop_exit_mode_resolves_only_current_enabled_targets_and_rejects_untrusted
     let listed = call(&path, &["list"]);
     assert!(listed.status.success());
     let listed: Value = serde_json::from_slice(&listed.stdout).unwrap();
+    assert_eq!(listed["unavailable"], serde_json::json!([]));
     let first = &listed["targets"][0];
     assert_eq!(first["targetId"], "test-build");
     assert!(first.get("identityFile").is_none());
@@ -81,6 +85,16 @@ fn desktop_exit_mode_resolves_only_current_enabled_targets_and_rejects_untrusted
         "invalid_artifact"
     );
     assert_eq!(first["effectiveHost"], "first.invalid");
+    std::fs::write(
+        &ssh_config,
+        initial_config.replace("first-hop.invalid", "second-hop.invalid"),
+    )
+    .unwrap();
+    assert_eq!(
+        error(call(&path, &["probe", &target.id, revision])),
+        "target_changed"
+    );
+    std::fs::write(&ssh_config, &initial_config).unwrap();
     std::fs::write(&trust, "# replacement trust\n").unwrap();
     assert_eq!(
         error(call(&path, &["probe", &target.id, revision])),
@@ -178,8 +192,9 @@ fn missing_and_cancelled_session_passwords_do_not_connect() {
         command
     };
     let list = fixture_command().arg("list").output().unwrap();
-    let revision = serde_json::from_slice::<Value>(&list.stdout).unwrap()["targets"][0]
-        ["targetRevision"]
+    let listed: Value = serde_json::from_slice(&list.stdout).unwrap();
+    assert_eq!(listed["unavailable"], serde_json::json!([]));
+    let revision = listed["targets"][0]["targetRevision"]
         .as_str()
         .unwrap()
         .to_owned();
