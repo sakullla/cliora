@@ -123,6 +123,11 @@ function Editor(props: ConfigurationContentProps) {
         </article>)}
         <div hidden={Boolean(props.section && expanded)}>{can('create') && <NewModelForm key={`new-model:${draft.sessionId}:${provider}`} props={action.props} provider={provider} disabled={structuralBlocked || !provider} label={t('tools.adapters.shared.modelId')}
           fields={modelFields}
+          onQuickCreate={async id => {
+            const success = await action.run({ kind: 'model', provider, id }, 'create', {});
+            if (success && can('default') && !view.defaultModel) await action.run({ kind: 'model', provider, id }, 'default');
+            return success;
+          }}
           onCreate={async (id, values) => { const success = await action.run({ kind: 'model', provider, id }, 'create', values); if (success) expandModel(id); return success; }}
           listChoices={{ input: [['text', t('tools.adapters.shared.modality.text')], ['image', t('tools.adapters.shared.modality.image')]] }} />}</div>
       </ModelStep>

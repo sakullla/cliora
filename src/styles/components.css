@@ -164,6 +164,14 @@ dialog[open] ~ .confirmation-dialog::backdrop { background: color-mix(in srgb, v
 .confirmation-dialog p { margin-top: var(--space-1_5); font-size: var(--fs-body); line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); }
 .confirmation-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-5); }
 .confirmation-actions > button { min-width: 76px; }
+.secret-approval-dialog { width: min(468px, calc(100vw - 40px)); }
+.secret-approval-body { flex: 1; min-width: 0; display: grid; gap: var(--space-2_5); }
+.secret-approval-facts { display: grid; gap: var(--space-1_5); margin: 0; padding: var(--space-2_5) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.secret-approval-facts > div { display: grid; grid-template-columns: 5.5em minmax(0, 1fr); gap: var(--space-2); align-items: baseline; }
+.secret-approval-facts dt { color: var(--text-3); font-size: var(--fs-caption); }
+.secret-approval-facts dd { margin: 0; color: var(--text); font-size: var(--fs-control); overflow-wrap: anywhere; }
+.secret-approval-risk { margin: 0 !important; padding: var(--space-2) var(--space-2_5); border: 1px solid var(--warning-line); border-radius: var(--radius-sm); background: var(--warning-soft); color: var(--text) !important; font-size: var(--fs-caption) !important; line-height: 1.55 !important; }
+.secret-approval-timeout { margin: 0 !important; color: var(--text-3) !important; font-size: var(--fs-caption) !important; font-variant-numeric: tabular-nums; }
 @media (max-width: 1264px) { .skeleton-row { grid-template-columns: 1fr; } }
 @media (max-width: 640px) {
   .guide-dialog-head { padding-inline: var(--space-4); }

@@ -162,6 +162,13 @@ export function ModelRow({ id, name, sub = [], badges = [], expanded, sectioned,
   </div>;
 }
 
+const gatewayPresets = [
+  { id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', interfaceFormat: 'openai_responses' },
+  { id: 'anthropic', label: 'Anthropic', baseUrl: 'https://api.anthropic.com', interfaceFormat: 'anthropic_messages' },
+  { id: 'openrouter', label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', interfaceFormat: 'openai_completions' },
+  { id: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', interfaceFormat: 'openai_completions' },
+] as const;
+
 export function ProviderEditor({ provider, providers, connection, protocol, disabled, canConfigure, canSelect, onConfigure, onSelect, onDraftValidityChange }: {
   provider: string; providers: string[]; connection?: Connection; protocol: string; disabled?: boolean; canConfigure: boolean; canSelect: boolean;
   onConfigure: (id: string, value: { baseUrl: string; interfaceFormat: string }) => Promise<boolean>; onSelect: (id: string) => Promise<boolean>;
@@ -182,6 +189,14 @@ export function ProviderEditor({ provider, providers, connection, protocol, disa
   const reset = () => { setId(provider); setIdTouched(Boolean(provider)); setBaseUrl(connection?.baseUrl ?? ''); setFormat(protocol || (!provider && !connection?.protocol ? 'openai_completions' : '')); };
   const complete = validIdentity(id, 80) && Boolean(baseUrl.trim()) && Boolean(format);
   const configure = () => { if (!disabled && !readOnly && complete) void onConfigure(id, { baseUrl: baseUrl.trim(), interfaceFormat: format }); };
+  const applyPreset = (preset: (typeof gatewayPresets)[number]) => {
+    if (disabled) return;
+    setId(preset.id);
+    setIdTouched(true);
+    setBaseUrl(preset.baseUrl);
+    setFormat(preset.interfaceFormat);
+    void onConfigure(preset.id, { baseUrl: preset.baseUrl, interfaceFormat: preset.interfaceFormat });
+  };
   const summary = provider || connection?.baseUrl ? <>{provider && <code>{provider}</code>}{provider && connection?.baseUrl ? ' · ' : ''}{connection?.baseUrl}</> : t('common.provider.metaEmpty');
   // A first provider applies itself once the card is complete and focus moves on (to the key or
   // the models), so the usual top-to-bottom fill never stalls on a separate confirm button.
@@ -192,6 +207,10 @@ export function ProviderEditor({ provider, providers, connection, protocol, disa
   return <section data-config-step="connection" data-config-required className={`${styles.controls} ${styles.step}`} onBlur={settle}>
     <StepHead step="connection" title={t('common.provider.title')} meta={summary} actions={canSelect && providers.length > 0 ? <select id={selectId} aria-label={t('common.provider.view')} title={t('common.provider.view')} value={provider} disabled={disabled} onChange={event => { void onSelect(event.target.value); }}><option value="" disabled>{t('common.provider.choose')}</option>{providers.map(item => <option key={item} value={item}>{item}</option>)}</select> : undefined} />
     {canConfigure ? <>
+      <div className={styles.presetBar} role="group" aria-label={t('common.provider.presetsLabel')}>
+        <span className={styles.presetLabel}>{t('common.provider.presetsLabel')}</span>
+        {gatewayPresets.map(preset => <button type="button" key={preset.id} className={styles.presetChip} data-active={baseUrl.trim() === preset.baseUrl && id === preset.id ? 'true' : undefined} disabled={disabled} onClick={() => applyPreset(preset)}>{preset.label}</button>)}
+      </div>
       <div className={styles.fieldGrid}>
         <label className={styles.span}>{t('common.provider.baseUrl')}<input value={baseUrl} disabled={disabled || readOnly} placeholder="https://api.example.com/v1" spellCheck={false} inputMode="url" autoFocus={!provider && !baseUrl && !disabled} onChange={event => { const next = event.target.value; setBaseUrl(next); if (!idTouched) setId(providerIdFromUrl(next)); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); configure(); } }} /></label>
         <label>{t('common.provider.id')}<input value={id} maxLength={80} disabled={disabled} placeholder={t('common.provider.idPlaceholder')} spellCheck={false} onChange={event => { setIdTouched(true); setId(event.target.value); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); configure(); } }} /></label>
@@ -250,14 +269,32 @@ export function EntityActions({ id, target, descriptor, disabled, defaultModel, 
 }
 
 /** Local creation values never become a second persisted model document. */
-export function NewModelForm({ props, provider, disabled, label, fields, initialValues = {}, allowOverride, listChoices = {}, onCreate }: {
+export function NewModelForm({ props, provider, disabled, label, fields, initialValues = {}, allowOverride, listChoices = {}, onCreate, onQuickCreate }: {
   props: ConfigurationEditorProps; provider: string; disabled?: boolean; label: string; fields: Field[]; initialValues?: Record<string, unknown>; allowOverride?: boolean; listChoices?: ListChoices;
   onCreate: (id: string, values: Record<string, unknown>, kind: 'model' | 'override') => Promise<boolean>;
+  onQuickCreate?: (id: string) => Promise<boolean>;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
-  return <div className={styles.controls}>{!open ? <button type="button" className={styles.addModel} disabled={disabled} onClick={() => setOpen(true)}><span aria-hidden="true">＋</span>{t('common.models.add')}</button>
-    : <CreationFields props={props} provider={provider} disabled={disabled} label={label} fields={fields} initialValues={initialValues} allowOverride={allowOverride} listChoices={listChoices} onCreate={onCreate} onClose={() => setOpen(false)} />}</div>;
+  const [quickId, setQuickId] = useState('');
+  const [quickBusy, setQuickBusy] = useState(false);
+  const canQuick = Boolean(onQuickCreate) && !fields.some(field => field.required);
+  const submitQuick = () => {
+    const trimmed = quickId.trim();
+    if (!onQuickCreate || disabled || quickBusy || !validIdentity(trimmed)) return;
+    setQuickBusy(true);
+    void onQuickCreate(trimmed).then(success => {
+      if (success) setQuickId('');
+    }).finally(() => setQuickBusy(false));
+  };
+  return <div className={`${styles.controls} ${styles.fields}`}>
+    {!open && canQuick && <div className={styles.quickModelBar}>
+      <input aria-label={t('common.models.quickAddAction')} value={quickId} maxLength={200} spellCheck={false} disabled={disabled || quickBusy} placeholder={t('common.models.quickAddPlaceholder')} onChange={event => setQuickId(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); submitQuick(); } }} />
+      <button type="button" className={styles.accent} disabled={disabled || quickBusy || !validIdentity(quickId.trim())} onClick={submitQuick}>{t('common.models.quickAddAction')}</button>
+    </div>}
+    {!open ? <button type="button" className={styles.addModel} disabled={disabled} onClick={() => setOpen(true)}><span aria-hidden="true">＋</span>{t('common.models.add')}</button>
+      : <CreationFields props={props} provider={provider} disabled={disabled} label={label} fields={fields} initialValues={initialValues} allowOverride={allowOverride} listChoices={listChoices} onCreate={onCreate} onClose={() => setOpen(false)} />}
+  </div>;
 }
 function CreationFields({ props, provider, disabled, label, fields, initialValues, allowOverride, listChoices, onCreate, onClose }: {
   props: ConfigurationEditorProps; provider: string; disabled?: boolean; label: string; fields: Field[]; initialValues: Record<string, unknown>; allowOverride?: boolean; listChoices: ListChoices; onClose: () => void;
