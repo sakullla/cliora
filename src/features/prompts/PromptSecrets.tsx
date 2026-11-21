@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { native } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
 import { formatFailure } from '../../lib/feedback';
-import { buildSecretUsageInstructions } from '../../lib/secretCommands';
+import { buildSecretUsageFromMetadata } from '../../lib/secretCommands';
 import { Icon } from '../../components/Icon';
 import { Badge, Button } from '../../components/ui';
 import type { Tone } from '../../lib/statusTone';
@@ -286,26 +286,21 @@ export function PromptSecrets({ local, body, disabled, onInsert }: { local: bool
     try {
       const context = cli ?? await native.secretCliContext();
       if (!mounted.current) return;
-      // Prefer a live installation that already carries a grant, so the inserted text
-      // holds real use/read commands; otherwise fall back to the first live one.
-      const installation = installations.find(item => !item.revoked && grants.some(grant => grant.installationId === item.id))
-        ?? installations.find(item => !item.revoked);
-      if (!installation) {
-        setError(t('library.secrets.broker.needInstallation'));
-        return;
-      }
       setCli(context);
-      const text = buildSecretUsageInstructions({
-        executable: context.executable,
-        entry: context.entry,
-        installationId: installation.id,
-        installationLabel: installation.label,
-        kind: installation.kind,
+      // The shared helper picks a live installation that already carries a grant
+      // when one exists, so the inserted text holds real use/read commands.
+      const text = buildSecretUsageFromMetadata({
+        context,
+        installations: installations.map(item => ({ id: item.id, label: item.label, kind: item.kind, revoked: item.revoked })),
         locale: i18n.language?.startsWith('en') ? 'en' : 'zh',
         secrets: secrets.map(secret => ({ id: secret.id, alias: secret.alias })),
         executors: executors.map(executor => ({ id: executor.id, label: executor.label })),
-        grants: grants.filter(grant => grant.installationId === installation.id).map(grant => ({ secretId: grant.secretId, executorId: grant.executorId })),
+        grants: grants.map(grant => ({ installationId: grant.installationId, secretId: grant.secretId, executorId: grant.executorId })),
       });
+      if (!text) {
+        setError(t('library.secrets.broker.needInstallation'));
+        return;
+      }
       onInsert(text);
       announce(t('library.secrets.broker.instructionsInserted'));
     } catch (failure) { if (mounted.current) setError(formatFailure(failure, t('library.secrets.broker.instructionsFailed'), t('library.secrets.retry'))); }
@@ -393,6 +388,7 @@ export function PromptSecrets({ local, body, disabled, onInsert }: { local: bool
       {brokerOpen && <>
         <p className={styles.hint} data-secret-broker-status>{broker.error ? `${broker.transport} · ${broker.error}` : broker.transport}</p>
         <p className={styles.hint}>{t('library.secrets.broker.hint')}</p>
+        <p className={styles.hint} data-secret-broker-mcp-hint>{t('library.secrets.broker.mcpHint')}</p>
         <div className={styles.secretActions}>
           <Button size="sm" variant="primary" data-secret-broker-instructions disabled={disabled || busy} onClick={() => void insertInstructions()}>{t('library.secrets.broker.insertInstructions')}</Button>
           <Button size="sm" variant="ghost" data-secret-broker-refresh disabled={busy} onClick={() => void reloadBroker()}>{t('library.secrets.refresh')}</Button>

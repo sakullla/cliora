@@ -560,10 +560,37 @@ fn management_descriptors_follow_adapter_ports_and_default_to_absent() {
         assert_eq!(descriptor.management.agents, adapter.agents().is_some_and(|port| port.capability().supported));
         assert_eq!(descriptor.management.plugins, adapter.plugins().is_some_and(|port| !port.capability().actions.is_empty()));
         assert_eq!(descriptor.management.mcp, adapter.supports_mcp());
+        // The secret MCP capability follows the same adapter declaration: a CLI
+        // with a native MCP mapping is `unverified` until real tool acceptance is
+        // recorded, and one without a mapping is `unsupported` with a reason. No
+        // shared consumer has to know which CLI it is looking at.
+        let secret_mcp = descriptor.secret_mcp;
+        assert!(!secret_mcp.reason.is_empty(), "{}: secret MCP needs a reason", adapter.id());
+        if adapter.supports_mcp() {
+            assert_eq!(secret_mcp.state, "unverified", "{}", adapter.id());
+            assert_eq!(secret_mcp.reason, crate::adapters::SECRET_MCP_UNVERIFIED_REASON);
+            assert!(!secret_mcp.is_supported());
+        } else {
+            assert_eq!(secret_mcp.state, "unsupported", "{}", adapter.id());
+            assert_eq!(secret_mcp.reason, crate::adapters::SECRET_MCP_UNSUPPORTED_REASON);
+            assert!(!secret_mcp.is_supported());
+        }
     }
     assert!(!registry.get("grok").unwrap().descriptor().management.accounts);
     assert!(!registry.get("pi").unwrap().descriptor().management.agents);
     assert!(registry.get("claude_code").unwrap().descriptor().management.agents);
+}
+
+#[test]
+fn a_registered_fixture_publishes_its_own_secret_mcp_capability() {
+    // Registering an adapter is enough: shared consumers read the capability from
+    // the registry and never dispatch on a CLI id.
+    let registry = Registry::with_adapters(vec![&SIXTH]).unwrap();
+    let descriptor = registry.get("sixth_fixture").unwrap().descriptor();
+    assert!(!descriptor.management.mcp);
+    assert_eq!(descriptor.secret_mcp.state, "unsupported");
+    assert_eq!(descriptor.secret_mcp.reason, crate::adapters::SECRET_MCP_UNSUPPORTED_REASON);
+    assert!(crate::adapters::SECRET_MCP_UNSUPPORTED_REASON.contains("CLI"));
 }
 
 impl crate::adapters::configuration::ConfigurationAdapter for Sixth {

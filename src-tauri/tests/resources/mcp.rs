@@ -465,3 +465,38 @@ fn draft_remove_rejects_external_changes_then_requires_a_fresh_confirmation() {
     assert!(!std::fs::read_to_string(&path).unwrap().contains("example"));
     assert!(list_placements(&db).unwrap().is_empty());
 }
+
+/// A managed entry is a definition like any other for distribution, but it stays
+/// out of the library: one secret MCP entry per target is not an editable copy.
+#[test]
+fn a_managed_entry_distributes_through_the_same_preview_and_commit() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let path = temp.path().join(".pi/agent/mcp.json");
+    write_parent(&path, "{\"mcpServers\":{}}");
+    let mut managed = draft();
+    managed.name = "cliora-secrets-pi".into();
+    managed.command = "/opt/cliora".into();
+    managed.args = vec!["--cliora-internal-secret-mcp-v1".into(), "--installation".into(), "0b6f0a24-6c5a-4f1e-9d3f-1f4b7c2a9e11".into()];
+    managed.in_library = false;
+
+    let preview = preview_draft(&db, &registry, temp.path(), managed.clone(), vec![target("pi")]).unwrap();
+    assert_eq!(preview.targets[0].status, "ready");
+    assert!(!preview.definition.in_library);
+    let committed = commit_draft(&db, &WorkingStore, &registry, temp.path(), preview.draft, confirmed(&[target("pi")], &preview.targets)).unwrap();
+    assert_eq!(committed.targets[0].status, "written");
+
+    let saved = get_definition(&db, &committed.definition.id).unwrap();
+    assert_eq!(saved.name, "cliora-secrets-pi");
+    assert!(!saved.in_library);
+    assert_eq!(saved.args, managed.args);
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("cliora-secrets-pi"), "{written}");
+    assert!(written.contains("0b6f0a24-6c5a-4f1e-9d3f-1f4b7c2a9e11"), "{written}");
+    // The same compare-and-swap guards a later edit of the managed definition.
+    let mut stale = managed;
+    stale.id = Some(saved.id.clone());
+    stale.expected_version = Some(saved.version + 1);
+    assert!(save_definition(&db, stale).is_err());
+}

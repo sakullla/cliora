@@ -414,6 +414,7 @@ impl CliAdapter for QoderAdapter {
     fn descriptor(&self) -> super::AdapterDescriptor {
         super::AdapterDescriptor {
             remote: self.remote_capabilities(),
+            secret_mcp: self.secret_mcp_capability(),
             id: self.id(),
             configuration: self.configuration().map(|port| port.describe(Scope::Global)),
             management: super::ManagementCapabilities {

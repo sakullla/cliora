@@ -7963,3 +7963,77 @@ pub async fn secret_cli_context() -> Result<SecretCliContext, ApiError> {
         entry: crate::secrets::cli::CLI_ARGUMENT.into(),
     })
 }
+
+// The secret MCP entry is per target and installed by the shared MCP preview,
+// commit and compare-and-swap flow. Placement comes from the native files and
+// protocol health from an actual helper probe; neither is inferred from the other.
+
+#[tauri::command]
+pub async fn secret_mcp_status(
+    app: AppHandle,
+    target: crate::secrets::mcp::SecretMcpTarget,
+) -> Result<crate::secrets::mcp::SecretMcpState, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        let registry = crate::adapters::Registry::builtins();
+        crate::secrets::mcp::status(&db, &registry, &target).map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_secret_mcp_enabled(
+    app: AppHandle,
+    target: crate::secrets::mcp::SecretMcpTarget,
+    enabled: bool,
+) -> Result<crate::secrets::mcp::SecretMcpState, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        let registry = crate::adapters::Registry::builtins();
+        let home = home()?;
+        crate::secrets::mcp::set_enabled(&db, &AppCredentialStore, &registry, &home, &target, enabled)
+            .map_err(native_error)
+    })
+    .await
+}
+
+/// Spawns the distributed helper and asks it for `initialize` and `tools/list`.
+/// The state returned afterwards still separates placement from protocol health.
+#[tauri::command]
+pub async fn check_secret_mcp_health(
+    app: AppHandle,
+    target: crate::secrets::mcp::SecretMcpTarget,
+) -> Result<crate::secrets::mcp::SecretMcpState, ApiError> {
+    let lookup = target.clone();
+    let handle = app.clone();
+    let installation = blocking(move || {
+        let db = handle.state::<AppState>().database(&handle)?;
+        crate::secrets::mcp::installation_for(&db, &lookup.tool_id).map_err(native_error)
+    })
+    .await?;
+    let Some(installation) = installation else {
+        return Err(native_error("尚未创建此 CLI 的秘密 MCP 安装".into()));
+    };
+    crate::secrets::mcp::verify(&target.tool_id, &installation.id).await;
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        let registry = crate::adapters::Registry::builtins();
+        crate::secrets::mcp::status(&db, &registry, &target).map_err(native_error)
+    })
+    .await
+}
+
+/// Revokes this target's installation so a reconnect starts without the grants of
+/// the old one. The native entry stays until it is disabled or rewritten.
+#[tauri::command]
+pub async fn revoke_secret_mcp_installation(
+    app: AppHandle,
+    target: crate::secrets::mcp::SecretMcpTarget,
+) -> Result<crate::secrets::mcp::SecretMcpState, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        let registry = crate::adapters::Registry::builtins();
+        crate::secrets::mcp::revoke(&db, &registry, &target).map_err(native_error)
+    })
+    .await
+}

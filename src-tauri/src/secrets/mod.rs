@@ -5,14 +5,15 @@
 //! The broker resolves a reference only for a registered installation and an
 //! explicit grant, runs a fixed executor without a shell, asks for a fresh
 //! approval on every value read, masks the value out of returned text and audits
-//! each decision. The CLI helper reaches the same broker over the per-user local
-//! IPC address and never opens the database itself.
+//! each decision. The MCP stdio helper and the CLI helper reach the same broker
+//! over the per-user local IPC address and never open the database themselves.
 pub mod approval;
 pub mod audit;
 pub mod broker;
 pub mod cli;
 pub mod executor;
 pub mod ipc;
+pub mod mcp;
 pub mod reference;
 pub mod store;
 

@@ -17,5 +17,10 @@ fn main() {
     if cliora_lib::secrets::cli::helper_entry() {
         return;
     }
+    // An MCP client starts the same binary as its stdio secret server; it forwards
+    // everything to the same broker and never opens local storage itself.
+    if cliora_lib::secrets::mcp::helper_entry() {
+        return;
+    }
     cliora_lib::run();
 }

@@ -328,6 +328,7 @@ impl CliAdapter for ZCode {
     fn descriptor(&self) -> AdapterDescriptor {
         AdapterDescriptor {
             remote: self.remote_capabilities(),
+            secret_mcp: self.secret_mcp_capability(),
             id: self.id(),
             configuration: self.configuration().map(|port| port.describe(Scope::Global)),
             name: self.name(),

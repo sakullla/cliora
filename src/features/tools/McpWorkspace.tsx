@@ -17,6 +17,7 @@ import { McpDetails } from '../../components/mcp/McpDetails';
 import { McpBatchImport, type McpBatchItem } from '../../components/mcp/McpBatchImport';
 import { SkeletonRows } from '../../components/Skeleton';
 import { EmptyState } from '../../components/EmptyState';
+import { SecretMcpPanel } from './SecretMcpPanel';
 import i18n from '../../i18n';
 import { DocumentFoot, DocumentHeader, DocumentWorkspace, ModeSwitch, Toggle, documentStyles as doc, type DocumentMode } from './DocumentWorkspace';
 import styles from './McpWorkspace.module.css';
@@ -481,6 +482,8 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
         {loadError && entries.length > 0 && !stale && <StatusBanner tone="error" action={<Button size="sm" onClick={() => void refreshNative()}>{t('tools.plugins.rescan')}</Button>}>{loadError}</StatusBanner>}
       </>}
       list={listBody}
+      listFooterLabel={t('library.secrets.mcp.title')}
+      listFooter={remoteTargetId ? null : <SecretMcpPanel toolId={toolId} scope={scope} projectPath={project} contextId={contextId ?? null} />}
       placeholder={!opened && entries.length > 0 ? <div className={doc.placeholder}>
         <span className={doc.placeholderIcon} aria-hidden="true"><Icon name="connections" size={22} /></span>
         <strong>{t('tools.mcp.selectHint')}</strong>

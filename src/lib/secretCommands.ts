@@ -43,6 +43,63 @@ export function grantedExecutors(input: SecretUsageInput, secretId: string): Sec
   return input.executors.filter(executor => allowed.has(executor.id));
 }
 
+/** One live installation as the native registry lists it. No value is involved. */
+export type SecretUsageInstallation = { id: string; label: string; kind: SecretInstallationKind; revoked: boolean };
+/** A grant as the registry stores it: one installation, one secret, one executor. */
+export type SecretUsageInstallationGrant = { installationId: string; secretId: string; executorId: string };
+
+/**
+ * The installation an instruction block names.
+ *
+ * A caller may pin one (the secret MCP panel pins the installation its native
+ * entry already carries). Otherwise the first live installation with a grant wins,
+ * so the text holds real use/read commands, and a live installation with no grant
+ * still produces the list command instead of a guessed one.
+ */
+export function preferredInstallation(
+  installations: SecretUsageInstallation[],
+  grants: SecretUsageInstallationGrant[],
+  preferredId?: string | null,
+): SecretUsageInstallation | undefined {
+  const live = installations.filter(installation => !installation.revoked);
+  return live.find(installation => installation.id === preferredId)
+    ?? live.find(installation => grants.some(grant => grant.installationId === installation.id))
+    ?? live[0];
+}
+
+export type SecretUsageMetadata = {
+  context: { executable: string; entry: string };
+  installations: SecretUsageInstallation[];
+  secrets: SecretUsageSecret[];
+  executors: SecretUsageExecutor[];
+  grants: SecretUsageInstallationGrant[];
+  preferredId?: string | null;
+  locale?: 'zh' | 'en';
+};
+
+/**
+ * The CLI fallback text from local metadata. It is the same text for a CLI and an
+ * MCP installation: the fallback runs the CLI helper, so a missing or unverified
+ * MCP entry still leaves a documented path. `null` means no live installation.
+ */
+export function buildSecretUsageFromMetadata(metadata: SecretUsageMetadata): string | null {
+  const installation = preferredInstallation(metadata.installations, metadata.grants, metadata.preferredId);
+  if (!installation) return null;
+  return buildSecretUsageInstructions({
+    executable: metadata.context.executable,
+    entry: metadata.context.entry,
+    installationId: installation.id,
+    installationLabel: installation.label,
+    kind: installation.kind,
+    locale: metadata.locale,
+    secrets: metadata.secrets,
+    executors: metadata.executors,
+    grants: metadata.grants
+      .filter(grant => grant.installationId === installation.id)
+      .map(grant => ({ secretId: grant.secretId, executorId: grant.executorId })),
+  });
+}
+
 const text = {
   zh: {
     title: '## 栖点秘密代理（本机 CLI）',

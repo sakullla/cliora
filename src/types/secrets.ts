@@ -91,3 +91,41 @@ export type PromptSecretApprovalRequest = {
   source: string;
   expiresInSeconds: number;
 };
+
+/** The target a secret MCP status or distribution call acts on. */
+export type SecretMcpTarget = {
+  toolId: string;
+  scope: 'global' | 'project';
+  projectPath?: string | null;
+  contextId?: string | null;
+};
+/** Registry capability: a mapping is confirmed, unverified or absent for this CLI. */
+export type SecretMcpCapabilityState = 'supported' | 'unverified' | 'unsupported';
+/** The combined availability: a supported adapter, a written entry and a verified protocol. */
+export type SecretMcpStateName = 'unsupported' | 'unverified' | 'disabled' | 'enabled';
+/** The native entry: `absent`, written and enabled, or written and disabled. */
+export type SecretMcpPlacement = 'absent' | 'enabled' | 'disabled';
+/** Protocol health. Only `healthy` follows a real initialize plus tools/list. */
+export type SecretMcpHealth = 'unknown' | 'healthy' | 'failed';
+/**
+ * Placement, protocol health and registry capability stay separate: `available`
+ * is the only field that claims a working tool, and it requires all three.
+ */
+export type SecretMcpState = {
+  toolId: string;
+  scope: 'global' | 'project';
+  projectPath: string | null;
+  capability: SecretMcpCapabilityState;
+  capabilityReason: string;
+  state: SecretMcpStateName;
+  reason: string;
+  installationId: string | null;
+  installationLabel: string | null;
+  command: string;
+  args: string[];
+  placement: SecretMcpPlacement;
+  health: SecretMcpHealth;
+  healthDetail: string;
+  available: boolean;
+  cliFallback: boolean;
+};

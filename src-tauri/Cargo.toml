@@ -55,6 +55,12 @@ tauri-plugin-process = "2"
 tauri-plugin-updater = "2"
 portable-pty = "0.9.0"
 tempfile = "3"
+# The official MCP SDK owns the stdio JSON-RPC lifecycle for the secret helper, and
+# the same client half performs the real initialize/tools/list health check.
+rmcp = { version = "3.11", default-features = false, features = ["server", "transport-io", "macros", "client", "transport-child-process"] }
+# rmcp derives each tool's input schema; the derive resolves this crate by name.
+schemars = { version = "1", default-features = false }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "process", "io-util", "io-std", "sync", "time"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 keyring = "4.2"

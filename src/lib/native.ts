@@ -13,7 +13,7 @@ import type { Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, MemoryAggregate, MemoryReadRequest, MemoryReadResult, MemoryDelete, MemoryDocument, MemoryEnable, MemoryList, MemorySave, MemoryTarget, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, SavedWorkbenchSession, TerminalId, TrayStatus, TwiglaneLinkOutcome, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchGitContext, WorkbenchWorktree, WorkbenchReplay, WorkbenchSession, WorkbenchTerminalSize, RemoteSessionIndexEntry, WorktreeBase, WorktreeBasePreview, WorktreeCleanupReport, WorktreeLedgerEntry, WorktreeMenuStatus, WorktreePrepareCommand } from '../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
-import type { NewSecretExecutor, PromptSecret, PromptSecretReference, SecretAuditEntry, SecretBrokerStatus, SecretCliContext, SecretExecutor, SecretGrant, SecretInstallation, SecretInstallationKind } from '../types/secrets';
+import type { NewSecretExecutor, PromptSecret, PromptSecretReference, SecretAuditEntry, SecretBrokerStatus, SecretCliContext, SecretExecutor, SecretGrant, SecretInstallation, SecretInstallationKind, SecretMcpState, SecretMcpTarget } from '../types/secrets';
 import type { McpDefinition, McpDraft, McpDraftPreview, McpDraftTargetRequest, McpCommitResult, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpStore, NativeRuleFile, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue, SkillManifest, SkillFileListing, SkillFilePreview } from '../types/resources';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, RemoteHistorySnapshot, ScanStatus, UsageReport } from '../types/history';
 import { markOnboardingLaunched } from './onboarding';
@@ -270,6 +270,13 @@ export const native = {
   answerPromptSecretApproval: (approvalId: string, accepted: boolean) => command<void>('answer_prompt_secret_approval', { approvalId, accepted }),
   listSecretAudit: (limit: number) => command<SecretAuditEntry[]>('list_secret_audit', { limit }),
   secretCliContext: () => command<SecretCliContext>('secret_cli_context'),
+  // The secret MCP entry is per target and goes through the shared MCP preview,
+  // commit and compare-and-swap flow. Status keeps placement, protocol health and
+  // registry capability apart, so no wrapper turns a written entry into a claim.
+  secretMcpStatus: (target: SecretMcpTarget) => command<SecretMcpState>('secret_mcp_status', { target }),
+  setSecretMcpEnabled: (target: SecretMcpTarget, enabled: boolean) => command<SecretMcpState>('set_secret_mcp_enabled', { target, enabled }),
+  checkSecretMcpHealth: (target: SecretMcpTarget) => command<SecretMcpState>('check_secret_mcp_health', { target }),
+  revokeSecretMcpInstallation: (target: SecretMcpTarget) => command<SecretMcpState>('revoke_secret_mcp_installation', { target }),
   previewWorkspaceLink: (url: string) => command<WorkspaceManifestPreview>('preview_workspace_link', { url }),
   listBusinessWorkspaces: () => command<BusinessWorkspace[]>('list_business_workspaces'),
   createBusinessWorkspace: (name: string) => command<BusinessWorkspace>('create_business_workspace', { name }),

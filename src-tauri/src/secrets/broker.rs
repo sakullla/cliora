@@ -126,6 +126,22 @@ pub fn load_installation(db: &Database, id: &str) -> Result<Option<Installation>
     })
 }
 
+/// The live installations of one kind for one target, newest first. A revoked
+/// installation keeps its audit trail and is never returned here, so a reconnect
+/// starts a fresh identity instead of reviving the old grants.
+pub fn installations_for(db: &Database, kind: Kind, target_id: &str) -> Result<Vec<Installation>, String> {
+    db.with_read_connection(|conn| {
+        let mut statement = conn
+            .prepare(
+                "SELECT id,label,kind,target_id,revoked,created_at,revoked_at FROM secret_installations
+                 WHERE kind=?1 AND target_id=?2 AND revoked=0 ORDER BY created_at DESC, id",
+            )
+            .map_err(sql)?;
+        let rows = statement.query_map(params![kind.as_str(), target_id], installation_row).map_err(sql)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(sql)
+    })
+}
+
 /// Revocation removes every grant of this installation in the same transaction, so
 /// reconnecting with the same label later starts without authorization.
 pub fn revoke_installation(db: &Database, id: &str) -> Result<(), String> {
