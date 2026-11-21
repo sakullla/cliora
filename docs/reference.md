@@ -162,6 +162,35 @@ WebDAV uses a schema 5 manifest so older clients reject unsupported capabilities
 
 Optional WebDAV sync uses a dedicated existing server directory and HTTPS (localhost HTTP is allowed for tests). One account/application password normally both authenticates and unlocks a randomly generated sync-space key; an advanced field permits a separate encryption password. Changing the default connection password stages a new wrapping key while retaining the old wrapper until the local credential update succeeds, then removes the old wrapper. If final cleanup is interrupted, sync status retains a pending rotation message until the connection is verified and saved again. This keeps setup to one password, but a server operator who knows that password may decrypt the data, so this is not end-to-end secrecy against that operator. Each encrypted immutable entity version has a random object key, and a conditionally updated encrypted manifest retains authenticated ancestry and deletion markers. Independent entities and unedited offline descendants merge automatically; concurrent same-item edits and edit/delete conflicts preserve both versions for explicit resolution. Initial connection tests read, list, conditional write, and cleanup; unsupported conditional writes are rejected. The app retries enabled sync in the background with capped backoff and shows failures and conflicts. A received active configuration is written to an installed CLI; a per-item failure stays on that item. A live third-party WebDAV service and cross-platform system credential backends have not yet been verified; the automated WebDAV tests use a local protocol server.
 
+## Prompt secrets
+
+A prompt body keeps only the canonical reference `{{cliora-secret:<uuid>}}`. `src-tauri/src/secrets/reference.rs` recognizes exactly that form and returns the referenced ids in body order (at most 256); anything else stays ordinary prompt text. The value never enters the body: `secrets::store` keeps it behind the shared `CredentialStore` boundary under a credential id derived from the secret id, so SQLite, search and previews, clipboard copies, export bundles, WebDAV sync and remote-host context carry an id and an alias, never a value.
+
+`src-tauri/src/secrets/` owns the local secret plane and no adapter or shared service may bypass it:
+
+- `broker.rs` is the only place that resolves a reference. Resolution requires a live installation of the matching kind (CLI or MCP) and an explicit grant to the requested executor; a revoked installation, a missing grant or an unknown id is denied without reading the value.
+- `executor.rs` runs a user-registered executor as a fixed executable plus arguments, without a shell, with a validated environment name, and delivers the value through an environment variable or standard input. The receipt it writes holds a digest and byte count, the returned text is masked, and a missing value fails closed instead of running without it.
+- `approval.rs` asks the running application for a fresh confirmation on every raw read. The prompt carries the alias and a source label only; it expires after 120 seconds so an abandoned request cannot authorize a later read.
+- `audit.rs` stores one row per decision. Operation, decision and result code are closed sets, so a row can never carry a value, a script body or a response.
+- `ipc.rs` is a per-user local transport: a domain socket inside the 0700 application directory on Unix, a named pipe whose DACL grants only the current user and the system account on Windows. One newline-delimited JSON request per connection, bounded request/response sizes, no TCP listener and no HTTP. This is a per-user permission boundary, not a sandbox against every process of the same user (R9).
+- `mcp.rs` is the stdio helper (`cliora --cliora-internal-secret-mcp-v1 --installation <uuid>`) speaking MCP over stdio. It holds one installation id and forwards `list`, `use` and `read` to the broker; it never opens the database. `cli.rs` is the smaller helper (`--cliora-internal-secret-cli-v1 … use --secret <id> --executor <id>`) used as the fallback.
+
+The secret MCP entry is installed per target. A target is the CLI's own MCP configuration (the adapter's `mcp_location`) and the entry name is `cliora-secrets-<toolId>`; the entry carries the current executable, `--cliora-internal-secret-mcp-v1` and the installation id, never a value. Writing uses the existing preview/commit/CAS flow, so an external edit is detected before a write. Three facts stay separate: what the registry declares (`SecretMcpCapability`), what the native file currently holds (`placement`) and whether the helper negotiated the protocol (`health`, invalidated by a write). Only a complete, live-recorded acceptance in `src-tauri/src/adapters/secret_access.rs` publishes `supported`; that list is empty, so every target stays `unverified` and the UI keeps offering the CLI fallback built from local metadata (`src/lib/secretCommands.ts`), never from a guessed command.
+
+Verification:
+
+```sh
+node scripts/verify-secret-access.mjs          # deterministic, no CLI, no model
+node scripts/verify-secret-access.mjs --json
+CLIORA_LIVE_SECRET_TESTS=1 CLIORA_LIVE_SECRET_PLAN=/abs/plan.json \
+  CLIORA_LIVE_SECRET_TOOLS=claude_code CLIORA_LIVE_SECRET_CANARY=canary-<synthetic> \
+  node scripts/verify-secret-access.mjs --live   # real CLI + model, may incur usage
+```
+
+The offline run checks that the acceptance prompt holds only synthetic references, that the synthetic metadata has no value field, that the CLI fallback commands come from the documented text, that the published MCP tool contract accepts ids but no value/target/environment/command (`tests/fixtures/secret-access/mcp-tools.json`, held against the real helper by a Rust test), that a local test double receives the value over both channels, stores only a digest and fails closed when the value is missing, and that [the per-target record](../docs/verification/secret-access.md) matches the adapter gate. A live run additionally needs an operator-supplied plan with absolute paths and a `canary-…` value; anything else is refused, so a real secret cannot reach the gate. Ordinary unit and browser tests never call a model.
+
+Limits: masking applies to text the broker returns, not to a CLI that reads a value and writes it somewhere else; the local transport trusts the current user's other processes (R9); and no target has real CLI, protocol and model-call evidence yet, so the record marks each one `unverified` with its missing condition.
+
 ## Module boundaries
 
 - `src/types/domain.ts` and `src-tauri/src/domain.rs`: stable tool IDs and bootstrap types. Add feature DTOs on both sides before exposing a command.

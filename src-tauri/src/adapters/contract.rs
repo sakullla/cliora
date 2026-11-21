@@ -88,7 +88,7 @@ pub const SECRET_MCP_UNVERIFIED_REASON: &str = "已确认 MCP 配置映射；真
 /// Secret MCP support as the registry declares it. `supported` is only published
 /// after both the native mapping and the real protocol acceptance are recorded;
 /// a written native entry is placement, not evidence, and is reported separately.
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SecretMcpCapability {
     /// `supported`, `unverified` or `unsupported`.
@@ -945,17 +945,18 @@ pub trait CliAdapter: Sync {
 
     fn configuration(&self) -> Option<&dyn super::configuration::ConfigurationAdapter> { None }
     fn supports_mcp(&self) -> bool { false }
-    /// Secret MCP capability. A CLI that declares a native MCP mapping owns the
-    /// configuration half, so it publishes `unverified`; an adapter only
-    /// publishes `supported` after it also records real model tool acceptance.
-    /// Adapters without an MCP mapping publish `unsupported` and keep the CLI
-    /// fallback. The declaration comes from the adapter, never from its id.
+    /// Secret MCP capability. The gate in `secret_access` publishes `unverified`
+    /// for an adapter that owns a native MCP mapping and `unsupported` without one;
+    /// `supported` additionally needs a complete live acceptance record for this
+    /// target. A configuration write, a protocol probe or a CLI name cannot
+    /// substitute for that record, and the declaration comes from the adapter rather
+    /// than from its id.
     fn secret_mcp_capability(&self) -> SecretMcpCapability {
-        if self.supports_mcp() {
-            SecretMcpCapability::unverified(SECRET_MCP_UNVERIFIED_REASON)
-        } else {
-            SecretMcpCapability::unsupported(SECRET_MCP_UNSUPPORTED_REASON)
-        }
+        super::secret_access::published(
+            super::secret_access::ACCEPTANCES,
+            self.supports_mcp(),
+            self.id(),
+        )
     }
     fn supports_skills(&self) -> bool { false }
     fn official_usage(&self) -> Option<&dyn super::official::OfficialUsageAdapter> {

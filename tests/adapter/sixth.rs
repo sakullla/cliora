@@ -566,14 +566,26 @@ fn management_descriptors_follow_adapter_ports_and_default_to_absent() {
         // shared consumer has to know which CLI it is looking at.
         let secret_mcp = descriptor.secret_mcp;
         assert!(!secret_mcp.reason.is_empty(), "{}: secret MCP needs a reason", adapter.id());
+        // The published capability is exactly what the acceptance gate computes, so
+        // no adapter can claim support from a mapping, a write or its own name.
+        assert_eq!(
+            secret_mcp,
+            crate::adapters::secret_access::published(
+                crate::adapters::secret_access::ACCEPTANCES,
+                adapter.supports_mcp(),
+                adapter.id(),
+            ),
+            "{}: secret MCP capability disagrees with its acceptance record",
+            adapter.id()
+        );
+        // No live acceptance is recorded today, so nothing may publish support.
+        assert!(!secret_mcp.is_supported(), "{}: a live acceptance would be needed to publish support", adapter.id());
         if adapter.supports_mcp() {
             assert_eq!(secret_mcp.state, "unverified", "{}", adapter.id());
             assert_eq!(secret_mcp.reason, crate::adapters::SECRET_MCP_UNVERIFIED_REASON);
-            assert!(!secret_mcp.is_supported());
         } else {
             assert_eq!(secret_mcp.state, "unsupported", "{}", adapter.id());
             assert_eq!(secret_mcp.reason, crate::adapters::SECRET_MCP_UNSUPPORTED_REASON);
-            assert!(!secret_mcp.is_supported());
         }
     }
     assert!(!registry.get("grok").unwrap().descriptor().management.accounts);
@@ -591,6 +603,150 @@ fn a_registered_fixture_publishes_its_own_secret_mcp_capability() {
     assert_eq!(descriptor.secret_mcp.state, "unsupported");
     assert_eq!(descriptor.secret_mcp.reason, crate::adapters::SECRET_MCP_UNSUPPORTED_REASON);
     assert!(crate::adapters::SECRET_MCP_UNSUPPORTED_REASON.contains("CLI"));
+}
+
+#[test]
+fn secret_mcp_support_requires_a_complete_acceptance_record() {
+    use crate::adapters::secret_access::{self, SecretMcpAcceptance};
+    use crate::adapters::{SecretMcpCapability, SECRET_MCP_UNSUPPORTED_REASON, SECRET_MCP_UNVERIFIED_REASON};
+
+    let record = SecretMcpAcceptance {
+        tool_id: "fixture_target",
+        mapping: "fixture.json#mcpServers",
+        recorded_at: "2026-11-21",
+        platform: "macos-arm64",
+        cli_version: "1.2.3",
+        protocol: "initialize + tools/list",
+        model_use: "use_secret with the referenced ids",
+        cli_fallback: "use --secret <id> --executor <id>",
+        evidence: "docs/verification/secret-access.md#fixture-target",
+    };
+    let unverified = SecretMcpCapability::unverified(SECRET_MCP_UNVERIFIED_REASON);
+    // A configuration mapping alone never publishes support, and a record for a CLI
+    // without a mapping cannot publish it either.
+    assert_eq!(secret_access::published(&[], true, record.tool_id), unverified);
+    assert_eq!(secret_access::published(&[record], false, record.tool_id), SecretMcpCapability::unsupported(SECRET_MCP_UNSUPPORTED_REASON));
+    // A complete record is the only route to `supported`.
+    assert!(secret_access::published(&[record], true, record.tool_id).is_supported());
+    // A record for another target does not carry over.
+    assert_eq!(secret_access::published(&[record], true, "another_target"), unverified);
+
+    // Each placeholder below is an unobserved fact, so none may publish support.
+    let placeholders: [SecretMcpAcceptance; 7] = [
+        SecretMcpAcceptance { recorded_at: "", ..record },
+        SecretMcpAcceptance { recorded_at: "2026-13-45", ..record },
+        SecretMcpAcceptance { recorded_at: "2026-11-32", ..record },
+        SecretMcpAcceptance { protocol: "", ..record },
+        SecretMcpAcceptance { model_use: "  ", ..record },
+        SecretMcpAcceptance { cli_fallback: "", ..record },
+        SecretMcpAcceptance { evidence: "tests/fixtures/secret-access/synthetic-metadata.json", ..record },
+    ];
+    for placeholder in placeholders {
+        assert_eq!(secret_access::published(&[placeholder], true, record.tool_id), unverified, "{placeholder:?}");
+    }
+
+    // Every shipped record has to name a registered adapter, a mapping label and an
+    // evidence anchor. The verification document is checked against the same labels
+    // by `scripts/verify-secret-access.mjs`, so a changed mapping without a new
+    // record fails the offline verification instead of inheriting this one.
+    let registry = crate::adapters::Registry::builtins();
+    for recorded in secret_access::ACCEPTANCES {
+        let adapter = registry.get(recorded.tool_id).unwrap_or_else(|| panic!("{}: acceptance names an unregistered target", recorded.tool_id));
+        assert!(adapter.supports_mcp(), "{}: acceptance names a CLI without an MCP mapping", recorded.tool_id);
+        assert!(!recorded.mapping.trim().is_empty(), "{}: acceptance needs the mapping it covered", recorded.tool_id);
+        assert!(recorded.evidence.starts_with("docs/verification/"), "{}: evidence must live under docs/verification", recorded.tool_id);
+    }
+    // Nothing is recorded yet, so no shipped adapter publishes support.
+    assert!(secret_access::ACCEPTANCES.is_empty());
+    assert!(registry.iter().all(|adapter| !adapter.secret_mcp_capability().is_supported()));
+}
+
+#[test]
+fn the_verification_document_lists_exactly_the_targets_that_declare_a_mapping() {
+    // The recorded facts live in `docs/verification/secret-access.md`. A target
+    // that gains or loses a mapping has to move in that table, otherwise the
+    // document would claim coverage the registry does not have.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/verification/secret-access.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let mut documented: Vec<(String, String, String)> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('|') { continue; }
+        let cells: Vec<&str> = trimmed.split('|').map(str::trim).filter(|cell| !cell.is_empty()).collect();
+        // Only per-target rows start with an adapter id.
+        if cells.len() < 3 || !cells[0].chars().all(|value| value.is_ascii_lowercase() || value.is_ascii_digit() || value == '_') { continue; }
+        let tool = cells[0].to_owned();
+        let mapping = cells[1].to_owned();
+        let status = cells[cells.len() - 1].to_owned();
+        assert!(!mapping.is_empty() && mapping != "—", "{tool}: 配置映射列不能为空");
+        assert!(
+            matches!(status.as_str(), "verified" | "unverified" | "not-installed" | "unsupported" | "not-run"),
+            "{tool}: 状态不在约定取值内：{status}"
+        );
+        documented.push((tool, mapping, status));
+    }
+    assert!(!documented.is_empty(), "验收文档缺少逐目标矩阵");
+    let registry = crate::adapters::Registry::builtins();
+    let mut declared: Vec<String> = registry.iter().filter(|adapter| adapter.supports_mcp()).map(|adapter| adapter.id().to_owned()).collect();
+    declared.sort();
+    let mut listed: Vec<String> = documented.iter().map(|(tool, _, _)| tool.clone()).collect();
+    listed.sort();
+    assert_eq!(listed, declared, "验收文档的目标集合必须与声明 MCP 映射的适配器一致");
+    // No recorded pass means no row may claim one, and every shipped adapter keeps
+    // the CLI fallback instead.
+    assert!(crate::adapters::secret_access::ACCEPTANCES.is_empty());
+    assert!(documented.iter().all(|(tool, _, status)| {
+        assert_ne!(status, "verified", "{tool}: 没有验收记录时文档不能标为 verified");
+        true
+    }));
+    assert!(registry.iter().all(|adapter| !adapter.secret_mcp_capability().is_supported()));
+}
+
+#[test]
+fn the_secret_access_fixture_matches_the_tools_the_helper_publishes() {
+    // The offline verification reads this fixture instead of starting a client, so a
+    // Rust test holds it against the real rmcp server. Otherwise the fixture could
+    // describe a contract no helper implements.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/secret-access/mcp-tools.json");
+    let contract: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let tools = crate::secrets::mcp::SecretMcp::new("4c2f8c9e-6b1a-4c44-9d5b-6f0a2b7c1234").tools();
+    let printed = serde_json::to_string(&tools).unwrap();
+    let expected = contract["tools"].as_array().unwrap();
+    let mut published: Vec<String> = tools.iter().map(|tool| tool.name.to_string()).collect();
+    published.sort();
+    let mut listed: Vec<String> = expected.iter().map(|tool| tool["name"].as_str().unwrap().to_owned()).collect();
+    listed.sort();
+    assert_eq!(published, listed);
+    let names: Vec<&str> = contract["noInputNamed"].as_array().unwrap().iter().map(|name| name.as_str().unwrap()).collect();
+    let forbidden: Vec<&str> = contract["noMetadataSubstring"].as_array().unwrap().iter().map(|token| token.as_str().unwrap()).collect();
+    for token in forbidden {
+        assert!(!printed.contains(token), "tool metadata must not carry {token}");
+    }
+    for row in expected {
+        let name = row["name"].as_str().unwrap();
+        let tool = tools.iter().find(|tool| tool.name == name).unwrap();
+        let schema = &tool.input_schema;
+        let properties: Vec<String> = schema.get("properties").and_then(Value::as_object).map(|map| map.keys().cloned().collect()).unwrap_or_default();
+        let mut wanted: Vec<String> = row["properties"].as_array().unwrap().iter().map(|value| value.as_str().unwrap().to_owned()).collect();
+        let mut found = properties.clone();
+        wanted.sort();
+        found.sort();
+        assert_eq!(found, wanted, "{name}: input properties differ from the fixture");
+        let mut required: Vec<String> = schema.get("required").and_then(Value::as_array).map(|values| values.iter().map(|value| value.as_str().unwrap().to_owned()).collect()).unwrap_or_default();
+        required.sort();
+        let mut required_fixture: Vec<String> = row["required"].as_array().unwrap().iter().map(|value| value.as_str().unwrap().to_owned()).collect();
+        required_fixture.sort();
+        assert_eq!(required, required_fixture, "{name}: required inputs differ from the fixture");
+        // No tool may accept a value, a target, an environment or a command.
+        for property in &properties {
+            assert!(!names.contains(&property.as_str()), "{name}: input {property} would carry a secret value or a target");
+        }
+        let description = tool.description.as_deref().unwrap_or_default();
+        for needle in row["descriptionContains"].as_array().unwrap() {
+            let needle = needle.as_str().unwrap();
+            assert!(description.contains(needle), "{name}: description must state {needle}");
+        }
+    }
 }
 
 impl crate::adapters::configuration::ConfigurationAdapter for Sixth {

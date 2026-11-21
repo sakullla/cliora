@@ -52,6 +52,7 @@ docs/verification/*
 !docs/verification/tools-resource-performance-2026-11-15.md
 !docs/verification/history-remote-2026-11-16.md
 !docs/verification/omp-performance-2026-11-17.md
+!docs/verification/secret-access.md
 !docs/verification/ui-omp-optimization/
 docs/verification/ui-omp-optimization/*
 !docs/verification/ui-omp-optimization/omp-quick-light-1360.png

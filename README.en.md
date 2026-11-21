@@ -42,7 +42,7 @@ Running several AI CLIs at once usually means one config file per tool, hand-edi
 
 **Quota and usage** – official and third-party quotas on one card with manual or scheduled refresh; an embedded JavaScript editor for custom relay-site queries (no Node or Python needed); daily trends, cache hit rate and estimated cost.
 
-**Library and resources** – prompts and long-lived rules with project and tag filters; MCP, Skills, Agents, plugins and memories in each CLI's native format.
+**Library and resources** – prompts and long-lived rules with project and tag filters; MCP, Skills, Agents, plugins and memories in each CLI's native format; prompt secret references that keep only `{{cliora-secret:<id>}}` in the body while the value stays in the local credential store, usable by a CLI through the secret MCP entry (`list_secrets`, `list_secret_executors`, `use_secret`, `read_secret`) or the CLI fallback, with a fresh confirmation on every raw read.
 
 **Projects and collaboration** – group related repositories into a business project; hand AI changes to [Twiglane](https://github.com/sakullla/Twiglane) for review and commit, with the result reported back; encrypted bundles or WebDAV sync between devices.
 
@@ -75,6 +75,7 @@ Cliora does not bundle the AI CLIs themselves; install them following each tool'
 - Everything stays on your machine: profiles, the session index and usage statistics live in a local database. Cliora does not upload session content or usage.
 - Secrets go to the system credential store (Windows and Linux) or user-only local files (macOS), never into ordinary profile records.
 - Data leaves the device only when you enable WebDAV sync, encrypted, to your own server.
+- Prompt secret values never enter the prompt body, the database, search or previews, copied text, export bundles, WebDAV sync or remote-host context. A prompt holds references only, and the audit trail records the id, the operation, allow/deny and a result code. A per-target installation writes the generated entry's command and installation id, never a value.
 
 ## Build from source
 
