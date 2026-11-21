@@ -279,6 +279,78 @@ fn an_edited_script_invalidates_the_registered_digest() {
 
 #[cfg(unix)]
 #[test]
+fn an_edited_absolute_executable_invalidates_the_registered_digest() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let script = directory.path().join("deploy.sh");
+    let write = |body: &str| {
+        std::fs::write(&script, body).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    };
+    write("#!/bin/sh\nprintf 'first'\n");
+    let database = db();
+    let store = MemoryCredentials::default();
+    let secret = create_secret(&database, &store, "入口脚本口令", CANARY);
+    // The script is the executable itself, not an argument: its bytes are the code
+    // that receives the value, so they belong to the registered definition.
+    let executor = register(&database, "脚本入口", script.to_str().unwrap(), &[], Channel::Env, Some("CLIORATEST"));
+    let installation = installation(&database);
+    grant(&database, &installation.id, &secret.id, &executor.id).unwrap();
+    let first = use_request(&database, &store, &installation.id, &secret.id, &executor.id);
+    assert!(first.ok, "{}", first.message);
+    assert_eq!(first.data.unwrap()["stdout"].as_str().unwrap().trim(), "first");
+
+    write("#!/bin/sh\nprintf 'second'\n");
+    let response = use_request(&database, &store, &installation.id, &secret.id, &executor.id);
+    assert!(!response.ok);
+    assert_eq!(response.code, audit::code::SCRIPT_CHANGED);
+    assert!(response.data.is_none());
+    assert!(!body(&response).contains(CANARY));
+
+    // A run whose digest cannot be recomputed at all fails closed the same way.
+    std::fs::remove_file(&script).unwrap();
+    let missing = use_request(&database, &store, &installation.id, &secret.id, &executor.id);
+    assert!(!missing.ok);
+    assert_eq!(missing.code, audit::code::SCRIPT_CHANGED);
+    assert!(!body(&missing).contains(CANARY));
+}
+
+#[cfg(unix)]
+#[test]
+fn an_absolute_executable_must_be_a_readable_regular_file() {
+    let database = db();
+    let directory = tempfile::tempdir().unwrap();
+    let attempt = |label: &str, executable: std::path::PathBuf| {
+        executor::register(
+            &database,
+            NewExecutor {
+                label: label.into(),
+                description: String::new(),
+                executable: executable.to_str().unwrap().to_owned(),
+                args: vec![],
+                cwd: None,
+                channel: Channel::Env,
+                env_name: Some("CLIORATEST".into()),
+            },
+        )
+    };
+    // A directory has no hashable content and cannot be an execution definition.
+    let directory_refused = attempt("目录入口", directory.path().to_path_buf());
+    assert!(directory_refused.is_err(), "a directory must not register");
+    // A missing absolute path cannot be read either.
+    assert!(attempt("缺失入口", directory.path().join("absent.sh")).is_err());
+    // Above the executable budget the content is refused, never silently excluded.
+    let huge = directory.path().join("huge.bin");
+    std::fs::File::create(&huge).unwrap().set_len(executor::MAX_EXECUTABLE_BYTES + 1).unwrap();
+    let oversized = attempt("超大入口", huge);
+    let message = oversized.unwrap_err();
+    assert!(message.contains("64 MiB"), "{message}");
+    // A refused registration stores nothing a grant could point at.
+    assert!(executor::list(&database).unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
 fn a_cancelled_run_stops_without_returning_output() {
     let database = db();
     let store = MemoryCredentials::default();
@@ -456,6 +528,40 @@ fn revoking_an_installation_stops_controlled_use() {
     let response = use_request(&database, &store, &installation.id, &secret.id, &executor.id);
     assert!(!response.ok);
     assert_eq!(response.code, audit::code::INSTALLATION_REVOKED);
+}
+
+#[test]
+fn an_audit_row_keeps_only_opaque_identifiers() {
+    let database = db();
+    let known = uuid::Uuid::new_v4().to_string();
+    record(
+        &database,
+        audit::Event {
+            operation: audit::Operation::Use,
+            decision: audit::Decision::Denied,
+            code: audit::code::GRANT_MISSING,
+            secret_id: Some("生产口令"),
+            installation_id: Some(&known),
+            executor_id: Some("/Users/me/deploy.sh --token abc"),
+        },
+    );
+    let rows = audit::list(&database, 10).unwrap();
+    assert_eq!(rows.len(), 1);
+    // A caller-supplied string is not an identifier unless it parses as one.
+    assert_eq!(rows[0].secret_id, None);
+    assert_eq!(rows[0].installation_id.as_deref(), Some(known.as_str()));
+    assert_eq!(rows[0].executor_id, None);
+    assert!(!format!("{rows:?}").contains("deploy.sh"));
+}
+
+#[test]
+fn a_failed_recheck_records_the_response_code() {
+    // Only codes from the closed set are stored; the fallback stays a revocation.
+    assert_eq!(recheck_code(audit::code::INSTALLATION_REVOKED), audit::code::INSTALLATION_REVOKED);
+    assert_eq!(recheck_code(audit::code::INSTALLATION_UNKNOWN), audit::code::INSTALLATION_UNKNOWN);
+    assert_eq!(recheck_code(audit::code::INVALID_REQUEST), audit::code::INVALID_REQUEST);
+    assert_eq!(recheck_code(audit::code::STORAGE_FAILED), audit::code::STORAGE_FAILED);
+    assert_eq!(recheck_code("本机秘密数据暂时不可用"), audit::code::INSTALLATION_REVOKED);
 }
 
 #[test]

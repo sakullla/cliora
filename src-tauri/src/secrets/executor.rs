@@ -2,7 +2,8 @@
 //!
 //! A registration stores one executable, an argument vector, an optional working
 //! directory, the channel that carries the value (one named environment variable
-//! or stdin) and a digest of the script content. Nothing here accepts a shell
+//! or stdin) and a digest of the definition's content: the absolute executable and
+//! every argument that names a script file. Nothing here accepts a shell
 //! command line or performs substitution: the process is started with `Command`
 //! directly, so the value never reaches argv, a persistent script or the global
 //! environment.
@@ -26,6 +27,11 @@ pub const MAX_STREAM_BYTES: usize = 64 * 1024;
 /// Script content is part of the definition, so a large file is refused rather
 /// than silently excluded from the digest.
 const MAX_SCRIPT_BYTES: u64 = 4 * 1024 * 1024;
+/// An absolute executable is hashed by content, and a compiled binary is part of
+/// the execution definition like any script. Its budget is larger than the
+/// argument-script budget so ordinary binaries are hashed instead of refused;
+/// anything bigger is refused rather than silently excluded from the digest.
+pub(crate) const MAX_EXECUTABLE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_EXECUTABLE: usize = 1024;
 const MAX_ARG: usize = 4096;
 const MAX_ARGS: usize = 64;
@@ -185,9 +191,30 @@ fn script_files(args: &[String], cwd: Option<&str>) -> Result<Vec<PathBuf>, Stri
     Ok(files)
 }
 
-/// Digest of the whole definition, including the content of every argument that
-/// points at a script file. Recomputing it before a run is what makes an edited
-/// script invalidate the grant.
+/// The executable file whose content belongs to the definition. An absolute path
+/// that names a regular file is hashed by content, because replacing that file
+/// replaces the code the value reaches. A bare command name is resolved through
+/// `PATH` at run time, so it stays part of the definition string only.
+fn executable_file(executable: &str) -> Result<Option<PathBuf>, String> {
+    let path = Path::new(executable);
+    if !path.is_absolute() {
+        return Ok(None);
+    }
+    let metadata = std::fs::metadata(path).map_err(|_| "无法读取执行入口程序内容".to_string())?;
+    if !metadata.is_file() {
+        return Err("执行入口程序不是常规文件，无法读取内容".into());
+    }
+    if metadata.len() > MAX_EXECUTABLE_BYTES {
+        return Err("执行入口程序超过 64 MiB，未登记".into());
+    }
+    Ok(Some(path.to_path_buf()))
+}
+
+/// Digest of the whole definition: the executable string, the argument vector,
+/// the working directory, the content of an absolute executable and the content
+/// of every argument that points at a script file. Recomputing it before a run is
+/// what makes an edited script invalidate the grant. A bare command name stays a
+/// string-only part of the definition because its file is chosen by `PATH`.
 fn digest_of(executable: &str, args: &[String], cwd: Option<&str>) -> Result<String, String> {
     let mut hasher = Sha256::new();
     hasher.update(b"cliora-secret-executor-v1\0");
@@ -204,6 +231,16 @@ fn digest_of(executable: &str, args: &[String], cwd: Option<&str>) -> Result<Str
         hasher.update(file.as_os_str().to_string_lossy().as_bytes());
         hasher.update([0]);
         let bytes = std::fs::read(&file).map_err(|_| "无法读取执行入口脚本内容".to_string())?;
+        hasher.update((bytes.len() as u64).to_le_bytes());
+        hasher.update(&bytes);
+    }
+    // The executable's own content is hashed last, under its own domain marker and
+    // length, so it can never be confused with an argument script.
+    if let Some(file) = executable_file(executable)? {
+        hasher.update(b"executable\0");
+        hasher.update(file.as_os_str().to_string_lossy().as_bytes());
+        hasher.update([0]);
+        let bytes = std::fs::read(&file).map_err(|_| "无法读取执行入口程序内容".to_string())?;
         hasher.update((bytes.len() as u64).to_le_bytes());
         hasher.update(&bytes);
     }

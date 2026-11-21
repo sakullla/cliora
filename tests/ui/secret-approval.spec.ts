@@ -6,17 +6,22 @@ const CANARY = 'canary-ui-approval-9a7f';
 const SECRET_ID = '11111111-2222-4333-8444-555555555555';
 const EXECUTOR_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 const INSTALLATION_ID = '4c2f8c9e-6b1a-4c44-9d5b-6f0a2b7c1234';
+// A newer installation without any grant: it must not shadow the granted one.
+const IDLE_INSTALLATION_ID = '5d3f9d0f-7c2b-4d55-8e6c-7a1b3c4d5678';
 
 type Call = { command: string; args: Record<string, any> };
 
-async function install(page: Page, options: { running?: boolean } = {}) {
-  await page.addInitScript((settings: { running: boolean }) => {
+async function install(page: Page, options: { running?: boolean; idleInstallation?: boolean } = {}) {
+  await page.addInitScript((settings: { running: boolean; idle: boolean }) => {
     const callbacks: Array<(value: unknown) => void> = [];
     const handlers: Record<string, number> = {};
     const calls: Call[] = [];
+    const idle = settings.idle
+      ? [{ id: '5d3f9d0f-7c2b-4d55-8e6c-7a1b3c4d5678', label: 'idle-cli', kind: 'cli', targetId: null, revoked: false, createdAt: 3, revokedAt: null }]
+      : [];
     const state = {
       running: settings.running,
-      installations: [{ id: '4c2f8c9e-6b1a-4c44-9d5b-6f0a2b7c1234', label: 'codex-cli', kind: 'cli', targetId: null, revoked: false, createdAt: 1, revokedAt: null }],
+      installations: [...idle, { id: '4c2f8c9e-6b1a-4c44-9d5b-6f0a2b7c1234', label: 'codex-cli', kind: 'cli', targetId: null, revoked: false, createdAt: 1, revokedAt: null }],
       executors: [{ id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', label: '部署脚本', description: '', executable: '/usr/bin/env', args: [], cwd: null, channel: 'env', envName: 'DEPLOY_TOKEN', digest: 'a'.repeat(64), createdAt: 1, updatedAt: 1 }],
       grants: [{ installationId: '4c2f8c9e-6b1a-4c44-9d5b-6f0a2b7c1234', secretId: '11111111-2222-4333-8444-555555555555', alias: '生产口令', executorId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', executorLabel: '部署脚本', createdAt: 1 }],
       audit: [{ id: 2, at: 2, operation: 'read', decision: 'denied', code: 'declined', secretId: '11111111-2222-4333-8444-555555555555', installationId: '4c2f8c9e-6b1a-4c44-9d5b-6f0a2b7c1234', executorId: null }],
@@ -79,7 +84,7 @@ async function install(page: Page, options: { running?: boolean } = {}) {
         },
       },
     });
-  }, { running: options.running ?? true });
+  }, { running: options.running ?? true, idle: options.idleInstallation ?? false });
   await page.addInitScript(installPromptFixtureBridge);
   await page.addInitScript(installRichPromptFixtures);
   await page.goto('/');
@@ -139,6 +144,23 @@ test('the broker panel lists metadata and inserts complete CLI instructions', as
   await broker.locator('[data-secret-installation-create]').click();
   await expect(broker.locator('[data-secret-installation]')).toHaveCount(2);
   expect(await bodyOf(dialog).inputValue()).not.toContain(CANARY);
+});
+
+test('inserted instructions pick the installation that carries a grant', async ({ page }) => {
+  await install(page, { idleInstallation: true });
+  await library(page);
+  const dialog = await newPrompt(page, '多个安装标识');
+  const broker = await openBroker(dialog);
+  await expect(broker.locator('[data-secret-installation]')).toHaveCount(2);
+  // The newer installation has no grant, so it cannot describe a usable command.
+  await broker.locator('[data-secret-broker-instructions]').click();
+  const body = await bodyOf(dialog).inputValue();
+  expect(body).toContain(`--installation ${INSTALLATION_ID}`);
+  expect(body).not.toContain(IDLE_INSTALLATION_ID);
+  expect(body).toContain(`use --secret ${SECRET_ID} --executor ${EXECUTOR_ID}`);
+  expect(body).toContain(`read --secret ${SECRET_ID}`);
+  expect(body).not.toContain('还没有任何已授权的秘密与执行入口');
+  expect(body).not.toContain(CANARY);
 });
 
 test('a read approval shows only the alias and the source and answers by id', async ({ page }) => {

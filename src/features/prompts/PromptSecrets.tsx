@@ -286,7 +286,10 @@ export function PromptSecrets({ local, body, disabled, onInsert }: { local: bool
     try {
       const context = cli ?? await native.secretCliContext();
       if (!mounted.current) return;
-      const installation = installations.find(item => !item.revoked);
+      // Prefer a live installation that already carries a grant, so the inserted text
+      // holds real use/read commands; otherwise fall back to the first live one.
+      const installation = installations.find(item => !item.revoked && grants.some(grant => grant.installationId === item.id))
+        ?? installations.find(item => !item.revoked);
       if (!installation) {
         setError(t('library.secrets.broker.needInstallation'));
         return;

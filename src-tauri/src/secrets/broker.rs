@@ -321,6 +321,18 @@ fn installation_checked(
     }
 }
 
+/// A failed installation re-check records the response's own closed-set code, so a
+/// storage failure is not filed as a revocation and no free text is ever stored.
+fn recheck_code(code: &str) -> &'static str {
+    match code {
+        audit::code::INSTALLATION_UNKNOWN => audit::code::INSTALLATION_UNKNOWN,
+        audit::code::INSTALLATION_REVOKED => audit::code::INSTALLATION_REVOKED,
+        audit::code::INVALID_REQUEST => audit::code::INVALID_REQUEST,
+        audit::code::STORAGE_FAILED => audit::code::STORAGE_FAILED,
+        _ => audit::code::INSTALLATION_REVOKED,
+    }
+}
+
 fn source_label(installation: &Installation) -> String {
     match (&installation.target_id, installation.kind) {
         (Some(target), Kind::Cli) => format!("{SOURCE_CLI} · {} · {target}", installation.label),
@@ -520,7 +532,10 @@ pub fn read_secret(
             // The installation may have been revoked while the window was open, and
             // the value may have changed or disappeared: resolve both again.
             match installation_checked(db, installation_id, audit::Operation::Read) {
-                Err(response) => (*response, audit::Decision::Denied, audit::code::INSTALLATION_REVOKED),
+                Err(response) => {
+                    let code = recheck_code(&response.code);
+                    (*response, audit::Decision::Denied, code)
+                }
                 Ok(_) => match read_value(store, &secret.id) {
                     Ok(Some(value)) => (
                         ipc::Response::success(

@@ -58,7 +58,6 @@ pub mod code {
     pub const OK: &str = "ok";
     pub const DECLINED: &str = "declined";
     pub const EXPIRED: &str = "expired";
-    pub const DUPLICATE_ANSWER: &str = "duplicate_answer";
     pub const APPROVAL_UNAVAILABLE: &str = "approval_unavailable";
     pub const INSTALLATION_UNKNOWN: &str = "installation_unknown";
     pub const INSTALLATION_REVOKED: &str = "installation_revoked";
@@ -88,6 +87,13 @@ pub struct Event<'a> {
     pub executor_id: Option<&'a str>,
 }
 
+/// Identifiers are opaque UUIDs. A caller-supplied string that does not parse as
+/// one is stored as null instead: free text could carry a value or a script body,
+/// and a row never holds either.
+fn opaque_id(value: Option<&str>) -> Option<&str> {
+    value.filter(|candidate| uuid::Uuid::parse_str(candidate).is_ok())
+}
+
 /// Appends one row. Audit writes never carry a value and never fail the caller's
 /// decision: a storage failure is reported so the caller can surface it.
 pub fn record(db: &Database, event: Event<'_>) -> Result<(), String> {
@@ -100,9 +106,9 @@ pub fn record(db: &Database, event: Event<'_>) -> Result<(), String> {
                 event.operation.as_str(),
                 event.decision.as_str(),
                 event.code,
-                event.secret_id,
-                event.installation_id,
-                event.executor_id,
+                opaque_id(event.secret_id),
+                opaque_id(event.installation_id),
+                opaque_id(event.executor_id),
             ],
         )
         .map(|_| ())
