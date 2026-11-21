@@ -62,25 +62,19 @@ async function assertClosedCollected(page: Page) {
   })).toEqual({ intervals: 0, terminals: 0 });
 }
 
-test('real WebGL cleanup releases closed terminals across three cycles', async ({ page }) => {
+test('real WebGL cleanup releases closed terminals and both preference and DECSET 12 blink timers', async ({ page }) => {
   await installRenderer(page);
   for (let cycle = 0; cycle < 3; cycle += 1) {
-    expect(await page.evaluate(() => (window as any).__open())).toBe(true);
-    await expect(page.locator('.xterm-screen canvas:not(.xterm-link-layer)')).toBeVisible();
-    await expect.poll(() => page.evaluate(() => (window as any).__blinkIntervals.size)).toBe(1);
-    await page.evaluate(() => (window as any).__close());
-    await assertClosedCollected(page);
-  }
-});
-
-test('real WebGL cleanup also pauses a CLI DECSET 12 cursor override', async ({ page }) => {
-  await installRenderer(page);
-  for (let cycle = 0; cycle < 3; cycle += 1) {
-    expect(await page.evaluate(() => (window as any).__open(false))).toBe(true);
-    await page.evaluate(() => new Promise<void>(resolve => (window as any).__current.terminal.write('\x1b[?12h', resolve)));
-    await expect.poll(() => page.evaluate(() => (window as any).__blinkIntervals.size)).toBe(1);
-    await page.evaluate(() => (window as any).__close());
-    await assertClosedCollected(page);
+    for (const preference of [true, false]) {
+      expect(await page.evaluate(blink => (window as any).__open(blink), preference)).toBe(true);
+      await expect(page.locator('.xterm-screen canvas:not(.xterm-link-layer)')).toBeVisible();
+      if (!preference) {
+        await page.evaluate(() => new Promise<void>(resolve => (window as any).__current.terminal.write('\x1b[?12h', resolve)));
+      }
+      await expect.poll(() => page.evaluate(() => (window as any).__blinkIntervals.size)).toBe(1);
+      await page.evaluate(() => (window as any).__close());
+      await assertClosedCollected(page);
+    }
   }
 });
 

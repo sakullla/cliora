@@ -718,7 +718,12 @@ async function installWorkbenchMock(page: Page, holdStartup = false) {
             if (beforeWrite) await beforeWrite(args.sessionId, text);
             return null;
           }
-          if (command === 'resize_workbench_session') { resizes.push({ sessionId: args.sessionId, cols: args.cols, rows: args.rows }); return null; }
+          if (command === 'resize_workbench_session') {
+            const resize = { sessionId: args.sessionId, cols: args.cols, rows: args.rows };
+            resizes.push(resize);
+            (window as Window & { __observeResize?: (grid: typeof resize) => void }).__observeResize?.(resize);
+            return null;
+          }
           if (command === 'plugin:event|listen') { bridge.listens[args.event] = args.handler; return args.handler; }
           if (command === 'plugin:event|unlisten') return null;
           return [];
@@ -2182,71 +2187,92 @@ test.describe('session switching with the production renderer', () => {
     deviceScaleFactor: 1.25,
   });
 
-  test('revealing a WebGL terminal preserves its grid', async ({ page }) => {
+  test('switching warm WebGL terminals preserves the grid at the same layout and releases their contexts on exit', async ({ page }) => {
+    type Grid = { sessionId: string; cols: number; rows: number; width: number; height: number; dpr: number };
+    type RendererFixture = Window & { __gridFrames: Grid[]; __webglCreates: number };
     await page.addInitScript(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => false });
-      Object.assign(window, { __twoSessions: true });
-    });
-    await installWorkbenchMock(page);
-    await page.goto('/');
-    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
-    const codex = page.getByRole('tab', { name: /Codex/ });
-    const claude = page.getByRole('tab', { name: /Claude Code/ });
-    const canvas = (id: string) => page.locator(`[data-pane-session="${id}"] .xterm-screen canvas:not(.xterm-link-layer)`);
-    const grids = () => page.evaluate(() => (window as unknown as { __resizes: Array<{ sessionId: string; cols: number; rows: number }> }).__resizes.filter(item => item.sessionId === 's1'));
-    await expect(canvas('s1')).toBeVisible();
-    await page.evaluate(() => document.fonts.ready.then(() => {}));
-    await page.waitForTimeout(300);
-    const settled = await grids();
-    expect(settled.length).toBeGreaterThan(0);
-    for (let round = 0; round < 3; round += 1) {
-      await claude.click();
-      await expect(canvas('s2')).toBeVisible();
-      await codex.click();
-      await expect(canvas('s1')).toBeVisible();
-    }
-    await page.waitForTimeout(300);
-    expect(await grids()).toEqual(settled);
-    // Actual layout changes must still reach the PTY; the fix must not freeze fitting.
-    await page.setViewportSize({ width: 1100, height: 720 });
-    await expect.poll(async () => (await grids()).at(-1)?.cols).toBeLessThan(settled.at(-1)!.cols);
-  });
-
-  test('rapid session switches reuse warm renderers with bounded contexts', async ({ page }) => {
-    await page.addInitScript(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => false });
-      Object.assign(window, { __twoSessions: true, __webglCreates: 0 });
+      const frames: Grid[] = [];
+      Object.assign(window, {
+        __twoSessions: true, __webglCreates: 0, __gridFrames: frames,
+        __observeResize: (grid: Pick<Grid, 'sessionId' | 'cols' | 'rows'>) => {
+          const host = document.querySelector(`[data-pane-session="${grid.sessionId}"] .xterm`)?.parentElement;
+          if (!host) throw new Error('PTY resize without a terminal host');
+          frames.push({ ...grid, width: host.clientWidth, height: host.clientHeight, dpr: devicePixelRatio });
+        },
+      });
       const original = HTMLCanvasElement.prototype.getContext;
-      const seen = new WeakSet<HTMLCanvasElement>();
+      const created = new WeakSet<HTMLCanvasElement>();
       HTMLCanvasElement.prototype.getContext = function (kind: string, ...args: unknown[]) {
-        if (kind === 'webgl2' && !seen.has(this)) {
-          seen.add(this);
-          (window as any).__webglCreates++;
+        const context = original.call(this, kind as any, ...args);
+        if (kind === 'webgl2' && context && !created.has(this)) {
+          created.add(this);
+          (window as RendererFixture).__webglCreates++;
         }
-        return original.call(this, kind as any, ...args);
+        return context;
       } as typeof original;
     });
     await installWorkbenchMock(page);
     await page.goto('/');
     await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+    await page.evaluate(() => document.fonts.ready.then(() => {}));
     const canvas = (id: string) => page.locator(`[data-pane-session="${id}"] .xterm-screen canvas:not(.xterm-link-layer)`);
-    await expect(canvas('s1')).toBeVisible();
+    const fittedGrid = async (id: string): Promise<Grid> => {
+      await expect(canvas(id)).toBeVisible();
+      const frame = await page.waitForFunction(session => {
+        const host = document.querySelector(`[data-pane-session="${session}"] .xterm`)?.parentElement;
+        const last = (window as RendererFixture).__gridFrames.findLast(grid => grid.sessionId === session);
+        return host && last && host.clientWidth === last.width && host.clientHeight === last.height && last.dpr === devicePixelRatio ? last : null;
+      }, id);
+      const grid = await frame.jsonValue();
+      await frame.dispose();
+      return grid!;
+    };
+
+    const revealed = [await fittedGrid('s1')];
     const durations: number[] = [];
-    for (let round = 0; round < 6; round++) {
-      const id = round % 2 ? 's1' : 's2';
-      durations.push(await page.evaluate(async id => {
+    for (const id of ['s2', 's1', 's2', 's1', 's2', 's1']) {
+      durations.push(await page.evaluate(async session => {
         const start = performance.now();
-        document.querySelector<HTMLButtonElement>(`[role="tab"][data-session-id="${id}"]`)!.click();
+        document.querySelector<HTMLButtonElement>(`[role="tab"][data-session-id="${session}"]`)!.click();
         await new Promise(requestAnimationFrame);
         await new Promise(requestAnimationFrame);
         return performance.now() - start;
       }, id));
-      await expect(canvas(id)).toBeVisible();
+      revealed.push(await fittedGrid(id));
     }
-    const creates = await page.evaluate(() => (window as any).__webglCreates);
-    console.log('session switch renderer cost', { creates, durations });
-    await test.info().attach('session-switch-cost', { body: JSON.stringify({ creates, durations }), contentType: 'application/json' });
+    const { frames, creates } = await page.evaluate(() => ({
+      frames: (window as RendererFixture).__gridFrames, creates: (window as RendererFixture).__webglCreates,
+    }));
+    await test.info().attach('session-switch-cost', { body: JSON.stringify({ creates, durations, frames, revealed }), contentType: 'application/json' });
     expect(creates).toBe(2);
+
+    // Compare every PTY resize, including startup. A delayed workbench layout can
+    // legitimately move from 1004×600 to 966×612; only an unchanged box must retain its grid.
+    const geometry = (grid: Grid) => [grid.sessionId, grid.width, grid.height, grid.dpr].join(':');
+    const byBox = new Map<string, Grid>();
+    const lastSent = new Map<string, Grid>();
+    for (const grid of frames) {
+      const key = geometry(grid);
+      const previous = lastSent.get(grid.sessionId);
+      if (previous) expect(geometry(previous), 'another PTY resize with unchanged geometry').not.toBe(key);
+      if (byBox.has(key)) expect(grid).toEqual(byBox.get(key));
+      byBox.set(key, grid);
+      lastSent.set(grid.sessionId, grid);
+    }
+    for (const id of ['s1', 's2']) {
+      const visits = revealed.filter(grid => grid.sessionId === id).map(geometry);
+      expect(new Set(visits).size, `expected a repeat visit at the same geometry for ${id}`).toBeLessThan(visits.length);
+    }
+
+    // A genuine viewport resize must still reach the PTY and fit the visible renderer.
+    const before = revealed.at(-1)!;
+    await page.setViewportSize({ width: 1100, height: 640 });
+    await expect.poll(async () => (await fittedGrid('s1')).cols).toBeLessThan(before.cols);
+    const after = await fittedGrid('s1');
+    expect(after.width).toBeLessThan(before.width);
+    expect(after.height).toBeLessThan(before.height);
+    expect(after.rows).toBeLessThan(before.rows);
     await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页', exact: true }).click();
     await expect(page.locator('.xterm-screen canvas:not(.xterm-link-layer)')).toHaveCount(0);
   });
