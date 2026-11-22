@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Map, Value};
 
 use super::super::configuration::{
-    ConfigurationAction, ConfigurationAdapter, ConfigurationDescriptor, ConfigurationField,
+    CatalogSupport, ConfigurationAction, ConfigurationAdapter, ConfigurationDescriptor, ConfigurationField,
     ConfigurationIssue, Documents, EditingState, ManagedConfiguration, PortableFieldKind,
     SuppressionChange, EDITING_VERSION,
 };
@@ -1894,6 +1894,33 @@ impl ConfigurationAdapter for OmpConfiguration {
             ));
         }
         issues
+    }
+
+    /// OMP has no separate default-model field: the directory reads the provider being edited
+    /// by pointing a request-only copy of `modelRoles.default` at it. A provider without models
+    /// still gets a reference, so a brand-new provider can fetch its catalog. Nothing is written.
+    fn draft_connection(&self, documents: &Documents, state: &EditingState) -> Result<Option<Connection>, String> {
+        let Some(provider) = selected_provider(documents, state) else { return Ok(None); };
+        let mut documents = documents.clone();
+        let id = first_model_id(&root(&documents, MODELS_ROLE), &provider).unwrap_or_else(|| "__cliora_draft__".into());
+        let settings = documents.entry(SETTINGS_ROLE.into()).or_insert_with(|| json!({}));
+        if !settings.is_object() { *settings = json!({}); }
+        if !settings.get("modelRoles").is_some_and(Value::is_object) { settings["modelRoles"] = json!({}); }
+        settings["modelRoles"]["default"] = json!(format!("{provider}/{id}"));
+        self.connection(&documents, state)
+    }
+
+    fn catalog_support(&self) -> CatalogSupport { CatalogSupport { available: true, multiple: true, reason: None } }
+
+    fn catalog_actions(&self, documents: &Documents, state: &EditingState, ids: &[String]) -> Result<Vec<ConfigurationAction>, String> {
+        let provider = selected_provider(documents, state).ok_or("请先设置供应商连接")?;
+        let models = models_as_map(root(documents, MODELS_ROLE))?;
+        Ok(ids.iter()
+            .filter(|id| models.pointer(&pointer(&model_path(&provider, id, None))).is_none())
+            .map(|id| ConfigurationAction {
+                version: EDITING_VERSION, target: model_target(&provider, id), operation: "create".into(), field: None, value: Some(json!({})),
+            })
+            .collect())
     }
 
     fn connection(

@@ -1161,6 +1161,31 @@ test('Ctrl+C copies a selection instead of interrupting, and interrupts without 
   await menu.getByRole('menuitem', { name: /全选/ }).click();
 });
 
+test('right-clicking the terminal offers text actions only, and session actions sit one step away', async ({ page }) => {
+  await openWorkbench(page);
+  const canvas = page.getByRole('region', { name: '当前会话' }).locator('.xterm-screen');
+  const menu = page.getByRole('menu', { name: '终端操作' });
+  await canvas.click({ button: 'right' });
+  // Nothing on right-click ends, restarts or re-files the session.
+  for (const name of ['结束此会话', '再开一个', '标记待审阅', '收起为后台']) {
+    await expect(menu.getByRole('menuitem', { name, exact: true })).toHaveCount(0);
+  }
+  await expect(menu.getByRole('menuitem', { name: /发送中断/ })).toHaveCount(0);
+  await menu.getByRole('menuitem', { name: /全选/ }).click();
+  // With a selection the first actions are about that text.
+  await canvas.click({ button: 'right' });
+  await expect(menu.getByRole('menuitem').first()).toContainText('复制');
+  await expect(menu.getByRole('menuitem', { name: /^查找“/ })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: /全选/ })).toHaveCount(0);
+  await menu.getByRole('menuitem', { name: '会话操作…' }).click();
+  await expect(menu.getByRole('menuitem', { name: '在 Twiglane 中查看改动', exact: true })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: '结束此会话', exact: true })).toBeVisible();
+  // The title-bar menu stays short: arrangement, display and interrupt live elsewhere.
+  for (const name of ['标记待审阅', '收起为后台', '终端显示', '复制输出']) {
+    await expect(menu.getByRole('menuitem', { name, exact: true })).toHaveCount(0);
+  }
+});
+
 test('the mouse wheel on the alternate screen never turns into arrow keys', async ({ page }) => {
   await openWorkbench(page);
   await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\u001b[?1049h\u001b[Halt-screen'));
@@ -4583,6 +4608,23 @@ test('an idle Codex prompt is unknown instead of a finished round', async ({ pag
   await expect(page.getByRole('button', { name: /等你处理/ })).toHaveCount(0);
 });
 
+test('a running row stays in its group while its output starts and pauses', async ({ page }) => {
+  await installWorkbenchMock(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const rail = page.getByRole('complementary', { name: '会话列表' });
+  const inRunning = rail.locator('[data-group="working"] [data-drag-id="s1"]');
+  await expect(inRunning).toHaveCount(1);
+  await expect(rail.locator('[data-group="unknown"]')).toHaveCount(0);
+  for (let round = 0; round < 2; round += 1) {
+    await page.evaluate((index) => (window as unknown as { __output: (text: string, id?: string) => void }).__output(`tick ${index}\r\n`, 's1'), round);
+    await expect(inRunning).toHaveCount(1);
+    // The live mark clears after a quiet pause; the row does not move to another group.
+    await page.waitForTimeout(1700);
+    await expect(inRunning).toHaveCount(1);
+  }
+});
+
 test('a marked round reviews, and collapsing moves it without ending it', async ({ page }) => {
   await installWorkbenchMock(page);
   await page.goto('/');
@@ -4590,10 +4632,10 @@ test('a marked round reviews, and collapsing moves it without ending it', async 
   const rail = page.getByRole('complementary', { name: '会话列表' });
   const row = rail.locator('[data-drag-id="s1"]');
   const stage = page.getByRole('region', { name: '当前会话' });
-  const taskMenu = () => page.getByRole('menu', { name: '终端操作' });
-  // The display actions live with the terminal's own menu, not next to its transport controls.
+  const taskMenu = () => page.getByRole('menu', { name: /会话操作$/ });
+  // List arrangement lives on the session list's own menu, not on the terminal's.
   await row.locator('[data-session-id="s1"]').click();
-  await stage.getByRole('button', { name: '更多终端操作' }).click();
+  await row.locator('[data-session-id="s1"]').click({ button: 'right' });
   await taskMenu().getByRole('menuitem', { name: '标记待审阅', exact: true }).click();
   await expect(row).toHaveAttribute('data-task', 'readyReview');
   await expect(row).toHaveAttribute('data-bucket', 'review');
@@ -4601,7 +4643,7 @@ test('a marked round reviews, and collapsing moves it without ending it', async 
   // The process is untouched: the mark is display only.
   await expect(row).toHaveAttribute('data-running', 'true');
 
-  await stage.getByRole('button', { name: '更多终端操作' }).click();
+  await row.locator('[data-session-id="s1"]').click({ button: 'right' });
   await taskMenu().getByRole('menuitem', { name: '收起为后台', exact: true }).click();
   await expect(rail.locator('[data-group="review"] [data-drag-id="s1"]')).toHaveCount(0);
   const collapsed = rail.locator('[data-group="collapsed"]');
@@ -4614,7 +4656,7 @@ test('a marked round reviews, and collapsing moves it without ending it', async 
   await expect(collapsed.locator('[data-drag-id="s1"]')).toHaveCount(1);
   await expect(collapsed.locator('[data-drag-id="s1"]')).toHaveAttribute('data-task', 'readyReview');
   await collapsed.locator('[data-session-id="s1"]').click();
-  await stage.getByRole('button', { name: '更多终端操作' }).click();
+  await collapsed.locator('[data-session-id="s1"]').click({ button: 'right' });
   await taskMenu().getByRole('menuitem', { name: '恢复关注', exact: true }).click();
   await expect(rail.locator('[data-group="collapsed"] [data-drag-id="s1"]')).toHaveCount(0);
   await expect(rail.locator('[data-group="review"] [data-drag-id="s1"]')).toHaveCount(1);
@@ -4629,8 +4671,8 @@ test('the task menu opens from the keyboard without the running terminal taking 
   const stage = page.getByRole('region', { name: '当前会话' });
   const taskMenu = () => page.getByRole('menu', { name: '终端操作' });
   const more = stage.getByRole('button', { name: '更多终端操作' });
-  const markItem = taskMenu().getByRole('menuitem', { name: '标记待审阅', exact: true });
-  const changesItem = taskMenu().getByRole('menuitem', { name: '查看本次改动', exact: true });
+  const markItem = taskMenu().getByRole('menuitem', { name: '在 Twiglane 中查看改动', exact: true });
+  const changesItem = taskMenu().getByRole('menuitem').nth(1);
   const openTaskMenu = async (key: 'Enter' | 'Space' = 'Enter') => {
     await more.focus();
     await page.keyboard.press(key);
@@ -4654,19 +4696,26 @@ test('the task menu opens from the keyboard without the running terminal taking 
     await expect(more).toBeFocused();
   }
 
-  // 菜单项可以只用键盘执行：标记只改变任务展示，进程不变。
-  await openTaskMenu();
+  // 菜单项可以只用键盘执行：标记在会话列表的菜单里，只改变任务展示，进程不变。
+  const rowButton = row.locator('[data-session-id="s1"]');
+  const rowMenu = () => page.getByRole('menu', { name: /会话操作$/ });
+  await rowButton.focus();
+  await page.keyboard.press('Shift+F10');
+  await expect(rowMenu()).toBeVisible();
+  await page.keyboard.press('ArrowDown');
+  await expect(rowMenu().getByRole('menuitem', { name: '标记待审阅', exact: true })).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(row).toHaveAttribute('data-task', 'readyReview');
   await expect(page.locator('[data-group="review"]')).toContainText('待审阅');
   await expect(row).toHaveAttribute('data-running', 'true');
-  await expect(more).toBeFocused();
 
   // Collapse by keyboard: the mark and the process stay, only the list moves the row.
-  await openTaskMenu();
+  await rowButton.focus();
+  await page.keyboard.press('Shift+F10');
+  await expect(rowMenu()).toBeVisible();
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
-  await expect(taskMenu().getByRole('menuitem', { name: '收起为后台', exact: true })).toBeFocused();
+  await expect(rowMenu().getByRole('menuitem', { name: '收起为后台', exact: true })).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(rail.locator('[data-group="review"] [data-drag-id="s1"]')).toHaveCount(0);
   const collapsed = rail.locator('[data-group="collapsed"]');
@@ -4678,11 +4727,12 @@ test('the task menu opens from the keyboard without the running terminal taking 
   await expect(collapsedRow).toHaveAttribute('data-running', 'true');
 
   // Restore by keyboard marks nothing new and returns the row to the review list.
-  await collapsed.locator('[data-session-id="s1"]').click();
-  await openTaskMenu();
+  await collapsed.locator('[data-session-id="s1"]').focus();
+  await page.keyboard.press('Shift+F10');
+  await expect(rowMenu()).toBeVisible();
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
-  await expect(taskMenu().getByRole('menuitem', { name: '恢复关注', exact: true })).toBeFocused();
+  await expect(rowMenu().getByRole('menuitem', { name: '恢复关注', exact: true })).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(rail.locator('[data-group="review"] [data-drag-id="s1"]')).toHaveCount(1);
 });
@@ -4734,19 +4784,21 @@ test('the new-session dialog leads with the task and keeps folded drafts', async
   await page.getByRole('button', { name: '新建会话', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
   const task = dialog.getByRole('textbox', { name: '初始提示词（可选）' });
-  // The task is the first field: everything it needs is summarized below it.
+  // The optional task follows the CLI and folder every launch needs.
   const tools = dialog.getByRole('button', { name: 'CLI 工具' });
   const taskBox = (await task.boundingBox())!;
   const toolsBox = (await tools.boundingBox())!;
-  expect(taskBox.y).toBeLessThan(toolsBox.y);
+  expect(taskBox.y).toBeGreaterThan(toolsBox.y);
   await task.fill('feat: 结算流程');
   await dialog.getByRole('button', { name: '工作目录 / 项目' }).click();
   await page.getByRole('option', { name: /Shop/ }).click();
   const advanced = dialog.getByRole('button', { name: '高级选项' });
-  await expect(advanced).toHaveAttribute('aria-expanded', 'false');
-  await expect(dialog.locator('#new-session-advanced')).toBeHidden();
+  // Launching in the folder itself has nothing to fold, so no empty toggle is offered.
+  await expect(advanced).toHaveCount(0);
   // The launch place and its base stay readable while the details are folded.
   await dialog.getByRole('radiogroup', { name: '启动位置' }).getByRole('radio', { name: /新建工作树/ }).click();
+  await expect(advanced).toHaveAttribute('aria-expanded', 'false');
+  await expect(dialog.locator('#new-session-advanced')).toBeHidden();
   await expect(dialog.locator('[data-place-field]')).toContainText('基于');
   await expect(dialog.locator('#worktree-setup-command')).toBeHidden();
   await advanced.click();

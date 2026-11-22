@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { Button } from '../../components/ui';
@@ -24,7 +25,12 @@ export function WorkbenchEmpty({ tools, projects, remoteTargets = [], remoteEnab
 }) {
   const { t } = useTranslation();
   const quickTools = tools.slice(0, QUICK_TOOL_LIMIT);
-  const recent = [...projects].sort((a, b) => (b.lastOpened ?? 0) - (a.lastOpened ?? 0)).slice(0, 4);
+  const recent = useMemo(() => {
+    // Prefer standalone projects, then display the four chosen cards by recency.
+    const byRecency = (a: Project, b: Project) => (b.lastOpened ?? 0) - (a.lastOpened ?? 0);
+    return [...projects].sort((a, b) => Number(!!a.workspaceBacked) - Number(!!b.workspaceBacked) || byRecency(a, b))
+      .slice(0, 4).sort(byRecency);
+  }, [projects]);
   return <div className={styles.empty}>
     <div className={styles.emptyShell}>
       <header className={styles.emptyHero}>

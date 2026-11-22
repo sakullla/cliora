@@ -73,6 +73,24 @@ async function changeHost(page: Page, name: string) {
   await page.getByRole('menuitemradio').filter({ hasText: name }).click();
 }
 
+test('switching workbench hosts defers hidden host pages until opened', async ({ page }) => {
+  await install(page);
+  for (const name of ['工具', '资料库']) await nav(page, name).click();
+  await expect(page.locator('[data-host-target="local"]')).toHaveCount(2);
+  await nav(page, '工作台').click();
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await expect(stage.getByRole('button', { name: '运行位置：本机' })).toBeVisible();
+  for (const host of ['a', 'b']) {
+    await changeHost(page, `开发主机 ${host}`);
+    await expect(stage.getByRole('button', { name: `运行位置：开发主机 ${host}` })).toBeVisible();
+    await expect(page.locator('[data-host-target]')).toHaveCount(0);
+  }
+  await nav(page, '资料库').click();
+  await expect(page.locator('[data-host-target="remote-b"]')).toHaveCount(1);
+  await nav(page, '工作台').click();
+  await expect(page.locator('[data-host-target="remote-b"]')).toHaveCount(1);
+});
+
 test('home restores its query and scroll after delayed reads and same-page navigation', async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 650 });
   await install(page);

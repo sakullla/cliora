@@ -736,3 +736,48 @@ fn named_profile_saves_yaml_but_never_a_literal_key() {
         .unwrap_err()
         .contains("明文密钥"));
 }
+
+#[test]
+fn model_directory_adds_only_new_ids_into_the_native_array() {
+    assert!(CONFIGURATION.catalog_support().available);
+    assert!(CONFIGURATION.catalog_support().multiple);
+    let mut documents = documents();
+    let mut state = EditingState { selected_provider: Some("alpha".into()), ..EditingState::default() };
+    let ids = vec!["one".to_owned(), "two".to_owned(), "new-1".to_owned()];
+    let actions = CONFIGURATION.catalog_actions(&documents, &state, &ids).unwrap();
+    assert_eq!(actions.len(), 1, "existing models are not created again");
+    assert_eq!(actions[0].target, json!({"kind":"model","provider":"alpha","id":"new-1"}));
+    assert_eq!(actions[0].operation, "create");
+    for action in &actions {
+        CONFIGURATION.edit(&mut documents, &mut state, action).unwrap();
+    }
+    let models = rendered(&documents, MODELS_ROLE);
+    let list = models["providers"]["alpha"]["models"].as_array().unwrap();
+    assert_eq!(list.iter().filter_map(|model| model["id"].as_str()).collect::<Vec<_>>(), vec!["one", "two", "new-1"]);
+    assert_eq!(models["providers"]["alpha"]["customProviderField"]["keep"], true);
+    assert_eq!(models["providers"]["alpha"]["models"][0]["customModelField"], "keep");
+}
+
+#[test]
+fn model_directory_reads_the_selected_provider_without_writing_roles() {
+    let documents = documents();
+    let state = EditingState { selected_provider: Some("beta".into()), ..EditingState::default() };
+    // The default role points at alpha; the directory still asks the provider being edited.
+    let connection = CONFIGURATION.draft_connection(&documents, &state).unwrap().unwrap();
+    assert_eq!(connection.provider_id, "beta");
+    assert_eq!(connection.base_url, "https://beta.example.test");
+    assert_eq!(rendered(&documents, SETTINGS_ROLE)["modelRoles"]["default"], "alpha/one");
+}
+
+#[test]
+fn model_directory_works_for_a_provider_with_no_models_yet() {
+    let mut documents = documents();
+    documents.get_mut(MODELS_ROLE).unwrap()["providers"]["fresh"] =
+        json!({"api":"openai-completions","baseUrl":"https://fresh.example.test/v1","apiKey":"${OMP_FRESH_API_KEY}"});
+    let state = EditingState { selected_provider: Some("fresh".into()), ..EditingState::default() };
+    let connection = CONFIGURATION.draft_connection(&documents, &state).unwrap().unwrap();
+    assert_eq!(connection.provider_id, "fresh");
+    assert_eq!(connection.base_url, "https://fresh.example.test/v1");
+    let actions = CONFIGURATION.catalog_actions(&documents, &state, &["m1".to_owned()]).unwrap();
+    assert_eq!(actions.len(), 1);
+}

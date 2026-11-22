@@ -4166,16 +4166,14 @@ pub async fn twiglane_feedback_send(
         };
         let mut payload = feedback::prompt_text(&file).into_bytes();
         payload.push(b'\r');
-        let encoded = base64::engine::general_purpose::STANDARD.encode(&payload);
         // 只有这里的失败是"可能已经写进去"的：标记 uncertain，绝不自动重试。
-        if crate::session_host::write(&target, &encoded).is_err() {
+        if crate::session_host::write_bytes(&target, &payload).is_err() {
             state.feedback.finish_send(&feedback_id, false);
             return Err(feedback::api_error("feedback_write_failed"));
         }
         // PTY 写入已经发生：即使条目刚被并发取消清掉，也不能反过来说"没有这批暂存"。
         let state_text = state.feedback.finish_send(&feedback_id, true)
-            .map(|preview| preview.state)
-            .unwrap_or_else(|| feedback::STATE_WRITTEN.to_string());
+            .unwrap_or(feedback::STATE_WRITTEN).to_owned();
         Ok(feedback::FeedbackSendOutcome { feedback_id, session_id: target, state: state_text })
     })
     .await

@@ -758,14 +758,20 @@ pub fn replay_snapshot(id: &str) -> Result<ReplaySnapshot, String> {
 }
 
 pub fn write(id: &str, data_base64: &str) -> Result<(), String> {
-    let bytes = decode_input(data_base64)?;
+    write_bytes(id, &decode_input(data_base64)?)
+}
+
+pub(crate) fn write_bytes(id: &str, bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() > MAX_INPUT_BASE64 / 4 * 3 {
+        return Err("输入过长".into());
+    }
     let session = lookup(id)?;
     if !session.running.load(Ordering::SeqCst) {
         return Err("会话已经结束".into());
     }
     let mut writer = session.writer.lock().map_err(|_| "会话状态不可用")?;
     let writer = writer.as_mut().ok_or("会话连接已关闭")?;
-    writer.write_all(&bytes).map_err(|error| format!("无法写入会话：{error}"))?;
+    writer.write_all(bytes).map_err(|error| format!("无法写入会话：{error}"))?;
     writer.flush().map_err(|error| format!("无法写入会话：{error}"))?;
     Ok(())
 }
@@ -1198,8 +1204,10 @@ fn emit<T: Serialize + Clone>(event: &str, payload: T) {
     }
 }
 
+const MAX_INPUT_BASE64: usize = 1_400_000;
+
 fn decode_input(data_base64: &str) -> Result<Vec<u8>, String> {
-    if data_base64.len() > 1_400_000 {
+    if data_base64.len() > MAX_INPUT_BASE64 {
         return Err("输入过长".into());
     }
     base64::engine::general_purpose::STANDARD.decode(data_base64).map_err(|_| "输入格式无法识别".into())

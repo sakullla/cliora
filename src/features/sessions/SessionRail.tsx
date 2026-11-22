@@ -15,15 +15,6 @@ import styles from './SessionWorkbench.module.css';
 
 export type SessionTone = 'live' | 'idle' | 'bell' | 'error' | 'ended';
 
-/** What one task row says about the next step, read from the shared task state. */
-export type RailTaskDetail = {
-  state: 'loading' | 'ready' | 'unknown';
-  text: string;
-  hint?: string;
-  /** One next step read from real Git and review facts; never an automatic write. */
-  action?: { label: string; run: () => void };
-};
-
 export type RailSession = {
   session: WorkbenchSession;
   name: string;
@@ -43,8 +34,6 @@ export type RailSession = {
   collapsed: boolean;
   /** The user marked this round for review; a display mark only. */
   marked: boolean;
-  /** Changes and the review next step, read only when this row is expanded. */
-  detail?: RailTaskDetail;
   /** 0 or 1 while the session is on screen in a split; null otherwise. */
   pane: number | null;
 };
@@ -167,8 +156,9 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
   const bucketOf = (bucket: TaskBucket) => activeSessions.filter((item) => !item.pinned && !pendingIds.has(item.session.id) && item.bucket === bucket);
   const attentionSessions = bucketOf('attention');
   const reviewSessions = bucketOf('review');
-  const runningSessions = bucketOf('working');
-  const unknownSessions = bucketOf('unknown');
+  // Producing output and sitting quietly are both "running": splitting them moved a row between
+  // groups every time a CLI paused, so the list kept jumping. The row's own mark shows activity.
+  const runningSessions = activeSessions.filter((item) => !item.pinned && !pendingIds.has(item.session.id) && (item.bucket === 'working' || item.bucket === 'unknown'));
   const endedSessions = bucketOf('ended');
   // A collapsed ended group still shows the session on screen, so the selection never vanishes.
   const endedVisible = endedCollapsed && !narrow ? endedSessions.filter((item) => item.session.id === selectedId) : endedSessions;
@@ -178,7 +168,6 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
     { key: 'attention', label: t('sessions.taskAttentionGroup'), items: attentionSessions, count: attentionSessions.length },
     { key: 'review', label: t('sessions.taskReadyReview'), items: reviewSessions, count: reviewSessions.length },
     { key: 'working', label: t('sessions.running'), items: runningSessions, count: runningSessions.length },
-    { key: 'unknown', label: t('sessions.taskUnknown'), items: unknownSessions, count: unknownSessions.length },
     { key: 'ended', label: t('sessions.ended'), items: endedVisible, count: endedSessions.length },
   ].filter((group) => group.count > 0);
 
@@ -306,12 +295,6 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
         }} />
         {!session.running && <IconButton size="sm" className={styles.rowRemove} aria-label={t('sessions.removeSessionLabel', { name: item.name })} title={t('sessions.removeSession')} disabled={busy} onClick={() => onRemove(session)} icon={<Icon name="close" size={12} />} />}
       </div>
-      {/* Changes and the next review step belong to this row and are read only when it is open. */}
-      {item.detail && <div className={styles.rowDetail} data-task-detail={item.detail.state} role="group" aria-label={t('sessions.taskDetailLabel', { name: item.name })}>
-        <p className={styles.rowDetailText} data-state={item.detail.state}>{item.detail.text}</p>
-        {item.detail.hint && <small className={styles.rowDetailHint}>{item.detail.hint}</small>}
-        {item.detail.action && <button type="button" className={styles.rowDetailAction} onClick={item.detail.action.run}>{item.detail.action.label}</button>}
-      </div>}
     </div>;
   };
 

@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -136,7 +136,7 @@ pub(crate) const STATE_UNCERTAIN: &str = "uncertain";
 /// 已暂存的一批意见。
 #[derive(Clone, Debug)]
 pub(crate) struct StagedFeedback {
-    pub(crate) file: FeedbackFile,
+    pub(crate) file: Arc<FeedbackFile>,
     pub(crate) state: &'static str,
 }
 
@@ -164,7 +164,8 @@ fn is_plain_value(value: &str) -> bool {
 }
 
 fn is_absolute_worktree(value: &str) -> bool {
-    if Path::new(value).is_absolute() {
+    // The wire format accepts POSIX paths even when the receiver runs on Windows.
+    if value.starts_with('/') || Path::new(value).is_absolute() {
         return true;
     }
     // Windows 盘符形式在以非 Windows 目标编译的测试里也要能判断。
@@ -286,10 +287,9 @@ fn digest_of(file: &FeedbackFile) -> Result<String, &'static str> {
         head_oid: &file.head_oid,
         comments: &file.comments,
     };
-    let bytes = serde_json::to_vec(&body).map_err(|_| "feedback_invalid")?;
     let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    Ok(hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
+    serde_json::to_writer(&mut hasher, &body).map_err(|_| "feedback_invalid")?;
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn is_relative_repo_path(value: &str) -> bool {
@@ -373,6 +373,7 @@ pub(crate) fn receive_file(link: &FeedbackLink) -> Result<FeedbackFile, &'static
 fn read_from(path: &Path, link: &FeedbackLink) -> Result<FeedbackFile, &'static str> {
     let bytes = read_file_bounded(path)?;
     let file: FeedbackFile = serde_json::from_slice(&bytes).map_err(|_| "feedback_invalid")?;
+    drop(bytes);
     validate_file(&file)?;
     // 深链只是索引：它声明的标识与 digest 必须就是文件里的那一批。
     if file.feedback_id != link.feedback_id
@@ -409,7 +410,10 @@ pub(crate) fn check_source(file: &FeedbackFile, source: Option<&ReviewState>) ->
     if source.result_revision != file.result_revision {
         return Err("feedback_stale");
     }
-    if source.status != super::STATUS_RETURNED {
+    // 审阅打开后直接写意见、还没有返回过结果，是 feedback-v1 允许的 resultRevision 0；
+    // 返回过之后只认最近一次 returned。
+    let first_round = source.status == super::STATUS_ACCEPTED && file.result_revision == 0;
+    if source.status != super::STATUS_RETURNED && !first_round {
         return Err("feedback_stale");
     }
     if source.head_oid.is_some() && source.head_oid.as_deref() != Some(file.head_oid.as_str()) {
@@ -503,7 +507,7 @@ impl FeedbackStore {
         }
         data.seen.insert(file.feedback_id.clone());
         let preview = preview_of(&file, STATE_PREPARED);
-        data.entries.insert(file.feedback_id.clone(), StagedFeedback { file, state: STATE_PREPARED });
+        data.entries.insert(file.feedback_id.clone(), StagedFeedback { file: Arc::new(file), state: STATE_PREPARED });
         Ok(preview)
     }
 
@@ -517,13 +521,13 @@ impl FeedbackStore {
     /// 检查与占用是同一个临界区，所以两个并发调用里只有一个能拿到 `Ok`，另一个只会得到
     /// 明确的拒绝，绝不会写第二次。已发送（written）、结果未知（uncertain）和正在写入
     /// （sending）都不是可发送状态。
-    pub(crate) fn begin_send(&self, feedback_id: &str) -> Result<FeedbackFile, &'static str> {
+    pub(crate) fn begin_send(&self, feedback_id: &str) -> Result<Arc<FeedbackFile>, &'static str> {
         let mut data = self.lock();
         let entry = data.entries.get_mut(feedback_id).ok_or("feedback_unknown")?;
         match entry.state {
             STATE_PREPARED => {
                 entry.state = STATE_SENDING;
-                Ok(entry.file.clone())
+                Ok(Arc::clone(&entry.file))
             }
             STATE_SENDING => Err("feedback_send_in_progress"),
             STATE_UNCERTAIN => Err("feedback_send_uncertain"),
@@ -532,23 +536,23 @@ impl FeedbackStore {
     }
 
     /// 写入结束：成功记为 written，失败或结果未知记为 uncertain。两者都不能再发。
-    pub(crate) fn finish_send(&self, feedback_id: &str, written: bool) -> Option<FeedbackPreview> {
+    pub(crate) fn finish_send(&self, feedback_id: &str, written: bool) -> Option<&'static str> {
         let mut data = self.lock();
         let entry = data.entries.get_mut(feedback_id)?;
         if entry.state == STATE_SENDING {
             entry.state = if written { STATE_WRITTEN } else { STATE_UNCERTAIN };
         }
-        Some(preview_of(&entry.file, entry.state))
+        Some(entry.state)
     }
 
     /// 写入之前的复核失败（会话已结束、目录变了等）没有碰过 PTY，退回 prepared 让用户恢复后重试。
-    pub(crate) fn abort_send(&self, feedback_id: &str) -> Option<FeedbackPreview> {
+    pub(crate) fn abort_send(&self, feedback_id: &str) -> Option<&'static str> {
         let mut data = self.lock();
         let entry = data.entries.get_mut(feedback_id)?;
         if entry.state == STATE_SENDING {
             entry.state = STATE_PREPARED;
         }
-        Some(preview_of(&entry.file, entry.state))
+        Some(entry.state)
     }
 
     /// 取消只清掉运行期暂存；标识仍保留在 seen 里，同一批不会被再次暂存。
@@ -743,6 +747,16 @@ mod tests {
         let mut accepted = source(&file);
         accepted.status = super::super::STATUS_ACCEPTED.into();
         assert_eq!(check_source(&file, Some(&accepted)).unwrap_err(), "feedback_stale");
+
+        // 打开审阅后、还没返回过结果就写意见：resultRevision 0 的那一批可以接收。
+        let mut first = sample();
+        first.result_revision = 0;
+        let mut opened = source(&first);
+        opened.status = super::super::STATUS_ACCEPTED.into();
+        assert!(check_source(&first, Some(&opened)).is_ok());
+        // 仍在发起中的审阅不能接收。
+        opened.status = super::super::STATUS_OPENING.into();
+        assert_eq!(check_source(&first, Some(&opened)).unwrap_err(), "feedback_stale");
     }
 
     #[test]
@@ -766,7 +780,7 @@ mod tests {
         store.stage(sample()).unwrap();
         assert!(store.begin_send(FEEDBACK_ID).is_ok());
         let written = store.finish_send(FEEDBACK_ID, true).expect("staged batch is found");
-        assert_eq!(written.state, STATE_WRITTEN);
+        assert_eq!(written, STATE_WRITTEN);
         // 已经写过一次：第二次发送在写 PTY 之前就被拒绝。
         assert_eq!(store.begin_send(FEEDBACK_ID).unwrap_err(), "feedback_already_sent");
         assert_eq!(store.len(), 1);
@@ -782,7 +796,7 @@ mod tests {
         store.stage(sample()).unwrap();
         assert!(store.begin_send(FEEDBACK_ID).is_ok());
         let uncertain = store.finish_send(FEEDBACK_ID, false).expect("staged batch is found");
-        assert_eq!(uncertain.state, STATE_UNCERTAIN);
+        assert_eq!(uncertain, STATE_UNCERTAIN);
         // 结果未知不是"没写过"：同一批意见绝不能再写一次，只能复制。
         assert_eq!(store.begin_send(FEEDBACK_ID).unwrap_err(), "feedback_send_uncertain");
         assert_eq!(store.len(), 1);
@@ -794,9 +808,9 @@ mod tests {
         store.stage(sample()).unwrap();
         assert!(store.begin_send(FEEDBACK_ID).is_ok());
         // 会话已结束这类复核失败没有碰过 PTY，恢复并再次确认仍然可用。
-        assert_eq!(store.abort_send(FEEDBACK_ID).expect("staged batch is found").state, STATE_PREPARED);
+        assert_eq!(store.abort_send(FEEDBACK_ID).expect("staged batch is found"), STATE_PREPARED);
         assert!(store.begin_send(FEEDBACK_ID).is_ok());
-        assert_eq!(store.finish_send(FEEDBACK_ID, true).unwrap().state, STATE_WRITTEN);
+        assert_eq!(store.finish_send(FEEDBACK_ID, true).unwrap(), STATE_WRITTEN);
     }
 
     #[test]

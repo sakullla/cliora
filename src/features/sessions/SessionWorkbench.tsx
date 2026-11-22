@@ -291,7 +291,7 @@ function playWorkbenchChime(kind: 'bell' | 'exit') {
 
 type MenuState = (
   | { kind: 'session'; sessionId: string; x: number; y: number; besideId: string | null }
-  | { kind: 'terminal'; sessionId: string; x: number; y: number; hasSelection: boolean }
+  | { kind: 'terminal'; sessionId: string; x: number; y: number; hasSelection: boolean; selection: string; surface: boolean }
 ) & {
   /** The control the menu was opened from, when it had one. Closing the menu gives the
    *  keyboard back to it, the same way a popup returns focus to its trigger. */
@@ -594,9 +594,6 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [attentionIds, setAttentionIds] = useState<Set<string>>(() => new Set());
   // 每个会话当前屏幕的适配器证据；shared 工作台从不按 CLI ID 解析屏幕。
   const [semanticsById, setSemanticsById] = useState<Map<string, TerminalSemantics | null>>(() => new Map());
-  // 展开后才读取改动与审阅下一步的行，普通后台行不触发扫描。
-  const [detailIds, setDetailIds] = useState<Set<string>>(() => new Set());
-  const [detailReads, setDetailReads] = useState<Map<string, { state: 'loading' | 'ready' | 'unknown'; status: WorkbenchCodeStatus | null }>>(() => new Map());
   const [collapsedOpen, setCollapsedOpen] = useState(false);
   const [activeOutputIds, setActiveOutputIds] = useState<Set<string>>(() => new Set());
   const [scrolledIds, setScrolledIds] = useState<Set<string>>(() => new Set());
@@ -1543,9 +1540,6 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     outputActive: (id, isActive) => {
       setActiveOutputIds((current) => toggleInSet(current, id, isActive));
       if (isActive && !visibleIdsRef.current.includes(id)) setUnreadIds((current) => toggleInSet(current, id, true));
-      // An expanded row's count is read before this new output: re-read just that row so the
-      // number follows the agent instead of staying at its first reading.
-      if (isActive && detailIds.has(id)) void readSessionDetail(id, true);
     },
     outputWritten: (id) => {
       if (id !== selectedIdRef.current || !findOpenRef.current || !findQueryRef.current.trim() || findRefreshTimer.current) return;
@@ -1985,61 +1979,6 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     }));
   }
 
-  /**
-   * One on-demand read per expanded row: no whole-list Git scan, no poll loop.
-   *
-   * `keepWhileReading` is the re-read path: the row already shows a readable count, so the
-   * previous value stays on screen instead of flashing "reading" for the same row.
-   */
-  async function readSessionDetail(id: string, keepWhileReading = false) {
-    if (!keepWhileReading) setDetailReads((current) => { const next = new Map(current); next.set(id, { state: 'loading', status: current.get(id)?.status ?? null }); return next; });
-    await codeReadPending.current;
-    try {
-      const value = await native.workbenchCodeStatus(id);
-      if (!value || value.sessionId !== id || (value.state !== 'ready' && value.state !== 'unknown')) throw new Error('unreadable');
-      setDetailReads((current) => { const next = new Map(current); next.set(id, { state: value.state === 'ready' ? 'ready' : 'unknown', status: value }); return next; });
-    } catch {
-      // A failed read is unknown, never "no changes".
-      setDetailReads((current) => { const next = new Map(current); next.set(id, { state: 'unknown', status: null }); return next; });
-    }
-  }
-
-  function toggleSessionDetail(id: string) {
-    const open = detailIds.has(id);
-    setDetailIds((current) => { const next = new Set(current); if (open) next.delete(id); else next.add(id); return next; });
-    // Every expand reads again: the agent keeps writing after the first read, so a row that
-    // stayed on its old "ready" count went stale without saying so. One row per expand is still
-    // an explicit on-demand read, never a scan of the rest of the list.
-    if (!open) void readSessionDetail(id, detailReads.get(id)?.state === 'ready');
-  }
-
-  /** Changes and the review next step of one row, or nothing while it stays closed. */
-  function taskDetailOf(session: WorkbenchSession): RailSession['detail'] {
-    if (!detailIds.has(session.id)) return undefined;
-    const read = detailReads.get(session.id);
-    if (!read || read.state === 'loading') return { state: 'loading', text: t('sessions.taskChangesLoading') };
-    const retry = { label: t('sessions.taskChangesRetry'), run: () => void readSessionDetail(session.id) };
-    const status = read.status;
-    if (read.state !== 'ready' || !status || status.state !== 'ready') {
-      return { state: 'unknown', text: t('sessions.taskChangesUnknown'), hint: t('sessions.taskChangesUnknownHint'), action: retry };
-    }
-    // A read that scoped its count to this session says so; a plain checkout total says that.
-    const scoped = status.sessionFiles != null;
-    const files = scoped ? status.sessionFiles! : status.uncommittedFiles ?? null;
-    const text = files == null ? t('sessions.taskChangesUnknown')
-      : files > 0 ? t(scoped ? 'sessions.taskChangesCount' : 'sessions.worktreeStatusUncommitted', { count: files })
-        : scoped ? t('sessions.taskChangesNone') : t('sessions.worktreeStatusClean');
-    const review = reviewStates.get(session.id) ?? null;
-    const verified = !!review && review.status === 'returned' && reviewEvidenceVerified(reviewResultKey(review), codeStatusReviews.get(session.id));
-    const hint = [status.branch ?? t('sessions.reviewDetached'), status.worktreePath ?? ''].filter(Boolean).join(' · ');
-    if (verified) return { state: 'ready', text, hint, action: { label: t('sessions.taskReviewViewResult'), run: () => selectSession(session.id, false) } };
-    if (review && (review.status === 'opening' || review.status === 'preparing')) return { state: 'ready', text, hint: t('sessions.taskReviewInProgress') };
-    if (review && review.status === 'rejected') return { state: 'ready', text, hint: t('sessions.taskReviewFailed'), action: { label: t('sessions.reviewRetry'), run: () => { selectSession(session.id, false); void startReview(session); } } };
-    // 只有可核实的本地工作树才给出审阅入口；远端和缺失目录保留原因。
-    if (session.projectId?.startsWith('remote:')) return { state: 'ready', text, hint: t('sessions.taskReviewRemote'), action: { label: t('sessions.taskOpenSession'), run: () => selectSession(session.id, false) } };
-    return { state: 'ready', text, hint, action: { label: t('sessions.reviewStart'), run: () => { selectSession(session.id, false); void startReview(session); } } };
-  }
-
   function forgetSession(id: string) {
     retiredSessionIds.current.add(id);
     pendingRestored.current.delete(id);
@@ -2053,8 +1992,6 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setScrolledIds((current) => { if (!current.has(id)) return current; const next = new Set(current); next.delete(id); return next; });
     setAttentionIds((current) => { if (!current.has(id)) return current; const next = new Set(current); next.delete(id); return next; });
     setSemanticsById((current) => { if (!current.has(id)) return current; const next = new Map(current); next.delete(id); return next; });
-    setDetailIds((current) => toggleInSet(current, id, false));
-    setDetailReads((current) => { if (!current.has(id)) return current; const next = new Map(current); next.delete(id); return next; });
     setArrangement((current) => (current.collapsed.includes(id) || current.reviewMarks.includes(id))
       ? { ...current, collapsed: current.collapsed.filter((item) => item !== id), reviewMarks: current.reviewMarks.filter((item) => item !== id) }
       : current);
@@ -3039,10 +2976,15 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setMenu({ kind: 'session', sessionId: session.id, x, y, trigger, besideId: previous && previous !== session.id ? previous : null });
   }
 
-  function openTerminalMenu(session: WorkbenchSession, x: number, y: number, trigger: HTMLElement | null = null) {
+  /** `surface` is a right-click or context key on the terminal itself; the title-bar button opens the session menu. */
+  function openTerminalMenu(session: WorkbenchSession, x: number, y: number, trigger: HTMLElement | null = null, surface = false) {
     setAppearanceOpen(false);
     refreshLedger();
-    setMenu({ kind: 'terminal', sessionId: session.id, x, y, trigger, hasSelection: !!handles.current.get(session.id)?.hasSelection() });
+    const handle = handles.current.get(session.id);
+    const hasSelection = !!handle?.hasSelection();
+    // The first selected line seeds find; a selection read here survives the menu taking focus.
+    const selection = surface && hasSelection ? (handle?.readOutput() ?? '').split('\n').map((line) => line.trim()).find(Boolean)?.slice(0, 120) ?? '' : '';
+    setMenu({ kind: 'terminal', sessionId: session.id, x, y, trigger, hasSelection, selection, surface });
   }
 
   /** Shift+F10 and the ContextMenu key reach the same menu a right-click opens. The terminal
@@ -3362,7 +3304,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
 
   const availableProjects = useMemo(() => projects.filter((item) => item.available && item.path), [projects]);
-  const availableRemoteProjects = useMemo(() => activeTargetId === 'local' ? [] : remoteProjects.filter((item) => item.path && item.targetId === activeTargetId).sort((a, b) => b.updatedAt - a.updatedAt), [activeTargetId, remoteProjects]);
+  const availableRemoteProjects = useMemo(() => !newDialogOpen || activeTargetId === 'local' ? [] : remoteProjects.filter((item) => item.path && item.targetId === activeTargetId).sort((a, b) => b.updatedAt - a.updatedAt), [newDialogOpen, activeTargetId, remoteProjects]);
   const activeRemoteTarget = remoteSshEnabled && activeTargetId !== 'local' ? remoteTargets.find((target) => target.id === activeTargetId) ?? null : null;
   const remoteHomePath = activeRemoteTarget ? remoteStartPath(activeRemoteTarget) : '';
   // The dialog reads its base from the directory it will really use; the home
@@ -3604,6 +3546,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }, [businessWorkspaces, t]);
   const cliSelectOptions = useMemo<FilterSelectOption[]>(() => toolOptions(terminalTools), [terminalTools]);
   const workspaceSelectOptions = useMemo<FilterSelectOption[]>(() => {
+    if (!newDialogOpen) return [];
     // A host lists its own places only: its home folder, its saved folders and a picked one.
     if (activeRemoteTarget) {
       const list: FilterSelectOption[] = [
@@ -3626,7 +3569,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     ];
     if (customFolderPath && !businessRepositoryOptions.some(option => option.value === `custom:${customFolderPath}`)) list.push({ value: `custom:${customFolderPath}`, label: shortPath(displayPath(customFolderPath)), detail: displayPath(customFolderPath), icon: <Icon name="folder" size={14} /> });
     return list;
-  }, [activeRemoteTarget, availableProjects, availableRemoteProjects, businessRepositoryOptions, customFolderPath, customRemotePath, remoteHomePath, workspaceValue, t]);
+  }, [newDialogOpen, activeRemoteTarget, availableProjects, availableRemoteProjects, businessRepositoryOptions, customFolderPath, customRemotePath, remoteHomePath, workspaceValue, t]);
   /**
    * A stored workspace that is no longer offered keeps its value and says why: switching hosts
    * or removing a project must not silently launch somewhere else.
@@ -3670,7 +3613,6 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       taskHint: taskHintOf(session),
       collapsed: collapsedIds.has(session.id),
       marked: arrangement.reviewMarks.includes(session.id),
-      detail: taskDetailOf(session),
       pane: split ? (split.indexOf(session.id) >= 0 ? split.indexOf(session.id) : null) : null,
     };
   });
@@ -4009,7 +3951,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   event.stopPropagation();
                   if (!target) return;
                   const rect = (host ?? canvasRef.current)?.getBoundingClientRect();
-                  openTerminalMenu(target, rect ? rect.left + 24 : 0, rect ? rect.top + 24 : 0, null);
+                  openTerminalMenu(target, rect ? rect.left + 24 : 0, rect ? rect.top + 24 : 0, null, true);
                 }}
                 onPointerDownCapture={(event) => {
                   const id = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-pane-session]')?.dataset.paneSession : undefined;
@@ -4019,7 +3961,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   event.preventDefault();
                   const id = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-pane-session]')?.dataset.paneSession : undefined;
                   const target = scopedSessions.find((item) => item.id === id) ?? current;
-                  if (target) openTerminalMenu(target, event.clientX, event.clientY);
+                  if (target) openTerminalMenu(target, event.clientX, event.clientY, null, true);
                 }}>
                 {mountedSessions.map((session) => {
                   const pane = visibleIds.indexOf(session.id);
@@ -4181,13 +4123,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         })()}
 
         {((loading && !scopedSessions.length) || (selectedId && !selected)) && <div className={styles.loading} role="status"><span className={styles.loadingMark} aria-hidden="true" /><p>{t('sessions.loading')}</p></div>}
-        {showEmpty && !listError && (() => {
-          const standalone = [...availableProjects.filter((project) => !project.workspaceBacked)].sort((a, b) => (b.lastOpened ?? 0) - (a.lastOpened ?? 0));
-          const emptyProjects = standalone.length >= 4
-            ? standalone.slice(0, 4)
-            : [...standalone, ...[...availableProjects.filter((project) => project.workspaceBacked)].sort((a, b) => (b.lastOpened ?? 0) - (a.lastOpened ?? 0)).slice(0, 4 - standalone.length)];
-          return <WorkbenchEmpty tools={terminalTools} projects={emptyProjects} remoteTargets={remoteTargets.filter((target) => target.enabled)} remoteEnabled={remoteSshEnabled} activeTargetId={activeTargetId} onTargetChange={(targetId) => { setActiveTargetId(targetId); onRemoteTargetChange?.(targetId); }} onManageHosts={() => setHostManagerOpen(true)} onNewSession={openNewSessionDialog} onOpenHome={onOpenHome} />;
-        })()}
+        {showEmpty && !listError && <WorkbenchEmpty tools={terminalTools} projects={availableProjects} remoteTargets={remoteTargets.filter((target) => target.enabled)} remoteEnabled={remoteSshEnabled} activeTargetId={activeTargetId} onTargetChange={(targetId) => { setActiveTargetId(targetId); onRemoteTargetChange?.(targetId); }} onManageHosts={() => setHostManagerOpen(true)} onNewSession={openNewSessionDialog} onOpenHome={onOpenHome} />}
       </section>
     </div>
 
@@ -4206,37 +4142,40 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       const name = toolName(session);
       const handle = handles.current.get(session.id);
       return createPortal(<div ref={menuRef} className={`${rowMenuStyles.rowMenuList} ${styles.contextMenu}`} role="menu" aria-label={menu.kind === 'session' ? t('sessions.sessionMenu', { name }) : t('sessions.terminalMenu')} style={menuBox ?? { top: 0, left: -10000 }} onKeyDown={menuNavigate} onContextMenu={(event) => event.preventDefault()} onClick={() => setMenu(null)}>
-        {menu.kind === 'terminal' ? <>
-          {/* Task display actions: none of them ends a process, writes a repository or approves a review. */}
-          <button role="menuitem" aria-pressed={arrangement.reviewMarks.includes(session.id)} title={arrangement.reviewMarks.includes(session.id) ? t('sessions.taskClearReviewHint') : t('sessions.taskMarkReviewHint')} onClick={() => toggleReviewMark(session.id)}><Icon name="eye" size={14} /><span>{arrangement.reviewMarks.includes(session.id) ? t('sessions.taskClearReview') : t('sessions.taskMarkReview')}</span>{arrangement.reviewMarks.includes(session.id) && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}</button>
-          <button role="menuitem" aria-expanded={detailIds.has(session.id)} onClick={() => toggleSessionDetail(session.id)}><Icon name="branch" size={14} /><span>{t('sessions.taskChanges')}</span></button>
-          <button role="menuitem" title={collapsedIds.has(session.id) ? undefined : t('sessions.taskCollapseHint')} onClick={() => toggleCollapseSession(session.id)}><Icon name="archive" size={14} /><span>{collapsedIds.has(session.id) ? t('sessions.taskRestore') : t('sessions.taskCollapse')}</span></button>
+        {menu.kind === 'terminal' && menu.surface ? <>
+          {/* Right-click on the terminal: only what acts on its text. Session actions stay on the
+              title-bar menu, so a click while selecting can never end, restart or move the session. */}
+          {menu.selection ? <>
+            <button role="menuitem" onClick={() => { handle?.copySelection(); handle?.focus(); }}><Icon name="copy" size={14} /><span>{t('sessions.copySelection')}</span><kbd>{modLabel}+C</kbd></button>
+            <button role="menuitem" onClick={() => { setFindQuery(menu.selection); openFind(); }}><Icon name="search" size={14} /><span className={styles.menuEllipsis}>{t('sessions.findSelection', { text: menu.selection })}</span></button>
+            {session.running && <button role="menuitem" onClick={() => { const text = menu.selection; handle?.copySelection(); setComposerDrafts((current) => ({ ...current, [session.id]: current[session.id] ? `${current[session.id]}\n${text}` : text })); toggleComposer(true); }}><Icon name="pencil" size={14} /><span>{t('sessions.quoteSelection')}</span></button>}
+          </> : <button role="menuitem" onClick={() => handle?.selectAll()}><Icon name="check" size={14} /><span>{t('sessions.selectAll')}</span></button>}
+          {session.running && <button role="menuitem" onClick={() => void pasteIntoSession(session)}><Icon name="clipboard" size={14} /><span>{t('sessions.pasteClipboard')}</span><kbd>{modLabel}+V</kbd></button>}
           <span className={styles.menuDivider} role="separator" />
-          <button role="menuitem" disabled={!menu.hasSelection} onClick={() => { handle?.copySelection(); handle?.focus(); }}><Icon name="copy" size={14} /><span>{t('sessions.copySelection')}</span><kbd>{modLabel}+C</kbd></button>
-          <button role="menuitem" disabled={!session.running} onClick={() => void pasteIntoSession(session)}><Icon name="clipboard" size={14} /><span>{t('sessions.pasteClipboard')}</span><kbd>{modLabel}+V</kbd></button>
-          <button role="menuitem" onClick={() => handle?.selectAll()}><Icon name="check" size={14} /><span>{t('sessions.selectAll')}</span></button>
-          <span className={styles.menuDivider} role="separator" />
-          {session.running && <button role="menuitem" onClick={() => toggleComposer(true)}><Icon name="pencil" size={14} /><span>{t('sessions.composerShort')}</span><kbd>{modLabel}+Shift+M</kbd></button>}
-          <button role="menuitem" onClick={openFind}><Icon name="search" size={14} /><span>{t('sessions.findOutput')}</span><kbd>{modLabel}+Shift+F</kbd></button>
+          {!menu.selection && <button role="menuitem" onClick={openFind}><Icon name="search" size={14} /><span>{t('sessions.findOutput')}</span><kbd>{modLabel}+Shift+F</kbd></button>}
           <button role="menuitem" onClick={() => void copyTerminalOutput(session)}><Icon name="clipboard" size={14} /><span>{t('sessions.copyOutput')}</span></button>
-          {session.directory && <button role="menuitem" onClick={() => void copySessionPath(session)}><Icon name="folder" size={14} /><span>{t('sessions.copyPath')}</span></button>}
-          {session.projectId && !session.projectId.startsWith('remote:') && <button role="menuitem" onClick={() => void native.openProjectDirectory(session.projectId!).catch(() => {})}><Icon name="arrowUpRight" size={14} /><span>{t('sessions.openFolder')}</span></button>}
           <button role="menuitem" title={t('sessions.clearViewHint')} onClick={() => { handle?.clear(); handle?.focus(); }}><Icon name="trash" size={14} /><span>{t('sessions.clearView')}</span></button>
           <span className={styles.menuDivider} role="separator" />
-          {session.running && <button role="menuitem" onClick={() => void sendToSession(session, '\x03')}><Icon name="square" size={12} /><span>{t('sessions.sendInterrupt')}</span></button>}
+          <button role="menuitem" onClick={(event) => { event.stopPropagation(); refreshLedger(); setMenu({ kind: 'terminal', sessionId: session.id, x: menu.x, y: menu.y, trigger: null, hasSelection: false, selection: '', surface: false }); }}><Icon name="more" size={14} /><span>{t('sessions.moreSessionActions')}</span></button>
+        </> : menu.kind === 'terminal' ? <>
+          {/* Title-bar menu: the next step for this session. Text actions live on right-click,
+              list arrangement on the session list, the interrupt and display on the toolbar. */}
+          {session.directory && <button role="menuitem" disabled={!!reviewBusy || !!busy} title={t('sessions.reviewHint')} onClick={() => { selectSession(session.id, false); void startReview(session); }}><Icon name="branch" size={14} /><span>{t('sessions.taskChanges')}</span></button>}
+          {session.projectId && !session.projectId.startsWith('remote:') && <button role="menuitem" onClick={() => void native.openProjectDirectory(session.projectId!).catch(() => {})}><Icon name="arrowUpRight" size={14} /><span>{t('sessions.openFolder')}</span></button>}
+          {session.directory && <button role="menuitem" onClick={() => void copySessionPath(session)}><Icon name="folder" size={14} /><span>{t('sessions.copyPath')}</span></button>}
+          <span className={styles.menuDivider} role="separator" />
           <button role="menuitem" disabled={!!busy} title={!session.running ? t('sessions.restartHint') : undefined} onClick={() => void restartOrCloneSession(session, !session.running)}><Icon name={session.running ? 'plus' : 'refresh'} size={14} /><span>{session.running ? t('sessions.cloneSession') : t('sessions.restartSession')}</span></button>
-          <button role="menuitem" onClick={() => setAppearanceOpen(true)}><Icon name="sliders" size={14} /><span>{t('sessions.displaySettings')}</span></button>
           {!session.projectId?.startsWith('remote:') && <button role="menuitem" onClick={() => openWorktreeSetup(setupDirectoryOf(session))}><Icon name="gitWorktree" size={14} /><span>{t('sessions.worktreeSetupOpen')}</span>{ledger.length > 0 && <span className={styles.menuCount}>{ledger.length}</span>}</button>}
           <span className={styles.menuDivider} role="separator" />
           <button role="menuitem" data-danger="true" disabled={!!busy} onClick={() => void endSession(session)}><Icon name="close" size={14} /><span>{session.running ? t('sessions.end') : t('sessions.closeTab')}</span></button>
         </> : <>
           <button role="menuitem" aria-pressed={pinnedIds.has(session.id)} onClick={() => togglePinSession(session.id)}><Icon name="pin" size={14} /><span>{pinnedIds.has(session.id) ? t('sessions.unpinSession') : t('sessions.pinSession')}</span>{pinnedIds.has(session.id) && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}</button>
+          <button role="menuitem" aria-pressed={arrangement.reviewMarks.includes(session.id)} title={arrangement.reviewMarks.includes(session.id) ? t('sessions.taskClearReviewHint') : t('sessions.taskMarkReviewHint')} onClick={() => toggleReviewMark(session.id)}><Icon name="eye" size={14} /><span>{arrangement.reviewMarks.includes(session.id) ? t('sessions.taskClearReview') : t('sessions.taskMarkReview')}</span>{arrangement.reviewMarks.includes(session.id) && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}</button>
+          <button role="menuitem" title={collapsedIds.has(session.id) ? undefined : t('sessions.taskCollapseHint')} onClick={() => toggleCollapseSession(session.id)}><Icon name="archive" size={14} /><span>{collapsedIds.has(session.id) ? t('sessions.taskRestore') : t('sessions.taskCollapse')}</span></button>
           {peekOffered && session.id !== selectedId && <button role="menuitem" onClick={() => openPeek(session.id)}><Icon name="eye" size={14} /><span>{t('sessions.peekSession')}</span></button>}
           {splitRoom && menu.besideId && sessions.some((item) => item.id === menu.besideId) && <button role="menuitem" onClick={() => { setPeekSessionId(null); setSelectedId(session.id); setSplit([menu.besideId!, session.id]); }}><Icon name="columns" size={14} /><span>{t('sessions.openBeside', { name: toolName(sessions.find((item) => item.id === menu.besideId)!) })}</span></button>}
           <span className={styles.menuDivider} role="separator" />
-          {session.running && <button role="menuitem" onClick={() => void sendToSession(session, '\x03')}><Icon name="square" size={12} /><span>{t('sessions.sendInterrupt')}</span></button>}
           <button role="menuitem" disabled={!!busy} onClick={() => void restartOrCloneSession(session, !session.running)}><Icon name={session.running ? 'plus' : 'refresh'} size={14} /><span>{session.running ? t('sessions.cloneSession') : t('sessions.restartSession')}</span></button>
-          <button role="menuitem" onClick={() => void copyTerminalOutput(session)}><Icon name="clipboard" size={14} /><span>{t('sessions.copyOutput')}</span></button>
           {session.directory && <button role="menuitem" onClick={() => void copySessionPath(session)}><Icon name="folder" size={14} /><span>{t('sessions.copyPath')}</span></button>}
           {session.projectId && !session.projectId.startsWith('remote:') && <button role="menuitem" onClick={() => void native.openProjectDirectory(session.projectId!).catch(() => {})}><Icon name="arrowUpRight" size={14} /><span>{t('sessions.openFolder')}</span></button>}
           {/* The short row menu only surfaces worktree settings when there is something to clean up. */}
@@ -4259,15 +4198,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         })}
       </div>
     </GuideDialog>
-    <GuideDialog open={newDialogOpen} title={t('sessions.newSessionDialogTitle')} hint={t('sessions.newSessionDialogHint')} wide onClose={() => setNewDialogOpen(false)}>
+    {newDialogOpen && <GuideDialog open title={t('sessions.newSessionDialogTitle')} hint={t('sessions.newSessionDialogHint')} wide onClose={() => setNewDialogOpen(false)}>
       <div className={styles.dialogForm}>
         {dialogError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{dialogError}</p></div></div>}
-        {/* The task comes first: a compact summary below carries the context a launch uses. */}
-        <div className={styles.dialogField} data-task-field="">
-          <span className={styles.fieldLabel}>{t('sessions.initialPromptLabel')}</span>
-          <textarea rows={3} autoFocus className={styles.dialogTextarea} value={initialPrompt} placeholder={t('sessions.newSessionTaskPlaceholder')} aria-label={t('sessions.initialPromptLabel')} onChange={(event) => setInitialPrompt(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing && !launchingNew && effectiveLaunchToolId) { event.preventDefault(); void launchFromDialog(); } }} />
-          <PromptPicker active={active && newDialogOpen} className={styles.dialogPrompts} labelClassName={styles.dialogPromptLabel} context={dialogPromptContext} sourceKey={`new:${workspaceValue}:${activeTargetId}`} workspaces={businessWorkspaces} onPick={(prompt) => setInitialPrompt(previous => previous ? `${previous}\n${prompt.body}` : prompt.body)} />
-        </div>
         <div className={styles.dialogPrimaryGrid}>
           <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.pickToolLabel')}</span><FilterSelect label={t('sessions.pickToolLabel')} value={effectiveLaunchToolId} options={cliSelectOptions} placeholder={t('home.launcher.pickTool')} searchLabel={t('sessions.searchCliTool')} onChange={pickLaunchTool} />
             {/* One click for the CLIs used most; the list above still reaches every tool. */}
@@ -4290,6 +4223,12 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           }} /></div>
         </div>
         {workspaceUnavailable && <p className={styles.baseError} role="alert" data-workspace-unavailable=""><Icon name="alert" size={14} /><span>{t('sessions.workspaceUnavailable', { path: workspaceValueLabel(workspaceValue) })} {t('sessions.workspaceUnavailableFix')}</span></p>}
+        {/* The task is optional, so it follows the choices that every launch needs. */}
+        <div className={styles.dialogField} data-task-field="">
+          <span className={styles.fieldLabel}>{t('sessions.initialPromptLabel')}</span>
+          <textarea rows={2} autoFocus className={styles.dialogTextarea} value={initialPrompt} placeholder={t('sessions.newSessionTaskPlaceholder')} aria-label={t('sessions.initialPromptLabel')} onChange={(event) => setInitialPrompt(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing && !launchingNew && effectiveLaunchToolId) { event.preventDefault(); void launchFromDialog(); } }} />
+          <PromptPicker active={active && newDialogOpen} className={styles.dialogPrompts} labelClassName={styles.dialogPromptLabel} context={dialogPromptContext} sourceKey={`new:${workspaceValue}:${activeTargetId}`} workspaces={businessWorkspaces} onPick={(prompt) => setInitialPrompt(previous => previous ? `${previous}\n${prompt.body}` : prompt.body)} />
+        </div>
         {/* Where this launch runs belongs to the summary; only its details fold away. */}
         {!activeRemoteTarget && !resumeLatest && <div className={styles.dialogField} data-place-field="">
           <div className={styles.placeRow}>
@@ -4310,15 +4249,25 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
             {baseStale && <span className={styles.baseHint} role="status">{t('sessions.worktreeBaseStale')}</span>}
           </div>}
         </div>}
+        <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.launchModeLabel')}</span><div className={styles.modeCards} role="radiogroup" aria-label={t('sessions.launchModeLabel')}>
+          <button type="button" role="radio" aria-checked={launchMode === 'normal'} className={styles.modeCard} onClick={() => { launchModeTouched.current = true; setLaunchMode('normal'); }}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="shield" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeNormal')}</strong><small>{t('sessions.modeNormalDesc')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
+          <button type="button" role="radio" aria-checked={launchMode === 'yolo'} disabled={!selectedLaunchTool?.yoloAvailable} title={!selectedLaunchTool?.yoloAvailable ? t('sessions.yoloUnsupported') : undefined} className={styles.modeCard} onClick={() => { launchModeTouched.current = true; setLaunchMode('yolo'); }}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="sparkle" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeYolo')}</strong><small>{selectedLaunchTool?.yoloAvailable ? t('sessions.modeYoloDesc') : t('sessions.yoloUnsupported')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
+        </div></div>
         {/* Advanced options fold away; every edited value stays in the dialog's own state. */}
-        <div className={styles.advancedRow}>
-          <button type="button" className={styles.advancedToggle} aria-expanded={advancedOpen} aria-controls="new-session-advanced" onClick={() => setAdvancedOpen((value) => !value)}>
-            <Icon name={advancedOpen ? 'chevronDown' : 'chevronRight'} size={12} />
-            <span>{t('sessions.newSessionAdvanced')}</span>
-            <small>{t('sessions.newSessionAdvancedHint')}</small>
-          </button>
-        </div>
-        {advancedOpen && <div id="new-session-advanced" className={styles.advancedPanel}>
+        {/* Only offer the fold when it holds something for this launch. */}
+        {(() => {
+          const worktreeOptions = !activeRemoteTarget && !resumeLatest && dialogPlace === 'worktree' && !!dialogPrepareDirectory();
+          const resumeOption = !!selectedLaunchTool?.resumeLatestAvailable && !activeRemoteTarget;
+          if (!worktreeOptions && !resumeOption) return null;
+          return <div className={styles.advancedRow}>
+            <button type="button" className={styles.advancedToggle} aria-expanded={advancedOpen} aria-controls="new-session-advanced" onClick={() => setAdvancedOpen((value) => !value)}>
+              <Icon name={advancedOpen ? 'chevronDown' : 'chevronRight'} size={12} />
+              <span>{t('sessions.newSessionAdvanced')}</span>
+              <small>{worktreeOptions ? t('sessions.newSessionAdvancedHint') : t('sessions.resumeLatest')}</small>
+            </button>
+          </div>;
+        })()}
+        {advancedOpen && (!activeRemoteTarget && (!!selectedLaunchTool?.resumeLatestAvailable || (!resumeLatest && dialogPlace === 'worktree' && !!dialogPrepareDirectory()))) && <div id="new-session-advanced" className={styles.advancedPanel}>
           {!activeRemoteTarget && !resumeLatest && dialogPlace === 'worktree' && (() => {
             const repoDirectory = dialogPrepareDirectory();
             if (!repoDirectory) return null;
@@ -4377,25 +4326,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           })()}
           {selectedLaunchTool?.resumeLatestAvailable && !activeRemoteTarget && <label className={styles.checkboxRow}><input type="checkbox" checked={resumeLatest} onChange={(event) => setResumeLatest(event.target.checked)} /><span>{t('sessions.resumeLatest')}</span></label>}
         </div>}
-        <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.launchModeLabel')}</span><div className={styles.modeCards} role="radiogroup" aria-label={t('sessions.launchModeLabel')}>
-          <button type="button" role="radio" aria-checked={launchMode === 'normal'} className={styles.modeCard} onClick={() => { launchModeTouched.current = true; setLaunchMode('normal'); }}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="shield" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeNormal')}</strong><small>{t('sessions.modeNormalDesc')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
-          <button type="button" role="radio" aria-checked={launchMode === 'yolo'} disabled={!selectedLaunchTool?.yoloAvailable} title={!selectedLaunchTool?.yoloAvailable ? t('sessions.yoloUnsupported') : undefined} className={styles.modeCard} onClick={() => { launchModeTouched.current = true; setLaunchMode('yolo'); }}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="sparkle" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeYolo')}</strong><small>{selectedLaunchTool?.yoloAvailable ? t('sessions.modeYoloDesc') : t('sessions.yoloUnsupported')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
-        </div></div>
-        <div className={styles.dialogSummary} role="group" aria-label={t('sessions.newSessionContextLabel')}>{effectiveLaunchToolId && <span className={styles.dialogSummaryIcon}><ToolIcon toolId={effectiveLaunchToolId} size={20} /></span>}<span>{(() => {
-          const place = workspaceValue.startsWith('project:') ? availableProjects.find((item) => 'project:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('remote:') ? availableRemoteProjects.find((item) => 'remote:' + item.id === workspaceValue)?.name ?? t('sessions.workspaceHome') : workspaceValue.startsWith('custom:') ? shortPath(displayPath(workspaceValue.slice('custom:'.length))) : workspaceValue.startsWith('rpath:') ? remoteBaseName(workspaceValue.slice('rpath:'.length)) || workspaceValue.slice('rpath:'.length) : t('sessions.workspaceHome');
-          const values = { tool: selectedLaunchTool?.name ?? '', place, mode: modeLabel(launchMode) };
-          // The summary names the worktree only once its base is confirmed, so it never
-          // promises a creation the launch would refuse.
-          const inWorktree = !activeRemoteTarget && !resumeLatest && dialogPlace === 'worktree' && !!dialogPrepareDirectory() && !!basePreview?.available && !!basePreview.reference;
-          if (!inWorktree) return t('sessions.launchSummary', values);
-          const branch = branchDraft.trim() || basePreview.proposedBranch;
-          return branch
-            ? t('sessions.launchSummaryWorktree', { ...values, branch, base: basePreview.reference })
-            : t('sessions.launchSummaryWorktreeNoBranch', { ...values, base: basePreview.reference });
-        })()}</span><Icon name="terminal" size={16} /></div>
         <div className={styles.dialogActions}><Button onClick={() => setNewDialogOpen(false)}>{t('common.dialog.cancel')}</Button><Button variant="ghost" className={styles.dialogBlank} title={t('sessions.newSessionBlankHint', { tool: selectedLaunchTool?.name ?? '' })} disabled={launchingNew || !effectiveLaunchToolId} onClick={() => void launchFromDialog({ blank: true })}>{t('sessions.newSessionBlank')}</Button><Button variant="primary" className={styles.dialogPrimary} data-dialog-save disabled={launchingNew || !effectiveLaunchToolId || workspaceUnavailable} onClick={() => void launchFromDialog()} icon={<Icon name="play" size={14} />}>{launchingNew ? t('sessions.startingSession') : t('sessions.startInWorkbench')}</Button></div>
       </div>
-    </GuideDialog>
+    </GuideDialog>}
     {worktreeSetupDialog()}
     {remotePicker.element}
     <GuideDialog open={hostManagerOpen} title={t('sessions.manageHosts')} hint={t('settings.remoteSsh.description')} onClose={() => { setHostManagerOpen(false); setReload((value) => value + 1); }}><RemoteSshSettings enabled={remoteSshEnabled} busy={false} onChange={() => {}} showHosts showToggle={false} /></GuideDialog>
