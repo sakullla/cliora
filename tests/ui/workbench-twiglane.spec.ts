@@ -9,8 +9,8 @@ const NEXT = '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d';
  * reviewId rules as the Rust registry (only the latest review of a session is
  * accepted) and records every call the tests assert on.
  */
-async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair' | 'remote'; tool?: 'claude_code' | 'codex'; replay?: string; ended?: boolean; resume?: 'available' | 'unsupported'; remotePath?: string } = {}) {
-  await page.addInitScript(({ base, pairing, tool, replay, ended, resume, remotePath }) => {
+async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair' | 'remote'; tool?: 'claude_code' | 'codex'; replay?: string; ended?: boolean; resume?: 'available' | 'unsupported'; remotePath?: string; coldReview?: { reviewId: string; sessionId: string; headOid: string } } = {}) {
+  await page.addInitScript(({ base, pairing, tool, replay, ended, resume, remotePath, coldReview }) => {
     type Review = {
       reviewId: string;
       sessionId: string;
@@ -31,7 +31,7 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
     if (pairingRemote) {
       try { localStorage.setItem('cliora:remote-target', 'r1'); } catch { /* storage may be unavailable */ }
     }
-    const sessions = (pairing === 'pair'
+    const sessions = (coldReview ? [] : pairing === 'pair'
       ? [
           { id: 's1', toolId: 'claude_code', projectId: null, directory: 'C:/work/alpha', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() - 60_000 },
           { id: 's2', toolId: 'codex', projectId: null, directory: 'C:/work/beta', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() - 30_000 },
@@ -47,6 +47,7 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
       reviews: {} as Record<string, Review>,
       latest: {} as Record<string, string>,
       starts: [] as Array<{ sessionId: string; reviewId: string }>,
+      reviewReads: [] as string[],
       links: [] as string[],
       calls: [] as string[],
       sessions,
@@ -69,6 +70,15 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
       restoredId: 's1b',
       restoreCalls: [] as string[],
     };
+    if (coldReview) {
+      harness.reviews[coldReview.reviewId] = {
+        reviewId: coldReview.reviewId, sessionId: coldReview.sessionId, worktreePath: remotePath,
+        protocolVersion: 1, baseline: base, status: 'accepted', reason: null, outcome: null, headOid: null, createdAt: 1,
+      };
+      harness.latest[coldReview.sessionId] = coldReview.reviewId;
+      harness.headOid = coldReview.headOid;
+      harness.files = 0;
+    }
     const bridge: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } = { handlers: [], listens: {} };
     const names: Record<string, string> = { claude_code: 'Claude Code', codex: 'Codex' };
     Object.assign(window, {
@@ -187,6 +197,7 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
             return { ...review };
           }
           if (command === 'twiglane_review_state') {
+            harness.reviewReads.push(String(args.sessionId));
             const reviewId = harness.latest[args.sessionId];
             return reviewId ? { ...harness.reviews[reviewId] } : null;
           }
@@ -231,7 +242,7 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
             }
             if (remote) {
               review.resultRevision = Number(query.get('resultRevision'));
-              review.remoteCheck = {sessionId:review.sessionId, worktreePath:review.worktreePath, headOid:harness.headOid, uncommittedFiles:harness.files, state:'ready'};
+              review.remoteCheck = {sessionId:review.sessionId, worktreePath:review.worktreePath, headOid:harness.headOid, uncommittedFiles:harness.files, sessionBase:review.baseline, state:'ready'};
             }
             review.status = 'returned';
             review.outcome = query.get('outcome');
@@ -240,7 +251,11 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
             review.meta = meta;
             return { kind: 'returned', remoteTargetId: remote ? 'r1' : undefined, sessionId: review.sessionId, reviewId, outcome: review.outcome, headOid: review.headOid, worktreeState, reason: null };
           }
-          if (command === 'plugin:deep-link|get_current') return null;
+          if (command === 'plugin:deep-link|get_current') {
+            if (!coldReview) return null;
+            const args = new URLSearchParams({ v: '1', event: 'returned', outcome: 'merged', worktreeState: 'clean', resultRevision: '3', ...coldReview });
+            return ['cliora://remote-review/?' + args.toString()];
+          }
           if (['write_workbench_session', 'resize_workbench_session'].includes(command)) return null;
           if (command === 'plugin:event|listen') { bridge.listens[args.event] = args.handler; return args.handler; }
           if (command === 'plugin:event|unlisten') return null;
@@ -248,7 +263,7 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
         },
       },
     });
-  }, { base: BASE, pairing: options.sessions ?? 'single', tool: options.tool ?? 'claude_code', replay: options.replay ?? 'ready', ended: options.ended === true, resume: options.resume ?? 'available', remotePath: options.remotePath ?? '/srv/alpha' });
+  }, { base: BASE, pairing: options.sessions ?? 'single', tool: options.tool ?? 'claude_code', replay: options.replay ?? 'ready', ended: options.ended === true, resume: options.resume ?? 'available', remotePath: options.remotePath ?? '/srv/alpha', coldReview: options.coldReview ?? null });
 }
 
 async function openWorkbench(page: Page) {
@@ -695,6 +710,31 @@ test('a Windows remote review can resend the exact merged URL after an unverifie
   await expect(page.getByText('Twiglane 已合入 ' + NEXT.slice(0, 7) + '。').first()).toBeVisible();
   const repeats = await page.evaluate(value => (window as unknown as {__harness: {links: string[]}}).__harness.links.filter(link => link === value).length, url);
   expect(repeats).toBe(2);
+  await expect(page.getByRole('dialog', { name: 'Twiglane 审查结果' })).toHaveCount(0);
+});
+
+test('a Windows cold-start return opens the original saved review without a live tab', async ({ page }) => {
+  const repository = 'D:/目录 with spaces/alpha';
+  const sessionId = '998aaaaa-1111-4222-8333-444444444444';
+  await installDesktop(page, {
+    sessions: 'remote', remotePath: repository,
+    coldReview: { sessionId, reviewId: 'f10ccccc-1111-4222-8333-444444444444', headOid: NEXT },
+  });
+  await page.goto('/');
+  const result = page.getByRole('dialog', { name: 'Twiglane 审查结果' });
+  await expect(result.getByRole('status')).toHaveText('Twiglane 已合入 ' + NEXT.slice(0, 7) + '。');
+  await expect(result).toContainText('Build box');
+  await expect(result.getByText(repository, {exact: true})).toBeVisible();
+  await expect(result.getByText(sessionId, {exact: true})).toBeVisible();
+  await expect(result.getByText(NEXT, {exact: true})).toBeVisible();
+  const reads = await page.evaluate(() => (window as unknown as {
+    __harness: { reviewReads: string[]; calls: string[]; sessions: unknown[] };
+  }).__harness);
+  expect(reads.reviewReads).toEqual([sessionId]);
+  expect(reads.sessions).toEqual([]);
+  expect(reads.calls.filter(command => /^(launch_|reattach_|restore_workbench)/.test(command))).toEqual([]);
+  await page.keyboard.press('Escape');
+  await expect(result).toHaveCount(0);
 });
 
 /** A review link may only read: it never starts a session and never writes Git. */

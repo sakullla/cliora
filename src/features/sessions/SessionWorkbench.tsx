@@ -1,5 +1,6 @@
 import { changedWorkspace, repositoryPlaces, WORKSPACES_CHANGED } from '../workspaces/WorkspaceBrowser';
 import { FOCUS_REFRESH_INTERVAL } from '../../lib/workspaceEvents';
+import { describeReturnedReview } from './TwiglaneReviewResult';
 import type { BusinessWorkspace, WorkspaceSelection, WorkspaceSessionContext } from '../../types/workspaces';
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -368,16 +369,6 @@ function reviewResultKey(review: TwiglaneReviewState): string {
   return `${review.reviewId}:${review.resultRevision ?? 0}`;
 }
 
-function sameReviewCheckout(a: string | null, b: string): boolean {
-  if (!a) return false;
-  const key = (path: string) => {
-    if (/^[a-z]:[\\/]/i.test(path) || /^(?:\\\\|\/\/)[^\\/]+[\\/][^\\/]+/.test(path)) {
-      return path.replace(/^\\\\\?\\/, '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-    }
-    return path.replace(/\/+$/, '') || '/';
-  };
-  return key(a) === key(b);
-}
 
 function firstTaskLine(text: string | null | undefined): string | null {
   const line = text?.split(/\r?\n/).map((item) => item.trim()).find(Boolean);
@@ -2684,11 +2675,6 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   function describeReview(review: TwiglaneReviewState | null, status: WorkbenchCodeStatus | null, unknownStatus: boolean) {
     if (!review) return { tone: 'idle', text: t('sessions.reviewIdle') };
     if (review.status === 'preparing') return { tone: 'pending', text: t('sessions.reviewRemotePreparing') };
-    if (review.protocolVersion === 1 && review.status === 'returned') {
-      status = review.remoteCheck ?? null;
-      if (status?.reason === 'invalid_baseline') return { tone: 'unconfirmed', text: t('sessions.reviewInvalidBaseline') };
-      unknownStatus = !status || status.state !== 'ready';
-    }
     if (review.status === 'opening' && review.protocolVersion === 1 && reviewClock - review.createdAt >= REVIEW_UNKNOWN_MS) {
       return { tone: 'pending', text: t('sessions.reviewRemoteWaiting') };
     }
@@ -2701,41 +2687,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     if (review.status === 'rejected') {
       return { tone: 'rejected', text: [t('sessions.reviewRejected'), reviewReasonText(t, review.reason)].join(' · ') };
     }
-    // 每一个 returned（包括 reviewed）都用真实 Git 状态复核：outcome、headOid 与 worktreeState
-    // 都只是待复核声明。读不到真实状态就是未确认，绝不显示成 0 个文件或成功。
-    const files = !unknownStatus && status?.state === 'ready' && typeof status.uncommittedFiles === 'number'
-      ? status.uncommittedFiles
-      : null;
-    if (files === null || !status || !sameReviewCheckout(status.worktreePath, review.worktreePath)) return { tone: 'unconfirmed', text: t('sessions.reviewReturnedStatusUnknown') };
-    if (review.protocolVersion === 1 && review.headOid && review.headOid !== status.headOid) {
-      return { tone: 'unconfirmed', text: t('sessions.reviewUnconfirmed') };
-    }
-    const merged = review.outcome === 'merged';
-    if (review.outcome === 'committed' || merged) {
-      // 提交/合入声明：OID 必须与基线不同且等于当前 HEAD。
-      const confirmed = !!review.headOid
-        && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(review.headOid)
-        && review.headOid !== review.baseline
-        && status.headOid === review.headOid;
-      if (!confirmed) return { tone: 'unconfirmed', text: t('sessions.reviewUnconfirmed') };
-    } else if (review.outcome !== 'reviewed') {
-      return { tone: 'unconfirmed', text: t('sessions.reviewReturnedStatusUnknown') };
-    }
-    // 工作区声明与真实读取不一致也是未确认；unknown 只表示声明未知，以真实读取为准。
-    const claim = review.worktreeState;
-    if ((claim === 'clean' && files > 0) || (claim === 'dirty' && files === 0)) {
-      return { tone: 'unconfirmed', text: t('sessions.reviewUnconfirmedWorktree') };
-    }
-    if (review.outcome === 'reviewed') {
-      return files > 0
-        ? { tone: 'returned', text: t('sessions.reviewReturnedDirty', { count: files }) }
-        : { tone: 'returned', text: t('sessions.reviewReturnedClean') };
-    }
-    const oid = review.headOid!.slice(0, 7);
-    const key = files > 0
-      ? (merged ? 'sessions.reviewReturnedMergedDirty' : 'sessions.reviewReturnedCommittedDirty')
-      : (merged ? 'sessions.reviewReturnedMerged' : 'sessions.reviewReturnedCommitted');
-    return { tone: 'confirmed', text: t(key, { oid, count: files }) };
+    return describeReturnedReview(t, review, status, unknownStatus);
   }
 
   /** 真实状态读不到时显示"未知"，绝不显示成 0 个文件。 */

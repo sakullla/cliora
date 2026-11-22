@@ -18,6 +18,17 @@
 }
 .shell[hidden] { display: none; }
 
+.savedReviewSummary { margin: 0 0 var(--space-4); }
+.savedReviewDetails {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+}
+.savedReviewDetails dt { color: var(--text-3); }
+.savedReviewDetails dd { margin: 0; overflow-wrap: anywhere; user-select: text; }
+.savedReviewRetry { margin-top: var(--space-4); }
+
 /* The rail is portaled into the app sidebar, outside .root, so it carries its own inks. */
 .root,
 .rail {

@@ -209,6 +209,8 @@ Twiglane 发送 `cliora://remote-review?v=1&event=returned`，并带原 `reviewI
 
 Cliora 在打开 Twiglane 之前持久保存当前审查来源。返回时按原协议身份、远端会话、项目、主机和工作树重新核验，也适用于 Cliora 进程重启或工作台重新附着后更换本地标签的情况。成功复核 HEAD、基线和工作区状态后写入收据。旧来源和逆序结果不会覆盖新结果。未确认的结果允许重送同一序号和完全相同的载荷，已保存的重送不再次写入。
 
+收到回传时，原工作台标签可用就聚焦该标签。标签已不存在时，Cliora 按原会话和审查标识读取持久记录，在结果窗口显示原主机、工作树、会话和复核状态。
+
 `cliora --twiglane-remote-v1 version` 的 `capabilities` 包含 `reviewReceipt` 时，Twiglane 可调用以下只读确认。
 
 ```text

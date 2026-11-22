@@ -30,6 +30,7 @@ const RemoteSshSettings = lazy(() => import('./features/settings/GeneralSettings
 const SessionWorkbench = lazy(() => import('./features/sessions/SessionWorkbench').then(module => ({ default: module.SessionWorkbench })));
 import type { RemoteWorkbenchIntent } from './features/sessions/workbenchLaunch';
 import type { WorkbenchRailLayout } from './features/sessions/SessionWorkbench';
+import { TwiglaneReviewResult } from './features/sessions/TwiglaneReviewResult';
 import { ManagedTools } from './features/home/ManagedTools';
 import { ProjectLauncher } from './features/home/ProjectLauncher';
 import { OnboardingCard } from './features/home/OnboardingCard';
@@ -248,6 +249,7 @@ export default function App() {
     setIncomingManifest(current => current === preview ? null : current);
   }, []);
   const [reviewSignal, setReviewSignal] = useState<TwiglaneReviewSignal | null>(null);
+  const [savedReview, setSavedReview] = useState<{ sessionId: string; reviewId: string; targetId: string; intent: number } | null>(null);
   // 收到的一批审阅意见只用于预览；发送必须由用户在原任务里再次确认。
   const [feedbackPreview, setFeedbackPreview] = useState<TwiglaneFeedbackPreview | null>(null);
   const [remoteTargets, setRemoteTargets] = useState<RemoteTarget[]>([]);
@@ -517,13 +519,17 @@ export default function App() {
           if (intent !== returnIntent) return;
           if (!active) return;
           if (!available) {
-            // 远端来源独立于当前工作台连接。重新附着后会读取已保存的原任务状态。
-            if (outcome.remoteTargetId) await transitionRef.current('sessions', outcome.remoteTargetId);
+            if (outcome.remoteTargetId && outcome.reviewId) {
+              setSavedReview({ sessionId, reviewId: outcome.reviewId, targetId: outcome.remoteTargetId, intent });
+            }
             else showReviewExpired();
             return;
           }
           if (!await transitionRef.current('sessions', outcome.remoteTargetId ?? 'local')) return;
-          if (active && intent === returnIntent) openWorkbenchSession(sessionId);
+          if (active && intent === returnIntent) {
+            setSavedReview(null);
+            openWorkbenchSession(sessionId);
+          }
           return;
         }
         setReviewSignal((current) => ({ sessionId, token: (current?.token ?? 0) + 1 }));
@@ -1290,5 +1296,7 @@ export default function App() {
       <div hidden={settingsTab !== 'migration'}>{hasVisited('settings:migration') && <Suspense fallback={<PageSkeleton />}><MigrationSettings active={settingsOpen && settingsTab === 'migration'} onImported={() => void refreshAfterImport()} /></Suspense>}</div>
     </>}
   </SettingsModal>
+  {savedReview && <TwiglaneReviewResult key={savedReview.intent} sessionId={savedReview.sessionId} reviewId={savedReview.reviewId}
+    host={remoteTargets.find(target => target.id === savedReview.targetId)?.name ?? savedReview.targetId} onClose={() => setSavedReview(null)} />}
   {nativeAvailable && bootstrap.preferences.remote_ssh_enabled && <RemoteWriteRecovery target={remoteTargets.find(item => item.id === remoteTargetId) ?? null} />}<CommandPalette open={paletteOpen} commands={commands} sourceFailed={paletteSourceFailed} onRetrySources={() => setPaletteReload((value) => value + 1)} onClose={() => setPaletteOpen(false)} /><ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} /><ConfirmationHost /></ToolIconsContext></ToastScope>;
 }
