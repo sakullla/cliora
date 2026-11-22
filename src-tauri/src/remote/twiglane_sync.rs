@@ -1,4 +1,4 @@
-//! Cross-application host sync (host-sync v1, R4/R7) on Cliora's side.
+//! Cross-application host sync (host-sync v2, R4/R7) on Cliora's side.
 //!
 //! The same headless contract Twiglane implements lives here: Twiglane and Cliora
 //! each expose one "--host-sync-v1" entry point that works with the desktop closed.
@@ -8,14 +8,30 @@
 //! really missing or different - the password itself, which goes straight to the
 //! local credential store. Private key material is never transferred, only paths.
 //!
+//! The wire format is v2 and has exactly one shape: the action name lives in argv,
+//! every parameter and every secret travels on one stdin JSON line, so a session
+//! reference never shows up in `ps` or a process audit. An argv carrying more than
+//! the action name (plus the peer program path for `receive`) is rejected with
+//! `host_sync_argv_rejected`. Versioning is used to *refuse* a mismatched peer, not
+//! to adapt to it: a caller reads `version` first and, if the peer lacks
+//! `stdinArgs`, answers `host_sync_peer_protocol_unsupported` without ever issuing
+//! a parameterised call.
+//!
+//! This version has no confirmation-ticket gate: a password leaves this side only
+//! on the private `fetch` pipe, and the one-shot `confirm` ticket flow is
+//! Twiglane's own implementation. `version` therefore advertises `stdinArgs` only,
+//! because the capability list must never name a guarantee this side does not
+//! honour.
+//!
 //! Differences from Twiglane's implementation come from the store: Cliora keeps
 //! targets in SQLite, so the cross-application identity lives in its own table and
 //! a link edit never rewrites a target row or its revision (updated_at).
 
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::OptionalExtension;
@@ -32,13 +48,24 @@ use super::{password, RemoteTarget};
 /// Protocol flag; both applications answer the same name so a peer only has to
 /// know the other side's executable path.
 pub const FLAG: &str = "--host-sync-v1";
-const PROTOCOL: u64 = 1;
+/// Wire protocol version.
+///
+/// v2 has exactly one wire shape: the action name is in argv, parameters and
+/// secrets only on stdin, and any extra argv entry is `host_sync_argv_rejected`.
+/// The version exists to *refuse* a mismatched peer rather than accommodate it:
+/// a caller reads `version` first and, when the peer does not advertise
+/// `stdinArgs`, answers `host_sync_peer_protocol_unsupported`. Until both sides
+/// speak v2, bidirectional sync stays unavailable.
+const PROTOCOL: u64 = 2;
 const KIND: &str = "host-sync-v1";
 const TTL_SECONDS: u64 = 120;
 const MAX_CHECKS: u32 = 8;
 const MAX_FETCHES: u32 = 2;
 const MAX_SESSIONS: usize = 16;
 const MAX_FIELD: usize = 4096;
+/// Upper bound for the one parameter line on stdin: only identifiers and a
+/// one-shot challenge travel there, far below the session file size.
+const MAX_REQUEST_LINE: usize = 8192;
 
 type Result<T> = std::result::Result<T, &'static str>;
 
@@ -541,6 +568,10 @@ trait Peer {
 
 struct HelperPeer {
     program: PathBuf,
+    /// Whether the peer speaks host-sync v2. Probed with a read-only `version`
+    /// call before the first action and cached: a v1 peer only parses positional
+    /// argv parameters, and this side now only sends parameters on stdin.
+    probe: OnceLock<bool>,
 }
 
 fn first_json_line(bytes: &[u8]) -> Result<Value> {
@@ -556,9 +587,28 @@ async fn read_reply(pipe: impl tokio::io::AsyncRead + Unpin) -> Result<Vec<u8>> 
     Ok(bytes)
 }
 
-async fn bounded_reply(command: Command, deadline: std::time::Duration) -> Result<(std::process::ExitStatus, Vec<u8>, Vec<u8>)> {
+/// Run one helper child. `stdin_line` of `None` keeps stdin on null: that is only
+/// used for the read-only `version` probe, because a peer that never reads stdin
+/// would otherwise just see a broken pipe.
+async fn bounded_reply(
+    command: Command,
+    deadline: std::time::Duration,
+    stdin_line: Option<&str>,
+) -> Result<(std::process::ExitStatus, Vec<u8>, Vec<u8>)> {
     let mut child = tokio::process::Command::from(command).kill_on_drop(true)
-        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|_| "host_sync_unavailable")?;
+        .stdin(if stdin_line.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|_| "host_sync_unavailable")?;
+    if let Some(line) = stdin_line {
+        use tokio::io::AsyncWriteExt;
+        let mut stdin = child.stdin.take().ok_or("host_sync_unavailable")?;
+        let written = stdin.write_all(line.as_bytes()).await;
+        // Close the pipe explicitly so the peer sees EOF even when it exits early.
+        drop(stdin);
+        if written.is_err() {
+            let _ = child.wait().await;
+            return Err("host_sync_unavailable");
+        }
+    }
     let stdout = child.stdout.take().ok_or("host_sync_unavailable")?;
     let stderr = child.stderr.take().ok_or("host_sync_unavailable")?;
     tokio::time::timeout(deadline, async {
@@ -570,13 +620,22 @@ async fn bounded_reply(command: Command, deadline: std::time::Duration) -> Resul
 }
 
 impl HelperPeer {
-    fn call(&self, args: &[&str]) -> Result<Value> {
+    fn new(program: PathBuf) -> Self {
+        Self { program, probe: OnceLock::new() }
+    }
+
+    /// One helper invocation. Only the error code comes back: diagnostics may
+    /// name hosts or paths, so they never reach this application's UI.
+    fn run_child(&self, args: &[&str], stdin_line: Option<&str>) -> Result<Value> {
         let mut command = Command::new(&self.program);
         command.arg(FLAG).args(args);
         super::hide_console_window(&mut command);
-        let (status, stdout, stderr) = tauri::async_runtime::block_on(bounded_reply(command, std::time::Duration::from_secs(10)))?;
+        let (status, stdout, stderr) = tauri::async_runtime::block_on(bounded_reply(
+            command,
+            std::time::Duration::from_secs(10),
+            stdin_line,
+        ))?;
         if !status.success() {
-            // Only the error code travels back: diagnostics may name hosts or paths.
             let code = first_json_line(&stderr)
                 .ok()
                 .and_then(|value| value["error"].as_str().map(str::to_string))
@@ -586,16 +645,51 @@ impl HelperPeer {
                 "session_stale" => "session_stale",
                 "target_unavailable" => "target_unavailable",
                 "host_sync_busy" => "host_sync_busy",
+                // A missing one-shot confirmation ticket must keep its own code so
+                // the UI can report it instead of collapsing into a generic failure.
+                "sync_confirmation_required" => "sync_confirmation_required",
                 _ => "host_sync_failed",
             });
         }
         first_json_line(&stdout)
     }
+
+    /// The peer must be host-sync v2: `version` has to report `protocol >= 2` and
+    /// advertise `stdinArgs`. A probe failure (an old helper without `version`)
+    /// counts as unsupported, and the verdict is cached once.
+    fn peer_supports_v2(&self) -> bool {
+        *self.probe.get_or_init(|| {
+            self.run_child(&["version"], None).is_ok_and(|value| {
+                value["protocol"]
+                    .as_u64()
+                    .is_some_and(|protocol| protocol >= PROTOCOL)
+                    && value["capabilities"].as_array().is_some_and(|caps| {
+                        caps.iter().any(|cap| cap.as_str() == Some("stdinArgs"))
+                    })
+            })
+        })
+    }
+
+    /// Action name in argv, parameters only as one stdin JSON line: a session
+    /// reference never shows up in `ps` or a process audit.
+    fn call(&self, action: &str, params: Value) -> Result<Value> {
+        if !self.peer_supports_v2() {
+            // Both sides have to move to host-sync v2 together. A v1 peer only
+            // parses positional argv parameters while this side only sends stdin,
+            // so this is an explicit refusal rather than a half-working fallback.
+            return Err("host_sync_peer_protocol_unsupported");
+        }
+        let line = format!("{params}\n");
+        self.run_child(&[action], Some(&line))
+    }
 }
 
 impl Peer for HelperPeer {
     fn check(&self, reference: &str, challenge: &str) -> Result<PeerCheck> {
-        let value = self.call(&["check", reference, challenge])?;
+        let value = self.call(
+            "check",
+            json!({ "sessionRef": reference, "challenge": challenge }),
+        )?;
         Ok(PeerCheck {
             fingerprint: value["configFingerprint"]
                 .as_str()
@@ -612,7 +706,10 @@ impl Peer for HelperPeer {
     }
 
     fn fetch(&self, reference: &str, challenge: &str, scope: &str) -> Result<PeerFetch> {
-        let value = self.call(&["fetch", reference, challenge, scope])?;
+        let value = self.call(
+            "fetch",
+            json!({ "sessionRef": reference, "challenge": challenge, "scope": scope }),
+        )?;
         let config = value
             .get("config")
             .filter(|config| !config.is_null())
@@ -630,7 +727,8 @@ impl Peer for HelperPeer {
     }
 
     fn settle(&self, reference: &str) -> Result<()> {
-        self.call(&["settle", reference]).map(|_| ())
+        self.call("settle", json!({ "sessionRef": reference }))
+            .map(|_| ())
     }
 }
 
@@ -869,7 +967,7 @@ impl<'a> Receiver<'a> {
             host_id = Some(candidate.id.clone());
             revision = Some(candidate.updated_at);
             expected_target = Some(candidate);
-            config_state = "saved";
+            config_state = "applied";
         }
         receipts.push(Receipt {
             kind: "config",
@@ -908,7 +1006,7 @@ impl<'a> Receiver<'a> {
                                 password_state = PasswordState::Equal;
                                 receipts.push(Receipt {
                                     kind: "password",
-                                    state: "saved",
+                                    state: "applied",
                                 });
                             }
                             Err(_) => {
@@ -950,7 +1048,7 @@ impl<'a> Receiver<'a> {
         }
 
         let partial = receipts.iter().any(|receipt| receipt.state == "failed");
-        let wrote = receipts.iter().any(|receipt| receipt.state == "saved");
+        let wrote = receipts.iter().any(|receipt| receipt.state == "applied");
         let result = if partial {
             "partial"
         } else if wrote {
@@ -974,20 +1072,171 @@ impl<'a> Receiver<'a> {
             "sessionClosed": settled,
         }))
     }
-
-
 }
 
-/// One helper invocation: read one action, print one JSON line.
+/// Parameters of one helper call. Everything except the action name arrives on
+/// stdin, never in argv.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Params {
+    Begin {
+        host_id: String,
+    },
+    Check {
+        session_ref: String,
+        challenge: String,
+    },
+    Fetch {
+        session_ref: String,
+        challenge: String,
+        scope: String,
+    },
+    Settle {
+        session_ref: String,
+    },
+    Receive {
+        session_ref: String,
+        resolve_to: Option<String>,
+    },
+}
+
+/// Read one parameter line from stdin. EOF or an over-long line is an invalid
+/// request, never a default.
+fn request_line() -> Result<String> {
+    let mut line = String::new();
+    let read = std::io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .map_err(|_| "host_sync_request")?;
+    if read == 0 || line.len() > MAX_REQUEST_LINE {
+        return Err("host_sync_request");
+    }
+    Ok(line)
+}
+
+/// argv may only hold the action name (`receive` also gets the peer program path).
+/// A session reference or host id in argv is refused so it never reaches `ps` or
+/// a process audit.
+fn verify_argv(rest: &[String], allowed: usize) -> Result<()> {
+    if rest.len() != allowed {
+        return Err("host_sync_argv_rejected");
+    }
+    Ok(())
+}
+
+/// One JSON parameter line: field names are fixed, extra or missing fields are
+/// refused.
+fn json_params(action: &str, line: &str) -> Result<Params> {
+    let value: Value = serde_json::from_str(line).map_err(|_| "host_sync_request")?;
+    let object = value.as_object().ok_or("host_sync_request")?;
+    let allowed: &[&str] = match action {
+        "begin" => &["hostId"],
+        "check" => &["sessionRef", "challenge"],
+        "fetch" => &["sessionRef", "challenge", "scope"],
+        "settle" => &["sessionRef"],
+        "receive" => &["sessionRef", "resolveTo"],
+        _ => return Err("host_sync_request"),
+    };
+    if object.keys().any(|key| !allowed.contains(&key.as_str())) {
+        return Err("host_sync_request");
+    }
+    let text = |key: &str| {
+        object
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or("host_sync_request")
+    };
+    Ok(match action {
+        "begin" => Params::Begin {
+            host_id: text("hostId")?,
+        },
+        "check" => Params::Check {
+            session_ref: text("sessionRef")?,
+            challenge: text("challenge")?,
+        },
+        "fetch" => Params::Fetch {
+            session_ref: text("sessionRef")?,
+            challenge: text("challenge")?,
+            scope: text("scope")?,
+        },
+        "settle" => Params::Settle {
+            session_ref: text("sessionRef")?,
+        },
+        _ => Params::Receive {
+            session_ref: text("sessionRef")?,
+            resolve_to: match object.get("resolveTo") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(chosen)) => Some(chosen.clone()),
+                Some(_) => return Err("host_sync_request"),
+            },
+        },
+    })
+}
+
+/// Parse the one stdin parameter line: a JSON object is preferred, the same
+/// positional text fields stay accepted for a hand-typed helper call.
+fn parse_params(action: &str, line: &str) -> Result<Params> {
+    let line = line.trim();
+    if line.is_empty() || line.len() > MAX_REQUEST_LINE {
+        return Err("host_sync_request");
+    }
+    if line.starts_with('{') {
+        return json_params(action, line);
+    }
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    let expected = match action {
+        "begin" | "settle" | "receive" => 1,
+        "check" => 2,
+        "fetch" => 3,
+        _ => return Err("host_sync_request"),
+    };
+    if fields.len() != expected {
+        return Err("host_sync_request");
+    }
+    Ok(match action {
+        "begin" => Params::Begin {
+            host_id: fields[0].to_string(),
+        },
+        "check" => Params::Check {
+            session_ref: fields[0].to_string(),
+            challenge: fields[1].to_string(),
+        },
+        "fetch" => Params::Fetch {
+            session_ref: fields[0].to_string(),
+            challenge: fields[1].to_string(),
+            scope: fields[2].to_string(),
+        },
+        "settle" => Params::Settle {
+            session_ref: fields[0].to_string(),
+        },
+        _ => Params::Receive {
+            session_ref: fields[0].to_string(),
+            resolve_to: None,
+        },
+    })
+}
+
+/// One helper invocation: action name in argv, parameters from stdin, one JSON
+/// result line on stdout.
 pub fn run(args: &[String]) -> Result<()> {
-    if args == ["version"] {
+    let action = args.first().ok_or("host_sync_request")?.clone();
+    let rest = &args[1..];
+    if action == "version" {
+        verify_argv(rest, 0)?;
         println!(
             "{}",
             json!({
                 "protocol": PROTOCOL,
                 "kind": KIND,
                 "app": "cliora",
-                "capabilities": ["begin", "check", "fetch", "settle", "receive"],
+                // Capability declaration: a caller reads this first and refuses a
+                // peer without stdinArgs. Only capabilities this side really
+                // implements are listed: this version has no confirmation-ticket
+                // gate, so nothing is promised for a `confirm` flow. The ticket
+                // subsystem lives on Twiglane's side; here the password is only
+                // ever returned on the private fetch pipe.
+                "capabilities": ["stdinArgs"],
+                "actions": ["begin", "check", "fetch", "settle", "receive"],
                 "ttlSeconds": TTL_SECONDS,
             })
         );
@@ -1002,38 +1251,58 @@ pub fn run(args: &[String]) -> Result<()> {
         secrets: &secrets,
         dir,
     };
-    let value = match args {
-        [action, host_id] if action == "begin" => source.begin(host_id)?,
-        [action, reference, challenge] if action == "check" => source.check(reference, challenge)?,
-        [action, reference] if action == "settle" => source.settle(reference)?,
-        [action, reference, challenge, scope] if action == "fetch" => {
-            source.fetch(reference, challenge, scope)?
+    let value = match action.as_str() {
+        "begin" => {
+            verify_argv(rest, 0)?;
+            match parse_params("begin", &request_line()?)? {
+                Params::Begin { host_id } => source.begin(&host_id)?,
+                _ => return Err("host_sync_request"),
+            }
         }
-        [action, program, reference] if action == "receive" => {
-            let receiver = Receiver {
-                db: &db,
-                secrets: &secrets,
-            };
-            receiver.receive(
-                &HelperPeer {
-                    program: PathBuf::from(program),
-                },
-                reference,
-                None,
-            )?
+        "check" => {
+            verify_argv(rest, 0)?;
+            match parse_params("check", &request_line()?)? {
+                Params::Check { session_ref, challenge } => {
+                    source.check(&session_ref, &challenge)?
+                }
+                _ => return Err("host_sync_request"),
+            }
         }
-        [action, program, reference, chosen] if action == "receive" => {
-            let receiver = Receiver {
-                db: &db,
-                secrets: &secrets,
-            };
-            receiver.receive(
-                &HelperPeer {
-                    program: PathBuf::from(program),
-                },
-                reference,
-                Some(chosen),
-            )?
+        "settle" => {
+            verify_argv(rest, 0)?;
+            match parse_params("settle", &request_line()?)? {
+                Params::Settle { session_ref } => source.settle(&session_ref)?,
+                _ => return Err("host_sync_request"),
+            }
+        }
+        "fetch" => {
+            verify_argv(rest, 0)?;
+            match parse_params("fetch", &request_line()?)? {
+                Params::Fetch { session_ref, challenge, scope } => {
+                    source.fetch(&session_ref, &challenge, &scope)?
+                }
+                _ => return Err("host_sync_request"),
+            }
+        }
+        "receive" => {
+            // argv holds only the action name and the peer program path; every
+            // other parameter comes from stdin.
+            verify_argv(rest, 1)?;
+            let program = PathBuf::from(&rest[0]);
+            match parse_params("receive", &request_line()?)? {
+                Params::Receive { session_ref, resolve_to } => {
+                    let receiver = Receiver {
+                        db: &db,
+                        secrets: &secrets,
+                    };
+                    receiver.receive(
+                        &HelperPeer::new(program),
+                        &session_ref,
+                        resolve_to.as_deref(),
+                    )?
+                }
+                _ => return Err("host_sync_request"),
+            }
         }
         _ => return Err("unsupported_action"),
     };
@@ -1122,9 +1391,7 @@ pub fn receive_with(
     let secrets = crate::credentials::AppCredentialStore;
     Receiver { db, secrets: &secrets }
         .receive(
-            &HelperPeer {
-                program: program.to_path_buf(),
-            },
+            &HelperPeer::new(program.to_path_buf()),
             session_ref,
             resolve_to,
         )
@@ -1474,7 +1741,7 @@ mod tests {
         let value = receiver.receive(&peer, &peer.reference, None).unwrap();
         assert_eq!(value["result"], "applied");
         assert_eq!(value["receipts"][0]["state"], "unchanged");
-        assert_eq!(value["receipts"][1]["state"], "saved");
+        assert_eq!(value["receipts"][1]["state"], "applied");
         assert_eq!(secrets.stored("host-a").as_deref(), Some("new-value"));
         assert_eq!(updated_at(&db, "host-a"), before, "只改密码不动目标行");
         assert!(!value.to_string().contains("new-value"));
@@ -1495,7 +1762,7 @@ mod tests {
         };
         let value = receiver.receive(&peer, &peer.reference, None).unwrap();
         assert_eq!(value["result"], "applied");
-        assert_eq!(value["receipts"][0]["state"], "saved");
+        assert_eq!(value["receipts"][0]["state"], "applied");
         let saved = target_by_id(&db, "host-a").unwrap();
         assert_eq!(HostConfig::of(&saved), remote);
         assert!(saved.enabled, "同步不改动接收方自己的启用状态");
@@ -1522,7 +1789,7 @@ mod tests {
         };
         let value = receiver.receive(&peer, &peer.reference, None).unwrap();
         assert_eq!(value["result"], "partial");
-        assert_eq!(value["receipts"][0]["state"], "saved");
+        assert_eq!(value["receipts"][0]["state"], "applied");
         assert_eq!(value["receipts"][1]["state"], "failed");
         assert_eq!(value["sessionClosed"], false);
         assert_eq!(*peer.settled.lock().unwrap(), 0);
@@ -1622,7 +1889,12 @@ mod tests {
             assert_eq!(read_reply(&vec![0u8; 256 * 1024 + 1][..]).await.unwrap_err(), "host_sync_protocol");
             let mut command = Command::new("/bin/sleep");
             command.arg("5");
-            assert_eq!(bounded_reply(command, std::time::Duration::from_millis(100)).await.unwrap_err(), "host_sync_timeout");
+            assert_eq!(
+                bounded_reply(command, std::time::Duration::from_millis(100), None)
+                    .await
+                    .unwrap_err(),
+                "host_sync_timeout"
+            );
         });
     }
 
@@ -1698,5 +1970,177 @@ mod tests {
         );
         assert!(!value.to_string().contains("hunter2"));
     }
-}
 
+    /// v2 只有一种调用形态：参数走 stdin，argv 里带参数一律拒绝。
+    #[test]
+    fn parameters_come_from_stdin_and_argv_parameters_are_rejected() {
+        let reference = "a".repeat(64);
+        let challenge = "b".repeat(64);
+        // argv 上只允许动作名（receive 另加对端程序路径）。
+        assert!(verify_argv(&[], 0).is_ok());
+        assert!(verify_argv(&["/usr/bin/twiglane".to_string()], 1).is_ok());
+        for rest in [
+            vec!["host-a".to_string()],
+            vec![reference.clone(), challenge.clone()],
+            vec![reference.clone(), challenge.clone(), "all".to_string()],
+            vec![reference.clone()],
+        ] {
+            assert_eq!(
+                verify_argv(&rest, 0).unwrap_err(),
+                "host_sync_argv_rejected"
+            );
+        }
+        // receive 只多允许一位对端路径：再多一位仍然拒绝。
+        assert_eq!(
+            verify_argv(
+                &[
+                    "/usr/bin/twiglane".to_string(),
+                    reference.clone(),
+                    "host-a".to_string()
+                ],
+                1
+            )
+            .unwrap_err(),
+            "host_sync_argv_rejected"
+        );
+
+        // 动作参数只从 stdin 读。
+        let line = format!(
+            "{{\"sessionRef\":\"{reference}\",\"challenge\":\"{challenge}\",\"scope\":\"all\"}}"
+        );
+        assert_eq!(
+            parse_params("fetch", &line).unwrap(),
+            Params::Fetch {
+                session_ref: reference.clone(),
+                challenge: challenge.clone(),
+                scope: "all".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_params("begin", "host-a\n").unwrap(),
+            Params::Begin {
+                host_id: "host-a".to_string(),
+            }
+        );
+        // 缺字段与多字段都按无效请求处理，绝不补默认值。
+        assert_eq!(
+            parse_params(
+                "check",
+                "{\"sessionRef\":\"x\",\"challenge\":\"y\",\"extra\":1}"
+            )
+            .unwrap_err(),
+            "host_sync_request"
+        );
+        assert_eq!(
+            parse_params("fetch", "{\"sessionRef\":\"x\"}").unwrap_err(),
+            "host_sync_request"
+        );
+    }
+
+    /// version 必须宣告 v2 的线格式，调用方据此判定协议是否兼容。只宣告真实能力：
+    /// 本侧没有票据门控，就不宣告 confirmation。
+    #[test]
+    fn version_declares_the_v2_wire_format() {
+        assert_eq!(PROTOCOL, 2);
+        let source = include_str!("twiglane_sync.rs");
+        assert!(
+            source.contains("\"capabilities\": [\"stdinArgs\"]"),
+            "version 必须宣告 stdinArgs"
+        );
+        assert!(
+            !source.contains("\"capabilities\": [\"stdinArgs\", \"confirmation\"]"),
+            "本侧没有票据门控，不能宣告 confirmation"
+        );
+        assert!(source.contains("verify_argv(rest, 0)?"));
+        assert!(source.contains("host_sync_peer_protocol_unsupported"));
+    }
+
+    /// 造一个假 helper 脚本：把收到的 argv 与 stdin 记到文件里，便于断言调用形态。
+    #[cfg(unix)]
+    fn fake_helper(dir: &Path, script: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("peer-helper.sh");
+        fs::write(&path, script).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// 对端是 v1（没有 stdinArgs）：给明确错误码，且不向它发出任何带参数的调用。
+    #[cfg(unix)]
+    #[test]
+    fn a_v1_peer_is_refused_with_an_explicit_protocol_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("argv.log");
+        let script = r##"#!/bin/sh
+printf '%s\n' "$*" >> __ARGV_LOG__
+case "$2" in
+  version) printf '%s\n' '{"protocol":1,"kind":"host-sync-v1","capabilities":["check","fetch","settle"]}' ;;
+  *) printf '%s\n' '{"protocol":1,"kind":"host-sync-v1","settled":true}' ;;
+esac
+"##
+        .replace("__ARGV_LOG__", &format!("'{}'", log.display()));
+        let peer = HelperPeer::new(fake_helper(dir.path(), &script));
+        let reference = "b".repeat(64);
+        let challenge = "c".repeat(64);
+        assert_eq!(
+            peer.check(&reference, &challenge).unwrap_err(),
+            "host_sync_peer_protocol_unsupported"
+        );
+        // 探测过 version 之后就不再调用任何动作：不存在「退回 argv」这条路径。
+        let lines: Vec<String> = fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0], "--host-sync-v1 version");
+        // 同一个 peer 再调一次也不会重新探测（结论已缓存）。
+        assert_eq!(
+            peer.settle(&reference).unwrap_err(),
+            "host_sync_peer_protocol_unsupported"
+        );
+        assert_eq!(
+            fs::read_to_string(&log).unwrap().lines().count(),
+            1,
+            "协议结论只探测一次"
+        );
+    }
+
+    /// 对端宣告 stdinArgs（v2）：参数走 stdin，argv 只留动作名。
+    #[cfg(unix)]
+    #[test]
+    fn a_peer_with_stdin_args_gets_parameters_on_stdin() {
+        let dir = tempfile::tempdir().unwrap();
+        let argv_log = dir.path().join("argv.log");
+        let stdin_log = dir.path().join("stdin.log");
+        let script = r##"#!/bin/sh
+printf '%s\n' "$*" >> __ARGV_LOG__
+case "$2" in
+  version) printf '%s\n' '{"protocol":2,"kind":"host-sync-v1","capabilities":["stdinArgs","confirmation"]}' ;;
+  check) IFS= read -r line; printf '%s\n' "$line" >> __STDIN_LOG__; printf '%s\n' '{"protocol":2,"kind":"host-sync-v1","hostId":"host-a","sharedHostId":"shared-1","configFingerprint":"__FP__","configRevision":9,"password":{"state":"absent"}}' ;;
+  *) printf '%s\n' '{"protocol":2,"kind":"host-sync-v1","settled":true}' ;;
+esac
+"##
+        .replace("__ARGV_LOG__", &format!("'{}'", argv_log.display()))
+        .replace("__STDIN_LOG__", &format!("'{}'", stdin_log.display()))
+        .replace("__FP__", &"a".repeat(64));
+        let peer = HelperPeer::new(fake_helper(dir.path(), &script));
+        let reference = "b".repeat(64);
+        let challenge = "c".repeat(64);
+        let checked = peer.check(&reference, &challenge).unwrap();
+        assert_eq!(checked.revision, 9);
+        let lines: Vec<String> = fs::read_to_string(&argv_log)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(lines[0], "--host-sync-v1 version");
+        assert_eq!(
+            lines[1], "--host-sync-v1 check",
+            "v2 对端的 argv 上不能出现会话引用"
+        );
+        let stdin = fs::read_to_string(&stdin_log).unwrap();
+        assert!(stdin.contains(&reference), "会话引用必须经 stdin 传");
+        assert!(stdin.contains(&challenge));
+    }
+}
