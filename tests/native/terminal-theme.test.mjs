@@ -17,6 +17,51 @@ function contrast(a, b) {
 }
 
 const TEXT_SLOTS = ['red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'brightRed', 'brightGreen', 'brightYellow', 'brightBlue', 'brightMagenta', 'brightCyan', 'brightBlack', 'foreground'];
+const ACCENTS = ['red', 'green', 'yellow', 'blue', 'magenta', 'cyan'];
+
+/** APCA 0.0.98G lightness contrast (|Lc|), which WCAG 2 overstates on dark canvases. */
+function apca(text, background) {
+  const y = (hex) => {
+    const n = Number.parseInt(hex.slice(1, 7), 16);
+    const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => (c / 255) ** 2.4);
+    const v = 0.2126729 * r + 0.7151522 * g + 0.072175 * b;
+    return v < 0.022 ? v + (0.022 - v) ** 1.414 : v;
+  };
+  const t = y(text);
+  const bg = y(background);
+  const s = bg > t ? (bg ** 0.56 - t ** 0.57) * 1.14 : (bg ** 0.65 - t ** 0.62) * 1.14;
+  return Math.abs(s) < 0.1 ? 0 : Math.abs(s) * 100 - 2.7;
+}
+
+/** OKLCH lightness of a hex colour. */
+function oklchL(hex) {
+  const n = Number.parseInt(hex.slice(1, 7), 16);
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => {
+    const v = c / 255;
+    return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  });
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return 0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s;
+}
+
+for (const mode of ['dark', 'light']) {
+  test(`${mode} terminal text meets APCA targets and each tier shares one OKLCH lightness`, () => {
+    const theme = terminalTheme(mode);
+    const minimum = mode === 'dark' ? { accent: 60, hint: 45 } : { accent: 70, hint: 70 };
+    for (const slot of [...ACCENTS, ...ACCENTS.map((name) => `bright${name[0].toUpperCase()}${name.slice(1)}`)]) {
+      assert.ok(apca(theme[slot], theme.background) >= minimum.accent, `${mode}.${slot} Lc ${apca(theme[slot], theme.background).toFixed(1)}`);
+    }
+    assert.ok(apca(theme.brightBlack, theme.background) >= minimum.hint, `${mode}.brightBlack Lc ${apca(theme.brightBlack, theme.background).toFixed(1)}`);
+    // Ink stays below glare on the dark canvas.
+    if (mode === 'dark') assert.ok(apca(theme.foreground, theme.background) < 95);
+    for (const tier of [ACCENTS, ACCENTS.map((name) => `bright${name[0].toUpperCase()}${name.slice(1)}`)]) {
+      const lightness = tier.map((slot) => oklchL(theme[slot]));
+      assert.ok(Math.max(...lightness) - Math.min(...lightness) < 0.01, `${mode} tier lightness ${lightness.map((v) => v.toFixed(3)).join(', ')}`);
+    }
+  });
+}
 
 for (const mode of ['dark', 'light']) {
   test(`${mode} terminal accents and secondary text are readable without the contrast floor`, () => {

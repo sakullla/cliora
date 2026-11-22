@@ -91,74 +91,130 @@ export function generateExtendedAnsi(hues: AnsiHues, background: string, foregro
 }
 
 /*
- * Both palettes keep the six hues at one OKLCH lightness per tier, so blue no longer reads darker
- * than green and every accent clears WCAG 4.5:1 on its own canvas without the contrast floor.
- * Hue angles: red 25, yellow 80, green 152 (the app's pine accent), cyan 192, blue 255, magenta 318.
- * Dark: normal L 0.76, bright L 0.86. Light: normal L 0.50, bright L 0.545 with more chroma.
+ * The palettes are generated, not hand-picked: a few OKLCH inputs per mode (canvas, ink, one
+ * lightness and chroma per ANSI tier, fixed hue angles) produce every slot, the way Linear derives a
+ * whole theme from base, accent and contrast. OKLCH is perceptually uniform, so one lightness per
+ * tier keeps blue from reading darker than green (the "dimidium" problem). Chroma is reduced only as
+ * far as each hue needs to stay inside sRGB.
+ *
+ * Targets come from APCA rather than WCAG 2 alone, because WCAG 2 overstates contrast on dark
+ * canvases (an accent at 8.5:1 can sit at APCA Lc 58). Dark: accents ≥ Lc 60 (content text), hints
+ * ≥ Lc 45, ink kept just under Lc 95 to avoid glare. Light: every text slot ≥ Lc 70.
+ * Bright hues turn a few degrees from normal ones so the two tiers stay distinct (as Dimidium does).
+ * Hue angles: red 25, yellow 82, green 150 (the app's pine accent), cyan 195, blue 255, magenta 322.
  */
-function buildTheme(base: Omit<ITheme, 'extendedAnsi'>, hues: AnsiHues): ITheme {
-  return { ...base, extendedAnsi: generateExtendedAnsi(hues, base.background!, base.foreground!) };
+type Oklch = readonly [number, number, number];
+
+function oklchToLinear([l, c, h]: Oklch): Rgb {
+  const a = c * Math.cos((h * Math.PI) / 180);
+  const b = c * Math.sin((h * Math.PI) / 180);
+  const l3 = (l + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const m3 = (l - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const s3 = (l - 0.0894841775 * a - 1.291485548 * b) ** 3;
+  return [
+    4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3,
+    -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3,
+    -0.0041960863 * l3 - 0.7034186147 * m3 + 1.707614701 * s3,
+  ];
 }
 
-const DARK_HUES = ['#f4928a', '#72c78b', '#d7a956', '#7cb4fc', '#d198e3', '#55c6c2'] as const;
+const inGamut = (rgb: Rgb) => rgb.every((v) => v >= -1e-4 && v <= 1 + 1e-4);
 
-const DARK_THEME = buildTheme({
-  background: '#0c0f0e',
-  foreground: '#edf2ef',
-  cursor: '#52c788',
-  cursorAccent: '#0c0f0e',
-  selectionBackground: '#52c7884d',
-  selectionInactiveBackground: '#52c78824',
+/** OKLCH to sRGB hex, keeping lightness and hue and lowering chroma until the colour fits sRGB. */
+export function oklchHex(color: Oklch): string {
+  const [l, c, h] = color;
+  let chroma = c;
+  if (!inGamut(oklchToLinear([l, c, h]))) {
+    let lo = 0;
+    let hi = c;
+    for (let i = 0; i < 24; i += 1) {
+      const mid = (lo + hi) / 2;
+      if (inGamut(oklchToLinear([l, mid, h]))) lo = mid; else hi = mid;
+    }
+    chroma = lo;
+  }
+  return toHex(oklchToLinear([l, chroma, h]).map((v) => {
+    const x = Math.max(0, Math.min(1, v));
+    return 255 * (x <= 0.0031308 ? 12.92 * x : 1.055 * x ** (1 / 2.4) - 0.055);
+  }) as Rgb);
+}
+
+const HUE_ANGLES = [25, 150, 82, 255, 322, 195] as const;
+const BRIGHT_HUE_TURN = 6;
+const NEUTRAL_HUE = 160;
+
+type PaletteSpec = {
+  /** Canvas and cursor are the app's own `--term-bg` and `--accent`, so the chrome matches. */
+  canvas: string;
+  ink: Oklch;
+  /** `black`: a raised surface on dark, the ink on light. */
+  black: Oklch;
+  /** `white`/`brightWhite` and `brightBlack` (hints, comments, timestamps). */
+  white: Oklch;
+  brightWhite: Oklch;
+  hint: Oklch;
+  normal: { l: number; c: number };
+  bright: { l: number; c: number };
+  cursor: string;
+  /** Selection alpha (hex byte) for focused and unfocused panes. */
+  selection: readonly [string, string];
+};
+
+function generateTheme(spec: PaletteSpec): ITheme {
+  const tier = ({ l, c }: { l: number; c: number }, turn: number) =>
+    HUE_ANGLES.map((h) => oklchHex([l, c, (h + turn) % 360])) as unknown as AnsiHues;
+  const hues = tier(spec.normal, 0);
+  const bright = tier(spec.bright, BRIGHT_HUE_TURN);
+  const background = spec.canvas;
+  const foreground = oklchHex(spec.ink);
+  const cursor = spec.cursor;
+  return {
+    background,
+    foreground,
+    cursor,
+    cursorAccent: background,
+    selectionBackground: `${cursor}${spec.selection[0]}`,
+    selectionInactiveBackground: `${cursor}${spec.selection[1]}`,
+    black: oklchHex(spec.black),
+    red: hues[0], green: hues[1], yellow: hues[2], blue: hues[3], magenta: hues[4], cyan: hues[5],
+    white: oklchHex(spec.white),
+    brightBlack: oklchHex(spec.hint),
+    brightRed: bright[0], brightGreen: bright[1], brightYellow: bright[2], brightBlue: bright[3], brightMagenta: bright[4], brightCyan: bright[5],
+    brightWhite: oklchHex(spec.brightWhite),
+    extendedAnsi: generateExtendedAnsi(hues, background, foreground),
+  };
+}
+
+const DARK_THEME = generateTheme({
+  canvas: '#0c0f0e',
+  ink: [0.93, 0.008, NEUTRAL_HUE],
   // Raised surface, so `black` fills (status bars, badges) stay visible on the canvas.
-  black: '#1c2420',
-  red: DARK_HUES[0],
-  green: DARK_HUES[1],
-  yellow: DARK_HUES[2],
-  blue: DARK_HUES[3],
-  magenta: DARK_HUES[4],
-  cyan: DARK_HUES[5],
-  white: '#c9d3cd',
-  // Secondary text (hints, comments, timestamps) at 5.5:1.
-  brightBlack: '#7d8c83',
-  brightRed: '#ffbfb8',
-  brightGreen: '#a7e2b6',
-  brightYellow: '#edcc94',
-  brightBlue: '#b3d4fe',
-  brightMagenta: '#e9c0f6',
-  brightCyan: '#98e1dd',
-  brightWhite: '#f6faf7',
-}, DARK_HUES);
-
-const LIGHT_HUES = ['#a83634', '#05773b', '#825b00', '#1762b6', '#854299', '#08726f'] as const;
+  black: [0.25, 0.012, NEUTRAL_HUE],
+  white: [0.83, 0.012, NEUTRAL_HUE],
+  brightWhite: [0.96, 0.006, NEUTRAL_HUE],
+  hint: [0.67, 0.019, NEUTRAL_HUE],
+  normal: { l: 0.8, c: 0.125 },
+  bright: { l: 0.89, c: 0.085 },
+  cursor: '#52c788',
+  selection: ['4d', '24'],
+});
 
 /**
  * Light palette on a paper canvas. `white` and `brightWhite` stay greys (GitHub Light convention) so
  * `white` text stays readable and `47`/`107` fills still look like fills; black is the ink.
  */
-const LIGHT_THEME = buildTheme({
-  background: '#ffffff',
-  foreground: '#141c17',
+const LIGHT_THEME = generateTheme({
+  canvas: '#ffffff',
+  ink: [0.22, 0.015, 157],
+  black: [0.22, 0.015, 157],
+  white: [0.54, 0.019, NEUTRAL_HUE],
+  brightWhite: [0.66, 0.017, NEUTRAL_HUE],
+  hint: [0.49, 0.021, NEUTRAL_HUE],
+  normal: { l: 0.5, c: 0.15 },
+  bright: { l: 0.545, c: 0.17 },
   cursor: '#1d7a52',
-  cursorAccent: '#ffffff',
-  selectionBackground: '#1d7a5230',
-  selectionInactiveBackground: '#1d7a5216',
-  black: '#141c17',
-  red: LIGHT_HUES[0],
-  green: LIGHT_HUES[1],
-  yellow: LIGHT_HUES[2],
-  blue: LIGHT_HUES[3],
-  magenta: LIGHT_HUES[4],
-  cyan: LIGHT_HUES[5],
-  white: '#65726b',
-  brightBlack: '#57655d',
-  brightRed: '#bf3a39',
-  brightGreen: '#058644',
-  brightYellow: '#926701',
-  brightBlue: '#136ed0',
-  brightMagenta: '#9848af',
-  brightCyan: '#08817e',
-  brightWhite: '#8b978f',
-}, LIGHT_HUES);
+  selection: ['30', '16'],
+});
 
 export function terminalTheme(mode: TerminalTheme): ITheme {
   return mode === 'dark' ? DARK_THEME : LIGHT_THEME;
