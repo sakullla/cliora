@@ -103,6 +103,13 @@ const workbenchNavPages: NavItemId[] = ['home', 'sessions'];
 /** Width of one page icon in the expanded workbench row (see shell.css). */
 const WORKBENCH_NAV_SLOT = 32;
 
+/**
+ * 一批审阅意见在原生层是一次性消费（文件随即删除），所以这里持有的预览就是唯一副本。
+ * 深链 effect 可能在"读取完成"与"切到工作台"之间被卸载重建（重挂载、语言变化），
+ * 因此这份副本留在组件外：下一次挂载会把它重新放到可见面板上，而不是随卸载消失。
+ */
+let carriedFeedback: TwiglaneFeedbackPreview | null = null;
+
 const themes: { id: Theme; glyph: IconName }[] = [
   { id: 'system', glyph: 'monitor' },
   { id: 'light', glyph: 'sun' },
@@ -414,6 +421,14 @@ export default function App() {
   // 链接行为一致。
   useEffect(() => {
     if (!nativeAvailable) return;
+    // 上一次 effect 实例卸载时收到、还没来得及显示的批次在这里接上：原生已经消费过它，
+    // 这是唯一副本。
+    if (carriedFeedback) {
+      const carried = carriedFeedback;
+      carriedFeedback = null;
+      setFeedbackPreview(carried);
+      openWorkbenchSession(carried.sessionId, 'local');
+    }
     let active = true;
     let stop: (() => void) | null = null;
     // review 链接带一次审查唯一的 reviewId，同一串重复到达就是同一事件的重复投递；native 注册表
@@ -457,11 +472,14 @@ export default function App() {
         if (handledFeedback.has(url)) return;
         handledFeedback.add(url);
         // 读取只生成预览：不启动 CLI、不写 PTY、不写 Git。
-        void native.twiglaneFeedbackLink(url).then(async (preview) => {
-          if (!active) return;
-          if (!await transitionRef.current('sessions', 'local')) return;
-          openWorkbenchSession(preview.sessionId);
+        void native.twiglaneFeedbackLink(url).then((preview) => {
+          // 文件已经删掉，这一批只剩内存里这份预览：先放到应用状态与工作台焦点上，再尝试
+          // 切页。切页被拒（例如用户拒绝放弃草稿）或本组件卸载时批次都还在，用户下一次
+          // 进入工作台仍能发送或取消；链接本身已按串去重，重投递不会重复读取。
+          if (!active) { carriedFeedback = preview; return; }
           setFeedbackPreview(preview);
+          // 批次属于发起审查的那台本机会话，所以切页明确回到 local。
+          openWorkbenchSession(preview.sessionId, 'local');
         }).catch((value) => {
           handledFeedback.delete(url);
           if (!active) return;
@@ -775,11 +793,14 @@ export default function App() {
   }
 
   // Same command and confirmation flow as the Records list, with Records' default mode.
-  function openWorkbenchSession(sessionId: string) {
+  // `host` lets an inbound link name the host the session actually lives on: the focus it sets
+  // survives a refused switch, so the batch is still found on the next visit.
+  function openWorkbenchSession(sessionId: string, host?: string) {
     setWorkbenchFailure(null);
     setWorkbenchFocus(sessionId);
     setWorkbenchToken((value) => value + 1);
-    void go('sessions');
+    if (host) void transitionRef.current('sessions', host);
+    else void go('sessions');
   }
 
   function openWorkbenchFailure(failure: WorkbenchFailure) {

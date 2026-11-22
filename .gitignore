@@ -79,4 +79,5 @@ docs/integrations/*
 !docs/integrations/twiglane-review-v2.md
 !docs/integrations/twiglane-review-v3.md
 !docs/integrations/project-workspace-v1.md
+!docs/integrations/twiglane-review-feedback-v1.md
 !docs/verification/multi-repository-project-workspaces.md

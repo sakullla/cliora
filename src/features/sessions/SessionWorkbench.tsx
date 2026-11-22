@@ -1542,6 +1542,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     outputActive: (id, isActive) => {
       setActiveOutputIds((current) => toggleInSet(current, id, isActive));
       if (isActive && !visibleIdsRef.current.includes(id)) setUnreadIds((current) => toggleInSet(current, id, true));
+      // An expanded row's count is read before this new output: re-read just that row so the
+      // number follows the agent instead of staying at its first reading.
+      if (isActive && detailIds.has(id)) void readSessionDetail(id, true);
     },
     outputWritten: (id) => {
       if (id !== selectedIdRef.current || !findOpenRef.current || !findQueryRef.current.trim() || findRefreshTimer.current) return;
@@ -1981,9 +1984,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     }));
   }
 
-  /** One on-demand read per expanded row: no whole-list Git scan, no poll loop. */
-  async function readSessionDetail(id: string) {
-    setDetailReads((current) => { const next = new Map(current); next.set(id, { state: 'loading', status: current.get(id)?.status ?? null }); return next; });
+  /**
+   * One on-demand read per expanded row: no whole-list Git scan, no poll loop.
+   *
+   * `keepWhileReading` is the re-read path: the row already shows a readable count, so the
+   * previous value stays on screen instead of flashing "reading" for the same row.
+   */
+  async function readSessionDetail(id: string, keepWhileReading = false) {
+    if (!keepWhileReading) setDetailReads((current) => { const next = new Map(current); next.set(id, { state: 'loading', status: current.get(id)?.status ?? null }); return next; });
     await codeReadPending.current;
     try {
       const value = await native.workbenchCodeStatus(id);
@@ -1998,8 +2006,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   function toggleSessionDetail(id: string) {
     const open = detailIds.has(id);
     setDetailIds((current) => { const next = new Set(current); if (open) next.delete(id); else next.add(id); return next; });
-    // A row that was already read keeps its result; an unknown one asks again on the next open.
-    if (!open && (!detailReads.has(id) || detailReads.get(id)?.state !== 'ready')) void readSessionDetail(id);
+    // Every expand reads again: the agent keeps writing after the first read, so a row that
+    // stayed on its old "ready" count went stale without saying so. One row per expand is still
+    // an explicit on-demand read, never a scan of the rest of the list.
+    if (!open) void readSessionDetail(id, detailReads.get(id)?.state === 'ready');
   }
 
   /** Changes and the review next step of one row, or nothing while it stays closed. */

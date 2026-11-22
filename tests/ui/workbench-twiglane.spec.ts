@@ -791,6 +791,34 @@ test('a verified return drives the shared task state and its own next step', asy
   await expect(page.locator('[data-drag-id="s1"] [data-session-id="s1"]')).toHaveAttribute('aria-selected', 'true');
 });
 
+test('an expanded row reads its own changes again instead of keeping the first count', async ({ page }) => {
+  await installDesktop(page);
+  await openWorkbench(page);
+  const row = page.locator('[data-drag-id="s1"]');
+  const reads = () => page.evaluate(() => (window as unknown as { __harness: { calls: string[] } }).__harness.calls
+    .filter((name) => name === 'workbench_code_status').length);
+  const toggleDetail = async () => {
+    await page.getByRole('region', { name: '当前会话' }).getByRole('button', { name: '更多终端操作' }).click();
+    await page.getByRole('menu', { name: '终端操作' }).getByRole('menuitem', { name: '查看本次改动', exact: true }).click();
+  };
+
+  await toggleDetail();
+  const detail = row.locator('[data-task-detail]');
+  await expect(detail).toHaveAttribute('data-task-detail', 'ready');
+  await expect(detail).toContainText('46 处未提交改动');
+  expect(await reads()).toBe(1);
+
+  // 后台代理在第一次读取之后继续提交：展开过的那一行不能一直停在旧计数上。
+  await page.evaluate(() => { (window as unknown as { __harness: { files: number } }).__harness.files = 3; });
+  await toggleDetail();
+  await expect(detail).toHaveCount(0);
+  await toggleDetail();
+  await expect(detail).toHaveAttribute('data-task-detail', 'ready');
+  await expect(detail).toContainText('3 处未提交改动');
+  // 重读只读这一行，仍然按需读取，没有扫描其他会话。
+  expect(await reads()).toBe(2);
+});
+
 // Codex 的输入框与其快捷键脚注落在终端最后几行；适配器只读这部分屏幕。
 const CODEZ_COMPOSER = '\r\n'.repeat(20) + '\u203a \r\n? for shortcuts';
 const FEEDBACK_LINK = 'cliora://review-feedback?v=1&feedbackId=8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=s1&resultRevision=2&digest=082476955cbba23ba6e82c2eacfff6d59f82c347b088fdb2df0f426ee62c56fc';
