@@ -4810,8 +4810,11 @@ test('the new-session dialog leads with the task and keeps folded drafts', async
   // Folding never loses an edited value.
   await expect(dialog.locator('#worktree-setup-command')).toHaveValue('npm ci');
   await expect(task).toHaveValue('feat: 结算流程');
-  // The secondary path opens a terminal with no task at all.
-  await dialog.getByRole('button', { name: '只打开终端' }).click();
+  // There is one launch button: an empty prompt opens the CLI with no task at all.
+  await expect(dialog.getByRole('button', { name: '只打开终端' })).toHaveCount(0);
+  await task.fill('');
+  await dialog.getByRole('radiogroup', { name: '启动位置' }).getByRole('radio', { name: /当前目录/ }).click();
+  await dialog.getByRole('button', { name: '启动会话' }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __launches: Array<Record<string, unknown>> }).__launches?.length ?? 0)).toBe(1);
   const launches = await page.evaluate(() => (window as unknown as { __launches: Array<Record<string, unknown>> }).__launches);
   expect(launches[0].toolId).toBe('codex');

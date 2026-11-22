@@ -483,8 +483,6 @@ export default {
   newSessionTaskPlaceholder: '这次要完成什么？会作为首条提示词和标题来源。',
   newSessionAdvanced: '高级选项',
   newSessionAdvancedHint: '工作树、分支、准备命令与恢复最近会话',
-  newSessionBlank: '只打开终端',
-  newSessionBlankHint: '不发送提示词，直接进入 {{tool}} 的终端',
   newSessionContextLabel: '本次启动',
   workspaceUnavailable: '继承的目录已不可用：{{path}}',
   workspaceUnavailableFix: '请重新选择项目、目录或主机；不会自动改用其他位置。',

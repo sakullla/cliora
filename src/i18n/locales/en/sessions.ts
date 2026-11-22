@@ -483,8 +483,6 @@ export default {
   newSessionTaskPlaceholder: 'What should this session do? It becomes the first prompt and the title source.',
   newSessionAdvanced: 'Advanced options',
   newSessionAdvancedHint: 'Worktree, branch, prepare command and resuming the latest session',
-  newSessionBlank: 'Just open a terminal',
-  newSessionBlankHint: 'Open {{tool}} with no prompt',
   newSessionContextLabel: 'This launch',
   workspaceUnavailable: 'The inherited folder is no longer available: {{path}}',
   workspaceUnavailableFix: 'Choose a project, folder or host again; nothing is switched on your behalf.',

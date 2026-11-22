@@ -2181,7 +2181,6 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 /* The base a worktree launch will use stays visible while its details are folded. */
 .baseSummary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5); min-width: 0; padding: var(--space-1_5) var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-3); font-size: var(--fs-caption); }
 /* The secondary path opens a terminal with no task, so it sits apart from the primary action. */
-.dialogBlank { margin-right: auto; }
 
 /* Received Twiglane comments sit above the terminal as a bounded, read-only preview. */
 .feedbackPanel { display: grid; gap: var(--space-2); max-height: 40%; min-height: 0; margin: var(--space-2) var(--space-2) 0; padding: var(--space-2_5) var(--space-3); overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }

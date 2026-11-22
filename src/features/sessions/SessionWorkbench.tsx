@@ -2244,7 +2244,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     }
   }
 
-  async function launchFromDialog(options: { blank?: boolean } = {}) {
+  async function launchFromDialog() {
     if (workspaceUnavailable) {
       // The inherited place is gone: ask for a fix instead of choosing another one.
       setDialogError(t('sessions.workspaceUnavailable', { path: workspaceValueLabel(workspaceValue) }));
@@ -2278,7 +2278,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       }
       const directory = !activeRemoteTarget && workspaceValue.startsWith('custom:') ? workspaceValue.slice('custom:'.length) : null;
       // The secondary path opens a terminal with no task: no prompt, no generated title or branch.
-      const promptText = options.blank ? null : initialPrompt.trim() || null;
+      const promptText = initialPrompt.trim() || null;
       const remoteLaunch = !!projectId?.startsWith('remote:');
       const resume = !remoteLaunch && resumeLatest && !!selectedLaunchTool?.resumeLatestAvailable;
       const taskLine = firstTaskLine(promptText);
@@ -4326,7 +4326,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           })()}
           {selectedLaunchTool?.resumeLatestAvailable && !activeRemoteTarget && <label className={styles.checkboxRow}><input type="checkbox" checked={resumeLatest} onChange={(event) => setResumeLatest(event.target.checked)} /><span>{t('sessions.resumeLatest')}</span></label>}
         </div>}
-        <div className={styles.dialogActions}><Button onClick={() => setNewDialogOpen(false)}>{t('common.dialog.cancel')}</Button><Button variant="ghost" className={styles.dialogBlank} title={t('sessions.newSessionBlankHint', { tool: selectedLaunchTool?.name ?? '' })} disabled={launchingNew || !effectiveLaunchToolId} onClick={() => void launchFromDialog({ blank: true })}>{t('sessions.newSessionBlank')}</Button><Button variant="primary" className={styles.dialogPrimary} data-dialog-save disabled={launchingNew || !effectiveLaunchToolId || workspaceUnavailable} onClick={() => void launchFromDialog()} icon={<Icon name="play" size={14} />}>{launchingNew ? t('sessions.startingSession') : t('sessions.startInWorkbench')}</Button></div>
+        <div className={styles.dialogActions}><Button onClick={() => setNewDialogOpen(false)}>{t('common.dialog.cancel')}</Button><Button variant="primary" className={styles.dialogPrimary} data-dialog-save disabled={launchingNew || !effectiveLaunchToolId || workspaceUnavailable} onClick={() => void launchFromDialog()} icon={<Icon name="play" size={14} />}>{launchingNew ? t('sessions.startingSession') : t('sessions.startInWorkbench')}</Button></div>
       </div>
     </GuideDialog>}
     {worktreeSetupDialog()}
