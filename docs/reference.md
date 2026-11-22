@@ -166,12 +166,14 @@ Optional WebDAV sync uses a dedicated existing server directory and HTTPS (local
 
 A prompt body keeps only the canonical reference `{{cliora-secret:<uuid>}}`. `src-tauri/src/secrets/reference.rs` recognizes exactly that form and returns the referenced ids in body order (at most 256); anything else stays ordinary prompt text. The value never enters the body: `secrets::store` keeps it behind the shared `CredentialStore` boundary under a credential id derived from the secret id, so SQLite, search and previews, clipboard copies, export bundles, WebDAV sync and remote-host context carry an id and an alias, never a value.
 
+Prompt-library actions store the reference and a human-readable action name. On a receiving device, set up an unknown UUID from the prompt editor and grant the local executor. The outgoing local session uses that device’s executable, installation and grants. Credentials and grants stay local.
+
 `src-tauri/src/secrets/` owns the local secret plane and no adapter or shared service may bypass it:
 
 - `broker.rs` is the only place that resolves a reference. Resolution requires a live installation of the matching kind (CLI or MCP) and an explicit grant to the requested executor; a revoked installation, a missing grant or an unknown id is denied without reading the value.
 - `executor.rs` runs a user-registered executor as a fixed executable plus arguments, without a shell, with a validated environment name, and delivers the value through an environment variable or standard input. The receipt it writes holds a digest and byte count, the returned text is masked, and a missing value fails closed instead of running without it.
 - `approval.rs` asks the running application for a fresh confirmation on every raw read. The prompt carries the alias and a source label only; it expires after 120 seconds so an abandoned request cannot authorize a later read.
-- `audit.rs` stores one row per decision. Operation, decision and result code are closed sets, so a row can never carry a value, a script body or a response.
+- `audit.rs` records one final outcome per access. A confirmed or declined read occupies one row. Opening the database, recording an access, or viewing history removes entries older than 30 days and keeps at most the newest 100, across all local secrets.
 - `ipc.rs` is a per-user local transport: a domain socket inside the 0700 application directory on Unix, a named pipe whose DACL grants only the current user and the system account on Windows. One newline-delimited JSON request per connection, bounded request/response sizes, no TCP listener and no HTTP. This is a per-user permission boundary, not a sandbox against every process of the same user (R9).
 - `mcp.rs` is the stdio helper (`cliora --cliora-internal-secret-mcp-v1 --installation <uuid>`) speaking MCP over stdio. It holds one installation id and forwards `list`, `use` and `read` to the broker; it never opens the database. `cli.rs` is the smaller helper (`--cliora-internal-secret-cli-v1 … use --secret <id> --executor <id>`) used as the fallback.
 

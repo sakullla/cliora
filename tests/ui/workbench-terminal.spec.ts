@@ -4496,7 +4496,7 @@ test('mouse-tracking TUI accelerates wheel scrolling into multiple atomic SGR re
   expect(reports.every((item) => /^\x1b\[<64;\d+;\d+M$/.test(item.text))).toBe(true);
 });
 
-test('quick input sends a prompt secret reference verbatim without any secret command', async ({ page }) => {
+test('quick input prepares a reference using only local authorization metadata', async ({ page }) => {
   await openWorkbench(page);
   await page.evaluate(() => {
     const app = window as unknown as { __secretCalls: string[]; __TAURI_INTERNALS__: { invoke: (command: string, args?: unknown) => Promise<unknown> } };
@@ -4504,6 +4504,11 @@ test('quick input sends a prompt secret reference verbatim without any secret co
     const invoke = app.__TAURI_INTERNALS__.invoke;
     app.__TAURI_INTERNALS__.invoke = (command: string, args?: unknown) => {
       if (command.includes('secret')) app.__secretCalls.push(command);
+      if (command === 'secret_access_options') return Promise.resolve({
+        cli: { executable: '/fixture/cliora', entry: '--cliora-internal-secret-cli-v1' },
+        installations: [{ id: 'local-fixture', kind: 'cli', revoked: false, targetId: null }],
+        grants: [{ installationId: 'local-fixture', secretId: '1f1f1f1f-aaaa-4bbb-8ccc-dddddddddddd', executorId: 'fixture-action', executorLabel: '部署', alias: '部署口令' }],
+      });
       return invoke(command, args);
     };
   });
@@ -4514,9 +4519,10 @@ test('quick input sends a prompt secret reference verbatim without any secret co
   await page.evaluate(() => { (window as unknown as { __writeLog: unknown[] }).__writeLog.length = 0; });
   await composer.getByRole('button', { name: '发送', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __writeLog: Array<{ sessionId: string; text: string }> }).__writeLog)).toEqual([
-    { sessionId: 's1', text: `部署前读取 ${reference}\n其余步骤照旧。\r` },
+    { sessionId: 's1', text: expect.stringContaining(`部署前读取 ${reference}\n其余步骤照旧。`) },
   ]);
-  expect(await page.evaluate(() => (window as unknown as { __secretCalls: string[] }).__secretCalls)).toEqual([]);
+  expect(await page.evaluate(() => (window as unknown as { __writeLog: Array<{ text: string }> }).__writeLog[0].text)).toContain('use --secret 1f1f1f1f-aaaa-4bbb-8ccc-dddddddddddd --executor fixture-action');
+  expect(await page.evaluate(() => (window as unknown as { __secretCalls: string[] }).__secretCalls)).toEqual(['secret_access_options']);
   await expect(composer.getByRole('textbox')).toHaveValue('');
 });
 

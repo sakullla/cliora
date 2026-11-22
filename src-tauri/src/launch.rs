@@ -1635,6 +1635,14 @@ fn plan_with_stage_at(
             .map_err(|message| LaunchPlanError::new(LaunchStage::Terminal, message))?,
         LaunchForm::Desktop => TerminalId::Desktop,
     };
+    let executable = PathBuf::from(selected_path);
+    #[cfg(windows)]
+    let (executable, entry_arg) = if request.initial_prompt.as_deref().is_some_and(|text| text.trim().contains(['\r', '\n'])) {
+        multiline_prompt_entry(&executable, adapter, version)
+            .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?
+    } else {
+        (executable, None)
+    };
     let task_text = worktree.task_text.as_deref().filter(|text| !text.trim().is_empty()).or(request.initial_prompt.as_deref());
     // Only a new local workbench session creates a worktree. An explicit request
     // that cannot satisfy this is an error, never a direct launch elsewhere.
@@ -1732,6 +1740,10 @@ fn plan_with_stage_at(
         }
         cli_args.push(prompt.to_owned());
     }
+    #[cfg(windows)]
+    if let Some(entry) = entry_arg {
+        cli_args.insert(0, entry);
+    }
     let process_directory = if launch_form == LaunchForm::Desktop && !attached_desktop_directory {
         executable_directory(Path::new(selected_path))
     } else {
@@ -1744,7 +1756,7 @@ fn plan_with_stage_at(
         tool_id: request.tool_id,
         project_id: request.project_id,
         mode: request.mode,
-        executable: PathBuf::from(selected_path),
+        executable,
         cli_args,
         directory: process_directory,
         session_markers: if launch_form == LaunchForm::Desktop {
@@ -1863,6 +1875,51 @@ fn powershell_script(
         quote_powershell(&directory),
         parts.join(" ")
     ))
+}
+
+#[cfg(windows)]
+fn multiline_prompt_entry(path: &Path, adapter: &dyn CliAdapter, version: &str) -> Result<(PathBuf, Option<String>), String> {
+    use std::io::Read;
+
+    let shim = windows_cli_path(path);
+    if !shim.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("cmd") || ext.eq_ignore_ascii_case("bat")) {
+        return Ok((shim, None));
+    }
+
+    // cmd.exe truncates multiline arguments at the first newline when the npm
+    // shim forwards %*. Resolve the actual entry in this installation before
+    // creating a worktree. Never send the prompt through the batch parser.
+    let unsupported = "此批处理入口无法完整传递多行提示词。请在工具页选择原生可执行文件，或在会话启动后粘贴全文。";
+    let directory = shim.parent().ok_or(unsupported)?;
+    let package = adapter.install_line_for_version(Some(version))
+        .filter(|line| !line.npm_package.is_empty()).ok_or(unsupported)?.npm_package;
+    let mut script = String::new();
+    std::fs::File::open(&shim).and_then(|file| file.take(16_384).read_to_string(&mut script))
+        .map_err(|_| unsupported)?;
+    let script = script.replace('\\', "/");
+    let invocation = script.trim_end().lines().last().ok_or(unsupported)?;
+    let (launcher, relative) = invocation.strip_suffix("%*")
+        .and_then(|line| line.trim_end().strip_suffix('"'))
+        .and_then(|line| line.rsplit_once("\"%dp0%/"))
+        .ok_or(unsupported)?;
+    if !relative.starts_with(&format!("node_modules/{package}/"))
+        || !Path::new(relative).components().all(|part| matches!(part, std::path::Component::Normal(_))) {
+        return Err(unsupported.into());
+    }
+    let entry = directory.join(relative);
+    if !entry.is_file() {
+        return Err(unsupported.into());
+    }
+    if launcher.trim().is_empty() && entry.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("exe")) {
+        return Ok((entry, None));
+    }
+    if !launcher.trim_end().ends_with("\"%_prog%\"") || !script.lines().any(|line| line.trim().eq_ignore_ascii_case("SET \"_prog=node\"")) {
+        return Err(unsupported.into());
+    }
+    let node = std::iter::once(directory.to_path_buf()).chain(crate::process_environment::directories())
+        .filter(|dir| dir.is_absolute()).map(|dir| dir.join("node.exe")).find(|node| node.is_file())
+        .ok_or("多行提示词启动需要此 npm 安装使用的 Node.js")?;
+    Ok((node, Some(terminal_path(&entry)?)))
 }
 
 #[cfg(windows)]

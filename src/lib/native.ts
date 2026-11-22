@@ -21,6 +21,11 @@ import type { ConflictPreview, PortableImportReport, PortableItem, PortablePrevi
 import type { QueryConfig, UsageCache, UsagePreset, UsageSample, DeleteQueryResult, DraftTestReport, SaveQueryResult, UsageError, UsageQuery, UsageQueryDraft } from '../types/usage';
 import type { DirectoryReceipt, RemoteCliProbe, RemoteDirectoryListing, RemoteProbe, RemoteProject, RemoteTarget, RemoteToolStore, RemoteWriteReceipt } from '../types/remote';
 import i18n, { bindLanguagePersist } from '../i18n';
+import { prepareLocalSecretPrompt } from './secretCommands';
+
+export function localSessionPrompt(body: string) {
+  return prepareLocalSecretPrompt(body, () => command<ScriptAccessOptions>('secret_access_options'), i18n.language.startsWith('en'));
+}
 
 export const nativeAvailable = isTauri();
 
@@ -250,7 +255,7 @@ export const native = {
   // remote library context cannot create, list or resolve a local secret.
   listPromptSecretPage: (search: string, offset: number, references: string) => command<PromptSecretPage>('list_prompt_secret_page', { search, offset, references }),
   listPromptSecrets: () => command<PromptSecret[]>('list_prompt_secrets'),
-  createPromptSecret: (alias: string, value: string) => command<PromptSecret>('create_prompt_secret', { alias, value }),
+  createPromptSecret: (alias: string, value: string, referenceId?: string) => command<PromptSecret>('create_prompt_secret', { alias, value, referenceId }),
   renamePromptSecret: (id: string, expectedVersion: number, alias: string) => command<PromptSecret>('rename_prompt_secret', { id, expectedVersion, alias }),
   updatePromptSecretValue: (id: string, expectedVersion: number, value: string) => command<PromptSecret>('update_prompt_secret_value', { id, expectedVersion, value }),
   deletePromptSecret: (id: string, expectedVersion: number) => command<void>('delete_prompt_secret', { id, expectedVersion }),
@@ -475,8 +480,14 @@ export const native = {
       const projects = await command<RemoteProject[]>('list_remote_projects', { targetId: null });
       const targetId = projects.find(item => `remote:${item.id}` === request.projectId)?.targetId ?? '';
       result = await remoteCommand<LaunchResult>('launch_cli', { request, targetId }, 'write', options);
-    } else if (request.workspaceId && request.repositoryId) result = await command<LaunchResult>('launch_workspace_cli', { workspaceId: request.workspaceId, repositoryId: request.repositoryId, request });
-    else result = await command<LaunchResult>('launch_cli', { request });
+    } else {
+      if (request.initialPrompt && !request.remoteIntent) {
+        request = { ...request, initialPrompt: await localSessionPrompt(request.initialPrompt) };
+      }
+      result = request.workspaceId && request.repositoryId
+        ? await command<LaunchResult>('launch_workspace_cli', { workspaceId: request.workspaceId, repositoryId: request.repositoryId, request })
+        : await command<LaunchResult>('launch_cli', { request });
+    }
     markOnboardingLaunched();
     return result;
   },

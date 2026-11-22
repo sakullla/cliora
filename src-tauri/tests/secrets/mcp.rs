@@ -352,7 +352,7 @@ fn a_use_without_a_grant_is_refused_without_a_value() {
     let broker = broker_for(&uses, false);
     let results = exchange(
         &uses.installation.id,
-        vec![("use_secret", json!({ "secretId": uses.secret.id, "executorId": uses.executor.id }))],
+        vec![("use_secret", json!({ "secretId": uses.secret.reference, "executorId": uses.executor.id }))],
     );
     let (is_error, text) = &results[0];
     assert!(is_error, "{text}");
@@ -371,7 +371,7 @@ fn an_approved_use_runs_the_executor_and_masks_the_output() {
     let broker = broker_for(&uses, false);
     let results = exchange(
         &uses.installation.id,
-        vec![("use_secret", json!({ "secretId": uses.secret.id, "executorId": uses.executor.id }))],
+        vec![("use_secret", json!({ "secretId": uses.secret.reference, "executorId": uses.executor.id }))],
     );
     let (is_error, text) = &results[0];
     assert!(!is_error, "{text}");
@@ -419,7 +419,7 @@ fn an_accepted_read_returns_the_value_only_after_the_native_approval() {
         assert!(text.contains(CANARY), "the approved read returns the value: {text}");
     }
     let rows = audit::list(&uses.database, 20).unwrap();
-    assert_eq!(rows.iter().filter(|row| row.operation == "approve" && row.decision == "allowed").count(), 2);
+    assert_eq!(rows.iter().filter(|row| row.operation == "read" && row.decision == "allowed").count(), 2);
     drop(broker);
 }
 

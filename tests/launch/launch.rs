@@ -2,6 +2,35 @@ use super::*;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
+#[cfg(windows)]
+#[test]
+fn npm_workbench_receives_the_entire_multiline_prompt_as_one_argument() {
+    let _guard = crate::session_host::lock_for_tests();
+    let temp = tempfile::tempdir().unwrap();
+    let relative = "node_modules/@openai/codex/bin/codex.js";
+    let script = temp.path().join(relative);
+    std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+    std::fs::write(&script, "require('fs').writeFileSync('received.json', JSON.stringify(process.argv.slice(2))); console.log('prompt-received');").unwrap();
+    let shim = temp.path().join("codex.cmd");
+    std::fs::write(&shim, format!("@echo off\r\nSET \"_prog=node\"\r\n\"%_prog%\"  \"%dp0%\\{relative}\" %*\r\n")).unwrap();
+
+    let (program, entry) = multiline_prompt_entry(&shim, &adapters::CODEX, "0.171.0").unwrap();
+    let prompt = "告诉我这个值 {{cliora-secret:11111111-2222-4333-8444-555555555555}}\r\n\r\n```\nsynthetic --executor \"测试\" %PATH% & end\n```";
+    let mut plan = sample(TerminalId::Workbench);
+    plan.executable = program;
+    plan.directory = temp.path().into();
+    plan.cli_args = vec![entry.unwrap(), "--yolo".into(), prompt.into()];
+    let id = crate::session_host::start(plan, None).unwrap().session_id.unwrap();
+    let received = crate::session_host::wait_for_replay(&id, "prompt-received");
+    crate::session_host::close(&id).unwrap();
+    received.unwrap();
+    let arguments: Vec<String> = serde_json::from_slice(&std::fs::read(temp.path().join("received.json")).unwrap()).unwrap();
+    assert_eq!(arguments, ["--yolo", prompt]);
+
+    std::fs::write(shim.as_path(), "@echo off\r\ncustom-wrapper %*").unwrap();
+    assert!(multiline_prompt_entry(&shim, &adapters::CODEX, "0.171.0").is_err());
+}
+
 #[test]
 fn cmd_launch_rejects_oversized_commands_without_truncating_other_terminals() {
     let mut plan = sample(TerminalId::Cmd);

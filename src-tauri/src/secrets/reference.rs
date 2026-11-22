@@ -11,6 +11,12 @@ const CLOSE: &str = "}}";
 /// thousands of credential lookups.
 const MAX_REFERENCES: usize = 256;
 
+/// Helpers accept either the id or the complete reference printed by list.
+pub fn argument_id(argument: &str) -> Result<String, &'static str> {
+    let id = argument.strip_prefix(OPEN).and_then(|token| token.strip_suffix(CLOSE)).unwrap_or(argument);
+    uuid::Uuid::parse_str(id).map(|id| id.to_string()).map_err(|_| "需要秘密标识或完整的栖点秘密引用")
+}
+
 /// The credential id used for a secret's value. It is derived from the secret id
 /// and is never the prompt body or the display alias.
 pub fn credential_id(secret_id: &str) -> Result<String, String> {

@@ -2183,4 +2183,20 @@ fn webdav_publication_keeps_prompt_secret_references_without_secret_metadata() {
         PortablePayload::Prompt(value) => value.item.id != scoped.id,
         _ => true,
     }));
+
+    let server = Server::new();
+    let receiver = database(&temp.path().join("receiver"));
+    let receiver_store = MemoryCredentials::default();
+    configure(&db, &store, setup(&server)).unwrap();
+    run(&db, &store, &registry, false).unwrap();
+    configure(&receiver, &receiver_store, setup(&server)).unwrap();
+    run(&receiver, &receiver_store, &registry, false).unwrap();
+    let received = crate::prompts::get(&receiver, &global.id, None).unwrap();
+    assert_eq!(received.body, global.body);
+    assert!(crate::secrets::list(&receiver, &receiver_store).unwrap().is_empty());
+    let before = server.state.lock().unwrap().files["/dav/manifest.cliora"].clone();
+    crate::secrets::store::create_local(&receiver, &receiver_store, "接收设备", "device-only", Some(&secret.id)).unwrap();
+    run(&receiver, &receiver_store, &registry, false).unwrap();
+    assert_eq!(server.state.lock().unwrap().files["/dav/manifest.cliora"], before);
+
 }

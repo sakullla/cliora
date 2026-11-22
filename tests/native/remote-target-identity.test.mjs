@@ -11,14 +11,32 @@ const moduleUrl = code => `data:text/javascript;base64,${Buffer.from(code).toStr
 async function loadNative() {
   const code = transpile('native').replace(/^import .+;$/gm, line => {
     if (line.includes("'./remoteOperations'")) return `const { RemoteOperations } = await import('${moduleUrl(transpile('remoteOperations'))}');`;
+    if (line.includes("'./secretCommands'")) return `const { prepareLocalSecretPrompt } = await import('${moduleUrl(transpile('secretCommands'))}');`;
     if (line.includes("'@tauri-apps/api/core'")) return 'const invoke = (...args) => globalThis.__targetIdentityInvoke(...args); const isTauri = () => true;';
     if (line.includes("'./onboarding'")) return 'const markOnboardingLaunched = () => {};';
-    if (line.includes("'../i18n'")) return 'const i18n = { t: key => key }; const bindLanguagePersist = () => {};';
+    if (line.includes("'../i18n'")) return "const i18n = { language: 'zh', t: key => key }; const bindLanguagePersist = () => {};";
     if (line.includes("remote/writeReceipts")) return "const getWriteReceipts = () => globalThis.__writeReceipts ?? []; const getWriteFaults = () => globalThis.__writeFaults ?? []; const rememberWriteReceipt = () => {}; const unresolvedWrite = item => !['committed', 'rolled_back', 'prepare_failed', 'conflict_before_commit'].includes(item.outcome); const rememberWriteFault = (targetId, targetRevision) => globalThis.__writeFaults.push({ targetId, targetRevision }); const requestWriteRecovery = targetId => globalThis.window.dispatchEvent(new CustomEvent('cliora:remote-write-recovery', { detail: { targetId } }));";
     throw new Error(`Unexpected runtime dependency: ${line}`);
   });
   return import(moduleUrl(code));
 }
+
+test('remote session launch forwards the literal reference without querying local secret metadata', async () => {
+  const initialPrompt = 'Use {{cliora-secret:00000000-0000-4000-a000-000000000001}}';
+  const calls = [];
+  globalThis.__targetIdentityInvoke = async (name, args) => {
+    calls.push(name);
+    if (name === 'list_remote_projects') return [{ id: 'fixture', targetId: 'remote-secret-fixture' }];
+    assert.equal(name, 'launch_cli');
+    assert.equal(args.request.initialPrompt, initialPrompt);
+    return {};
+  };
+  try {
+    const { native } = await loadNative();
+    await native.launchCli({ toolId: 'codex', projectId: 'remote:fixture', initialPrompt });
+    assert.deepEqual(calls, ['list_remote_projects', 'launch_cli']);
+  } finally { delete globalThis.__targetIdentityInvoke; }
+});
 
 test('native error normalization supplies nonblank detail without losing remote advice or original messages', async () => {
   const action = 'Check the remote directory permissions';

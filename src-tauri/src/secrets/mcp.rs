@@ -142,7 +142,7 @@ fn serve_stdio(installation: String) -> i32 {
 const LIST_SECRETS_DESCRIPTION: &str = "List the local secret metadata this Cliora installation may use. \
 Returns each secret's stable id, alias, `{{cliora-secret:<secret-id>}}` reference, status and the executor \
 entries it is granted. No secret value is returned; a status other than `available` means this device lacks \
-the value. Use the ids with use_secret or read_secret.";
+the value. To reference a secret, reuse its reference field verbatim. To perform a task, pass it to use_secret.";
 
 const LIST_EXECUTORS_DESCRIPTION: &str = "List the registered executor entries this Cliora installation may \
 run, with their id, label, the secret ids each is granted and whether the registered script still matches its \
@@ -162,7 +162,7 @@ unless the task needs the text itself.";
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UseSecretArgs {
-    /// Secret id from list_secrets, or the id inside `{{cliora-secret:<secret-id>}}`.
+    /// Secret id or complete `{{cliora-secret:<secret-id>}}` reference from list_secrets.
     pub secret_id: String,
     /// Executor id granted for that secret in list_secret_executors.
     pub executor_id: String,
@@ -171,7 +171,7 @@ pub struct UseSecretArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReadSecretArgs {
-    /// Secret id from list_secrets, or the id inside `{{cliora-secret:<secret-id>}}`.
+    /// Secret id or complete `{{cliora-secret:<secret-id>}}` reference from list_secrets.
     pub secret_id: String,
 }
 
@@ -201,6 +201,8 @@ impl SecretMcp {
         executor_id: Option<String>,
     ) -> Result<Json<Value>, String> {
         let installation = self.installation.clone();
+        let secret_id = secret_id.as_deref().map(super::reference::argument_id).transpose()
+            .map_err(|message| failure_document(super::audit::code::INVALID_REQUEST, message))?;
         // The IPC call blocks on the broker (a read waits for its approval), so it
         // runs off the protocol task.
         let attempt = tokio::task::spawn_blocking(move || {

@@ -324,3 +324,29 @@ fn paging_reads_only_visible_values_and_orders_references_first() {
     assert!(none.items.is_empty());
     assert_eq!(store.reads.load(Ordering::Relaxed), 41);
 }
+
+#[test]
+fn imported_prompt_reference_can_be_bound_on_the_receiving_device_without_changing_its_body() {
+    let registry = crate::adapters::Registry::builtins();
+    let source = db();
+    let source_store = MemoryCredentials::default();
+    let created = secret(&source, &source_store, "部署", CANARY);
+    let expected = format!("使用 {} 执行已授权的部署操作。", created.reference);
+    let document = prompt(&source, "部署", &expected);
+    let snapshot = crate::portable::collect_snapshot(&source, &source_store, &registry).unwrap();
+    let target = db();
+    let target_store = MemoryCredentials::default();
+    let preview = crate::portable::preview_import(&target, &target_store, &registry, snapshot).unwrap();
+    crate::portable::apply_import(&target, &target_store, &registry, &preview,
+        &std::collections::BTreeSet::from([format!("library:{}", document.id)])).unwrap();
+    let received = crate::prompts::get(&target, &document.id, None).unwrap();
+    assert_eq!(received.body, expected);
+    assert_eq!(resolve(&target, &target_store, &expected).unwrap()[0].status, SecretStatus::Unknown);
+    let bound = create_local(&target, &target_store, "本机部署", "second-device", Some(&created.id)).unwrap();
+    assert_eq!(bound.reference, created.reference);
+    assert!(create_local(&target, &target_store, "重复绑定", "overwrite", Some(&created.id)).is_err());
+    assert_eq!(target_store.get(&reference::credential_id(&created.id).unwrap()).unwrap(), "second-device");
+    let grants = target.with_read_connection(|conn| conn.query_row("SELECT count(*) FROM secret_grants", [],
+        |r| r.get::<_, i64>(0)).map_err(|e| e.to_string())).unwrap();
+    assert_eq!(grants, 0);
+}

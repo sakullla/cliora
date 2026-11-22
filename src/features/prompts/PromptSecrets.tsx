@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { native } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
 import { formatFailure } from '../../lib/feedback';
-import { buildSecretUsageFromMetadata, grantedScriptCommand, grantedSecretAliases } from '../../lib/secretCommands';
+import { preferredInstallation, promptSecretTokens } from '../../lib/secretCommands';
 import { SecretScriptAccess } from './SecretScriptAccess';
 import { RowMenu } from '../../components/RowMenu';
 import { Icon } from '../../components/Icon';
@@ -59,7 +59,7 @@ export function insertReference(body: string, reference: string): string {
 const pageSize = 30;
 const emptyBroker: SecretBrokerStatus = { running: false, transport: '', error: null };
 type Tab = 'secrets' | 'access';
-type Form = { kind: 'create' } | { kind: 'rename'; id: string } | { kind: 'value'; id: string } | null;
+type Form = { kind: 'create'; referenceId?: string } | { kind: 'rename'; id: string } | { kind: 'value'; id: string } | null;
 
 /**
  * Local secret management for the prompt editor. The panel only ever handles aliases and
@@ -111,14 +111,7 @@ export function PromptSecrets({ local, body, disabled, onInsert }: { local: bool
   const [auditRevision, setAuditRevision] = useState(0);
   const pageRequest = useRef(0);
   const brokerRequest = useRef(0);
-  const referenceText = useMemo(() => {
-    const tokens = new Set<string>();
-    for (const match of body.matchAll(/\{\{cliora-secret:(?:urn:uuid:)?(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\}\}/g)) {
-      tokens.add(match[0]);
-      if (tokens.size === 256) break;
-    }
-    return [...tokens].join(' ');
-  }, [body]);
+  const referenceText = useMemo(() => promptSecretTokens(body).join(' '), [body]);
 
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -158,7 +151,7 @@ export function PromptSecrets({ local, body, disabled, onInsert }: { local: bool
     if (!local || tab !== 'access' || !auditOpen) return;
     let current = true;
     setAuditError('');
-    void native.listSecretAudit(20).then(rows => { if (current) setAudit(rows); })
+    void native.listSecretAudit(100).then(rows => { if (current) setAudit(rows); })
       .catch(failure => { if (current) setAuditError(formatFailure(failure, t('library.secrets.readFailed'), t('library.secrets.retry'))); });
     return () => { current = false; };
   }, [local, tab, auditOpen, auditRevision]);
@@ -206,7 +199,7 @@ export function PromptSecrets({ local, body, disabled, onInsert }: { local: bool
     }
   }
   function closeForm() { setForm(null); setAlias(''); setValue(''); }
-  function openCreate() { setError(''); setAlias(''); setValue(''); setTab('secrets'); setForm({ kind: 'create' }); }
+  function openCreate(referenceId?: string) { setError(''); setAlias(''); setValue(''); setTab('secrets'); setForm({ kind: 'create', referenceId }); }
   function openRename(secret: PromptSecret) { setError(''); setAlias(secret.alias); setValue(''); setForm({ kind: 'rename', id: secret.id }); }
   function openValue(secret: PromptSecret) { setError(''); setValue(''); setForm({ kind: 'value', id: secret.id }); }
 
@@ -214,13 +207,14 @@ export function PromptSecrets({ local, body, disabled, onInsert }: { local: bool
     if (busy || !alias.trim() || !value) return;
     setBusy(true); setError('');
     try {
-      const created = await native.createPromptSecret(alias, value);
+      const created = await native.createPromptSecret(alias, value, form?.kind === 'create' ? form.referenceId : undefined);
       if (!mounted.current) return;
       closeForm();
       setSearch(''); setOffset(0);
       announce(t('library.secrets.created', { name: created.alias }));
       setRevision(value => value + 1);
-      onInsert(created.reference);
+      if (form?.kind !== 'create' || !form.referenceId) onInsert(created.reference);
+      setGrantSecretId(created.id);
     } catch (failure) { if (mounted.current) setError(formatFailure(failure, t('library.secrets.createFailed'), t('library.secrets.retry'))); }
     finally { if (mounted.current) setBusy(false); }
   }
@@ -352,38 +346,12 @@ export function PromptSecrets({ local, body, disabled, onInsert }: { local: bool
     } catch (failure) { if (mounted.current) setError(formatFailure(failure, t('library.secrets.broker.saveFailed'), t('library.secrets.retry'))); }
     finally { if (mounted.current) setBusy(false); }
   }
-  /** Inserts complete, copied-from-metadata instructions; creates a default CLI identity if none exists yet. */
-  async function insertInstructions() {
-    setError('');
-    setBusy(true);
-    try {
-      const context = cli ?? await native.secretCliContext();
-      if (!mounted.current) return;
-      setCli(context);
-      let currentInstallations = installations.filter(item => (item.kind === 'cli' && !item.targetId) || item.id === preferredId);
-      if (!currentInstallations.some(item => !item.revoked)) {
-        const created = await createDefaultCli();
-        if (!mounted.current) return;
-        currentInstallations = [created, ...currentInstallations];
-      }
-      // The shared helper picks a live installation that already carries a grant
-      // when one exists, so the inserted text holds real use/read commands.
-      const text = buildSecretUsageFromMetadata({
-        context, preferredId,
-        installations: currentInstallations.map(item => ({ id: item.id, label: item.label, kind: item.kind, revoked: item.revoked })),
-        locale: i18n.language?.startsWith('en') ? 'en' : 'zh',
-        secrets: grantedSecretAliases(grants),
-        executors: executors.map(executor => ({ id: executor.id, label: executor.label })),
-        grants,
-      });
-      if (!text) {
-        setError(t('library.secrets.broker.needInstallation'));
-        return;
-      }
-      onInsert(text);
-      announce(t('library.secrets.broker.instructionsInserted'));
-    } catch (failure) { if (mounted.current) setError(formatFailure(failure, t('library.secrets.broker.instructionsFailed'), t('library.secrets.retry'))); }
-    finally { if (mounted.current) setBusy(false); }
+  const insertionTarget = preferredInstallation(installations.filter(item => item.kind === 'cli' && !item.targetId), grants, preferredId);
+  const portableInstructions = [...new Set(grants.filter(grant => grant.installationId === insertionTarget?.id).map(grantInstruction))];
+  function grantInstruction(grant: SecretGrant) {
+    return t('library.secrets.broker.grantedInstructions', {
+      script: grant.executorLabel, secret: grant.alias, reference: '{{cliora-secret:' + grant.secretId + '}}',
+    });
   }
 
   const brokerReady = !!cli && !brokerLoading && !brokerError;
@@ -425,7 +393,7 @@ export function PromptSecrets({ local, body, disabled, onInsert }: { local: bool
             {t('library.secrets.tabs.access')}<span className={styles.tabDot} data-state={brokerState} aria-hidden="true" />
           </button>
         </div>
-        <Button size="sm" variant="primary" data-secret-create disabled={disabled || busy} icon={<Icon name="plus" size={12} />} onClick={openCreate}>{t('library.secrets.create')}</Button>
+        <Button size="sm" variant="primary" data-secret-create disabled={disabled || busy} icon={<Icon name="plus" size={12} />} onClick={() => openCreate()}>{t('library.secrets.create')}</Button>
       </div>
     </header>
 
@@ -437,13 +405,14 @@ export function PromptSecrets({ local, body, disabled, onInsert }: { local: bool
         <span className={styles.refsLabel}>{problems > 0 && <Icon name="alert" size={12} />}{problems > 0 ? t('library.secrets.referencesProblem', { count: problems }) : t('library.secrets.references')}</span>
         {references.map(item => <span className={styles.ref} key={item.id} title={item.reference} data-secret-reference={item.reference} data-secret-reference-status={item.status}>
           <span className={styles.dot} data-tone={statusTone[item.status]} aria-hidden="true" />
-          <span>{item.alias ?? t('library.secrets.referenceUnnamed')}</span>
+          <span>{item.alias ?? item.id.slice(0, 8)}</span>
           {item.status !== 'available' && <span className={styles.refState}>{t(`library.secrets.referenceStatus.${item.status}`)}</span>}
+          {item.status === 'unknown' && <Button size="sm" variant="ghost" disabled={disabled || busy} data-secret-bind={item.id} onClick={() => openCreate(item.id)}>{t('library.secrets.bindHere')}</Button>}
         </span>)}
       </div>}
 
       {form?.kind === 'create' && <div className={styles.create} onKeyDown={formKeys(() => void create(), !!alias.trim() && !!value)}>
-        <div className={styles.createHead}><Icon name="lock" size={14} />{t('library.secrets.createTitle')}</div>
+        <div className={styles.createHead}><Icon name="lock" size={14} />{form.referenceId ? t('library.secrets.bindHere') : t('library.secrets.createTitle')}</div>
         <div className={styles.fields}>
           <label className={styles.field}>{t('library.secrets.alias')}<input autoFocus data-secret-alias maxLength={80} value={alias} disabled={busy} placeholder={t('library.secrets.aliasPlaceholder')} onChange={event => setAlias(event.target.value)} /></label>
           <label className={styles.field}>{t('library.secrets.value')}<input type="password" data-secret-value autoComplete="new-password" spellCheck={false} value={value} disabled={busy} placeholder={t('library.secrets.valuePlaceholder')} onChange={event => setValue(event.target.value)} /></label>
@@ -519,9 +488,7 @@ export function PromptSecrets({ local, body, disabled, onInsert }: { local: bool
               alias={secret.alias}
               availablePrograms={programs} installations={installations} executors={executors} grants={grants.filter(grant => grant.secretId === secret.id)} busy={busy || !brokerReady}
               onInsert={grant => {
-                const description = t('library.secrets.broker.grantedInstructions', { secret: grant.alias, script: grant.executorLabel });
-                const command = grantedScriptCommand({ ...cli, installationId: grant.installationId }, grant);
-                onInsert([description, '```', command, '```'].join('\n'));
+                onInsert(grantInstruction(grant));
                 announce(t('library.secrets.broker.instructionsInserted'));
               }}
               onGrant={saveGrant} onRevoke={grant => void revokeGrant(grant)} onClose={() => setGrantSecretId('')}
@@ -544,7 +511,10 @@ export function PromptSecrets({ local, body, disabled, onInsert }: { local: bool
         </div>
         <div className={styles.heroActions}>
           <IconButton size="sm" aria-label={t('library.secrets.refresh')} data-secret-broker-refresh disabled={busy || brokerLoading} icon={<Icon name="refresh" size={13} />} onClick={() => { void reloadBroker(); setAuditRevision(n => n + 1); }} />
-          <Button size="sm" variant="primary" data-secret-broker-instructions disabled={disabled || busy || !brokerReady} icon={<Icon name="terminal" size={12} />} onClick={() => void insertInstructions()}>{t('library.secrets.broker.insertInstructions')}</Button>
+          <Button size="sm" variant="primary" data-secret-broker-instructions disabled={disabled || busy || !brokerReady || !portableInstructions.length} icon={<Icon name="plus" size={12} />} onClick={() => {
+            onInsert(portableInstructions.join('\n'));
+            announce(t('library.secrets.broker.instructionsInserted'));
+          }}>{t('library.secrets.broker.insertInstructions')}</Button>
         </div>
       </div>
 
@@ -599,14 +569,15 @@ export function PromptSecrets({ local, body, disabled, onInsert }: { local: bool
       </details>}
       <details className={styles.details} open={auditOpen} onToggle={event => setAuditOpen(event.currentTarget.open)}>
         <summary><span>{t('library.secrets.broker.audit')}</span>{audit.length > 0 && <span className={styles.count}>{audit.length}</span>}</summary>
+        {auditOpen && <p className={styles.muted}>{t('library.secrets.broker.retention')}</p>}
         {auditError && <p role="alert">{auditError} <Button size="sm" onClick={() => setAuditRevision(n => n + 1)}>{t('library.secrets.retry')}</Button></p>}
-        {auditOpen && (!audit.length ? <p className={styles.muted} data-secret-audit-empty>{t('library.secrets.broker.auditEmpty')}</p> : <ul className={styles.rows}>
+        {auditOpen && (!audit.length ? <p className={styles.muted} data-secret-audit-empty>{t('library.secrets.broker.auditEmpty')}</p> : <ul className={`${styles.rows} ${styles.auditRows}`}>
           {audit.map(entry => <li className={styles.row} key={entry.id} data-secret-audit={entry.id} data-secret-audit-code={entry.code}>
-            <span className={styles.dot} data-tone={entry.decision === 'allowed' ? 'success' : 'danger'} aria-hidden="true" />
+            <span className={styles.dot} data-tone={entry.code === 'ok' ? 'success' : 'danger'} aria-hidden="true" />
             <span className={styles.rowText}>
               <span className={styles.rowTitle}>{t(`library.secrets.broker.operation.${entry.operation}`)}</span>
-              <Badge tone={entry.decision === 'allowed' ? 'success' : 'danger'}>{t(`library.secrets.broker.decision.${entry.decision}`)}</Badge>
-              <code className={styles.rowCode}>{entry.code}</code>
+              <span className={styles.rowTitle}>{grants.find(grant => grant.secretId === entry.secretId)?.alias ?? secrets.find(secret => secret.id === entry.secretId)?.alias}</span>
+              {entry.code !== 'ok' && <Badge tone="danger">{t(`library.secrets.broker.result.${entry.code}`, { defaultValue: entry.code })}</Badge>}
             </span>
             <span className={styles.rowTime}>{relativeTime(entry.at, locale)}</span>
           </li>)}

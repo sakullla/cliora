@@ -9,16 +9,13 @@ use crate::prompts::timestamp;
 use rusqlite::params;
 use serde::Serialize;
 
-/// The operations a user can audit. `Approve`/`Decline` are the answers to a
-/// read approval, `Error` marks a failure that produced no result.
+/// A read records its final outcome once, including a declined approval.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Operation {
     List,
     Use,
     Read,
-    Approve,
-    Decline,
     Error,
 }
 
@@ -28,8 +25,6 @@ impl Operation {
             Self::List => "list",
             Self::Use => "use",
             Self::Read => "read",
-            Self::Approve => "approve",
-            Self::Decline => "decline",
             Self::Error => "error",
         }
     }
@@ -94,15 +89,32 @@ fn opaque_id(value: Option<&str>) -> Option<&str> {
     value.filter(|candidate| uuid::Uuid::parse_str(candidate).is_ok())
 }
 
+const MAX_ACCESSES: u32 = 100;
+const RETENTION_SECONDS: u64 = 30 * 24 * 60 * 60;
+
+pub(crate) fn prune(conn: &rusqlite::Connection, now: u64) -> rusqlite::Result<()> {
+    // Earlier releases stored a separate confirmation before each read result.
+    conn.execute(
+        "DELETE FROM secret_audit WHERE id NOT IN (
+           SELECT id FROM secret_audit WHERE at >= ?1 AND operation NOT IN ('approve','decline')
+           ORDER BY at DESC, id DESC LIMIT ?2
+         )",
+        params![now.saturating_sub(RETENTION_SECONDS) as i64, MAX_ACCESSES],
+    )?;
+    Ok(())
+}
+
 /// Appends one row. Audit writes never carry a value and never fail the caller's
 /// decision: a storage failure is reported so the caller can surface it.
 pub fn record(db: &Database, event: Event<'_>) -> Result<(), String> {
     db.with_connection(|conn| {
-        conn.execute(
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        let now = timestamp();
+        tx.execute(
             "INSERT INTO secret_audit(at,operation,decision,result_code,secret_id,installation_id,executor_id)
              VALUES(?1,?2,?3,?4,?5,?6,?7)",
             params![
-                timestamp() as i64,
+                now as i64,
                 event.operation.as_str(),
                 event.decision.as_str(),
                 event.code,
@@ -111,8 +123,9 @@ pub fn record(db: &Database, event: Event<'_>) -> Result<(), String> {
                 opaque_id(event.executor_id),
             ],
         )
-        .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+        prune(&tx, now).map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())
     })
 }
 
@@ -132,8 +145,9 @@ pub struct Entry {
 /// Newest rows first. The audit view only needs the recent history, so the query
 /// is bounded instead of loading the whole table into the UI process.
 pub fn list(db: &Database, limit: u32) -> Result<Vec<Entry>, String> {
-    let limit = limit.clamp(1, 500) as i64;
-    db.with_read_connection(|conn| {
+    let limit = limit.clamp(1, MAX_ACCESSES);
+    db.with_connection(|conn| {
+        prune(conn, timestamp()).map_err(|error| error.to_string())?;
         let mut statement = conn
             .prepare(
                 "SELECT id,at,operation,decision,result_code,secret_id,installation_id,executor_id

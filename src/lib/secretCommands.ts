@@ -1,4 +1,4 @@
-import type { SecretInstallationKind } from '../types/secrets';
+import type { ScriptAccessOptions, SecretInstallationKind } from '../types/secrets';
 
 /**
  * The CLI usage text a user inserts into a prompt.
@@ -39,12 +39,71 @@ export function quoteArgument(value: string): string {
 
 type CliCommandContext = Pick<SecretUsageInput, 'executable' | 'entry' | 'installationId'>;
 
+// PowerShell otherwise detaches a Windows GUI executable before the broker
+// answers. An output pipeline waits for it and captures its JSON on stdout.
+const POWERSHELL_OUTPUT = ' | Out-String -Stream';
+
 export function grantedScriptCommand(context: CliCommandContext, grant: SecretUsageGrant): string {
   return command(context, ['use', '--secret', grant.secretId, '--executor', grant.executorId]);
 }
 
 function command(input: CliCommandContext, rest: string[]): string {
-  return [input.executable, input.entry, '--installation', input.installationId, ...rest].map(quoteArgument).join(' ');
+  const argv = [input.executable, input.entry, '--installation', input.installationId, ...rest];
+  if (/^(?:[A-Za-z]:[\\/]|\\\\)/.test(input.executable)) {
+    return '& ' + argv.map(arg => SAFE_ARGUMENT.test(arg) ? arg : "'" + arg.replaceAll("'", "''") + "'").join(' ') + POWERSHELL_OUTPUT;
+  }
+  return argv.map(quoteArgument).join(' ');
+}
+
+export function promptSecretTokens(body: string): string[] {
+  const tokens = new Set<string>();
+  for (const match of body.matchAll(/\{\{cliora-secret:(?:urn:uuid:)?(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\}\}/g)) {
+    tokens.add(match[0]);
+    if (tokens.size === 256) break;
+  }
+  return [...tokens];
+}
+
+/** Only the outgoing local message receives commands. No credential is fetched here. */
+export async function prepareLocalSecretPrompt(
+  body: string, load: () => Promise<Pick<ScriptAccessOptions, 'cli' | 'installations' | 'grants'>>,
+  english: boolean,
+): Promise<string> {
+  const tokens = promptSecretTokens(body);
+  if (!tokens.length) return body;
+  const { cli, installations, grants } = await load();
+  const live = installations.filter(item => item.kind === 'cli' && !item.targetId && !item.revoked);
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  const listCommands = new Set<string>();
+  for (const token of tokens) {
+    const compact = token.slice('{{cliora-secret:'.length, -2).replace(/^urn:uuid:/, '').replaceAll('-', '').toLowerCase();
+    if (seen.has(compact)) continue;
+    seen.add(compact);
+    const matching = grants.filter(grant => grant.secretId.replaceAll('-', '').toLowerCase() === compact
+      && live.some(item => item.id === grant.installationId));
+    if (!matching.length) {
+      lines.push(english ? token + ' has no authorized local CLI action. If list_secrets is available, check its granted actions. Otherwise ask the user to set up this reference on this device and authorize the requested action in Secret references.' : token + ' 尚无本机 CLI 操作授权。若当前提供 list_secrets，可查询已授权的 MCP 操作；否则请用户在「秘密引用」中为此引用配置本机值，并授权所需操作。');
+      continue;
+    }
+    lines.push(matching[0].alias + ' ' + token);
+    for (const grant of matching) {
+      const context = { ...cli, installationId: grant.installationId };
+      listCommands.add(command(context, ['list']));
+      const use = grantedScriptCommand(context, grant);
+      if (!body.includes(use) && !body.includes(use.replace(/^& /, ''))) lines.push(grant.executorLabel, use);
+    }
+    const first = matching[0];
+    const read = command({ ...cli, installationId: first.installationId }, ['read', '--secret', first.secretId]);
+    if (!body.includes(read)) lines.push(english ? 'Show value (requires confirmation)' : '查看原值（需确认）', read);
+  }
+  if (listCommands.size) {
+    lines.push(english ? 'Find a reference by alias. Use its reference field directly.' : '按名称查找引用时，直接使用返回的 reference 字段。', ...listCommands);
+  }
+  const guidance = english
+    ? 'Keep the literal reference when quoting or passing it on. To perform a task, run its authorized action and return the result. If no action matches, ask the user to grant one. Only run read if the user explicitly asks to see the value. Stop if approval is declined or unavailable.'
+    : '转述或传递引用时，原样保留占位符。执行任务时，运行匹配的已授权操作，只返回操作结果。缺少合适的操作时，请用户授权。只有用户明确要求查看原值时才运行 read；被拒绝或无法确认时停止读取。';
+  return [body, '', guidance, ...lines].join('\n');
 }
 
 /** The executors granted for one secret, in registry order. */
@@ -117,7 +176,7 @@ const text = {
     executable: '可执行文件',
     intro: '所有命令都通过本机秘密代理执行；原值只在本机凭据库，参数里只有秘密标识。',
     listTitle: '### 1. 列出可用秘密',
-    listNote: '输出是 JSON：每个秘密带别名、状态和可用的执行入口；状态不是 available 表示本机缺少原值。',
+    listNote: '按别名找到秘密后，可直接复用 reference 字段。执行任务时用对应的已授权入口，只有用户明确要求查看原值时才执行 read。',
     useTitle: '### 2. 受控使用（原值只进入执行入口，输出里的原值会被遮蔽）',
     alias: '别名',
     executor: '执行入口',
@@ -133,7 +192,7 @@ const text = {
     executable: 'Executable',
     intro: 'Every command runs through the local secret broker. The value stays in the local credential store; the arguments carry identifiers only.',
     listTitle: '### 1. List the secrets you may use',
-    listNote: 'The output is JSON: each secret carries its alias, status and usable executors. A status other than available means this device lacks the value.',
+    listNote: 'Find the alias and reuse its reference field directly. Use a granted executor for tasks. Only call read if the user explicitly asks to see the value.',
     useTitle: '### 2. Controlled use (the value only reaches the executor, and it is masked in the output)',
     alias: 'Alias',
     executor: 'Executor',

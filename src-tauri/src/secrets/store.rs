@@ -205,39 +205,49 @@ pub fn page(db: &Database, store: &dyn CredentialStore, search: &str, offset: u3
     Ok(SecretPage { items, total, matched, offset, grant_counts })
 }
 
-/// Create the value first, then the metadata row. A metadata failure removes the
-/// new value so a failed save never leaves an unreferenced secret behind.
-pub fn create(
+pub fn create(db: &Database, store: &dyn CredentialStore, alias: &str, value: &str) -> Result<PromptSecret, String> {
+    create_local(db, store, alias, value, None)
+}
+
+/// Explicit setup on a receiving device keeps the portable UUID and grants nothing.
+/// Reserve the metadata row before writing the credential so competing requests
+/// or an already-configured reference cannot overwrite another device-local value.
+pub fn create_local(
     db: &Database,
     store: &dyn CredentialStore,
     alias: &str,
     value: &str,
+    reference_id: Option<&str>,
 ) -> Result<PromptSecret, String> {
     let alias = normalize_alias(alias)?;
     validate_value(value)?;
-    let id = uuid::Uuid::new_v4().to_string();
+    let id = match reference_id {
+        Some(id) => uuid::Uuid::parse_str(id).map_err(|_| "秘密标识无效")?,
+        None => uuid::Uuid::new_v4(),
+    }.to_string();
     let credential_id = reference::credential_id(&id)?;
-    store
-        .put(&credential_id, value)
-        .map_err(|error| format!("无法保存秘密原值：{error}"))?;
     let now = timestamp() as i64;
-    let inserted = db.with_connection(|conn| {
-        conn.execute(
+    db.with_connection(|conn| {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(sql)?;
+        tx.execute(
             "INSERT INTO prompt_secrets(id,alias,credential_id,version,created_at,updated_at) VALUES(?1,?2,?3,1,?4,?4)",
             params![id, alias, credential_id, now],
-        )
-        .map_err(|error| {
+        ).map_err(|error| {
             if error.to_string().contains("UNIQUE constraint failed: prompt_secrets.alias") {
                 "已存在同名秘密，请换一个别名".to_string()
+            } else if error.sqlite_error_code() == Some(rusqlite::ErrorCode::ConstraintViolation) {
+                "此引用已在本机配置，请刷新后重试".to_string()
             } else {
                 error.to_string()
             }
-        })
-    });
-    if let Err(error) = inserted {
-        let _ = store.delete(&credential_id);
-        return Err(error);
-    }
+        })?;
+        store.put(&credential_id, value).map_err(|_| "无法保存秘密原值".to_string())?;
+        if let Err(error) = tx.commit() {
+            let _ = store.delete(&credential_id);
+            return Err(error.to_string());
+        }
+        Ok(())
+    })?;
     Ok(PromptSecret {
         reference: reference::format(&id),
         id,
