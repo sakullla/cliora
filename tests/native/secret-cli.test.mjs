@@ -101,16 +101,6 @@ test('local prompts carry literal references, scoped actions and a distinct appr
   assert.ok(commands.some(line => line.endsWith(' use --secret ' + id + ' --executor ' + grant.executorId + ' | Out-String -Stream')));
   assert.ok(commands.some(line => line.endsWith(' read --secret ' + id + ' | Out-String -Stream')));
   assert.ok(commands.some(line => line.endsWith(' list | Out-String -Stream')));
-  const oldUse = commands[0].replace(' | Out-String -Stream', '');
-  for (const legacy of [oldUse, oldUse.replace(/^& /, '')]) {
-    const fenced = ['操作', '~~~', legacy, '~~~'].join('\r\n');
-    const updated = fenced.replace(legacy, commands[0]);
-    assert.equal(await prepareLocalSecretPrompt(fenced, () => assert.fail('metadata lookup'), false), updated);
-    const withToken = await prepareLocalSecretPrompt(token + '\n' + fenced, async () => metadata, false);
-    assert.ok(withToken.includes(updated));
-    assert.equal(withToken.split('use --secret').length, 2);
-    assert.equal(await prepareLocalSecretPrompt(updated, () => assert.fail('metadata lookup'), false), updated);
-  }
   assert.doesNotMatch(outgoing, /revoked|other-target|99999999/);
   const unavailable = await prepareLocalSecretPrompt(body, async () => ({ ...metadata, grants: [] }), true);
   assert.match(unavailable, /no authorized local CLI action/);

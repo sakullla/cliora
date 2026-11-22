@@ -69,21 +69,10 @@ export async function prepareLocalSecretPrompt(
   body: string, load: () => Promise<Pick<ScriptAccessOptions, 'cli' | 'installations' | 'grants'>>,
   english: boolean,
 ): Promise<string> {
-  // Older prompts may already contain a generated command, even without a
-  // reference token. Upgrade only complete standalone commands on local send.
-  if (body.includes('--cliora-internal-secret-cli-v1')) {
-    const oldCommand = /^(?:& )?('(?:[A-Z]:[\\/]|\\\\)(?:[^'\r\n]|'')*?' --cliora-internal-secret-cli-v1 --installation [\da-f-]+ (?:list|read --secret [\da-f-]+|use --secret [\da-f-]+ --executor [\da-f-]+))(?=\r?$)/gim;
-    body = body.replace(oldCommand, (_line, invocation: string) => '& ' + invocation + POWERSHELL_OUTPUT);
-  }
   const tokens = promptSecretTokens(body);
-  const legacyList = /^list_secrets\r?$/m.test(body) && (body.includes('### 1. 列出可用秘密') || body.includes('### 1. List the secrets you may use'));
-  if (!tokens.length && !legacyList) return body;
+  if (!tokens.length) return body;
   const { cli, installations, grants } = await load();
   const live = installations.filter(item => item.kind === 'cli' && !item.targetId && !item.revoked);
-  if (!tokens.length) {
-    const target = preferredInstallation(live, grants);
-    return target ? body + '\n' + command({ ...cli, installationId: target.id }, ['list']) : body;
-  }
   const lines: string[] = [];
   const seen = new Set<string>();
   const listCommands = new Set<string>();

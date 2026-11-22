@@ -2184,10 +2184,6 @@ fn webdav_publication_keeps_prompt_secret_references_without_secret_metadata() {
         _ => true,
     }));
 
-    let old = format!("使用\n```\n& 'C:\\Cliora\\cliora.exe' --cliora-internal-secret-cli-v1 --installation {} use --secret {} --executor {}\n```\n连接",
-        uuid::Uuid::new_v4(), secret.id, uuid::Uuid::new_v4());
-    db.with_connection(|conn| conn.execute("UPDATE library_items SET body=?1 WHERE id=?2",
-        rusqlite::params![old, global.id]).map_err(|err| err.to_string())).unwrap();
     let server = Server::new();
     let receiver = database(&temp.path().join("receiver"));
     let receiver_store = MemoryCredentials::default();
@@ -2196,7 +2192,7 @@ fn webdav_publication_keeps_prompt_secret_references_without_secret_metadata() {
     configure(&receiver, &receiver_store, setup(&server)).unwrap();
     run(&receiver, &receiver_store, &registry, false).unwrap();
     let received = crate::prompts::get(&receiver, &global.id, None).unwrap();
-    assert_eq!(received.body, format!("使用\n{}\n连接", secret.reference));
+    assert_eq!(received.body, global.body);
     assert!(crate::secrets::list(&receiver, &receiver_store).unwrap().is_empty());
     let before = server.state.lock().unwrap().files["/dav/manifest.cliora"].clone();
     crate::secrets::store::create_local(&receiver, &receiver_store, "接收设备", "device-only", Some(&secret.id)).unwrap();

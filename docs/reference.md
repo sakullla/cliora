@@ -166,7 +166,7 @@ Optional WebDAV sync uses a dedicated existing server directory and HTTPS (local
 
 A prompt body keeps only the canonical reference `{{cliora-secret:<uuid>}}`. `src-tauri/src/secrets/reference.rs` recognizes exactly that form and returns the referenced ids in body order (at most 256); anything else stays ordinary prompt text. The value never enters the body: `secrets::store` keeps it behind the shared `CredentialStore` boundary under a credential id derived from the secret id, so SQLite, search and previews, clipboard copies, export bundles, WebDAV sync and remote-host context carry an id and an alias, never a value.
 
-Prompt-library actions store the reference and a human-readable action name. Saving, migrating a legacy prompt, importing and exporting convert generated helper commands to portable references. On a receiving device, set up an unknown UUID from the prompt editor and grant the local executor. The outgoing local session uses that device’s executable, installation and grants. Credentials and grants stay local.
+Prompt-library actions store the reference and a human-readable action name. On a receiving device, set up an unknown UUID from the prompt editor and grant the local executor. The outgoing local session uses that device’s executable, installation and grants. Credentials and grants stay local.
 
 `src-tauri/src/secrets/` owns the local secret plane and no adapter or shared service may bypass it:
 
