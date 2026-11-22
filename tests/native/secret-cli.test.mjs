@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { buildSecretUsageInstructions, grantedExecutors, prepareLocalSecretPrompt, quoteArgument } from '../../src/lib/secretCommands.ts';
 
@@ -94,12 +98,56 @@ test('local prompts carry literal references, scoped actions and a distinct appr
   const commands = outgoing.split('\n').filter(line => line.includes('--installation'));
   assert.equal(commands.length, 3);
   assert.ok(commands.every(line => line.startsWith("& 'C:\\Program Files\\O''Brien\\cliora.exe' ")));
-  assert.ok(commands.some(line => line.endsWith(' use --secret ' + id + ' --executor ' + grant.executorId)));
-  assert.ok(commands.some(line => line.endsWith(' read --secret ' + id)));
-  assert.ok(commands.some(line => line.endsWith(' list')));
+  assert.ok(commands.some(line => line.endsWith(' use --secret ' + id + ' --executor ' + grant.executorId + ' | Out-String -Stream')));
+  assert.ok(commands.some(line => line.endsWith(' read --secret ' + id + ' | Out-String -Stream')));
+  assert.ok(commands.some(line => line.endsWith(' list | Out-String -Stream')));
+  const oldUse = commands[0].replace(' | Out-String -Stream', '');
+  for (const legacy of [oldUse, oldUse.replace(/^& /, '')]) {
+    const fenced = ['操作', '~~~', legacy, '~~~'].join('\r\n');
+    const updated = fenced.replace(legacy, commands[0]);
+    assert.equal(await prepareLocalSecretPrompt(fenced, () => assert.fail('metadata lookup'), false), updated);
+    const withToken = await prepareLocalSecretPrompt(token + '\n' + fenced, async () => metadata, false);
+    assert.ok(withToken.includes(updated));
+    assert.equal(withToken.split('use --secret').length, 2);
+    assert.equal(await prepareLocalSecretPrompt(updated, () => assert.fail('metadata lookup'), false), updated);
+  }
   assert.doesNotMatch(outgoing, /revoked|other-target|99999999/);
   const unavailable = await prepareLocalSecretPrompt(body, async () => ({ ...metadata, grants: [] }), true);
   assert.match(unavailable, /no authorized local CLI action/);
   assert.doesNotMatch(unavailable, /--installation/);
   assert.equal(await prepareLocalSecretPrompt('plain text', () => assert.fail('unexpected metadata lookup'), false), 'plain text');
+});
+
+test('Windows PowerShell waits for a delayed GUI helper response and preserves its exit code', { skip: process.platform !== 'win32' }, () => {
+  const directory = mkdtempSync(join(tmpdir(), "cliora helper's test-"));
+  const source = join(directory, 'helper.cs');
+  const executable = join(directory, 'cliora.exe');
+  try {
+    writeFileSync(source, [
+      'using System;',
+      'class Helper { static int Main(string[] args) {',
+      '  System.Threading.Thread.Sleep(300);',
+      '  bool declined = Array.IndexOf(args, "read") >= 0;',
+      '  Console.WriteLine(declined ? "{\\"code\\":\\"declined\\"}" : "{\\"code\\":\\"ok\\"}");',
+      '  return declined ? 1 : 0;',
+      '} }',
+    ].join('\n'));
+    const compiler = join(process.env.SystemRoot, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
+    const build = spawnSync(compiler, ['/nologo', '/target:winexe', '/out:' + executable, source], { encoding: 'utf8' });
+    assert.equal(build.status, 0, build.error?.message ?? build.stdout + build.stderr);
+    const instructions = buildSecretUsageInstructions({ ...input, executable });
+    const commands = instructions.split('\n').filter(line => line.startsWith('& '));
+    assert.equal(commands.length, 3);
+    for (const command of commands) {
+      const declined = command.includes(' read --secret');
+      const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+        command + "\nWrite-Output 'done'\nexit $LASTEXITCODE"], { encoding: 'utf8', timeout: 15000 });
+      assert.equal(result.status, declined ? 1 : 0, result.error?.message ?? result.stderr);
+      assert.deepEqual(result.stdout.trim().split(/\r?\n/), [JSON.stringify({ code: declined ? 'declined' : 'ok' }), 'done']);
+    }
+  } finally {
+    rmSync(executable, { force: true });
+    rmSync(source, { force: true });
+    rmdirSync(directory);
+  }
 });

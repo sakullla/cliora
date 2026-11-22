@@ -39,6 +39,10 @@ export function quoteArgument(value: string): string {
 
 type CliCommandContext = Pick<SecretUsageInput, 'executable' | 'entry' | 'installationId'>;
 
+// PowerShell otherwise detaches a Windows GUI executable before the broker
+// answers. An output pipeline waits for it and captures its JSON on stdout.
+const POWERSHELL_OUTPUT = ' | Out-String -Stream';
+
 export function grantedScriptCommand(context: CliCommandContext, grant: SecretUsageGrant): string {
   return command(context, ['use', '--secret', grant.secretId, '--executor', grant.executorId]);
 }
@@ -46,7 +50,7 @@ export function grantedScriptCommand(context: CliCommandContext, grant: SecretUs
 function command(input: CliCommandContext, rest: string[]): string {
   const argv = [input.executable, input.entry, '--installation', input.installationId, ...rest];
   if (/^(?:[A-Za-z]:[\\/]|\\\\)/.test(input.executable)) {
-    return '& ' + argv.map(arg => SAFE_ARGUMENT.test(arg) ? arg : "'" + arg.replaceAll("'", "''") + "'").join(' ');
+    return '& ' + argv.map(arg => SAFE_ARGUMENT.test(arg) ? arg : "'" + arg.replaceAll("'", "''") + "'").join(' ') + POWERSHELL_OUTPUT;
   }
   return argv.map(quoteArgument).join(' ');
 }
@@ -65,6 +69,12 @@ export async function prepareLocalSecretPrompt(
   body: string, load: () => Promise<Pick<ScriptAccessOptions, 'cli' | 'installations' | 'grants'>>,
   english: boolean,
 ): Promise<string> {
+  // Older prompts may already contain a generated command, even without a
+  // reference token. Upgrade only complete standalone commands on local send.
+  if (body.includes('--cliora-internal-secret-cli-v1')) {
+    const oldCommand = /^(?:& )?('(?:[A-Z]:[\\/]|\\\\)(?:[^'\r\n]|'')*?' --cliora-internal-secret-cli-v1 --installation [\da-f-]+ (?:list|read --secret [\da-f-]+|use --secret [\da-f-]+ --executor [\da-f-]+))(?=\r?$)/gim;
+    body = body.replace(oldCommand, (_line, invocation: string) => '& ' + invocation + POWERSHELL_OUTPUT);
+  }
   const tokens = promptSecretTokens(body);
   if (!tokens.length) return body;
   const { cli, installations, grants } = await load();
