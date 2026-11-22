@@ -59,7 +59,7 @@ import type { ApiError, Bootstrap, Theme } from './types/domain';
 import type { HistorySession } from './types/history';
 import type { Project, TrayRepairTarget, TwiglaneFeedbackPreview, TwiglaneReviewSignal, WorkbenchSession } from './types/launch';
 import { preferredLaunchMode } from './types/launch';
-import type { LibraryItem, LibraryKind } from './types/library';
+import type { LibraryTitle, LibraryKind } from './types/library';
 import type { AdapterCatalog } from './types/native';
 import type { RemoteTarget } from './types/remote';
 
@@ -220,7 +220,7 @@ export default function App() {
   const [paletteProjects, setPaletteProjects] = useState<Project[]>([]);
   const [paletteLiveSessions, setPaletteLiveSessions] = useState<WorkbenchSession[]>([]);
   const [paletteSessions, setPaletteSessions] = useState<HistorySession[]>([]);
-  const [paletteLibrary, setPaletteLibrary] = useState<Array<{ item: LibraryItem; searchOnly: boolean }>>([]);
+  const [paletteLibrary, setPaletteLibrary] = useState<Array<{ item: LibraryTitle; searchOnly: boolean }>>([]);
   const [paletteSourceFailed, setPaletteSourceFailed] = useState(false);
   const [paletteReload, setPaletteReload] = useState(0);
   const [spotlight, setSpotlight] = useState<Spotlight | null>(null);
@@ -361,7 +361,7 @@ export default function App() {
     const markFailed = () => { if (live) setPaletteSourceFailed(true); };
     void native.listProjects().then((result) => {
       if (live && Array.isArray(result)) {
-        setPaletteProjects([...result].sort((a, b) => (b.lastOpened ?? 0) - (a.lastOpened ?? 0)));
+        setPaletteProjects(result);
       }
     }).catch(markFailed);
     // Palette data is read-only: sessions come straight from the indexed DB snapshot
@@ -374,7 +374,7 @@ export default function App() {
       if (!live || !Array.isArray(result)) return;
       setPaletteSessions([...result].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)).slice(0, 20));
     }).catch(markFailed);
-    void Promise.all([native.listLibraryItems('prompt', null, ''), native.listLibraryItems('rule', null, '')])
+    void Promise.all([native.listLibraryTitles('prompt'), native.listLibraryTitles('rule')])
       .then((groups) => {
         if (live) setPaletteLibrary(groups.flatMap((entries) => entries.map((item, entryIndex) => ({ item, searchOnly: entryIndex >= 5 }))));
       })
@@ -1248,7 +1248,7 @@ export default function App() {
     value={settingsTab}
     onChange={setSettingsTab}
     items={settingsCategories}
-    searchEntries={buildSettingsSearchEntries(t, nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools, nativeAvailable)}
+    searchEntries={settingsOpen ? buildSettingsSearchEntries(t, nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools, nativeAvailable) : []}
     onSelectSearchResult={(entry: SettingsSearchEntry) => {
       openSettings({ tab: entry.category, anchor: entry.anchorId, toolQuery: entry.toolQuery ?? '' });
     }}

@@ -10,7 +10,10 @@ function nonnegative(value) { const n = number(value); return n !== null && n >=
 function seconds(value) { return Number.isInteger(value) && value > 0 && value <= 4294967295 ? value : null; }
 function instant(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d\d-\d\dT.*(?:Z|[+-]\d\d:\d\d)$/.test(value)) return null;
-  const date = new Date(value); return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+  const date = new Date(value); const time = date.getTime();
+  // Go's zero time ("0001-01-01T00:00:00Z") and other pre-epoch values are
+  // "unset" in these APIs, never a real reset or expiry.
+  return Number.isFinite(time) && time >= 0 ? date.toISOString() : null;
 }
 function epochMillis(value) {
   const n = nonnegative(value);

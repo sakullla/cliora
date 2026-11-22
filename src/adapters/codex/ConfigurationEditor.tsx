@@ -35,9 +35,22 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
       onChange={value => value === '' ? action('reset') : action('set', value)} onReset={() => action('reset')}
       onValidityChange={valid => onValidityChange(id, valid)} />;
   };
+  const isBuiltinProvider = ['openai', 'ollama', 'lmstudio'].includes(provider);
+  const switchToOfficial = () => {
+    if (disabled) return;
+    void onAction({ version: descriptor.version, target: 'configuration', operation: 'reset', field: 'model_provider', value: null });
+  };
+  const switchToCustom = () => {
+    if (disabled || !isBuiltinProvider) return;
+    void onAction({ version: descriptor.version, target: 'configuration', operation: 'set', field: 'model_provider', value: 'custom' });
+  };
   return <section className={styles.editor} aria-label={t('tools.adapters.codex.label')}>
     <div hidden={section === 'settings'}>
       <ConfigurationStep step="connection" requiredInQuick={requiredInQuick} label={t('common.provider.title')} title={t('common.provider.title')} meta={connectionMeta(values.model_provider, values.base_url)}>
+        <div className={sharedStyles.presetBar} role="group" aria-label={t('common.provider.presetsLabel')}>
+          <button type="button" className={sharedStyles.presetChip} data-active={isBuiltinProvider ? 'true' : undefined} disabled={disabled} onClick={switchToOfficial}>{t('tools.adapters.codex.modeOfficial')}</button>
+          <button type="button" className={sharedStyles.presetChip} data-active={!isBuiltinProvider ? 'true' : undefined} disabled={disabled} onClick={switchToCustom}>{t('tools.adapters.codex.modeCustom')}</button>
+        </div>
         <div className={styles.fields}>{render('model_provider')}{render('base_url')}</div>
         <p className={styles.note} role="note">{t('tools.adapters.codex.protocolBoundary', { protocol: wireProtocol })}</p>
         {view?.defaultAddressReason && <p className={styles.note}>{view.defaultAddressReason}</p>}

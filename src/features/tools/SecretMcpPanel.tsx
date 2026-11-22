@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { native } from '../../lib/native';
 import { writeClipboard } from '../../lib/clipboard';
 import { formatFailure } from '../../lib/feedback';
-import { buildSecretUsageFromMetadata } from '../../lib/secretCommands';
+import { buildSecretUsageFromMetadata, grantedSecretAliases } from '../../lib/secretCommands';
 import { Icon } from '../../components/Icon';
 import { Badge, Button } from '../../components/ui';
 import type { Tone } from '../../lib/statusTone';
@@ -69,20 +69,11 @@ export function SecretMcpPanel({ toolId, scope, projectPath, contextId }: {
   /** The fallback is built from this device's metadata: ids, aliases and grants only. */
   const loadFallback = useCallback(async () => {
     try {
-      const [context, secrets, executors, installations, grants] = await Promise.all([
-        native.secretCliContext(),
-        native.listPromptSecrets(),
-        native.listSecretExecutors(),
-        native.listSecretInstallations(),
-        native.listSecretGrants(),
-      ]);
+      const { cli, installations, executors, grants } = await native.secretAccessOptions();
       if (!mounted.current) return '';
       const text = buildSecretUsageFromMetadata({
-        context,
-        installations: installations ?? [],
-        secrets: (secrets ?? []).map(secret => ({ id: secret.id, alias: secret.alias })),
-        executors: (executors ?? []).map(executor => ({ id: executor.id, label: executor.label })),
-        grants: (grants ?? []).map(grant => ({ installationId: grant.installationId, secretId: grant.secretId, executorId: grant.executorId })),
+        context: cli, installations, executors, grants,
+        secrets: grantedSecretAliases(grants),
         // The fallback names the installation this panel manages when it exists.
         preferredId: state?.installationId ?? null,
         locale: i18n.language?.startsWith('en') ? 'en' : 'zh',
@@ -113,23 +104,30 @@ export function SecretMcpPanel({ toolId, scope, projectPath, contextId }: {
       if (mounted.current) setBusy(false);
     }
   }
-  async function copyFallback() {
-    const text = fallback || await loadFallback();
+  async function copyText(text: string, doneKey: string) {
     if (!text) return;
     try {
       await writeClipboard(text);
-      if (mounted.current) setNotice(t('library.secrets.mcp.fallbackCopied'));
+      if (mounted.current) setNotice(t(doneKey));
     } catch {
       if (mounted.current) setError(t('common.editor.clipboardUnavailable'));
     }
   }
+  async function copyFallback() {
+    const text = fallback || await loadFallback();
+    await copyText(text, 'library.secrets.mcp.fallbackCopied');
+  }
 
   if (!ready) return null;
   const enabled = state?.placement === 'enabled';
+  const verifyPrimary = enabled && state?.health !== 'healthy';
+  const commandText = state?.command ? [state.command, ...state.args].join(' ') : '';
+  const summaryTone = !state ? 'neutral' : state.available ? 'success' : state.health === 'failed' ? 'danger' : state.capability === 'unverified' ? 'warning' : 'neutral';
+
   return <section className={styles.panel} data-secret-mcp data-secret-mcp-state={state?.state ?? 'loading'} data-secret-mcp-available={state?.available ? 'true' : 'false'}>
     <button type="button" className={styles.head} data-secret-mcp-toggle aria-expanded={open} onClick={() => setOpen(value => !value)}>
-      <Icon name={open ? 'arrowDown' : 'chevronRight'} size={12} />
-      <Icon name="lock" size={12} />
+      <Icon name={open ? 'chevronDown' : 'chevronRight'} size={12} />
+      <Icon name="shield" size={13} className={styles.shieldIcon} />
       <strong>{t('library.secrets.mcp.title')}</strong>
       <span className={styles.gap} />
       {state && <Badge tone={stateTone[state.state]} dot>{t(`library.secrets.mcp.state.${state.state}`)}</Badge>}
@@ -140,21 +138,16 @@ export function SecretMcpPanel({ toolId, scope, projectPath, contextId }: {
       {error && <p className={styles.error} role="alert" data-secret-mcp-error>{error}</p>}
       {notice && <p className={styles.notice} role="status" data-secret-mcp-notice>{notice}</p>}
       {state && <>
-        <p className={styles.hint} data-secret-mcp-reason>{state.reason}</p>
-        <dl className={styles.facts}>
-          <div><dt>{t('library.secrets.mcp.capability')}</dt><dd data-secret-mcp-capability={state.capability}>{state.capability}</dd></div>
-          <div><dt>{t('library.secrets.mcp.placementLabel')}</dt><dd data-secret-mcp-placement={state.placement}>{t(`library.secrets.mcp.placement.${state.placement}`)}</dd></div>
-          <div><dt>{t('library.secrets.mcp.healthLabel')}</dt><dd data-secret-mcp-health={state.health}>{t(`library.secrets.mcp.health.${state.health}`)}{state.healthDetail && <small>{state.healthDetail}</small>}</dd></div>
-          <div><dt>{t('library.secrets.mcp.installation')}</dt><dd data-secret-mcp-installation>{state.installationId ?? t('library.secrets.mcp.noInstallation')}</dd></div>
-          {state.command && <div><dt>{t('library.secrets.mcp.command')}</dt><dd><code data-secret-mcp-command>{[state.command, ...state.args].join(' ')}</code></dd></div>}
-        </dl>
-        {state.capability === 'unsupported' && <p className={styles.hint} data-secret-mcp-unsupported>{state.capabilityReason}</p>}
+        <div className={styles.summary} data-tone={summaryTone}>
+          <p className={styles.reason} data-secret-mcp-reason>{state.reason}</p>
+          {state.capability === 'unsupported' && <p className={styles.hint} data-secret-mcp-unsupported>{state.capabilityReason}</p>}
+        </div>
         <div className={styles.actions}>
-          {state.capability !== 'unsupported' && <Button size="sm" variant="primary" data-secret-mcp-enable disabled={busy} onClick={() => void run(
+          {state.capability !== 'unsupported' && <Button size="sm" variant={verifyPrimary ? undefined : 'primary'} data-secret-mcp-enable disabled={busy} onClick={() => void run(
             () => native.setSecretMcpEnabled(target, !enabled),
             enabled ? 'library.secrets.mcp.disabledNotice' : 'library.secrets.mcp.writtenNotice',
           )}>{enabled ? t('library.secrets.mcp.disable') : t('library.secrets.mcp.enable')}</Button>}
-          {state.placement !== 'absent' && <Button size="sm" data-secret-mcp-verify disabled={busy} onClick={() => void run(
+          {state.placement !== 'absent' && <Button size="sm" variant={verifyPrimary ? 'primary' : undefined} data-secret-mcp-verify disabled={busy} onClick={() => void run(
             () => native.checkSecretMcpHealth(target),
             'library.secrets.mcp.verifiedNotice',
           )}>{t('library.secrets.mcp.verify')}</Button>}
@@ -162,15 +155,31 @@ export function SecretMcpPanel({ toolId, scope, projectPath, contextId }: {
             () => native.revokeSecretMcpInstallation(target),
             'library.secrets.mcp.revokedNotice',
           )}>{t('library.secrets.mcp.revoke')}</Button>}
-          <Button size="sm" variant="ghost" data-secret-mcp-refresh disabled={busy || loading} onClick={() => void load()}>{t('library.secrets.refresh')}</Button>
+          <Button size="sm" variant="ghost" data-secret-mcp-refresh disabled={busy || loading} icon={<Icon name="refresh" size={12} />} onClick={() => void load()}>{t('library.secrets.refresh')}</Button>
         </div>
+        <dl className={styles.facts}>
+          <div><dt>{t('library.secrets.mcp.capability')}</dt><dd data-secret-mcp-capability={state.capability}>{state.capability}</dd></div>
+          <div><dt>{t('library.secrets.mcp.placementLabel')}</dt><dd data-secret-mcp-placement={state.placement}>{t(`library.secrets.mcp.placement.${state.placement}`)}</dd></div>
+          <div><dt>{t('library.secrets.mcp.healthLabel')}</dt><dd data-secret-mcp-health={state.health}>{t(`library.secrets.mcp.health.${state.health}`)}{state.healthDetail && <small>{state.healthDetail}</small>}</dd></div>
+          <div><dt>{t('library.secrets.mcp.installation')}</dt><dd data-secret-mcp-installation>{state.installationId ?? t('library.secrets.mcp.noInstallation')}</dd></div>
+          {commandText && <div className={styles.commandRow}>
+            <dt>{t('library.secrets.mcp.command')}</dt>
+            <dd>
+              <code data-secret-mcp-command>{commandText}</code>
+              <Button size="sm" variant="ghost" title={t('library.secrets.mcp.copyCommand')} aria-label={t('library.secrets.mcp.copyCommand')} icon={<Icon name="copy" size={12} />} onClick={() => void copyText(commandText, 'library.secrets.mcp.commandCopied')} />
+            </dd>
+          </div>}
+        </dl>
       </>}
       <div className={styles.fallback} data-secret-mcp-fallback>
-        <strong>{t('library.secrets.mcp.fallbackTitle')}</strong>
+        <div className={styles.fallbackHead}>
+          <strong>{t('library.secrets.mcp.fallbackTitle')}</strong>
+          <span className={styles.gap} />
+          {fallback && <Button size="sm" variant="ghost" data-secret-mcp-copy disabled={busy} icon={<Icon name="copy" size={12} />} onClick={() => void copyFallback()}>{t('library.secrets.mcp.fallbackCopy')}</Button>}
+        </div>
         <p className={styles.hint}>{t('library.secrets.mcp.fallbackHint')}</p>
         {fallback && <pre className={styles.code} data-secret-mcp-fallback-text>{fallback}</pre>}
         {!fallback && <p className={styles.hint} data-secret-mcp-fallback-empty>{t('library.secrets.mcp.fallbackEmpty')}</p>}
-        {fallback && <Button size="sm" data-secret-mcp-copy disabled={busy} onClick={() => void copyFallback()}>{t('library.secrets.mcp.fallbackCopy')}</Button>}
       </div>
     </div>}
   </section>;

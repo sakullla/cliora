@@ -59,6 +59,11 @@ function Editor(props: ConfigurationContentProps) {
       </div>}
     </article>)}
     <div hidden={Boolean(props.section && expanded)}>{can('create') && <NewModelForm key={`new-model:${draft.sessionId}:${provider}`} props={action.props} provider={provider} disabled={structuralBlocked || !provider} label={t('tools.adapters.shared.modelId')} fields={descriptor.fields.filter(item => !item.id.startsWith('default'))}
+      onQuickCreate={async id => {
+        const success = await action.run({ kind: 'model', provider, id }, 'create', {});
+        if (success && can('default') && !view.defaultModel) await action.run({ kind: 'model', provider, id }, 'default');
+        return success;
+      }}
       onCreate={async (id, values, kind) => { const success = await action.run({ kind, provider, id }, kind === 'override' ? 'create_override' : 'create', values); if (success) setExpanded(`${kind}:${id}`); return success; }} allowOverride={can('create_override')} listChoices={{ input: inputChoices }} />}
     </div>
     </ModelStep>

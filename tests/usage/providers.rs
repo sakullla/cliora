@@ -149,16 +149,28 @@ fn glm_preserves_overage_and_distinct_credit_mcp_and_rolling_windows() {
 fn kimi_counts_and_ratio_pools_do_not_invent_weekly_or_monthly_counts() {
     let old = parse("kimi-cn", "kimi-counts");
     assert_eq!(old.metrics.len(), 2);
-    assert_eq!(old.metrics[0].used, Some(214.0));
+    assert_eq!(old.metrics[0].used, Some(139.0));
     assert_eq!(
         old.metrics[0].window.as_ref().unwrap().duration_seconds,
+        Some(18000)
+    );
+    assert_eq!(old.metrics[1].used, Some(214.0));
+    assert_eq!(
+        old.metrics[1].window.as_ref().unwrap().duration_seconds,
         Some(604800)
     );
     let new = parse("kimi-global", "kimi-ratios");
     assert_eq!(new.status, UsageStatus::Success);
     assert_eq!(new.metrics.len(), 2);
-    assert_eq!(new.metrics[0].source_percent, Some(0.0));
-    assert_eq!(new.metrics[0].used, None);
+    // limits[].detail is authoritative; a lagging limit_5h ratio must not
+    // replace its absolute count (#3908).
+    assert_eq!(new.metrics[0].used, Some(25.0));
+    assert_eq!(new.metrics[0].total, Some(100.0));
+    assert_eq!(new.metrics[0].source_percent, None);
+    assert_eq!(
+        new.metrics[0].window.as_ref().unwrap().duration_seconds,
+        Some(18000)
+    );
     assert!((new.metrics[1].source_percent.unwrap() - 105.6).abs() < 1e-9);
     assert_eq!(new.metrics[1].total, None);
     assert_eq!(
@@ -173,19 +185,27 @@ fn kimi_counts_and_ratio_pools_do_not_invent_weekly_or_monthly_counts() {
 }
 
 #[test]
-fn kimi_placeholder_fallback_requires_same_period_and_no_monthly_pool() {
+fn kimi_count_windows_win_over_lagging_ratio_pools() {
     let mixed = parse("kimi-global", "kimi-mixed");
     assert_eq!(mixed.metrics[0].used, Some(19.0));
-    let mut raw = fixture("kimi-mixed");
-    raw["usages"]["limit_7d"]["reset_time"] = "2026-10-16T16:45:58Z".into();
-    let result = parse_value("kimi-global", raw).result.unwrap();
-    assert_eq!(result.metrics[0].source_percent, Some(0.0));
-    assert_eq!(result.metrics[0].used, None);
+    // A monthly pool does not change which source is authoritative.
     let mut raw = fixture("kimi-mixed");
     raw["usages"]["limit_month_total"] = json!({"used_ratio": 0.0313});
     let result = parse_value("kimi-global", raw).result.unwrap();
+    assert_eq!(result.metrics[0].used, Some(19.0));
+    assert_eq!(result.metrics[0].source_percent, None);
+    // A ratio is used only for a window no count covers.
+    let mut raw = fixture("kimi-mixed");
+    raw.as_object_mut().unwrap().remove("usage");
+    let result = parse_value("kimi-global", raw).result.unwrap();
     assert_eq!(result.metrics[0].source_percent, Some(0.0));
-    assert_eq!(result.metrics[0].used, None);
+    // limit_month_code is only the fallback when the shared pool is absent.
+    let mut raw = fixture("kimi-ratios");
+    raw["usages"].as_object_mut().unwrap().remove("limit_month_total");
+    let result = parse_value("kimi-global", raw).result.unwrap();
+    let monthly = result.metrics.last().unwrap();
+    assert_eq!(monthly.id, "kimi-month-code");
+    assert_eq!(monthly.source_percent, Some(10.0));
 }
 
 #[test]

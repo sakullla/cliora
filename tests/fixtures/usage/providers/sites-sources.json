@@ -1,16 +1,16 @@
 {
   "kind":"synthetic-sanitized-contract-fixtures",
-  "capturedAt":"2026-10-02",
+  "capturedAt":"2026-11-22",
   "realAccountCapture":false,
   "sub2api":{
     "repository":"https://github.com/Wei-Shaw/sub2api",
-    "revision":"b8dece9000c68815a5b867ca5a1e6f236e173905",
-    "paths":["backend/internal/handler/gateway_handler.go#Usage","backend/internal/handler/subscription_handler.go#GetActive/GetProgress","backend/internal/service/subscription_service.go#SubscriptionProgress/UsageWindowProgress","backend/internal/server/routes/user.go"]
+    "revision":"328db26f450edbdf9f8d4344a3ea903ac6396842",
+    "paths":["backend/internal/handler/gateway_handler.go#Usage/usageQuotaLimited/usageUnrestricted","backend/internal/handler/subscription_handler.go#GetActive/GetProgress","backend/internal/service/subscription_service.go#SubscriptionProgress/UsageWindowProgress","backend/internal/server/routes/user.go"]
   },
   "newapi":{
     "repository":"https://github.com/QuantumNous/new-api",
-    "revision":"1a4166d8e8ba9802d2ca56fe8ecf0ed5404e80d5",
-    "paths":["controller/token.go#GetTokenUsage","controller/user.go#GetSelf","controller/subscription.go#GetSubscriptionSelf/GetSubscriptionPlans","model/subscription.go#UserSubscription/SubscriptionSummary/SubscriptionPlan","middleware/auth.go#TokenAuthReadOnly/authHelper"]
+    "revision":"8542c9d6490b4330fe18160930f81ae7428bc777",
+    "paths":["controller/token.go#GetTokenUsage","controller/user.go#GetSelf","controller/subscription.go#GetSubscriptionSelf/GetSubscriptionPlans","model/subscription.go#UserSubscription/SubscriptionSummary/SubscriptionPlan","middleware/auth.go#TokenAuthReadOnly/authHelper","middleware/access_token_routes.go"]
   },
-  "notes":"Shapes are transcribed from pinned source with synthetic IDs, amounts and dates. Tests derive missing, permission, business, unlimited, overage, expiry and partial variants. HTTP fixture servers verify requests and actual packaged helper entry in a Windows development binary; no real-site/account acceptance is claimed. Forks are not assumed compatible."
+  "notes":"Shapes are transcribed from pinned source with synthetic IDs, amounts and dates. Tests derive missing, permission, business, unlimited, overage, expiry and partial variants. HTTP fixture servers verify requests and actual packaged helper entry in a Windows development binary; no cloud-site/account acceptance is claimed. Local Docker Sub2API (0.2.24) and a local New API build were exercised with real dashboard tokens, API keys and bound subscriptions. Forks are not assumed compatible."
 }

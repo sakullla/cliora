@@ -5,41 +5,41 @@
    of the same height so the footer never covers the last model row. */
 :root { --config-footer-h: 56px; }
 
-.controls label { display: grid; gap: var(--space-2); min-width: 0; font-size: var(--fs-body); }
-.controls label:has(> input[type='checkbox']), .controls label:has(> input[type='radio']) { display: flex; gap: var(--space-2); align-items: center; }
-.controls input:not([type='checkbox']):not([type='radio']):not([role='combobox']), .controls select { width: 100%; min-width: 0; box-sizing: border-box; font-size: var(--fs-body); font-weight: var(--fw-regular); }
+.controls label { display: grid; gap: var(--space-1_5); min-width: 0; font-size: var(--fs-caption); font-weight: var(--fw-medium); color: var(--text-2); }
+.controls label:has(> input[type='checkbox']), .controls label:has(> input[type='radio']) { display: flex; gap: var(--space-2); align-items: center; font-size: var(--fs-control); font-weight: var(--fw-regular); color: var(--text); }
+.controls input:not([type='checkbox']):not([type='radio']):not([role='combobox']), .controls select { width: 100%; min-width: 0; box-sizing: border-box; font-size: var(--fs-control); font-weight: var(--fw-regular); }
 .controls select { padding-right: var(--space-8); }
 .controls button { max-width: 100%; white-space: normal; }
 .controls .accent { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); box-shadow: none; }
-.controls .accent:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.controls .accent:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-soft) 75%, var(--accent) 12%); border-color: var(--accent); color: var(--accent); }
 .controls .danger { color: var(--danger); border-color: var(--danger-line); }
 .controls .danger:hover:not(:disabled) { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
 .controls button:disabled { opacity: .5; }
-.controls p, .message { color: var(--text-2); font-size: var(--fs-body); line-height: 1.6; margin: var(--space-1_5) 0; overflow-wrap: anywhere; }
+.controls p, .message { color: var(--text-3); font-size: var(--fs-caption); line-height: 1.55; margin: var(--space-1) 0; overflow-wrap: anywhere; }
 .controls.group, .controls .group { border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .controls details { min-width: 0; }
-.controls details summary { cursor: pointer; font-size: var(--fs-body); padding: var(--space-1_5) 0; }
+.controls details summary { cursor: pointer; font-size: var(--fs-control); padding: var(--space-1_5) 0; }
 
 /* Field chrome: label row with an inline info toggle, a lightweight restore
    action, and an on-demand info panel (ADR-2). */
 .fieldHead { display: flex; align-items: center; gap: var(--space-1_5); min-width: 0; }
 .fieldHead > label { flex: 1; min-width: 0; }
-.controls .infoToggle { flex: none; display: inline-grid; place-items: center; width: 20px; min-height: 20px; height: 20px; padding: 0; border: 0; border-radius: var(--radius-xs); background: transparent; box-shadow: none; color: var(--text-3); font-size: var(--fs-caption); line-height: 1; }
-.controls .infoToggle:hover:not(:disabled) { background: var(--surface-3); color: var(--text-2); }
-.controls .infoToggle[aria-expanded='true'] { background: var(--accent-soft); color: var(--accent); }
-.controls .restore { flex: none; justify-self: start; width: fit-content; min-height: 0; padding: 0; border: 0; background: none; box-shadow: none; color: var(--accent); font-size: var(--fs-caption); white-space: nowrap; }
+.controls .infoToggle { flex: none; display: inline-grid; place-items: center; width: 20px; min-height: 20px; height: 20px; padding: 0; border: 0; border-radius: var(--radius-xs); background: transparent; box-shadow: none; color: var(--text-3); font-size: var(--fs-caption); line-height: 1; opacity: .55; transition: opacity var(--fast) var(--ease), background-color var(--fast) var(--ease), color var(--fast) var(--ease); }
+.controls .infoToggle:hover:not(:disabled), .controls .infoToggle:focus-visible { opacity: 1; background: var(--surface-3); color: var(--text-2); }
+.controls .infoToggle[aria-expanded='true'] { opacity: 1; background: var(--accent-soft); color: var(--accent); }
+.controls .restore { flex: none; justify-self: start; width: fit-content; min-height: 0; padding: 0; border: 0; background: none; box-shadow: none; color: var(--accent); font-size: var(--fs-micro); white-space: nowrap; }
 .controls .restore:hover:not(:disabled) { background: none; border: 0; color: var(--accent-hover); text-decoration: underline; text-underline-offset: 2px; }
 .infoPanel { display: grid; gap: var(--space-1); min-width: 0; padding: var(--space-2) var(--space-2_5); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
-.infoPanel small { color: var(--text-2); font-size: var(--fs-body); line-height: 1.6; overflow-wrap: anywhere; }
-.infoPanel small code { font-size: var(--fs-body); font-weight: var(--fw-regular); }
-.unavailable { display: block; margin-top: var(--space-0_5); color: var(--text-3); font-size: var(--fs-body); line-height: 1.5; }
+.infoPanel small { color: var(--text-2); font-size: var(--fs-caption); line-height: 1.55; overflow-wrap: anywhere; }
+.infoPanel small code { font-size: var(--fs-micro); font-weight: var(--fw-regular); }
+.unavailable { display: block; margin-top: var(--space-0_5); color: var(--text-3); font-size: var(--fs-caption); line-height: 1.5; }
 
 /* Bordered disclosure section: turns bare <details> groups into cards with a
    header row. Summary text is unchanged so existing anchors keep working. */
-.disclosureCard { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); padding: 0 var(--space-3); }
-.disclosureCard[open] { padding-bottom: var(--space-3); }
-.disclosureCard > summary { cursor: pointer; padding: var(--space-2_5) 0; font-size: var(--fs-body); font-weight: var(--fw-semibold); }
-.disclosureCard[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: var(--space-2_5); }
+.disclosureCard { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); padding: 0 var(--space-3_5); }
+.disclosureCard[open] { padding-bottom: var(--space-3_5); }
+.disclosureCard > summary { cursor: pointer; padding: var(--space-2_5) 0; font-size: var(--fs-control); font-weight: var(--fw-semibold); }
+.disclosureCard[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: var(--space-3); }
 .entityPrimary { display: flex; gap: var(--space-2); flex-wrap: wrap; grid-column: 1 / -1; }
 .entityMore { min-width: 0; grid-column: 1 / -1; }
 .entityPanel { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-2); padding: var(--space-2_5) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
@@ -48,59 +48,71 @@
 .controls .entityPanel > .danger { margin-left: auto; }
 .connectionTitle { font-size: .86em; color: var(--text-2); }
 .sectionTitle { font-size: var(--fs-body); font-weight: var(--fw-semibold); color: var(--text); }
-.fields { display: grid; gap: var(--space-2); min-width: 0; }
+.fields { display: grid; gap: var(--space-2_5); min-width: 0; }
 .buttons { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 
-/* Numbered connection steps sit on the dialog surface. The sticky chain above
-   already names them, so a hairline is enough to separate one step from the next. */
-.step { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-0_5) 0 var(--space-1); border: 0; border-radius: 0; background: transparent; scroll-margin-top: 104px; }
-.step + .step { margin-top: var(--space-1); padding-top: var(--space-4); border-top: 1px solid var(--line); }
-.providerCard { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-4) var(--space-4) var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); scroll-margin-top: 104px; }
+/* Modern elevated step cards: clean rounded cards with subtle depth. */
+.step { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-xs); scroll-margin-top: 104px; }
+.step + .step { margin-top: 0; }
+.providerCard { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-xs); scroll-margin-top: 104px; }
 .stepHead { display: flex; align-items: flex-start; gap: var(--space-2_5); min-width: 0; }
-.stepIndex { flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; margin-top: 1px; border-radius: 50%; background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent-line); color: var(--accent); font-size: var(--fs-caption); font-weight: var(--fw-bold); font-variant-numeric: tabular-nums; }
+.stepIndex { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; margin-top: 1px; border-radius: 50%; background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent-line); color: var(--accent); font-size: var(--fs-micro); font-weight: var(--fw-bold); font-variant-numeric: tabular-nums; }
 .stepHeading { flex: 1; display: grid; gap: var(--space-0_5); min-width: 0; }
 .stepHeading > .sectionTitle { line-height: 22px; }
-.stepMeta { min-width: 0; overflow: hidden; color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
-.stepMeta code { font-family: var(--font-mono); font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text-2); }
+.stepMeta { min-width: 0; overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.stepMeta code { font-family: var(--font-mono); font-size: var(--fs-micro); font-weight: var(--fw-medium); color: var(--text-2); }
 .stepActions { flex: none; display: inline-flex; align-items: center; gap: var(--space-1_5); max-width: 55%; }
-.controls .stepActions select { width: auto; max-width: 220px; min-height: 28px; padding: var(--space-1) var(--space-8) var(--space-1) var(--space-2_5); font-size: var(--fs-body); }
+.controls .stepActions select { width: auto; max-width: 220px; min-height: 28px; padding: var(--space-1) var(--space-8) var(--space-1) var(--space-2_5); font-size: var(--fs-caption); }
 .step > p, .providerCard > p { margin: 0; }
-.stepNote { margin: 0 !important; color: var(--text-2); font-size: var(--fs-body); line-height: 1.6; }
+.stepNote { margin: 0 !important; color: var(--text-3); font-size: var(--fs-caption); line-height: 1.55; }
+
+/* Quick gateway presets row inside provider cards */
+.presetBar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1_5); }
+.presetLabel { color: var(--text-3); font-size: var(--fs-micro); font-weight: var(--fw-medium); margin-right: var(--space-0_5); }
+.controls .presetChip { display: inline-flex; align-items: center; min-height: 26px; padding: 0 var(--space-2_5); border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface-2); box-shadow: none; color: var(--text-2); font-size: var(--fs-micro); font-weight: var(--fw-medium); white-space: nowrap; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), color var(--fast) var(--ease); }
+.controls .presetChip:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+.controls .presetChip[data-active='true'] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: var(--fw-semibold); }
+
 /* Two-column field grid for short connection values; long values span. */
-.fieldGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3) var(--space-4); min-width: 0; }
+.fieldGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3) var(--space-3_5); min-width: 0; }
 .fieldGrid > .span { grid-column: 1 / -1; }
 @media (max-width: 640px) { .fieldGrid { grid-template-columns: 1fr; } }
-/* Unapplied provider edits: an explicit apply bar instead of always-on buttons. */
+
+/* Unapplied provider edits: crisp action strip. */
 .pendingBar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-2_5); padding: var(--space-2) var(--space-2_5) var(--space-2) var(--space-3); border: 1px solid var(--warning-line); border-radius: var(--radius); background: var(--warning-soft); }
-.pendingBar > span { flex: 1 1 180px; min-width: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-medium); }
+.pendingBar > span { flex: 1 1 180px; min-width: 0; color: var(--text); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
 .pendingBar > .buttons { flex: none; }
 .connectionSummary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5); min-width: 0; }
+
 /* Model list inside the model step. */
 .modelList { display: grid; gap: var(--space-2); min-width: 0; }
-.modelEmpty { display: grid; justify-items: center; gap: var(--space-1); padding: var(--space-5) var(--space-4); border: 1px dashed var(--line-strong); border-radius: var(--radius); background: var(--surface-2); text-align: center; }
-.modelEmpty > strong { font-size: var(--fs-body); font-weight: var(--fw-semibold); color: var(--text); }
-.modelEmpty > span { max-width: 420px; color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.6; }
-.controls .addModel { justify-content: center; width: 100%; min-height: 36px; border: 1px dashed var(--line-strong); border-radius: var(--radius); background: transparent; box-shadow: none; color: var(--text-2); font-size: var(--fs-control); font-weight: var(--fw-medium); }
+.modelEmpty { display: grid; justify-items: center; gap: var(--space-1); padding: var(--space-4) var(--space-4); border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); background: var(--surface-2); text-align: center; }
+.modelEmpty > strong { font-size: var(--fs-control); font-weight: var(--fw-semibold); color: var(--text); }
+.modelEmpty > span { max-width: 420px; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.55; }
+.quickModelBar { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.quickModelBar > input { flex: 1; min-width: 0; font-family: var(--font-mono); }
+.quickModelBar > input:placeholder-shown { font-family: inherit; }
+.quickModelBar > button { flex: none; white-space: nowrap; }
+.controls .addModel { justify-content: center; width: 100%; min-height: 36px; border: 1px dashed var(--line-strong); border-radius: var(--radius); background: transparent; box-shadow: none; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-medium); transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), color var(--fast) var(--ease); }
 .controls .addModel:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 .controls .catalogButton { display: inline-flex; align-items: center; gap: var(--space-1_5); min-height: 28px; padding: 0 var(--space-2_5); font-size: var(--fs-caption); white-space: nowrap; }
-.createForm { display: grid; gap: var(--space-3); min-width: 0; margin: 0; padding: var(--space-4); border: 1px solid var(--accent-line); border-radius: var(--radius); background: var(--surface); }
-.createForm > legend { padding: 0 var(--space-1_5); font-size: var(--fs-body); font-weight: var(--fw-semibold); color: var(--text); }
+.createForm { display: grid; gap: var(--space-3); min-width: 0; margin: 0; padding: var(--space-4); border: 1px solid var(--accent-line); border-radius: var(--radius-lg); background: var(--surface-2); }
+.createForm > legend { padding: 0 var(--space-1_5); font-size: var(--fs-control); font-weight: var(--fw-semibold); color: var(--text); }
 .createActions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); padding-top: var(--space-1); }
 
-/* Model list rows shared by multi-model editors: quiet text row with a chevron
-   instead of a boxed button; identity is de-duplicated (name shown once). */
-.modelRowHead { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
-.modelRowButton { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-2); min-height: 44px; padding: var(--space-2) var(--space-3); text-align: left; justify-content: flex-start; border: 0; border-radius: var(--radius); background: transparent; box-shadow: none; }
+/* Model list rows shared by multi-model editors: clean cards with clear hierarchy. */
+.modelRowHead { display: flex; align-items: center; gap: var(--space-2); min-width: 0; padding-right: var(--space-2); }
+.modelRowButton { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-2); min-height: 44px; padding: var(--space-2) var(--space-3); text-align: left; justify-content: flex-start; border: 0; border-radius: var(--radius); background: transparent; box-shadow: none; transition: background-color var(--fast) var(--ease); }
 .modelRowButton:hover:not(:disabled) { background: var(--surface-2); border-color: transparent; }
-.modelRowText { display: grid; gap: 1px; flex: 1; min-width: 0; }
-.modelRowName { font-size: var(--fs-body); font-weight: var(--fw-semibold); overflow-wrap: anywhere; }
-.modelRowSub { font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text-3); overflow-wrap: anywhere; }
+.modelRowText { display: grid; gap: var(--space-0_5); flex: 1; min-width: 0; }
+.modelRowName { font-size: var(--fs-control); font-weight: var(--fw-semibold); color: var(--text); overflow-wrap: anywhere; }
+.modelRowSub { font-size: var(--fs-caption); font-weight: var(--fw-regular); color: var(--text-3); overflow-wrap: anywhere; }
 .modelBadge, .countBadge { flex: none; }
 .countBadge { margin-left: var(--space-1_5); }
 .modelRowChevron { flex: none; color: var(--text-3); transition: transform var(--fast) var(--ease); }
 .modelRowButton[aria-expanded='true'] .modelRowChevron { transform: rotate(90deg); }
 .modelRowDefault { flex: none; min-height: 26px; padding: 0 var(--space-2_5); font-size: var(--fs-caption); white-space: nowrap; }
-.modelBack { display: flex; align-items: center; gap: var(--space-2_5); min-width: 0; padding: var(--space-1); }
-.modelBackButton { flex: none; display: inline-flex; align-items: center; gap: var(--space-1); min-height: 26px; padding: 0 var(--space-2); border: 0; border-radius: var(--radius-sm); background: none; box-shadow: none; color: var(--accent); font-size: var(--fs-control); font-weight: var(--fw-medium); }
+.modelBack { display: flex; align-items: center; gap: var(--space-2_5); min-width: 0; padding: var(--space-1_5) var(--space-2); }
+.modelBackButton { flex: none; display: inline-flex; align-items: center; gap: var(--space-1); min-height: 26px; padding: 0 var(--space-2); border: 0; border-radius: var(--radius-sm); background: none; box-shadow: none; color: var(--accent); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
 .modelBackButton:hover:not(:disabled) { background: var(--accent-soft); }
 .modelBackTitle { display: flex; align-items: center; gap: var(--space-1_5); min-width: 0; overflow-wrap: anywhere; }

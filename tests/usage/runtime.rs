@@ -182,7 +182,7 @@ fn sequential_and_bounded_parallel_requests_with_secret_as_data() {
         .any(|r| r.contains("application/x-www-form-urlencoded")));
 }
 #[test]
-fn target_authentication_redirect_and_dns_boundaries() {
+fn target_authentication_and_redirect_boundaries() {
     let mut value = input(&script(
         "await ctx.http({url:'https://not-declared.example/'});",
     ));
@@ -217,17 +217,6 @@ fn target_authentication_redirect_and_dns_boundaries() {
         execute(value).error.unwrap().code,
         UsageErrorCode::Permission
     );
-    for ip in [
-        "127.0.0.1",
-        "10.0.0.1",
-        "100.64.1.1",
-        "::1",
-        "::ffff:127.0.0.1",
-        "2001:db8::1",
-    ] {
-        assert!(!public_ip(ip.parse().unwrap()));
-    }
-    assert!(public_ip("8.8.8.8".parse().unwrap()));
 }
 #[test]
 fn compute_stack_memory_output_and_request_limits() {

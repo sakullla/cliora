@@ -12,6 +12,7 @@ struct MemoryCredentials {
     values: Mutex<BTreeMap<String, String>>,
     fail_put: Mutex<bool>,
     fail_read: Mutex<bool>,
+    reads: std::sync::atomic::AtomicUsize,
 }
 
 impl MemoryCredentials {
@@ -32,6 +33,7 @@ impl CredentialStore for MemoryCredentials {
         Ok(())
     }
     fn get(&self, id: &str) -> Result<String, String> {
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if *self.fail_read.lock().unwrap() {
             return Err("synthetic read failure".into());
         }
@@ -300,4 +302,25 @@ fn invalid_aliases_and_values_are_refused_before_saving() {
     assert!(store.stash().is_empty());
     let created = secret(&database, &store, "  正常别名  ", CANARY);
     assert_eq!(created.alias, "正常别名");
+}
+
+#[test]
+fn paging_reads_only_visible_values_and_orders_references_first() {
+    use std::sync::atomic::Ordering;
+    let db = db();
+    let store = MemoryCredentials::default();
+    for n in 0..69 { secret(&db, &store, &format!("entry-{n:02}"), CANARY); }
+    let last = secret(&db, &store, "last", CANARY);
+    store.reads.store(0, Ordering::Relaxed);
+    let first = page(&db, &store, "", 0, &last.reference).unwrap();
+    assert_eq!((first.total, first.matched, first.items.len()), (70, 70, 30));
+    assert_eq!(first.items[0].id, last.id);
+    assert_eq!(store.reads.load(Ordering::Relaxed), 30);
+    let end = page(&db, &store, "", 999, &last.reference).unwrap();
+    assert_eq!((end.offset, end.items.len()), (60, 10));
+    let match_one = page(&db, &store, "LAST", 30, "").unwrap();
+    assert_eq!((match_one.offset,match_one.matched), (0,1));
+    let none = page(&db, &store, "unmatched", 120, "").unwrap();
+    assert!(none.items.is_empty());
+    assert_eq!(store.reads.load(Ordering::Relaxed), 41);
 }

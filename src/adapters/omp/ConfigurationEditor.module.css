@@ -4,8 +4,8 @@
 .fields > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-1_5); }
 .fields label, .fields > div > div { grid-column: 1 / -1; }
 .editor input:not([type="checkbox"]), .editor select { min-width: 0; width: 100%; box-sizing: border-box; }
-.note { font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text-2); line-height: 1.5; margin: 0; }
-.model { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); min-width: 0; overflow: hidden; transition: border-color var(--fast) var(--ease); }
+.note { font-size: var(--fs-caption); font-weight: var(--fw-regular); color: var(--text-3); line-height: 1.55; margin: 0; }
+.model { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); min-width: 0; overflow: hidden; transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease); }
 .model > .fields { padding: var(--space-3) var(--space-4) var(--space-4); border-top: 1px solid var(--line); background: var(--surface-2); }
 .model > .fields input:not([type="checkbox"]), .model > .fields select { background-color: var(--surface); }
 .model:hover { border-color: var(--line-strong); }

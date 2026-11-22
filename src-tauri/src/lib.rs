@@ -113,6 +113,11 @@ mod windows_security;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // The host-sync helper must run before the single-instance plugin, the webview
+    // or any background work so a sync works with the desktop closed.
+    if crate::remote::twiglane_sync::helper_entry() {
+        return;
+    }
     tauri::Builder::default()
         // single-instance 必须最先注册，并启用 deep-link feature 才能把第二个
         // 实例的系统链接转交给已经在运行的窗口。
@@ -272,6 +277,7 @@ pub fn run() {
             commands::delete_prompt,
             commands::record_prompt_usage,
             commands::list_prompt_secrets,
+            commands::list_prompt_secret_page,
             commands::create_prompt_secret,
             commands::rename_prompt_secret,
             commands::update_prompt_secret_value,
@@ -283,6 +289,8 @@ pub fn run() {
             commands::list_secret_installations,
             commands::create_secret_installation,
             commands::revoke_secret_installation,
+            commands::restore_cli_installation,
+            commands::delete_cli_installation,
             commands::list_secret_grants,
             commands::grant_secret_usage,
             commands::revoke_secret_usage,
@@ -290,11 +298,13 @@ pub fn run() {
             commands::answer_prompt_secret_approval,
             commands::list_secret_audit,
             commands::secret_cli_context,
+            commands::secret_access_options,
             commands::secret_mcp_status,
             commands::set_secret_mcp_enabled,
             commands::check_secret_mcp_health,
             commands::revoke_secret_mcp_installation,
             commands::list_library_items,
+            commands::list_library_titles,
             commands::save_library_item,
             commands::delete_library_item,
             commands::list_remote_library_items,
@@ -486,6 +496,8 @@ pub fn run() {
             commands::save_remote_target,
             commands::list_remote_saved_passwords,
             commands::delete_remote_target,
+            commands::host_sync_begin,
+            commands::host_sync_receive,
             commands::list_remote_projects,
             commands::list_remote_directories,
             commands::create_remote_directory,

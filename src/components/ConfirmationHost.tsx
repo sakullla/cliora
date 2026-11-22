@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { answerConfirmation, answerSecretApproval, confirmationSnapshot, dismissSecretApproval, presentSecretApproval, secretApprovalSnapshot, subscribeConfirmation, subscribeSecretApproval } from '../lib/confirm';
@@ -16,6 +16,7 @@ export function ConfirmationHost() {
   const { t } = useTranslation();
   const request = useSyncExternalStore(subscribeConfirmation, confirmationSnapshot);
   const approval = useSyncExternalStore(subscribeSecretApproval, secretApprovalSnapshot);
+  const [countdown, setCountdown] = useState<{ id: string; seconds: number } | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const approvalDialog = useRef<HTMLDialogElement>(null);
 
@@ -37,6 +38,17 @@ export function ConfirmationHost() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!approval) { setCountdown(null); return; }
+    setCountdown({ id: approval.approvalId, seconds: approval.expiresInSeconds });
+    const started = Date.now();
+    const timer = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - started) / 1000);
+      setCountdown({ id: approval.approvalId, seconds: Math.max(0, approval.expiresInSeconds - elapsed) });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [approval?.approvalId, approval?.expiresInSeconds]);
+
   useLayoutEffect(() => {
     if (!request || !dialog.current) return;
     const element = dialog.current;
@@ -56,6 +68,8 @@ export function ConfirmationHost() {
     catch { void answerSecretApproval(approval.approvalId, false); }
     return () => { element.close(); };
   }, [approval]);
+
+  const secondsLeft = approval ? (countdown?.id === approval.approvalId ? countdown.seconds : approval.expiresInSeconds) : 0;
 
   return <>
     {request && <dialog ref={dialog} className="confirmation-dialog" aria-labelledby="confirmation-title" aria-describedby="confirmation-message"
@@ -77,16 +91,19 @@ export function ConfirmationHost() {
         <Button variant={request.destructive ? 'danger' : 'primary'} onClick={() => answerConfirmation(request.id, true)}>{request.confirmLabel ?? t('common.dialog.confirm')}</Button>
       </div>
     </dialog>}
-    {approval && <dialog ref={approvalDialog} className="confirmation-dialog" aria-labelledby="secret-approval-title" aria-describedby="secret-approval-message"
+    {approval && <dialog ref={approvalDialog} className="confirmation-dialog secret-approval-dialog" aria-labelledby="secret-approval-title" aria-describedby="secret-approval-message"
       data-secret-approval={approval.approvalId}
       onCancel={event => { event.preventDefault(); void answerSecretApproval(approval.approvalId, false); }}>
       <div className="confirmation-head">
         <span className="confirmation-icon" data-destructive="true" aria-hidden="true"><Icon name="lock" size={18} /></span>
-        <div>
+        <div className="secret-approval-body">
           <h2 id="secret-approval-title">{t('common.secretApproval.title')}</h2>
-          <p id="secret-approval-message">{t('common.secretApproval.message', { alias: approval.alias, source: approval.source })}</p>
-          <p data-secret-approval-risk>{t('common.secretApproval.risk')}</p>
-          <p data-secret-approval-timeout>{t('common.secretApproval.timeout', { seconds: approval.expiresInSeconds })}</p>
+          <dl className="secret-approval-facts" id="secret-approval-message">
+            <div><dt>{t('common.secretApproval.secretLabel')}</dt><dd><strong>{approval.alias}</strong></dd></div>
+            <div><dt>{t('common.secretApproval.sourceLabel')}</dt><dd>{approval.source}</dd></div>
+          </dl>
+          <p className="secret-approval-risk" data-secret-approval-risk>{t('common.secretApproval.risk')}</p>
+          <p className="secret-approval-timeout" data-secret-approval-timeout>{secondsLeft === 0 && approval.expiresInSeconds > 0 ? t('common.secretApproval.expired') : t('common.secretApproval.timeout', { seconds: secondsLeft })}</p>
         </div>
       </div>
       <div className="confirmation-actions">

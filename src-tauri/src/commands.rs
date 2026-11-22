@@ -1235,6 +1235,14 @@ pub async fn export_history_session(
 }
 
 #[tauri::command]
+pub async fn list_library_titles(app: AppHandle, kind: library::LibraryKind) -> Result<Vec<library::LibraryTitle>, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        library::list_titles(&db, kind).map_err(native_error)
+    }).await
+}
+
+#[tauri::command]
 pub async fn list_library_items(
     app: AppHandle,
     kind: library::LibraryKind,
@@ -5643,6 +5651,44 @@ pub fn delete_remote_target(
     Ok(())
 }
 
+/// Create one host-sync session for the host the user is jumping from. Only the
+/// session reference leaves the process; configuration and password stay local.
+#[tauri::command]
+pub async fn host_sync_begin(
+    app: AppHandle,
+    target_id: String,
+) -> Result<serde_json::Value, ApiError> {
+    blocking(move || {
+        let database = app.state::<AppState>().database(&app)?;
+        let dir = crate::remote::twiglane_sync::desktop_sessions_dir()
+            .map_err(|error| native_error(error.to_string()))?;
+        crate::remote::twiglane_sync::begin_with(&database, dir, &target_id)
+            .map_err(native_error)
+    }).await
+}
+
+/// Receive one jump: drive Twiglane's helper over the private pipe and write only
+/// what this machine really lacks. Never returns a secret.
+#[tauri::command]
+pub async fn host_sync_receive(
+    app: AppHandle,
+    session_ref: String,
+    resolve_to: Option<String>,
+) -> Result<serde_json::Value, ApiError> {
+    blocking(move || {
+        let database = app.state::<AppState>().database(&app)?;
+        let program = crate::remote::twiglane_sync::twiglane_helper()
+            .map_err(|error| native_error(error.to_string()))?;
+        crate::remote::twiglane_sync::receive_with(
+            &database,
+            &program,
+            &session_ref,
+            resolve_to.as_deref(),
+        )
+        .map_err(native_error)
+    }).await
+}
+
 #[tauri::command]
 pub fn list_remote_projects(
     app: AppHandle,
@@ -7801,6 +7847,14 @@ pub async fn list_prompt_secrets(
     .await
 }
 #[tauri::command]
+pub async fn list_prompt_secret_page(app: AppHandle, search: String, offset: u32, references: String) -> Result<crate::secrets::store::SecretPage, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::store::page(&db, &AppCredentialStore, &search, offset, &references).map_err(native_error)
+    }).await
+}
+
+#[tauri::command]
 pub async fn create_prompt_secret(
     app: AppHandle,
     alias: String,
@@ -8025,12 +8079,31 @@ pub async fn revoke_secret_installation(app: AppHandle, id: String) -> Result<()
 }
 
 #[tauri::command]
+pub async fn restore_cli_installation(app: AppHandle, id: String) -> Result<(), ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::broker::restore_cli_installation(&db, &id).map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn delete_cli_installation(app: AppHandle, id: String) -> Result<(), ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::broker::delete_cli_installation(&db, &id).map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn list_secret_grants(
     app: AppHandle,
+    secret_id: Option<String>,
 ) -> Result<Vec<crate::secrets::broker::Grant>, ApiError> {
     blocking(move || {
         let db = app.state::<AppState>().database(&app)?;
-        crate::secrets::broker::list_grants(&db).map_err(native_error)
+        crate::secrets::broker::grants_for_secret(&db, secret_id.as_deref()).map_err(native_error)
     })
     .await
 }
@@ -8106,6 +8179,31 @@ pub async fn secret_cli_context() -> Result<SecretCliContext, ApiError> {
         executable,
         entry: crate::secrets::cli::CLI_ARGUMENT.into(),
     })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptAccessOptions {
+    cli: SecretCliContext,
+    installations: Vec<crate::secrets::broker::Installation>,
+    executors: Vec<crate::secrets::executor::SecretExecutor>,
+    grants: Vec<crate::secrets::broker::Grant>,
+    available_programs: Vec<&'static str>,
+}
+
+#[tauri::command]
+pub async fn secret_access_options(app: AppHandle, secret_id: Option<String>) -> Result<ScriptAccessOptions, ApiError> {
+    let cli = secret_cli_context().await?;
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        Ok(ScriptAccessOptions {
+            cli,
+            installations: crate::secrets::broker::list_installations(&db).map_err(native_error)?,
+            executors: crate::secrets::executor::list(&db).map_err(native_error)?,
+            grants: crate::secrets::broker::grants_for_secret(&db, secret_id.as_deref()).map_err(native_error)?,
+            available_programs: ["node", "gh"].into_iter().filter(|name| crate::secrets::executor::preset_available(name)).collect(),
+        })
+    }).await
 }
 
 // The secret MCP entry is per target and installed by the shared MCP preview,
