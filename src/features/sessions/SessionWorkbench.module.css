@@ -776,10 +776,17 @@
 .identityText { display: flex; flex: 1 1 auto; align-items: center; gap: var(--space-3); min-width: 0; overflow: hidden; }
 /* CLI spinner frames differ in width; a fixed slot keeps the task text from jittering. */
 .titleGlyph { display: inline-block; min-width: 1.15em; text-align: center; font-variant-emoji: text; }
-.identityTitleRow { display: flex; flex: 0 1 auto; align-items: center; gap: var(--space-2); min-width: min(140px, 100%); }
-/* A short title (often just the CLI name) keeps its own width instead of the reserve, so the
-   context after it does not sit behind an empty gap. */
-.identityTitleRow[data-short] { flex: none; min-width: 0; }
+/* The row's width comes only from the space the stage bar offers, never from a state change.
+   The reduced-motion reset in base.css gives every element a 0.01ms transition for the default
+   `transition-property: all`, and a pending flex/min-width transition keeps the previous values
+   until its start time is committed: the row would hold flex-shrink 0 and a long title would
+   overflow the bar instead of ellipsizing, moving the state chip with it. Geometry stays
+   instantaneous here, so the title truncates and the chip keeps one position in every state. */
+.identityTitleRow { display: flex; flex: 0 1 auto; align-items: center; gap: var(--space-2); min-width: min(140px, 100%); transition: none; }
+/* A short title (often just the CLI name) drops the reserve so the context after it does not sit
+   behind an empty gap. It keeps the same flex, so the title still shrinks instead of overflowing
+   when the bar is narrower than its text. */
+.identityTitleRow[data-short] { min-width: 0; }
 .identityTitleRow > h2 {
   flex: 0 1 auto;
   min-width: 0;
@@ -852,6 +859,14 @@
 .sessionElapsed { position: relative; display: inline-flex; flex: none; align-items: center; gap: var(--space-1); padding-left: var(--space-3); color: var(--term-text-2); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; line-height: 18px; white-space: nowrap; }
 .sessionElapsed::before { content: ''; position: absolute; top: 50%; left: 0; width: 1px; height: 14px; background: var(--term-frame); transform: translateY(-50%); }
 .sessionElapsed > :global(svg) { color: var(--term-text-3); }
+/* The counter gains a digit at 10s and again at 10m, so it holds a fixed slot instead of
+   widening the row: the session title keeps one truncation point while time passes. */
+.elapsedLabel { display: inline-grid; text-align: start; }
+.elapsedLabel > span,
+.elapsedLabel::after { grid-area: 1 / 1; }
+/* A generated label reserves the widest sub-hour form (`59s`/`59m`) without adding text to the
+   chip, so the counter gains its second digit without moving the title's truncation point. */
+.elapsedLabel::after { content: '59s'; visibility: hidden; }
 .sessionElapsed + .identitySub { margin-left: calc(var(--space-1) * -1); padding-left: 0; }
 .sessionElapsed + .identitySub::before { display: none; }
 .exitCode { flex: none; line-height: 24px; color: var(--term-text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }

@@ -3873,7 +3873,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   <div className={styles.identityTitleRow} data-short={(title ? stableTitle(title) : toolName(current)).length <= SHORT_STAGE_TITLE || undefined}><h2 title={title ? toolName(current) + ' · ' + stableTitle(title) : toolName(current)}>{title ? <SessionTitle title={title} /> : toolName(current)}</h2><Badge className={styles.statusChip} tone={sessionBadgeTone(tone)} data-state={tone} data-task={current ? taskStateOf(current) : undefined} title={currentStateLabel}><SessionActivityIcon tone={tone} slot="status" className={styles.statusDot} /><span className={styles.statusLabel}><span>{currentStateLabel}</span>{stateReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></Badge></div>
                   {/* The stage icon already names the CLI; the running time leads the context instead and
                       stays visible while the directory chip gives way. */}
-                  {elapsed && <span className={styles.sessionElapsed} title={t('sessions.elapsedTitle', { time: elapsed })}><Icon name="clock" size={12} />{elapsed}</span>}
+                  {elapsed && <span className={styles.sessionElapsed} title={t('sessions.elapsedTitle', { time: elapsed })}><Icon name="clock" size={12} /><span className={styles.elapsedLabel}><span>{elapsed}</span></span></span>}
                   <div className={styles.identitySub}>
                     {/* A first flex item never wraps; this empty one takes that place so every real chip can. */}
                     <span className={styles.identitySubAnchor} aria-hidden="true" />
