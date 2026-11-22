@@ -164,7 +164,7 @@ async function emitApproval(page: Page, approvalId = 'approval-1', alias = '生�
   }, { approvalId, alias, source });
 }
 
-test('the broker panel lists metadata and inserts complete CLI instructions', async ({ page }) => {
+test('the broker panel lists local metadata and inserts portable instructions', async ({ page }) => {
   await install(page);
   await library(page);
   const dialog = await newPrompt(page, '受控使用');
@@ -188,12 +188,12 @@ test('the broker panel lists metadata and inserts complete CLI instructions', as
   await openBroker(dialog);
   await broker.locator('[data-secret-broker-instructions]').click();
   const body = await bodyOf(dialog).inputValue();
-  expect(body).toContain('--cliora-internal-secret-cli-v1');
-  expect(body).toContain(`--installation ${INSTALLATION_ID}`);
-  expect(body).toContain(`use --secret ${SECRET_ID} --executor ${EXECUTOR_ID}`);
-  expect(body).toContain(`read --secret ${SECRET_ID}`);
-  expect(body).toContain('/Applications/Cliora.app/Contents/MacOS/cliora');
-  expect(body).toContain('每次都要在栖点确认');
+  expect(body).not.toContain('--cliora-internal-secret-cli-v1');
+  expect(body).not.toContain(INSTALLATION_ID);
+  expect(body).toContain(`{{cliora-secret:${SECRET_ID}}}`);
+  expect(body).not.toContain(EXECUTOR_ID);
+  expect(body).not.toContain('/Applications/Cliora.app/Contents/MacOS/cliora');
+  expect(body).toContain('部署脚本');
   expect(body).not.toContain(CANARY);
   // Creating an installation through the panel adds a row the instructions can use.
   await broker.locator('[data-secret-add-identity]').click();
@@ -212,10 +212,10 @@ test('inserted instructions pick the installation that carries a grant', async (
   // The newer installation has no grant, so it cannot describe a usable command.
   await broker.locator('[data-secret-broker-instructions]').click();
   const body = await bodyOf(dialog).inputValue();
-  expect(body).toContain(`--installation ${INSTALLATION_ID}`);
+  expect(body).not.toContain(INSTALLATION_ID);
   expect(body).not.toContain(IDLE_INSTALLATION_ID);
-  expect(body).toContain(`use --secret ${SECRET_ID} --executor ${EXECUTOR_ID}`);
-  expect(body).toContain(`read --secret ${SECRET_ID}`);
+  expect(body).toContain(`{{cliora-secret:${SECRET_ID}}}`);
+  expect(body).not.toContain(EXECUTOR_ID);
   expect(body).not.toContain('还没有任何已授权的秘密与执行入口');
   expect(body).not.toContain(CANARY);
 });
@@ -267,7 +267,7 @@ test('an offline broker is reported before any secret is used', async ({ page })
   await expect(broker.locator('[data-secret-broker-status]')).toContainText('未找到正在运行的栖点秘密代理');
   // The instructions are still exact: they come from metadata, not from the broker.
   await broker.locator('[data-secret-broker-instructions]').click();
-  expect(await bodyOf(dialog).inputValue()).toContain(`--installation ${INSTALLATION_ID}`);
+  expect(await bodyOf(dialog).inputValue()).toContain(`{{cliora-secret:${SECRET_ID}}}`);
 });
 
 test('the first script permission needs only a preset and explicit approval', async ({ page }) => {
@@ -292,7 +292,8 @@ test('the first script permission needs only a preset and explicit approval', as
   const grantCalls: string[] = await page.evaluate(() => (window as any).__secretBroker.calls.map((c: Call) => c.command).filter((name: string) => /secret/.test(name) && name !== 'list_prompt_secret_page'));
   expect(grantCalls).toEqual(['secret_access_options', 'create_secret_installation', 'save_secret_executor', 'grant_secret_usage', 'list_secret_grants']);
   await form.locator('[data-secret-grant-insert]').click();
-  await expect(bodyOf(dialog)).toHaveValue(new RegExp(writes[2].args.executorId));
+  await expect(bodyOf(dialog)).toHaveValue(/查看 GitHub 用户名/);
+  await expect(bodyOf(dialog)).not.toHaveValue(new RegExp(writes[2].args.executorId));
   await expect(bodyOf(dialog)).not.toHaveValue(/read --secret/);
   await form.locator('[data-secret-grant-revoke]').click();
   await expect(form.locator('[data-secret-grant-row]')).toHaveCount(0);
@@ -310,8 +311,8 @@ test('a revoked local CLI can be restored and permanently deleted', async ({ pag
   await row.locator('[data-secret-installation-revoke]').click();
   await confirm('撤销');
   await expect(row).toHaveAttribute('data-secret-installation-revoked', 'true');
-  await broker.locator('[data-secret-broker-instructions]').click();
-  await expect(dialog.locator('[data-secret-error]')).toContainText('恢复已撤销');
+  await expect(broker.locator('[data-secret-broker-instructions]')).toBeDisabled();
+  await expect(bodyOf(dialog)).toHaveValue('');
   await row.locator('[data-secret-installation-restore]').click();
   await confirm('恢复连接');
   await expect(row).toHaveAttribute('data-secret-installation-revoked', 'false');

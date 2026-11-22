@@ -76,9 +76,14 @@ export async function prepareLocalSecretPrompt(
     body = body.replace(oldCommand, (_line, invocation: string) => '& ' + invocation + POWERSHELL_OUTPUT);
   }
   const tokens = promptSecretTokens(body);
-  if (!tokens.length) return body;
+  const legacyList = /^list_secrets\r?$/m.test(body) && (body.includes('### 1. 列出可用秘密') || body.includes('### 1. List the secrets you may use'));
+  if (!tokens.length && !legacyList) return body;
   const { cli, installations, grants } = await load();
   const live = installations.filter(item => item.kind === 'cli' && !item.targetId && !item.revoked);
+  if (!tokens.length) {
+    const target = preferredInstallation(live, grants);
+    return target ? body + '\n' + command({ ...cli, installationId: target.id }, ['list']) : body;
+  }
   const lines: string[] = [];
   const seen = new Set<string>();
   const listCommands = new Set<string>();
@@ -86,22 +91,21 @@ export async function prepareLocalSecretPrompt(
     const compact = token.slice('{{cliora-secret:'.length, -2).replace(/^urn:uuid:/, '').replaceAll('-', '').toLowerCase();
     if (seen.has(compact)) continue;
     seen.add(compact);
-    const matching = grants.filter(grant => grant.secretId.replaceAll('-', '').toLowerCase() === compact);
-    const installation = live.find(item => matching.some(grant => grant.installationId === item.id)
-      && body.includes('--installation ' + item.id)) ?? live.find(item => matching.some(grant => grant.installationId === item.id));
-    if (!installation) {
-      lines.push(english ? token + ' has no authorized local CLI action. If list_secrets is available, check its granted actions. Otherwise ask the user to authorize an action in Secret references.' : token + ' 尚无本机 CLI 操作授权。若当前提供 list_secrets，可查询已授权的 MCP 操作；否则请用户在「秘密引用」中授权。');
+    const matching = grants.filter(grant => grant.secretId.replaceAll('-', '').toLowerCase() === compact
+      && live.some(item => item.id === grant.installationId));
+    if (!matching.length) {
+      lines.push(english ? token + ' has no authorized local CLI action. If list_secrets is available, check its granted actions. Otherwise ask the user to set up this reference on this device and authorize the requested action in Secret references.' : token + ' 尚无本机 CLI 操作授权。若当前提供 list_secrets，可查询已授权的 MCP 操作；否则请用户在「秘密引用」中为此引用配置本机值，并授权所需操作。');
       continue;
     }
-    const context = { ...cli, installationId: installation.id };
-    const allowed = matching.filter(grant => grant.installationId === installation.id);
-    lines.push(allowed[0].alias + ' ' + token);
-    listCommands.add(command(context, ['list']));
-    for (const grant of allowed) {
+    lines.push(matching[0].alias + ' ' + token);
+    for (const grant of matching) {
+      const context = { ...cli, installationId: grant.installationId };
+      listCommands.add(command(context, ['list']));
       const use = grantedScriptCommand(context, grant);
       if (!body.includes(use) && !body.includes(use.replace(/^& /, ''))) lines.push(grant.executorLabel, use);
     }
-    const read = command(context, ['read', '--secret', allowed[0].secretId]);
+    const first = matching[0];
+    const read = command({ ...cli, installationId: first.installationId }, ['read', '--secret', first.secretId]);
     if (!body.includes(read)) lines.push(english ? 'Show value (requires confirmation)' : '查看原值（需确认）', read);
   }
   if (listCommands.size) {

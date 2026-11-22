@@ -296,6 +296,7 @@ pub fn normalize_draft(draft: &PromptDraft) -> Result<PromptDraft, String> {
     if result.body.len() > MAX_BODY {
         return Err("正文不能超过 1 MB".into());
     }
+    crate::secrets::portable::normalize_prompt(&mut result.body);
     if result
         .expected_version
         .is_some_and(|v| v == 0 || v >= 9_007_199_254_740_991)

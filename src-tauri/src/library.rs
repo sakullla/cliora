@@ -152,6 +152,9 @@ pub fn save(db: &Database, mut draft: LibraryDraft) -> Result<LibraryItem, Strin
     if draft.body.len() > 1_000_000 {
         return Err("正文不能超过 1 MB".into());
     }
+    if draft.kind == LibraryKind::Prompt {
+        crate::secrets::portable::normalize_prompt(&mut draft.body);
+    }
     let id = draft.id.unwrap_or_else(|| Uuid::new_v4().to_string());
     let stamp = now() as i64;
     db.with_connection(|conn| {

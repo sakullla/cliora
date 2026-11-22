@@ -15,6 +15,7 @@ pub mod executor;
 pub mod ipc;
 pub mod mcp;
 pub mod reference;
+pub(crate) mod portable;
 pub mod store;
 
 pub use reference::{format as format_reference, references as parse_references};

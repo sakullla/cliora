@@ -7765,10 +7765,11 @@ pub async fn create_prompt_secret(
     app: AppHandle,
     alias: String,
     value: String,
+    reference_id: Option<String>,
 ) -> Result<crate::secrets::PromptSecret, ApiError> {
     blocking(move || {
         let db = app.state::<AppState>().database(&app)?;
-        crate::secrets::create(&db, &AppCredentialStore, &alias, &value).map_err(native_error)
+        crate::secrets::store::create_local(&db, &AppCredentialStore, &alias, &value, reference_id.as_deref()).map_err(native_error)
     })
     .await
 }

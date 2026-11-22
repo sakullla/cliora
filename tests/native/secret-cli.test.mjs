@@ -151,3 +151,24 @@ test('Windows PowerShell waits for a delayed GUI helper response and preserves i
     rmdirSync(directory);
   }
 });
+
+test('one synced prompt generates only destination commands on Windows, macOS and Linux', async () => {
+  const secret = input.secrets[0];
+  const body = '部署 ' + '{{cliora-secret:' + secret.id + '}}';
+  for (const [platform, executable] of Object.entries({
+    windows: 'C:\\Cliora\\cliora.exe', mac: '/Applications/Cliora.app/Contents/MacOS/cliora', linux: '/usr/bin/cliora',
+  })) {
+    const installationId = 'local-' + platform;
+    const out = await prepareLocalSecretPrompt(body, async () => ({
+      cli: { executable, entry: input.entry },
+      installations: [{ id: installationId, kind: 'cli', targetId: null, revoked: false }],
+      grants: [{ secretId: secret.id, alias: secret.alias, installationId, executorId: platform, executorLabel: '部署' }],
+    }), false);
+    assert.ok(out.startsWith(body));
+    assert.ok(out.includes(executable));
+    assert.ok(out.includes('--installation ' + installationId));
+    assert.ok(out.includes('--executor ' + platform));
+    assert.equal(out.includes('Out-String'), platform === 'windows');
+    assert.ok(!out.includes(input.installationId));
+  }
+});

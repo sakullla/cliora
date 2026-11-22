@@ -255,7 +255,7 @@ export const native = {
   // remote library context cannot create, list or resolve a local secret.
   listPromptSecretPage: (search: string, offset: number, references: string) => command<PromptSecretPage>('list_prompt_secret_page', { search, offset, references }),
   listPromptSecrets: () => command<PromptSecret[]>('list_prompt_secrets'),
-  createPromptSecret: (alias: string, value: string) => command<PromptSecret>('create_prompt_secret', { alias, value }),
+  createPromptSecret: (alias: string, value: string, referenceId?: string) => command<PromptSecret>('create_prompt_secret', { alias, value, referenceId }),
   renamePromptSecret: (id: string, expectedVersion: number, alias: string) => command<PromptSecret>('rename_prompt_secret', { id, expectedVersion, alias }),
   updatePromptSecretValue: (id: string, expectedVersion: number, value: string) => command<PromptSecret>('update_prompt_secret_value', { id, expectedVersion, value }),
   deletePromptSecret: (id: string, expectedVersion: number) => command<void>('delete_prompt_secret', { id, expectedVersion }),

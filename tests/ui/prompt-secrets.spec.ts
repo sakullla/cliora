@@ -55,7 +55,7 @@ async function install(page: Page, remote = false) {
           if (command === 'create_prompt_secret') {
             if (state.failCreate) throw { message: 'fixture: 秘密原值写入失败' };
             if (secrets.some(item => item.alias === String(args.alias).trim())) throw { message: '已存在同名秘密，请换一个别名' };
-            const created = { id: crypto.randomUUID(), alias: String(args.alias).trim(), version: 1, value: String(args.value) };
+            const created = { id: args.referenceId ?? crypto.randomUUID(), alias: String(args.alias).trim(), version: 1, value: String(args.value) };
             secrets.push(created);
             return describe(created);
           }
@@ -341,4 +341,22 @@ test('launching a saved bare reference supplies the existing action without read
   expect(outgoing).toContain(body);
   expect(outgoing).toContain('read --secret ' + id);
   expect(outgoing).not.toContain(CANARY);
+});
+
+test('a synchronized reference can be configured and authorized without changing the prompt body', async ({ page }) => {
+  await install(page);
+  await library(page);
+  const editor = await newPrompt(page);
+  const id = '11111111-2222-4333-8444-555555555555';
+  const body = '跨平台 ' + referenceOf(id);
+  await bodyOf(editor).fill(body);
+  await editor.locator('[data-secret-bind]').click();
+  await editor.locator('[data-secret-alias]').fill('本机凭据');
+  await editor.locator('[data-secret-value]').fill(CANARY);
+  await editor.locator('[data-secret-submit]').click();
+  await expect(editor.locator('[data-secret-reference-status="available"]')).toHaveCount(1);
+  await expect(bodyOf(editor)).toHaveValue(body);
+  await editor.locator('[data-secret-grant-save]').click();
+  await expect(editor.locator('[data-secret-grant-row]')).toBeVisible();
+  await expect(bodyOf(editor)).toHaveValue(body);
 });

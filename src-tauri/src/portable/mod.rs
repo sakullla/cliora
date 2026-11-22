@@ -785,12 +785,13 @@ fn collect_snapshot_on(
             }),
         });
     }
-    for (id, kind, title, body, category, project_id, version, updated_at) in library {
+    for (id, kind, title, mut body, category, project_id, version, updated_at) in library {
         let kind = match kind.as_str() {
             "prompt" => crate::library::LibraryKind::Prompt,
             "rule" => crate::library::LibraryKind::Rule,
             _ => return Err("资料库分类无效".into()),
         };
+        if kind == crate::library::LibraryKind::Prompt { crate::secrets::portable::normalize_prompt(&mut body); }
         let item=LibraryItem { id:id.clone(),kind,title,body,category,project_id,version:version.max(0) as u64,updated_at:updated_at.max(0) as u64 };
         let payload=if kind==crate::library::LibraryKind::Prompt {
             PortablePayload::Prompt(PortablePrompt { metadata:prompt_metadata_on(conn,&item)?, item })
@@ -1055,6 +1056,9 @@ pub fn preview_import(
                 entity.payload=PortablePayload::Prompt(PortablePrompt{item:item.clone(),metadata});
             }
         }
+        if let PortablePayload::Prompt(prompt) = &mut entity.payload {
+            crate::secrets::portable::normalize_prompt(&mut prompt.item.body);
+        }
     }
     let local = collect_snapshot(db, store, registry)?;
     let local: BTreeMap<_, _> = local
@@ -1189,7 +1193,8 @@ fn preview_content(entity: &PortableEntity) -> Result<String, String> {
 fn restore_library(conn:&Connection,value:&LibraryItem)->Result<(),String>{
     let kind=match value.kind {crate::library::LibraryKind::Prompt=>"prompt",crate::library::LibraryKind::Rule=>"rule"};
     let project_id=value.project_id.as_ref().filter(|id|conn.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",[*id],|r|r.get::<_,bool>(0)).unwrap_or(false));
-    conn.execute("INSERT INTO library_items(id,kind,title,body,category,project_id,version,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,title=excluded.title,body=excluded.body,category=excluded.category,project_id=excluded.project_id,version=excluded.version,updated_at=excluded.updated_at",params![value.id,kind,value.title,value.body,value.category,project_id,value.version as i64,value.updated_at as i64]).map_err(|e|e.to_string())?;
+    let body = if kind == "prompt" { crate::secrets::portable::prompt_body(&value.body) } else { value.body.as_str().into() };
+    conn.execute("INSERT INTO library_items(id,kind,title,body,category,project_id,version,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,title=excluded.title,body=excluded.body,category=excluded.category,project_id=excluded.project_id,version=excluded.version,updated_at=excluded.updated_at",params![value.id,kind,value.title,body.as_ref(),value.category,project_id,value.version as i64,value.updated_at as i64]).map_err(|e|e.to_string())?;
     Ok(())
 }
 

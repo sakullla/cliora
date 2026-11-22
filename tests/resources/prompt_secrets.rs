@@ -324,3 +324,64 @@ fn paging_reads_only_visible_values_and_orders_references_first() {
     assert!(none.items.is_empty());
     assert_eq!(store.reads.load(Ordering::Relaxed), 41);
 }
+
+#[test]
+fn a_legacy_prompt_syncs_as_a_reference_and_binds_only_on_the_receiving_device() {
+    let registry = crate::adapters::Registry::builtins();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("source.db");
+    let source = Database::open(&path).unwrap();
+    let source_store = MemoryCredentials::default();
+    let created = secret(&source, &source_store, "部署", CANARY);
+    let install = uuid::Uuid::new_v4();
+    let executor = uuid::Uuid::new_v4();
+    let legacy = format!("部署步骤\r\n```\r\n& 'C:\\Program Files\\Cliora\\cliora.exe' --cliora-internal-secret-cli-v1 --installation {install} use --secret {} --executor {executor} | Out-String -Stream\r\n```\r\n完成", created.id);
+    let expected = format!("部署步骤\r\n{}\r\n完成", created.reference);
+    let document = prompt(&source, "部署", &legacy);
+    assert_eq!(document.body, expected);
+    // Simulate a source database written by an older client.
+    source.with_connection(|conn| conn.execute("UPDATE library_items SET body=? WHERE id=?",
+        rusqlite::params![legacy, document.id]).map_err(|e| e.to_string())).unwrap();
+    let snapshot = crate::portable::collect_snapshot(&source, &source_store, &registry).unwrap();
+    let bytes = serde_json::to_string(&snapshot).unwrap();
+    assert!(bytes.contains(&created.reference));
+    for local in [CANARY, &install.to_string(), &executor.to_string(), "cliora.exe"] {
+        assert!(!bytes.contains(local));
+    }
+    source.with_connection(|conn| conn.pragma_update(None, "user_version", 36).map_err(|e| e.to_string())).unwrap();
+    drop(source);
+    let upgraded = Database::open(&path).unwrap();
+    let migrated = crate::prompts::get(&upgraded, &document.id, None).unwrap();
+    assert_eq!(migrated.body, expected);
+    assert_eq!(migrated.version, document.version + 1);
+    let target = db();
+    let target_store = MemoryCredentials::default();
+    let preview = crate::portable::preview_import(&target, &target_store, &registry, snapshot).unwrap();
+    crate::portable::apply_import(&target, &target_store, &registry, &preview,
+        &std::collections::BTreeSet::from([format!("library:{}", document.id)])).unwrap();
+    let received = crate::prompts::get(&target, &document.id, None).unwrap();
+    assert_eq!(received.body, expected);
+    assert_eq!(resolve(&target, &target_store, &expected).unwrap()[0].status, SecretStatus::Unknown);
+    let bound = create_local(&target, &target_store, "本机部署", "second-device", Some(&created.id)).unwrap();
+    assert_eq!(bound.reference, created.reference);
+    assert!(create_local(&target, &target_store, "重复绑定", "overwrite", Some(&created.id)).is_err());
+    assert_eq!(target_store.get(&reference::credential_id(&created.id).unwrap()).unwrap(), "second-device");
+    let grants = target.with_read_connection(|conn| conn.query_row("SELECT count(*) FROM secret_grants", [],
+        |r| r.get::<_, i64>(0)).map_err(|e| e.to_string())).unwrap();
+    assert_eq!(grants, 0);
+}
+
+#[test]
+fn legacy_mac_and_linux_commands_migrate_without_rewriting_custom_scripts() {
+    let id = uuid::Uuid::new_v4().to_string();
+    let install = uuid::Uuid::new_v4();
+    for path in ["/usr/bin/cliora", "'/Applications/Cliora Beta.app/Contents/MacOS/cliora'"] {
+        let cmd = format!("{path} --cliora-internal-secret-cli-v1 --installation {install} read --secret {id}");
+        let header = format!("## Cliora secret broker (local CLI)\n\nInstallation: old ({install})\nExecutable: {path}\n\n");
+        let body = format!("{header}```\n{cmd}\n```\nuser notes");
+        assert_eq!(crate::secrets::portable::prompt_body(&body), format!("## Cliora secret broker (local CLI)\n\n{}\nuser notes", reference::format(&id)));
+        for custom in [format!("{cmd} --custom"), format!("/usr/bin/echo example && {cmd}")] {
+            assert_eq!(crate::secrets::portable::prompt_body(&custom), custom);
+        }
+    }
+}
