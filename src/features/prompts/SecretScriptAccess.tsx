@@ -5,6 +5,7 @@ import { Icon } from '../../components/Icon';
 import type { IconName } from '../../components/Icon';
 import { Button, IconButton } from '../../components/ui';
 import type { NewSecretExecutor, SecretExecutor, SecretGrant, SecretInstallation } from '../../types/secrets';
+import { reveal } from '../../lib/reveal';
 import styles from './PromptSecrets.module.css';
 
 const presets = [
@@ -100,7 +101,7 @@ export function SecretScriptAccess({ availablePrograms, alias, installations, ex
     ...(executors.length ? [{ key: 'saved', value: executors[0].id, icon: 'archive' as IconName, title: t('library.secrets.broker.executors'), detail: t('library.secrets.broker.savedShort'), pressed: !!existing }] : []),
   ];
 
-  return <div className={styles.sheet} data-secret-grant-form>
+  return <div ref={reveal} className={styles.sheet} data-secret-grant-form>
     <div className={styles.sheetHead}>
       <div>
         <strong>{t('library.secrets.broker.panelTitle', { name: alias })}</strong>

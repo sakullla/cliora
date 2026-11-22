@@ -360,3 +360,52 @@ test('a synchronized reference can be configured and authorized without changing
   await expect(editor.locator('[data-secret-grant-row]')).toBeVisible();
   await expect(bodyOf(editor)).toHaveValue(body);
 });
+
+test('a stale reference can be removed from the body and a known one copied or located', async ({ page }) => {
+  await install(page);
+  await library(page);
+  const dialog = await newPrompt(page);
+  await titleOf(dialog).fill('整理引用');
+  const panel = secretPanel(dialog);
+  const row = await createSecret(dialog, '部署口令', CANARY);
+  const reference = referenceOf((await row.getAttribute('data-secret-id'))!);
+  const stale = '11111111-2222-4333-8444-555555555555';
+  await bodyOf(dialog).fill(`登录 ${referenceOf(stale)} 后部署 ${reference}`);
+  const staleChip = panel.locator(`[data-secret-reference="${referenceOf(stale)}"]`);
+  await expect(staleChip).toHaveAttribute('data-secret-reference-status', 'unknown');
+  // Only the stale reference and one separating space go; the rest of the text is untouched.
+  await staleChip.locator('[data-secret-reference-remove]').click();
+  await expect(bodyOf(dialog)).toHaveValue(`登录 后部署 ${reference}`);
+  await expect(staleChip).toHaveCount(0);
+  // A usable reference has no remove control; its name points at its row.
+  await expect(panel.locator(`[data-secret-reference="${reference}"] [data-secret-reference-remove]`)).toHaveCount(0);
+  await panel.locator(`[data-secret-reference="${reference}"]`).getByRole('button', { name: '部署口令' }).click();
+  await expect(row).toHaveAttribute('data-flash', 'true');
+
+  await row.locator('button[aria-haspopup="menu"]').click();
+  await dialog.locator('[data-secret-copy-reference]').click();
+  await expect(panel.locator('[data-secret-notice]')).toContainText('已复制');
+  const copied = await page.evaluate(() => (window as unknown as { __copied: string[] }).__copied);
+  expect(copied).toEqual([reference]);
+  expect(copied.join('')).not.toContain(CANARY);
+});
+
+test('the value field can show what is being typed without reading anything back', async ({ page }) => {
+  await install(page);
+  await library(page);
+  const dialog = await newPrompt(page);
+  const panel = secretPanel(dialog);
+  await panel.locator('[data-secret-create]').click();
+  const value = panel.locator('[data-secret-value]');
+  await expect(value).toHaveAttribute('type', 'password');
+  await value.fill(CANARY);
+  await panel.getByRole('button', { name: '显示输入的原值' }).click();
+  await expect(value).toHaveAttribute('type', 'text');
+  await panel.getByRole('button', { name: '隐藏输入的原值' }).click();
+  await expect(value).toHaveAttribute('type', 'password');
+  // Closing the form forgets both the value and the choice to show it.
+  await value.press('Escape');
+  await panel.locator('[data-secret-create]').click();
+  await expect(panel.locator('[data-secret-value]')).toHaveValue('');
+  await expect(panel.locator('[data-secret-value]')).toHaveAttribute('type', 'password');
+});

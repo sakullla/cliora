@@ -4848,7 +4848,7 @@ test('an inherited workspace that is gone is named instead of replaced', async (
   await expect(page.locator('[data-workspace-unavailable]')).toBeVisible();
   const notice = page.locator('[data-workspace-unavailable]');
   await expect(notice).toBeVisible();
-  await expect(notice).toContainText('继承的目录已不可用');
+  await expect(notice).toContainText('上次选择的位置已不可用');
   await expect(notice).toContainText('Shop');
   // The launch stops and names the choice that needs fixing; it never picks another folder.
   await expect(dialog.getByRole('button', { name: '启动会话' })).toBeDisabled();

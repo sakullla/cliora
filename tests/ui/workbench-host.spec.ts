@@ -198,6 +198,38 @@ test('choosing a remote host in the sidebar makes the next new session remote', 
   await expect(page.getByRole('dialog', { name: '选择远程文件夹' })).toHaveCount(0);
 });
 
+test('switching hosts brings back each host own place instead of reporting a missing folder', async ({ page }) => {
+  await installHostDesktop(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await stage.getByRole('button', { name: '新建会话' }).click();
+  const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
+  const workspace = dialog.getByRole('button', { name: '工作目录 / 项目' });
+  await page.evaluate(() => { (window as unknown as { __dialogResult?: string | null }).__dialogResult = 'C:/picked folder'; });
+  await workspace.click();
+  await page.getByRole('button', { name: '选择其他文件夹…' }).click();
+  await expect(workspace).toHaveAttribute('title', /C:\/picked folder/);
+  await dialog.getByRole('button', { name: '关闭' }).click();
+
+  // The sidebar switch: the host opens on its own home, not on the local folder.
+  await page.locator('.sidebar-host').getByRole('button', { name: '运行位置：本机' }).click();
+  await page.getByRole('menuitemradio', { name: /测试远程主机/ }).click();
+  await stage.getByRole('button', { name: '新建会话' }).click();
+  await expect(workspace).toHaveAttribute('title', '默认主目录 · 测试远程主机 · /srv/project');
+  await expect(dialog.locator('[data-workspace-unavailable]')).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: '启动会话' })).toBeEnabled();
+
+  await dialog.getByRole('button', { name: '关闭' }).click();
+
+  // Back on this computer, the folder picked there comes back.
+  await page.locator('.sidebar-host').getByRole('button', { name: '运行位置：测试远程主机' }).click();
+  await page.getByRole('menuitemradio', { name: /本机/ }).click();
+  await stage.getByRole('button', { name: '新建会话' }).click();
+  await expect(workspace).toHaveAttribute('title', /C:\/picked folder/);
+  await expect(dialog.locator('[data-workspace-unavailable]')).toHaveCount(0);
+});
+
 test('a remote session composer lists that host library, not this computer', async ({ page }) => {
   await page.addInitScript((host) => {
     localStorage.setItem('cliora:remote-target', host.id);

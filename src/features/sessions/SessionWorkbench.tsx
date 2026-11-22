@@ -655,6 +655,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   // The last name each workspace value had while it was still offered, so a vanished choice
   // can still be named when the user has to fix it.
   const workspaceLabels = useRef(new Map<string, string>());
+  // Each place belongs to one host. The dialog keeps the last place per host, so switching
+  // hosts brings back that host's own choice instead of carrying a local project to SSH.
+  const workspaceOwner = useRef(activeTargetId);
+  const workspaceByTarget = useRef(new Map<string, { value: string; remotePath: string }>());
   const [customFolderPath, setCustomFolderPath] = useState('');
   const [launchMode, setLaunchMode] = useState<LaunchMode>('normal');
   // The dialog's mode follows the saved default until the user picks one for this launch.
@@ -2103,9 +2107,29 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setLaunchMode(preferredLaunchMode(settings, target, !!tool?.yoloAvailable));
   }
 
+  /**
+   * Make the dialog's place belong to `targetId`: the current place is kept for its own host
+   * and the place last used on `targetId` comes back (that host's home the first time).
+   * A remembered place that has since disappeared is still named, never replaced.
+   */
+  function adoptWorkspaceTarget(targetId: string): string {
+    const owner = workspaceOwner.current;
+    if (owner === targetId) return workspaceValue;
+    workspaceByTarget.current.set(owner, { value: workspaceValue, remotePath: customRemotePath });
+    const saved = workspaceByTarget.current.get(targetId);
+    workspaceOwner.current = targetId;
+    const value = saved?.value ?? '__home';
+    setWorkspaceValue(value);
+    setCustomRemotePath(saved?.remotePath ?? '');
+    return value;
+  }
+
   function openNewSessionDialog(prefill?: { toolId?: string; projectId?: string; directory?: string; place?: 'worktree' }, targetOverride?: string) {
     setDialogError('');
-    setBusinessSelection(null);
+    const dialogTarget = targetOverride || activeTargetId;
+    const inheritedValue = adoptWorkspaceTarget(dialogTarget);
+    // A repository chosen last time keeps its project scope (prompts, worktree base).
+    setBusinessSelection(dialogTarget === 'local' ? businessRepositoryOptions.find((option) => option.value === inheritedValue)?.selection ?? null : null);
     // Each opening starts from the saved preference; the dialog decides this launch.
     // An entry that asked for a worktree is an explicit choice, not the preference.
     dialogPlaceTouched.current = !!prefill?.place;
@@ -2151,7 +2175,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     if (prefill) setLaunchToolId(nextToolId);
     // Each opening starts from the saved default mode, not the previous dialog's choice.
     launchModeTouched.current = false;
-    applyPreferredMode(launchSettings, prefill ? (prefill.projectId ? 'project' : 'cli') : dialogModeTarget(workspaceValue), nextToolId);
+    applyPreferredMode(launchSettings, prefill ? (prefill.projectId ? 'project' : 'cli') : dialogModeTarget(inheritedValue), nextToolId);
     setAdvancedOpen(false);
     setNewDialogOpen(true);
   }
@@ -3412,8 +3436,6 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setBaseRef(baseChoice?.kind === 'reference' ? baseChoice.reference : basePreview?.reference ?? '');
     setBaseEditing(true);
   }
-  // A picked folder belongs to the host it was picked on.
-  useEffect(() => { setCustomRemotePath(''); }, [activeTargetId]);
   useEffect(() => {
     // An empty list means "not loaded yet" until either this screen or the shell has hosts.
     // Resetting earlier snaps a selected SSH host back to this computer while the sidebar stays put.
@@ -4220,9 +4242,17 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
               if (project?.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)) { setLaunchToolId(project.preferredTool); nextToolId = project.preferredTool; }
             }
             if (!launchModeTouched.current) applyPreferredMode(launchSettings, dialogModeTarget(value), nextToolId);
-          }} /></div>
+          }} />
+          </div>
         </div>
-        {workspaceUnavailable && <p className={styles.baseError} role="alert" data-workspace-unavailable=""><Icon name="alert" size={14} /><span>{t('sessions.workspaceUnavailable', { path: workspaceValueLabel(workspaceValue) })} {t('sessions.workspaceUnavailableFix')}</span></p>}
+        {workspaceUnavailable && <div className={styles.workspaceMissing} role="alert" data-workspace-unavailable="">
+          <Icon name="alert" size={14} />
+          <span className={styles.workspaceMissingCopy}><strong>{t('sessions.workspaceUnavailable', { path: workspaceValueLabel(workspaceValue) })}</strong><small>{t('sessions.workspaceUnavailableFix')}</small></span>
+          <span className={styles.workspaceMissingActions}>
+            <Button size="sm" icon={<Icon name="home" size={13} />} onClick={() => { setWorkspaceValue('__home'); setBusinessSelection(null); setDialogError(''); }}>{activeRemoteTarget ? t('sessions.workspaceUseHostHome', { host: activeRemoteTarget.name }) : t('sessions.workspaceUseHome')}</Button>
+            <Button size="sm" variant="ghost" icon={<Icon name="folder" size={13} />} onClick={() => void pickCustomWorkspaceFolder()}>{t('sessions.pickFolder')}</Button>
+          </span>
+        </div>}
         {/* The task is optional, so it follows the choices that every launch needs. */}
         <div className={styles.dialogField} data-task-field="">
           <span className={styles.fieldLabel}>{t('sessions.initialPromptLabel')}</span>
