@@ -36,12 +36,20 @@
 
 1. **原生配置写入**：该 CLI 的原生文件里存在条目 `cliora-secrets-<toolId>`，命令是当前可执行文件、参数是 `--cliora-internal-secret-mcp-v1 --installation <安装标识>`，不含任何秘密值。写入由 T3 的共享 preview/commit/CAS 流程完成，适配器拥有路径与格式。
 2. **协议健康**：用真实客户端对真实 helper 完成协议协商与工具发现，必须看到 `list_secrets`、`list_secret_executors`、`use_secret`、`read_secret`。健康记录按「目标 + 安装标识」保存，写入会使其失效（`src-tauri/src/secrets/mcp.rs`）。
-3. **模型调用**：在只含 `{{cliora-secret:<id>}}` 引用与执行入口标识的提示词下，模型选择 `use_secret` 并生成 `secretId`/`executorId` 参数；固定测试执行入口收到合成值，模型可见输出只有业务结果与遮蔽标记。原值读取仍触发 Cliora 逐次确认。
+3. **模型调用**：在只含 `{{cliora-secret:<id>}}` 引用与执行入口标识的提示词下，模型选择 `use_secret` 并生成 `secretId`/`executorId` 参数；固定测试执行入口收到合成值，模型可见输出只有业务结果与遮蔽标记。
 4. **CLI 回退**：同一提示词下，`--cliora-internal-secret-cli-v1 --installation <id> use --secret <id> --executor <id>` 让同一个测试执行入口收到同一合成值，输出同样遮蔽。
 
 只有四类事实全部观察到的目标才能在 `src-tauri/src/adapters/secret_access.rs` 的 `ACCEPTANCES` 增加验收记录并发布 `supported`。记录必须写明 `tool_id`、`mapping`、真实日历日期（`YYYY-MM-DD`）、平台、CLI 版本、协议、模型调用、CLI 回退和带锚点的证据；证据必须在 `docs/verification/` 下并带 `#` 锚点，锚点必须真实存在于文档（标题 slug 或显式 `<a id>`，离线 `evidence-consistency` 会解析），`mapping` 必须同时与上表该目标的映射标签、适配器 `secret_mcp_mapping()` 的声明逐字一致（Rust 契约测试与 `node scripts/verify-secret-access.mjs` 的 `evidence-consistency` 都会比对）。缺任何一项时 `published()` 仍返回 `unverified`；未声明映射的适配器即使被记录也发布 `unsupported`。目前 `ACCEPTANCES` 只有 `codex` 一条，其余目标仍使用 CLI 回退。
 
 ## 验证命令
+
+### 批量原值与会话授权
+
+同一个提示词可包含多个秘密引用。明确需要读取原值时，同一安装身份的 CLI 可使用 `read --secret <id1> --secret <id2>`，MCP 可调用 `read_secret({"secretIds":["<id1>","<id2>"]})`。旧的单项调用继续可用。任意一项读取失败时，整组均不返回原值。
+
+用两个合成秘密检查桌面确认框，核对请求来源和待授权的别名。选择「仅允许这次」后，下一次仍须确认；选择「允许本次会话」后，只读已批准的引用可直接返回。新增引用、另开本地工作台 CLI、MCP 断开后重新连接均须重新确认。撤销安装或绑定后读取失败。外部终端每次批量读取时单次审批。
+
+下方 2026-11-21 的实机记录覆盖当时的受控执行路径。新增的批量读取与会话授权尚无真实模型会话验收记录。
 
 离线（确定性、零费用，不启动 AI CLI、不调用模型）：
 
@@ -131,6 +139,6 @@ node scripts/verify-secret-access.mjs --live
 - 实机证据只覆盖 macOS arm64 上的 `codex-cli 0.171.0` 一次运行；模型工具选择稳定性、其它版本与 `claude_code` 等其余 18 个目标都没有通过记录。Windows 与 Linux 的原生配置写入、CLI 启动与协议均未验证。
 - `claude_code` 的协议与回退曾在真实会话中观察到，但模型调用被第三方网关当日额度阻断（429，零费用），因此按规则不升级为验收；额度重置或更换凭据后需重跑并回填记录。
 - 模型可能选择其他工具、改写参数或在输出里复述别的内容；一次成功不能证明稳定可用，失败也不自动等于适配器缺陷，需要按目标重复观察。
-- 遮蔽是文本层面的保护，不阻止获授权脚本主动外发（R9）。工具发现不等于授权：每次执行仍受绑定与授权约束，原值读取仍逐次确认（R3、R4）。
+- 遮蔽是文本层面的保护，不阻止获授权脚本主动外发（R9）。每次实际访问都检查安装和绑定，原值读取须具备相应的单次或当前工具会话授权（R3、R4）。
 - 矩阵按当前注册表的 19 个 CLI 统计（全部声明 `supports_mcp`）。新增适配器只要声明 MCP 映射，默认能力就是 `unverified`，必须另有一条完整验收记录才能发布 `supported`；`tests/adapter/sixth.rs` 的 `the_verification_document_lists_exactly_the_targets_that_declare_a_mapping` 会要求本表与注册表同步增删。
 - 本记录不包含真实密钥、私有原生配置或会话内容；所有标识与别名均为合成值。

@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { prepareLocalSecretPrompt } from '../../src/lib/secretCommands.ts';
 
 import {
   checkEvidenceConsistency,
@@ -16,6 +17,25 @@ import {
 // starts no AI CLI and calls no model. These tests keep that promise explicit and
 // keep the live gate from turning a missing observation into a pass.
 const CANARY = 'canary-synthetic-access-5b1e9d';
+
+test('outgoing prompts group only the requested references by a live installation', async () => {
+  const ids = ['11111111-2222-4333-8444-555555555551', '11111111-2222-4333-8444-555555555552', '11111111-2222-4333-8444-555555555553'];
+  const references = ids.map(id => '{{cliora-secret:' + id + '}}');
+  const body = [...references, references[0]].join('\n');
+  const install = id => ({ id, kind: 'cli', targetId: null, revoked: false });
+  const grant = (installationId, secretId) => ({ installationId, secretId, alias: secretId, executorId: 'script', executorLabel: 'check' });
+  const outgoing = await prepareLocalSecretPrompt(body, async () => ({
+    cli: { executable: '/usr/bin/cliora', entry: '--cliora-internal-secret-cli-v1' },
+    installations: ['single', 'shared', 'other'].map(install),
+    grants: [grant('single', ids[0]), grant('shared', ids[0]), grant('shared', ids[1]), grant('other', ids[2])],
+  }), true);
+  assert.ok(outgoing.startsWith(body + '\n'));
+  const commands = outgoing.split('\n').filter(line => line.includes(' read --secret '));
+  assert.equal(commands.length, 2);
+  assert.ok(commands.some(line => line.endsWith('--installation shared read --secret ' + ids[0] + ' --secret ' + ids[1])));
+  assert.ok(commands.some(line => line.endsWith('--installation other read --secret ' + ids[2])));
+  assert.match(outgoing, /secretIds array of MCP read_secret/);
+});
 const plan = {
   helper: '/opt/cliora-fixture/Cliora',
   installationId: '4c2f8c9e-6b1a-4c44-9d5b-6f0a2b7c1234',

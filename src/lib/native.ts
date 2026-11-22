@@ -30,7 +30,7 @@ export function localSessionPrompt(body: string) {
 export const nativeAvailable = isTauri();
 
 export const LAUNCH_SETTINGS_EVENT = 'cliora:launch-settings-changed';
-/** Emitted by the broker for every raw read; the payload carries no value. */
+/** Emitted when a raw read needs consent. The payload contains display metadata. */
 export const SECRET_APPROVAL_EVENT = 'cliora:secret-approval-request';
 function notifyLaunchSettings(settings: LaunchSettings) {
   window.dispatchEvent(new CustomEvent<LaunchSettings>(LAUNCH_SETTINGS_EVENT, { detail: settings }));
@@ -275,7 +275,8 @@ export const native = {
   revokeSecretUsage: (installationId: string, secretId: string, executorId: string) => command<void>('revoke_secret_usage', { installationId, secretId, executorId }),
   secretBrokerStatus: () => command<SecretBrokerStatus>('secret_broker_status'),
   /** Answers one read approval by id. A repeated or unknown id answers nothing. */
-  answerPromptSecretApproval: (approvalId: string, accepted: boolean) => command<void>('answer_prompt_secret_approval', { approvalId, accepted }),
+  answerPromptSecretApproval: (approvalId: string, accepted: boolean, rememberSession?: boolean) =>
+    command<void>('answer_prompt_secret_approval', { approvalId, accepted, ...(rememberSession && { rememberSession: true }) }),
   listSecretAudit: (limit: number) => command<SecretAuditEntry[]>('list_secret_audit', { limit }),
   secretAccessOptions: (secretId?: string) => command<ScriptAccessOptions>('secret_access_options', { secretId }),
   secretCliContext: () => command<SecretCliContext>('secret_cli_context'),

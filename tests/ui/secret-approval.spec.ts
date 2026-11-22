@@ -157,11 +157,11 @@ const approvalDialog = (page: Page) => page.locator('dialog[data-secret-approval
 async function waitForListener(page: Page) {
   await expect.poll(() => page.evaluate(() => (window as unknown as { __secretBroker: { hasListener: (event: string) => boolean } }).__secretBroker.hasListener('cliora:secret-approval-request'))).toBe(true);
 }
-async function emitApproval(page: Page, approvalId = 'approval-1', alias = '生产口令', source = 'CLI · codex-cli') {
+async function emitApproval(page: Page, approvalId = 'approval-1', alias = '生产口令', source = 'CLI · codex-cli', extra: { aliases?: string[]; sessionAvailable?: boolean; expiresInSeconds?: number } = {}) {
   await waitForListener(page);
-  await page.evaluate(({ approvalId, alias, source }) => {
-    (window as unknown as { __secretBroker: { emit: (event: string, payload: unknown) => void } }).__secretBroker.emit('cliora:secret-approval-request', { approvalId, alias, source, expiresInSeconds: 120 });
-  }, { approvalId, alias, source });
+  await page.evaluate(payload => {
+    (window as unknown as { __secretBroker: { emit: (event: string, payload: unknown) => void } }).__secretBroker.emit('cliora:secret-approval-request', payload);
+  }, { approvalId, alias, source, expiresInSeconds: 120, ...extra });
 }
 
 test('the broker panel lists local metadata and inserts portable instructions', async ({ page }) => {
@@ -228,6 +228,7 @@ test('a read approval shows only the alias and the source and answers by id', as
   await expect(dialog).toHaveAttribute('data-secret-approval', 'approval-1');
   await expect(dialog).toContainText('生产口令');
   await expect(dialog).toContainText('CLI · codex-cli');
+  await expect(dialog.locator('[data-secret-approval-session]')).toHaveCount(0);
   await expect(dialog.locator('[data-secret-approval-risk]')).toContainText('模型上下文');
   await expect(dialog.locator('[data-secret-approval-timeout]')).toContainText('120');
   // The window never receives a value, not even as an empty field.
@@ -238,6 +239,57 @@ test('a read approval shows only the alias and the source and answers by id', as
   const answers = await page.evaluate(() => (window as unknown as { __secretBroker: { calls: Call[] } }).__secretBroker.calls.filter(call => call.command === 'answer_prompt_secret_approval'));
   expect(answers).toEqual([{ command: 'answer_prompt_secret_approval', args: { approvalId: 'approval-1', accepted: true } }]);
   expect(JSON.stringify(answers)).not.toContain(CANARY);
+});
+
+test('a batch identifies its pending aliases and remembers only an explicit session decision', async ({ page }, testInfo) => {
+  await install(page);
+  const aliases = ['部署用户名', '部署口令'];
+  const dialog = approvalDialog(page);
+  for (const choice of ['once', 'session'] as const) {
+    await emitApproval(page, 'approval-1', aliases[0], 'MCP · codex-cli', { aliases, sessionAvailable: true });
+    await expect(dialog.getByRole('listitem')).toHaveText(aliases);
+    await expect(dialog).toContainText('MCP · codex-cli');
+    await expect(dialog.getByRole('button', { name: '允许本次会话' })).toBeVisible();
+    if (choice === 'session') {
+      const path = testInfo.outputPath('batch-session-approval.png');
+      await dialog.screenshot({ path });
+      await testInfo.attach('批量与会话授权', { path, contentType: 'image/png' });
+    }
+    await dialog.getByRole('button', { name: choice === 'session' ? '允许本次会话' : '仅允许这次' }).click();
+    await expect(dialog).toHaveCount(0);
+  }
+  const answers = await page.evaluate(() => (window as any).__secretBroker.calls.filter((call: Call) => call.command === 'answer_prompt_secret_approval').map((call: Call) => call.args));
+  expect(answers).toEqual([{ approvalId: 'approval-1', accepted: true }, { approvalId: 'approval-1', accepted: true, rememberSession: true }]);
+  expect(await page.content()).not.toContain(CANARY);
+});
+
+test('an external CLI can approve multiple references for this read only', async ({ page }) => {
+  await install(page);
+  const aliases = ['部署用户名', '部署口令'];
+  await emitApproval(page, 'approval-1', aliases[0], 'CLI · codex-cli', { aliases, sessionAvailable: false });
+  const dialog = approvalDialog(page);
+  await expect(dialog.getByRole('listitem')).toHaveText(aliases);
+  await expect(dialog.locator('[data-secret-approval-session]')).toHaveCount(0);
+  await dialog.getByRole('button', { name: '仅允许这次' }).click();
+  await expect(dialog).toHaveCount(0);
+});
+
+test('parallel callers keep separate decisions and an expired request releases the dialog', async ({ page }) => {
+  await install(page);
+  await page.clock.install();
+  await emitApproval(page, 'first', '短请求', 'MCP · A', { sessionAvailable: true, expiresInSeconds: 5 });
+  await emitApproval(page, 'expired-in-queue', '已过期', 'MCP · B', { expiresInSeconds: 2 });
+  await emitApproval(page, 'next', '后续请求', 'CLI · C', { expiresInSeconds: 10 });
+  const dialog = approvalDialog(page);
+  await expect(dialog).toHaveAttribute('data-secret-approval', 'first');
+  await page.clock.fastForward(5_000);
+  await expect(dialog).toHaveAttribute('data-secret-approval', 'next');
+  await expect(dialog).toContainText('CLI · C');
+  await expect(dialog).not.toContainText('短请求');
+  await expect(dialog.locator('[data-secret-approval-session]')).toHaveCount(0);
+  await dialog.getByRole('button', { name: '拒绝', exact: true }).click();
+  const answers = await page.evaluate(() => (window as any).__secretBroker.calls.filter((call: Call) => call.command === 'answer_prompt_secret_approval').map((call: Call) => call.args));
+  expect(answers).toEqual([{ approvalId: 'next', accepted: false }]);
 });
 
 test('a declined or repeated answer returns nothing and keeps the window usable', async ({ page }) => {

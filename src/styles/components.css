@@ -170,6 +170,7 @@ dialog[open] ~ .confirmation-dialog::backdrop { background: color-mix(in srgb, v
 .secret-approval-facts > div { display: grid; grid-template-columns: 5.5em minmax(0, 1fr); gap: var(--space-2); align-items: baseline; }
 .secret-approval-facts dt { color: var(--text-3); font-size: var(--fs-caption); }
 .secret-approval-facts dd { margin: 0; color: var(--text); font-size: var(--fs-control); overflow-wrap: anywhere; }
+.secret-approval-aliases { display: grid; gap: var(--space-1); max-height: 24vh; overflow-y: auto; margin: 0; padding: 0; list-style: none; font-weight: 600; }
 .secret-approval-risk { margin: 0 !important; padding: var(--space-2) var(--space-2_5); border: 1px solid var(--warning-line); border-radius: var(--radius-sm); background: var(--warning-soft); color: var(--text) !important; font-size: var(--fs-caption) !important; line-height: 1.55 !important; }
 .secret-approval-timeout { margin: 0 !important; color: var(--text-3) !important; font-size: var(--fs-caption) !important; font-variant-numeric: tabular-nums; }
 @media (max-width: 1264px) { .skeleton-row { grid-template-columns: 1fr; } }

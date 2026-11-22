@@ -226,13 +226,13 @@ function checkToolContract(metadata) {
   }
   const byName = name => tools.find(tool => tool.name === name);
   expect(JSON.stringify(byName('use_secret').properties.slice().sort()) === JSON.stringify(['executorId', 'secretId']), 'use_secret 的输入结构不对');
-  expect(JSON.stringify(byName('read_secret').properties) === JSON.stringify(['secretId']), 'read_secret 只接受秘密标识');
+  expect(JSON.stringify(byName('read_secret').properties.slice().sort()) === JSON.stringify(['secretId', 'secretIds']), 'read_secret 应接受单项或一组秘密标识');
   // A model can build both calls from the prompt reference plus the schema.
   const use = metadata.expected.useCall;
   const read = metadata.expected.readCall;
   expect(use.tool === 'use_secret' && read.tool === 'read_secret', '期望调用应指向受控使用与原值读取');
   expect(JSON.stringify(Object.keys(use.arguments).sort()) === JSON.stringify(byName('use_secret').properties.slice().sort()), '受控使用调用参数与工具结构不一致');
-  expect(JSON.stringify(Object.keys(read.arguments)) === JSON.stringify(byName('read_secret').properties), '原值读取调用参数与工具结构不一致');
+  expect(JSON.stringify(Object.keys(read.arguments)) === JSON.stringify(['secretId']) && read.arguments.secretId === use.arguments.secretId, '单项原值读取调用应使用提示词内的秘密标识');
   expect(metadata.prompt.references.includes(`{{cliora-secret:${use.arguments.secretId}}}`), '受控使用调用的秘密标识与提示词引用不一致');
   const printed = JSON.stringify(tools);
   expect(!printed.includes(metadata.canary), '工具契约出现了 canary');

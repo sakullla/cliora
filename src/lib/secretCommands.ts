@@ -76,6 +76,7 @@ export async function prepareLocalSecretPrompt(
   const lines: string[] = [];
   const seen = new Set<string>();
   const listCommands = new Set<string>();
+  const readOptions = new Map<string, Set<string>>();
   for (const token of tokens) {
     const compact = token.slice('{{cliora-secret:'.length, -2).replace(/^urn:uuid:/, '').replaceAll('-', '').toLowerCase();
     if (seen.has(compact)) continue;
@@ -90,19 +91,29 @@ export async function prepareLocalSecretPrompt(
     for (const grant of matching) {
       const context = { ...cli, installationId: grant.installationId };
       listCommands.add(command(context, ['list']));
+      const ids = readOptions.get(grant.installationId) ?? new Set<string>();
+      ids.add(grant.secretId);
+      readOptions.set(grant.installationId, ids);
       const use = grantedScriptCommand(context, grant);
       if (!body.includes(use) && !body.includes(use.replace(/^& /, ''))) lines.push(grant.executorLabel, use);
     }
-    const first = matching[0];
-    const read = command({ ...cli, installationId: first.installationId }, ['read', '--secret', first.secretId]);
-    if (!body.includes(read)) lines.push(english ? 'Show value (requires confirmation)' : '查看原值（需确认）', read);
+  }
+  // Prefer the installation covering the most references, so an overlapping
+  // grant does not split a request that one installation can handle together.
+  const assigned = new Set<string>();
+  for (const [installationId, ids] of [...readOptions].sort((a, b) => b[1].size - a[1].size)) {
+    const group = [...ids].filter(id => !assigned.has(id));
+    if (!group.length) continue;
+    for (const id of group) assigned.add(id);
+    const read = command({ ...cli, installationId }, ['read', ...group.flatMap(id => ['--secret', id])]);
+    if (!body.includes(read)) lines.push(english ? 'Read requested values (omit references you do not need)' : '查看所需原值（请删去未请求的引用）', read);
   }
   if (listCommands.size) {
     lines.push(english ? 'Find a reference by alias. Use its reference field directly.' : '按名称查找引用时，直接使用返回的 reference 字段。', ...listCommands);
   }
   const guidance = english
-    ? 'Keep the literal reference when quoting or passing it on. To perform a task, run its authorized action and return the result. If no action matches, ask the user to grant one. Only run read if the user explicitly asks to see the value. Stop if approval is declined or unavailable.'
-    : '转述或传递引用时，原样保留占位符。执行任务时，运行匹配的已授权操作，只返回操作结果。缺少合适的操作时，请用户授权。只有用户明确要求查看原值时才运行 read；被拒绝或无法确认时停止读取。';
+    ? 'Keep literal references when quoting or passing them on. For a task, run the granted action and return its result. If no action matches, ask the user to grant one. Only read the values the user explicitly asks to see. Group those references in one CLI read or in the secretIds array of MCP read_secret when available. Stop if approval is declined or unavailable.'
+    : '转述或传递引用时，原样保留占位符。执行任务时，运行匹配的已授权操作，只返回操作结果。缺少合适的操作时，请用户授权。只读取用户明确要求查看的原值，多个引用可合并到一次 CLI read，或在提供 MCP read_secret 时一起传入 secretIds。被拒绝或无法确认时停止读取。';
   return [body, '', guidance, ...lines].join('\n');
 }
 
@@ -181,9 +192,9 @@ const text = {
     alias: '别名',
     executor: '执行入口',
     noGrant: '当前安装标识还没有任何已授权的秘密与执行入口，请先在资料库的“秘密引用”里授权。',
-    readTitle: '### 3. 读取原值（每次都要在栖点确认）',
-    readNote: '只有确认后，本次命令的 stdout 才返回原值；原值可能进入模型上下文与 CLI 会话记录。',
-    readSwap: '把 {{id}} 换成第 1 步里对应秘密的标识；拒绝、超时或窗口不可用都不会返回原值。',
+    readTitle: '### 3. 读取原值',
+    readNote: '读取多个原值时，为每个所需引用添加一个 --secret，一起在栖点确认。工作台 CLI 和 MCP 可选择「允许本次会话」，外部终端每次请求都要确认。原值可能进入模型上下文与 CLI 会话记录。',
+    readSwap: '把 {{id}} 换成第 1 步里用户要求查看的秘密标识。MCP read_secret 可用 secretIds 一次请求多个引用。',
     exitNote: '命令失败时退出码非零，结果里只有遮蔽后的文本；不会改成别的秘密，也不会重试成别的执行入口。',
   },
   en: {
@@ -197,9 +208,9 @@ const text = {
     alias: 'Alias',
     executor: 'Executor',
     noGrant: 'This installation has no granted secret and executor yet. Grant one in the library under secret references first.',
-    readTitle: '### 3. Read the value (each read asks for confirmation in Cliora)',
-    readNote: 'Only an accepted confirmation returns the value on this command stdout. The value may enter the model context and the CLI session history.',
-    readSwap: 'Replace {{id}} with the identifier of the secret from step 1. A refused, expired or unavailable confirmation returns no value.',
+    readTitle: '### 3. Read raw values',
+    readNote: 'Repeat --secret for each requested reference to approve them together in Cliora. The workbench CLI and MCP offer “Allow for this session”. An external terminal asks for confirmation in Cliora on each request. Values may enter the model context and the CLI session history.',
+    readSwap: 'Replace {{id}} with the identifier from step 1 that the user asked to read. MCP read_secret accepts multiple references in secretIds.',
     exitNote: 'A failed command exits non-zero and its output is masked. It never falls back to another secret or executor, and never retries.',
   },
 } as const;

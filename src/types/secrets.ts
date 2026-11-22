@@ -85,10 +85,12 @@ export type SecretCliContext = {
   executable: string;
   entry: string;
 };
-/** A read approval. The window only learns the alias, the source and the wait. */
+/** The broker sends display metadata for the references that need consent. */
 export type PromptSecretApprovalRequest = {
   approvalId: string;
   alias: string;
+  aliases?: string[];
+  sessionAvailable?: boolean;
   source: string;
   expiresInSeconds: number;
 };

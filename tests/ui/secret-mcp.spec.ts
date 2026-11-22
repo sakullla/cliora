@@ -102,7 +102,8 @@ test('the MCP tab keeps capability, placement and protocol health apart and stil
   await expect(text).toContainText('--cliora-internal-secret-cli-v1');
   await expect(text).toContainText('use --secret sec-1 --executor ex-1');
   await expect(text).toContainText('read --secret sec-1');
-  await expect(text).toContainText('每次都要在栖点确认');
+  await expect(text).toContainText('允许本次会话');
+  await expect(text).toContainText('外部终端每次请求都要确认');
   await expect(text).not.toContainText('sec-2');
   await expect(text).not.toContainText('ex-2');
   await expect(page.locator('body')).not.toContainText(CANARY);

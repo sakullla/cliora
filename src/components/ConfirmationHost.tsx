@@ -10,7 +10,7 @@ import { Button } from './ui';
 /**
  * The application dialog host. It owns two queues: ordinary confirmations requested
  * by a window action, and secret read approvals requested by the broker. An approval
- * shows the alias and the request source only; the value is never sent to the window.
+ * shows the aliases requiring consent and the request source.
  */
 export function ConfirmationHost() {
   const { t } = useTranslation();
@@ -26,7 +26,7 @@ export function ConfirmationHost() {
     dismissSecretApproval();
   }, []);
 
-  // The broker emits one event per raw read. Only the alias and the source travel.
+  // A batch shares one approval id. Only the broker resolves the references.
   useEffect(() => {
     if (!nativeAvailable || typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
     const pending = listen<PromptSecretApprovalRequest>(SECRET_APPROVAL_EVENT, event => {
@@ -40,14 +40,12 @@ export function ConfirmationHost() {
 
   useEffect(() => {
     if (!approval) { setCountdown(null); return; }
-    setCountdown({ id: approval.approvalId, seconds: approval.expiresInSeconds });
-    const started = Date.now();
-    const timer = setInterval(() => {
-      const elapsed = Math.floor((Date.now() - started) / 1000);
-      setCountdown({ id: approval.approvalId, seconds: Math.max(0, approval.expiresInSeconds - elapsed) });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [approval?.approvalId, approval?.expiresInSeconds]);
+    const tick = () => setCountdown({ id: approval.approvalId, seconds: Math.max(0, Math.ceil((approval.expiresAt - Date.now()) / 1000)) });
+    tick();
+    const timer = setInterval(tick, 1000);
+    const expiry = setTimeout(() => dismissSecretApproval(approval.approvalId), Math.max(0, approval.expiresAt - Date.now()));
+    return () => { clearInterval(timer); clearTimeout(expiry); };
+  }, [approval]);
 
   useLayoutEffect(() => {
     if (!request || !dialog.current) return;
@@ -70,6 +68,7 @@ export function ConfirmationHost() {
   }, [approval]);
 
   const secondsLeft = approval ? (countdown?.id === approval.approvalId ? countdown.seconds : approval.expiresInSeconds) : 0;
+  const aliases = approval?.aliases?.length ? approval.aliases : approval ? [approval.alias] : [];
 
   return <>
     {request && <dialog ref={dialog} className="confirmation-dialog" aria-labelledby="confirmation-title" aria-describedby="confirmation-message"
@@ -91,7 +90,7 @@ export function ConfirmationHost() {
         <Button variant={request.destructive ? 'danger' : 'primary'} onClick={() => answerConfirmation(request.id, true)}>{request.confirmLabel ?? t('common.dialog.confirm')}</Button>
       </div>
     </dialog>}
-    {approval && <dialog ref={approvalDialog} className="confirmation-dialog secret-approval-dialog" aria-labelledby="secret-approval-title" aria-describedby="secret-approval-message"
+    {approval && <dialog key={approval.approvalId} ref={approvalDialog} className="confirmation-dialog secret-approval-dialog" aria-labelledby="secret-approval-title" aria-describedby="secret-approval-message"
       data-secret-approval={approval.approvalId}
       onCancel={event => { event.preventDefault(); void answerSecretApproval(approval.approvalId, false); }}>
       <div className="confirmation-head">
@@ -99,16 +98,20 @@ export function ConfirmationHost() {
         <div className="secret-approval-body">
           <h2 id="secret-approval-title">{t('common.secretApproval.title')}</h2>
           <dl className="secret-approval-facts" id="secret-approval-message">
-            <div><dt>{t('common.secretApproval.secretLabel')}</dt><dd><strong>{approval.alias}</strong></dd></div>
             <div><dt>{t('common.secretApproval.sourceLabel')}</dt><dd>{approval.source}</dd></div>
+            <div><dt>{t('common.secretApproval.secretLabel')}</dt><dd><ul className="secret-approval-aliases">
+              {aliases.map((alias, index) => <li key={index}>{alias}</li>)}
+            </ul></dd></div>
           </dl>
           <p className="secret-approval-risk" data-secret-approval-risk>{t('common.secretApproval.risk')}</p>
+          {approval.sessionAvailable && <p>{t('common.secretApproval.sessionHint')}</p>}
           <p className="secret-approval-timeout" data-secret-approval-timeout>{secondsLeft === 0 && approval.expiresInSeconds > 0 ? t('common.secretApproval.expired') : t('common.secretApproval.timeout', { seconds: secondsLeft })}</p>
         </div>
       </div>
       <div className="confirmation-actions">
         <Button autoFocus data-secret-approval-decline onClick={() => void answerSecretApproval(approval.approvalId, false)}>{t('common.secretApproval.decline')}</Button>
         <Button variant="danger" data-secret-approval-accept onClick={() => void answerSecretApproval(approval.approvalId, true)}>{t('common.secretApproval.accept')}</Button>
+        {approval.sessionAvailable && <Button data-secret-approval-session onClick={() => void answerSecretApproval(approval.approvalId, true, true)}>{t('common.secretApproval.session')}</Button>}
       </div>
     </dialog>}
   </>;

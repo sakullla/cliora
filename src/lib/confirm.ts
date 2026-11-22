@@ -42,15 +42,11 @@ export async function confirmAction(message: string, isCurrent: () => boolean = 
   }
 }
 
-// A secret read approval is a separate queue from ordinary confirmations: it is
-// created by the broker, not by a window action, and the window only ever holds the
-// alias, the request source and one approval id. There is at most one open request;
-// a second one waits for the broker to time out instead of stacking dialogs.
-
-let approval: PromptSecretApprovalRequest | null = null;
+// Concurrent callers keep their own request ids and original expiry times.
+const approvals: (PromptSecretApprovalRequest & { expiresAt: number })[] = [];
 const approvalListeners = new Set<() => void>();
 
-export const secretApprovalSnapshot = () => approval;
+export const secretApprovalSnapshot = () => approvals[0] ?? null;
 export function subscribeSecretApproval(listener: () => void) {
   approvalListeners.add(listener);
   return () => { approvalListeners.delete(listener); };
@@ -59,13 +55,10 @@ function notifyApproval() {
   approvalListeners.forEach(listener => listener());
 }
 
-/**
- * Shows one request. Returns false when the payload is unusable or another request is
- * already open; the broker then reports the read as unavailable or expired.
- */
 export function presentSecretApproval(request: PromptSecretApprovalRequest): boolean {
-  if (!request || typeof request.approvalId !== 'string' || !request.approvalId || approval) return false;
-  approval = { ...request, alias: String(request.alias ?? ''), source: String(request.source ?? '') };
+  if (!request?.approvalId || !Number.isFinite(request.expiresInSeconds) || request.expiresInSeconds <= 0
+    || approvals.some(item => item.approvalId === request.approvalId)) return false;
+  approvals.push({ ...request, expiresAt: Date.now() + request.expiresInSeconds * 1000 });
   notifyApproval();
   return true;
 }
@@ -75,16 +68,23 @@ export function presentSecretApproval(request: PromptSecretApprovalRequest): boo
  * already expired and an answer after the window closed all do nothing: the native
  * side owns the pending entry and refuses what it no longer holds.
  */
-export function answerSecretApproval(approvalId: string, accepted: boolean): Promise<void> {
+export function answerSecretApproval(approvalId: string, accepted: boolean, rememberSession = false): Promise<void> {
+  const approval = secretApprovalSnapshot();
   if (!approval || approval.approvalId !== approvalId) return Promise.resolve();
-  approval = null;
-  notifyApproval();
-  return Promise.resolve(native.answerPromptSecretApproval(approvalId, accepted)).then(() => undefined, () => undefined);
+  const session = accepted && approval.sessionAvailable === true && rememberSession;
+  dismissSecretApproval(approvalId);
+  if (Date.now() >= approval.expiresAt) return Promise.resolve();
+  return Promise.resolve(native.answerPromptSecretApproval(approvalId, accepted, session)).then(() => undefined, () => undefined);
 }
 
-/** Drops the open request without answering it, so it expires on the native side. */
+/** Advance to the next unexpired request, or clear the window's queue on unmount. */
 export function dismissSecretApproval(approvalId?: string) {
-  if (!approval || (approvalId && approval.approvalId !== approvalId)) return;
-  approval = null;
+  if (!approvals.length || (approvalId && approvals[0].approvalId !== approvalId)) return;
+  if (approvalId) {
+    approvals.shift();
+    while (approvals.length && approvals[0].expiresAt <= Date.now()) approvals.shift();
+  } else {
+    approvals.length = 0;
+  }
   notifyApproval();
 }
