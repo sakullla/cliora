@@ -454,7 +454,9 @@ fn batch_reads_remember_only_approved_references_in_one_live_session() {
     let next = session::LocalSession::new();
     let host = FakeHost::new(Answer::Remember);
     let read = |ids: &[String], token: &str, owner: &str| {
-        read_secrets(&database, &credentials, &host, owner, ids, true, Some(token), &AtomicBool::new(false))
+        read_secrets(&database, &credentials, &host, ReadSelection {
+            installation_id: owner, requested: ids, batch: true, token: Some(token),
+        }, &AtomicBool::new(false))
     };
     let group = [a.reference.clone(), b.id.clone(), a.id.clone()];
     let response = read(&group, session.token(), &connection.id);
@@ -498,8 +500,9 @@ fn one_time_approval_inside_a_session_does_not_grant_future_reads() {
     let a = create_secret(&database, &credentials, "A", CANARY);
     grant(&database, &connection.id, &a.id, &executor.id).unwrap();
     let session = session::LocalSession::new();
-    let read = |host: &FakeHost| read_secrets(&database, &credentials, host, &connection.id,
-        std::slice::from_ref(&a.id), false, Some(session.token()), &AtomicBool::new(false));
+    let read = |host: &FakeHost| read_secrets(&database, &credentials, host, ReadSelection {
+        installation_id: &connection.id, requested: std::slice::from_ref(&a.id), batch: false, token: Some(session.token()),
+    }, &AtomicBool::new(false));
 
     let once = FakeHost::new(Answer::Accept);
     assert!(read(&once).ok);
@@ -533,7 +536,9 @@ fn a_failed_batch_returns_no_partial_values_and_remembers_nothing() {
     let session = session::LocalSession::new();
     let host = FakeHost::new(Answer::Remember);
     let read = |host: &FakeHost, token| {
-        read_secrets(&database, &credentials, host, &connection.id, &group, true, token, &AtomicBool::new(false))
+        read_secrets(&database, &credentials, host, ReadSelection {
+            installation_id: &connection.id, requested: &group, batch: true, token,
+        }, &AtomicBool::new(false))
     };
     credentials.delete(&reference::credential_id(&b.id).unwrap()).unwrap();
     let missing = read(&host, Some(session.token()));
@@ -570,8 +575,10 @@ fn revoking_and_regranting_during_confirmation_invalidates_the_pending_answer() 
     let a = create_secret(&db, &credentials, "A", CANARY);
     grant(&db, &connection.id, &a.id, &executor.id).unwrap();
     let session = session::LocalSession::new();
-    let response = read_secrets(&db, &credentials, &RotatingHost(&db, &connection.id, &a.id, &executor.id),
-        &connection.id, std::slice::from_ref(&a.id), false, Some(session.token()), &AtomicBool::new(false));
+    let host = RotatingHost(&db, &connection.id, &a.id, &executor.id);
+    let response = read_secrets(&db, &credentials, &host, ReadSelection {
+        installation_id: &connection.id, requested: std::slice::from_ref(&a.id), batch: false, token: Some(session.token()),
+    }, &AtomicBool::new(false));
     assert_eq!(response.code, audit::code::EXPIRED);
     assert!(response.data.is_none());
 }

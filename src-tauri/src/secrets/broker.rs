@@ -524,7 +524,9 @@ pub fn use_secret(
 pub fn read_secret(
     db: &Database, store: &dyn CredentialStore, host: &dyn approval::Host, installation: &str, secret: &str,
 ) -> ipc::Response {
-    read_secrets(db, store, host, installation, &[secret.to_owned()], false, None, &AtomicBool::new(false))
+    read_secrets(db, store, host, ReadSelection {
+        installation_id: installation, requested: &[secret.to_owned()], batch: false, token: None,
+    }, &AtomicBool::new(false))
 }
 
 pub fn read_request(
@@ -535,7 +537,9 @@ pub fn read_request(
         (None, Some(ids), None) => (ids.as_slice(), true),
         _ => return denied(audit::code::INVALID_REQUEST, "read 需要 secretId 或 secretIds"),
     };
-    read_secrets(db, store, host, &request.installation, ids, batch, request.session.as_deref(), cancel)
+    read_secrets(db, store, host, ReadSelection {
+        installation_id: &request.installation, requested: ids, batch, token: request.session.as_deref(),
+    }, cancel)
 }
 
 type ReadError = (&'static str, &'static str);
@@ -565,10 +569,18 @@ fn read_aliases(db: &Database, installation: &str, ids: &[String]) -> Result<Vec
     }).map_err(|_| (audit::code::STORAGE_FAILED, "本机秘密数据暂时不可用"))?
 }
 
+struct ReadSelection<'a> {
+    installation_id: &'a str,
+    requested: &'a [String],
+    batch: bool,
+    token: Option<&'a str>,
+}
+
 fn read_secrets(
-    db: &Database, store: &dyn CredentialStore, host: &dyn approval::Host, installation_id: &str,
-    requested: &[String], batch: bool, token: Option<&str>, cancel: &AtomicBool,
+    db: &Database, store: &dyn CredentialStore, host: &dyn approval::Host,
+    selection: ReadSelection<'_>, cancel: &AtomicBool,
 ) -> ipc::Response {
+    let ReadSelection { installation_id, requested, batch, token } = selection;
     if requested.is_empty() || requested.len() > 256 {
         return denied(audit::code::INVALID_REQUEST, "每次可请求 1 至 256 个秘密引用");
     }
