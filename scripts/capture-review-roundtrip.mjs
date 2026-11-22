@@ -17,7 +17,7 @@ const themeOption = value('--theme', argv.includes('--full') ? 'all' : 'light');
 if (!['all', 'light', 'dark'].includes(themeOption)) throw new Error('--theme accepts all, light or dark');
 const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
 const curated = !argv.includes('--full');
-const representative = new Set(['cliora-repository-prompt', 'twiglane-source-manager', 'cliora-returned-original-session', 'cliora-feedback-preview', 'cliora-feedback-written']);
+const representative = new Set(['cliora-repository-prompt', 'twiglane-source-manager', 'cliora-returned-original-session', 'cliora-feedback-preview', 'cliora-feedback-dismissed', 'cliora-feedback-written']);
 fs.mkdirSync(out, { recursive: true });
 const prune = previousCaptureCleanup(out, 'manifest.json');
 const report = { kind: 'two-frontends-synthetic-ipc-and-scheme', nativePlatform: 'unverified', realGit: false, systemScheme: false, input: { projects: 2, repositoryMembers: 49, prompts: 124, reviewSources: 2, viewport: '1360x900' }, captures: [], observations: [], pageErrors: [] };
@@ -118,10 +118,11 @@ try {
     if (results[0].review.status !== 'returned' || results[1].review.status !== 'accepted') throw new Error('Independent source results were not retained');
     report.observations.push({ theme, sourceA: a.id, sourceB: b.id, baselineA: new URL(a.url).searchParams.get('baseline'), baselineB: new URL(b.url).searchParams.get('baseline'), returnedSession: results[0].sessionId, bStatus: results[1].review.status, originalDraftRetained: true, promptNotSent: await cliora.evaluate(() => !window.__reviewCalls.some(call => call.command === 'write_workbench_session')) });
     // feedback-v1：接收只生成预览，用户确认后原生侧写入一次；浏览器只证明交互与布局。
-    await cliora.evaluate(({ sessionId }) => window.__setReviewFeedback({
-      feedbackId: '8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1',
+    // 每一批意见都由原生暂存（feedbackId + digest），界面只是它的只读副本。
+    const feedbackBatch = (feedbackId, digest) => ({
+      feedbackId,
       reviewId: '6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8',
-      sessionId,
+      sessionId: REVIEW_SESSION_A,
       resultRevision: 2,
       worktreePath: '/work/commerce/team-0/api',
       rangeVersion: 'range-7',
@@ -131,13 +132,29 @@ try {
         { path: 'src/lib/api.ts', kind: 'add', oldNo: null, newNo: 14, body: '这个分支缺少 title 的回退说明，请在恢复入口里补一句。' },
       ],
       state: 'prepared',
-    }), { sessionId: REVIEW_SESSION_A });
-    await cliora.evaluate(({ sessionId }) => window.__emitReviewLink('cliora://review-feedback?v=1&feedbackId=8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=' + sessionId + '&resultRevision=2&digest=082476955cbba23ba6e82c2eacfff6d59f82c347b088fdb2df0f426ee62c56fc'), { sessionId: REVIEW_SESSION_A });
+      link: 'cliora://review-feedback?v=1&feedbackId=' + feedbackId + '&reviewId=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8&sessionId=' + REVIEW_SESSION_A + '&resultRevision=2&digest=' + digest,
+    });
+    const receiveFeedback = async batch => {
+      const { link, ...preview } = batch;
+      await cliora.evaluate(value => window.__setReviewFeedback(value), preview);
+      await cliora.evaluate(url => window.__emitReviewLink(url), link);
+    };
     const feedbackPanel = cliora.getByRole('region', { name: 'Twiglane 审阅意见' });
+    // 同一批预览先走一次取消：取消只关闭本地副本，不写终端也不写 Git。
+    await receiveFeedback(feedbackBatch('8b7c6d5e-4f30-4121-8394-a5b6c7d8e9f1', '082476955cbba23ba6e82c2eacfff6d59f82c347b088fdb2df0f426ee62c56fc'));
     await expect(feedbackPanel).toBeVisible();
     await expect(feedbackPanel).toContainText('来自审查');
     await expect(feedbackPanel).toContainText('src/lib/api.ts:13');
+    // Codex 的输入框是唯一允许写入的界面：面板给出「发送到终端」本身就说明适配器读到了它。
+    await expect(feedbackPanel.getByRole('button', { name: '发送到终端', exact: true })).toBeVisible();
+    await expect(feedbackPanel).not.toContainText('当前终端界面没有可输入提示框');
     await shot(cliora, 'cliora-feedback-preview');
+    await feedbackPanel.getByRole('button', { name: '关闭预览', exact: true }).click();
+    await expect(feedbackPanel).toHaveCount(0);
+    await shot(cliora, 'cliora-feedback-dismissed');
+    const written = feedbackBatch('d1e2f3a4-b5c6-4d7e-8f90-a1b2c3d4e5f6', '5c3f1d9e7a2b4c6d8e0f1a3b5c7d9e1f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c2d');
+    await receiveFeedback(written);
+    await expect(feedbackPanel).toBeVisible();
     await feedbackPanel.getByRole('button', { name: '发送到终端', exact: true }).click();
     await expect(feedbackPanel).toContainText('已写入终端一次，不代表 Agent 已处理。');
     await shot(cliora, 'cliora-feedback-written');
@@ -147,7 +164,7 @@ try {
   if (report.pageErrors.length) throw new Error(JSON.stringify(report.pageErrors));
   fs.writeFileSync(path.join(out, 'manifest.json'), JSON.stringify(report, null, 2) + '\n');
   fs.writeFileSync(path.join(out, 'index.html'), '<!doctype html><meta charset="utf-8"><title>双端审查浏览器交互</title><p>合成 IPC / scheme；不是原生平台验收。</p>' + report.captures.map(capture => `<figure><figcaption>${capture.file}</figcaption><img style="max-width:100%" src="${capture.file}"></figure>`).join(''));
-  fs.writeFileSync(path.join(out, 'README.md'), '# 双端审查浏览器捕获\n\n合成 IPC 和链接投递，不代表真实 Git、macOS WebView 或系统 scheme 已通过。\n\n两项目、49 个仓库成员、124 条提示词、两个独立来源；A → B → A → 原 Cliora 会话，草稿保留且没有自动发送；随后接收一批 feedback-v1 意见，只读预览后确认写入一次。详见 manifest.json。\n');
+  fs.writeFileSync(path.join(out, 'README.md'), '# 双端审查浏览器捕获\n\n合成 IPC 和链接投递，不代表真实 Git、macOS WebView 或系统 scheme 已通过。\n\n两项目、49 个仓库成员、124 条提示词、两个独立来源；A → B → A → 原 Cliora 会话，草稿保留且没有自动发送；随后接收 feedback-v1 意见：先取消一批预览（只关闭本地副本，不写终端），再接收新的一批只读预览并确认写入一次。详见 manifest.json。\n');
   prune(report.captures.map(capture => capture.file));
   console.log(JSON.stringify({ out, captures: report.captures.length, pageErrors: report.pageErrors.length, observations: report.observations }, null, 2));
 } finally { await browser.close(); }

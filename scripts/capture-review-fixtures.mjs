@@ -34,8 +34,12 @@ export async function installReviewDesktop(page, theme = 'light') {
         if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], worktreeLaunch: 'direct' };
         if (command === 'get_tray_status') return { available: false, error: null };
         if (command === 'list_workbench_sessions') return structuredClone(sessions);
-        // A Codex composer at the bottom of the screen: the one interface that may receive a send.
-        if (command === 'replay_workbench_session') return btoa('\r\n'.repeat(20) + '> \r\n? for shortcuts');
+        // Codex docks its composer to the bottom of the screen, and the adapter reads only the last
+        // rows of an active buffer. The replay therefore has to stay taller than the terminal grid
+        // (a 900px window gives ~44 rows) so that the composer and its shortcut footer are the final
+        // two lines; a short replay would scroll nothing and leave only blank rows in that window.
+        const codexScreen = '\r\n'.repeat(80) + '\u203a \r\n? for shortcuts';
+        if (command === 'replay_workbench_session') return btoa(String.fromCharCode(...new TextEncoder().encode(codexScreen)));
         if (command === 'plugin:event|listen') {
           const eventId = nextListenerId++; listeners.set(eventId, { event: args.event, handler: args.handler });
           bridge.listens.push({ event: args.event, handler: args.handler, eventId });
