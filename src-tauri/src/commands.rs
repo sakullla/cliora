@@ -4079,7 +4079,29 @@ pub async fn twiglane_review_link(
         };
         let remote_revision = match &event { crate::twiglane::LinkEvent::Remote { result_revision, .. } => *result_revision, _ => None };
         let state = app.state::<AppState>();
-        let outcome = state.reviews.apply(event);
+        let mut outcome = state.reviews.apply(event.clone());
+        let retry = if outcome.reason.as_deref() == Some("duplicate_result") {
+            state.reviews.remote_return_retry(&event)
+        } else {
+            None
+        };
+        if let Some(source) = retry {
+            let database = state.database(&app)?;
+            if !crate::twiglane::remote_review::stored_result(
+                &database, &source.review_id, &source.session_id, source.result_revision,
+            ).map_err(native_error)? {
+                outcome = crate::twiglane::LinkOutcome {
+                    remote_target_id: source.remote_binding.as_ref().map(|binding| binding.target_id.clone()),
+                    kind: "returned".into(),
+                    session_id: Some(source.session_id),
+                    review_id: Some(source.review_id),
+                    outcome: source.outcome,
+                    head_oid: source.head_oid,
+                    worktree_state: source.worktree_state,
+                    reason: None,
+                };
+            }
+        }
         if outcome.kind == "returned" {
             if let Some(session_id) = outcome.session_id.as_deref() {
                 if let Some(revision) = remote_revision {
@@ -4090,7 +4112,12 @@ pub async fn twiglane_review_link(
                         Ok((_,status)) => status,
                         Err(error) => crate::twiglane::CodeStatus::unknown(session_id, Some(source.worktree_path.clone()), error.code),
                     };
-                    if !state.reviews.checked_remote_return(&source, checked) { return Ok(crate::twiglane::LinkOutcome::ignored("late_result")); }
+                    let database = state.database(&app)?;
+                    if !state.reviews.checked_remote_return(&source, checked, |entry| {
+                        crate::twiglane::remote_review::store_result(&database, entry)
+                    }).map_err(native_error)? {
+                        return Ok(crate::twiglane::LinkOutcome::ignored("late_result"));
+                    }
                 } else { state.reviews.recheck_return(session_id); }
             }
         }

@@ -682,7 +682,16 @@ fn remote_launch_plan(
     if let Some(prompt) = request.initial_prompt.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
         launch_args.push(prompt.to_owned());
     }
-    let remote_command = if requested_session.is_some() {
+    let windows = crate::twiglane::remote_review::windows_path(&session_directory);
+    let remote_command = if windows {
+        if requested_session.is_some() {
+            return Err(LaunchPlanError::new(LaunchStage::Tool, "Windows SSH 会话已断开，请启动新的会话".into()));
+        }
+        crate::remote::twiglane_review::windows_launch_command(
+            &session_directory, adapter.command(), &launch_args, &session,
+            adapter.remote_launch_environment(request.mode),
+        ).map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message.into()))?
+    } else if requested_session.is_some() {
         remote_reattach_command(&session)
     } else {
         remote_persistent_command(path, adapter.command(), &launch_args, &session, adapter.remote_launch_environment(request.mode))
@@ -707,7 +716,7 @@ fn remote_launch_plan(
         session_markers: &[],
         credential: None,
         remote_session_id: Some(session),
-        remote_end_args: Some(remote_end_args),
+        remote_end_args: (!windows).then_some(remote_end_args),
         environment: crate::remote::password::askpass_environment(&target),
     }))
 }

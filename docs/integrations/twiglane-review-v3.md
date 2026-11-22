@@ -190,3 +190,41 @@ Twiglane 的 `cliora_review_sources({resetPending})` 返回有界的 `{sources, 
 
 
 接收 accepted 的等待只决定来源登记，不授权迟到回调改当前阅读上下文。Twiglane 保留已经接受的来源；repository epoch、路径或显式来源选择已经变化时，仅登记该来源，不激活它、不把其 baseline 写入当前仓库。用户之后可显式选择该来源继续审查。
+
+## Twiglane 远端审查与连接器 v1
+
+### 审查来源
+
+Cliora 通过 `twiglane://remote-review?v=1` 发送 `reviewId`、`sessionId`、`targetId`、`targetRevision`、`peerRevision`、`peerIdentity`、`worktreePath` 和 `worktreeIdentity`。启动时可用的完整提交 ID 通过可选的 `baseline` 发送。首次启动产生的记录绑定工作树，重复读取或重新打开同一记录不会移动基线。源会话更换主机、工作树被替换或已无可核实的来源时，需要从正确的远端工作树发起新审查。
+
+POSIX 继续发送绝对路径。Windows 发送盘符大写、使用 `/` 分隔的规范路径，例如 `C:/项目 with spaces/repository`。Windows 工作树指纹是紧凑 ASCII JSON 的 SHA-256。数组包含小写物理 DNS 主机名、工作树根目录信息和该工作树的 Git 目录信息。每项目录信息包含规范路径、卷序列号和 64 位文件索引。POSIX 指纹仍使用原路径、设备号和 inode。
+
+Windows OpenSSH 的 Cliora 工作台使用前台会话，运行目录来自盘符项目。该主机需要能在 OpenSSH 命令路径找到 Git、Python 3 和原生 CLI 可执行文件。正常退出会回传结束标记，连接中断后可重新启动会话。POSIX 会话继续由 tmux 或 screen 管理。
+
+### 返回和持久确认
+
+Twiglane 发送 `cliora://remote-review?v=1&event=returned`，并带原 `reviewId`、`sessionId`、正整数 `resultRevision`、`outcome` 和 `worktreeState`。结果阶段依次为 `reviewed`、`committed`、`merged`。后两种结果必须带完整 `headOid`。旧格式的来源和返回链接可继续解析。
+
+Cliora 校验当前来源、阶段和序号，对绑定的工作树重新读取实际 HEAD 与工作区状态。成功复核后将结果保存到本地数据库。旧来源和逆序结果不会覆盖新结果。未确认的结果允许重送同一序号和完全相同的载荷，已保存的重送不再次写入。
+
+`cliora --twiglane-remote-v1 version` 的 `capabilities` 包含 `reviewReceipt` 时，Twiglane 可调用以下只读确认。
+
+```text
+cliora --twiglane-remote-v1 review-receipt <reviewId> <sessionId> <resultRevision>
+```
+
+只有该来源和序号已落库时才返回 `{"stored":true}`。其他有效查询返回 `{"stored":false}`。启动深链接本身不会生成回执。
+
+### 通过 Cliora 主机簿打开 agent v2
+
+`cliora --twiglane-remote-v1 version` 的 `capabilities` 包含 `agentV2` 时，Twiglane 可用以下固定命令连接已启用且受信任的 Cliora SSH 目标。
+
+```text
+cliora --twiglane-remote-v1 probe-v2 <targetId> <targetRevision>
+cliora --twiglane-remote-v1 install-v2 <targetId> <peerRevision> <sha256> <digestSignature>
+cliora --twiglane-remote-v1 connect-v2 <targetId> <peerRevision> <sha256> <digestSignature>
+```
+
+探测返回 `system`、`architecture`、`peerRevision`、`peerIdentity` 及可用的 `gitVersion`、`agentSha256`。安装从标准输入读取组件字节，输出 `installed` 与 `agentSha256`。连接将标准输入输出用于 v2 帧。远端写入和启动在已冻结的 SSH 设置及主机密钥通过验证后才开始，凭据由 Cliora 管理。
+
+`digestSignature` 是 Twiglane 发布方对 UTF-8 字节 `twiglane-agent-v2 sha256:<64 个小写十六进制字符>\n` 的 Tauri 签名。连接器使用发布公钥核对该证明，远端按摘要核对实际组件。v1 的签名和命令继续沿用原协议。开发构建可在显式设置 `CLIORA_TWIGLANE_TEST_DB` 的夹具进程内通过 `CLIORA_TWIGLANE_TEST_V2_PUBLISHER` 选择测试公钥。发行构建始终使用内置发布公钥。

@@ -9,7 +9,7 @@
 //! returned 的 Git outcome 与工作区声明正交，两者都只是待复核声明；有界的 `meta.*`
 //! 只被保存，不执行、不影响核心解析与复核。
 
-mod remote_review;
+pub(crate) mod remote_review;
 pub(crate) mod feedback;
 
 use std::collections::{BTreeMap, HashMap};
@@ -547,19 +547,58 @@ impl ReviewRegistry {
     }
 
     /// Record only the result that requested this remote read. A newer return can finish first.
-    pub(crate) fn checked_remote_return(&self, source: &ReviewState, status: CodeStatus) -> bool {
-        let mut current = false;
+    pub(crate) fn checked_remote_return(
+        &self,
+        source: &ReviewState,
+        status: CodeStatus,
+        store: impl FnOnce(&ReviewState) -> Result<(), String>,
+    ) -> Result<bool, String> {
+        let mut current = Ok(false);
         self.update(&source.review_id, &source.session_id, |entry| {
             if entry.remote_binding.is_some() && entry.status == STATUS_RETURNED && entry.result_revision == source.result_revision {
-                let confirmed_commit = entry.outcome.as_deref() == Some("committed") && status.state == "ready" &&
-                    entry.head_oid.is_some() && entry.head_oid == status.head_oid && entry.head_oid != entry.baseline &&
-                    status.uncommitted_files.is_some_and(|files| !matches!((entry.worktree_state.as_deref(), files), (Some("clean"), 1..) | (Some("dirty"), 0)));
-                entry.verified_head = if confirmed_commit { entry.head_oid.clone() } else { None };
+                let writes_head = matches!(entry.outcome.as_deref(), Some("committed" | "merged"));
+                let matches_result = |status: &CodeStatus| {
+                    status.state == "ready"
+                        && status.worktree_path.as_deref() == Some(entry.worktree_path.as_str())
+                        && (entry.head_oid.is_none() || entry.head_oid == status.head_oid)
+                        && (!writes_head || (entry.head_oid.is_some() && entry.head_oid != entry.baseline))
+                        && status.uncommitted_files.is_some_and(|files| !matches!((entry.worktree_state.as_deref(), files), (Some("clean"), 1..) | (Some("dirty"), 0)))
+                };
+                let confirmed = matches_result(&status);
+                // A second validation of the same result can finish after a
+                // successful first read, even if the repository changes later.
+                if !confirmed && entry.remote_check.as_ref().is_some_and(matches_result) {
+                    current = Ok(true);
+                    return;
+                }
+                if confirmed {
+                    current = store(entry).map(|()| true);
+                    if current.is_err() {
+                        return;
+                    }
+                } else {
+                    current = Ok(true);
+                }
+                entry.verified_head = if confirmed && writes_head { entry.head_oid.clone() } else { None };
                 entry.remote_check = Some(status);
-                current = true;
             }
         });
         current
+    }
+
+    /// A repeated delivery may retry remote validation only while the same
+    /// source is current, and only with the same revision and payload.
+    pub(crate) fn remote_return_retry(&self, event: &LinkEvent) -> Option<ReviewState> {
+        let LinkEvent::Remote { event, result_revision: Some(revision) } = event else { return None; };
+        let LinkEvent::Returned { review_id, session_id, outcome, head_oid, worktree_state, .. } = event.as_ref() else { return None; };
+        let current = self.feedback_source(review_id, session_id)?;
+        (current.remote_binding.is_some()
+            && current.status == STATUS_RETURNED
+            && current.result_revision == *revision
+            && current.outcome.as_ref() == Some(outcome)
+            && &current.head_oid == head_oid
+            && current.worktree_state.as_ref() == Some(worktree_state))
+            .then_some(current)
     }
 
     /// Record a baseline advance only after native HEAD and dirty-state verification.
@@ -601,6 +640,12 @@ impl ReviewRegistry {
         }
         if version != 2 && revision.is_some_and(|revision| revision <= source.result_revision) {
             return LinkOutcome::ignored("duplicate_result");
+        }
+        if let LinkEvent::Returned { outcome, .. } = &event {
+            let stage = |value: &str| OUTCOMES.iter().position(|stage| *stage == value);
+            if version == 1 && source.outcome.as_deref().and_then(stage) > stage(outcome) {
+                return LinkOutcome::ignored("late_result");
+            }
         }
         let mut result = LinkOutcome { remote_target_id: source.remote_binding.as_ref().map(|b| b.target_id.clone()), kind: String::new(), session_id: Some(session_id), review_id: Some(review_id), outcome: None, head_oid: None, worktree_state: None, reason: None };
         match event {

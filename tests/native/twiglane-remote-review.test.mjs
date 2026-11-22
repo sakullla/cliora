@@ -8,6 +8,54 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 const helper = fileURLToPath(new URL('../../src-tauri/src/remote/twiglane_review_metadata.py', import.meta.url));
 
+test('Windows launch records a drive checkout, keeps its original baseline, and refuses replacement', {skip: process.platform !== 'win32'}, t => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'cliora-review-windows-'));
+  t.after(() => rmSync(dir, {recursive: true, force: true}));
+  const repo = path.join(dir, '目录 with spaces');
+  const env = {...process.env, USERPROFILE: dir};
+  const run = (bin, args, cwd, input = '') => spawnSync(bin, args, {cwd, input, encoding: 'utf8', env, timeout: 15000});
+  const git = (cwd, ...args) => {
+    const result = run('git', args, cwd);
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  mkdirSync(repo);
+  git(repo, 'init', '-qb', 'main');
+  git(repo, 'config', 'user.name', 'Fixture');
+  git(repo, 'config', 'user.email', 'test@example.invalid');
+  writeFileSync(path.join(repo, 'file'), 'first\n');
+  git(repo, 'add', 'file');
+  git(repo, 'commit', '-qm', 'first');
+  const original = git(repo, 'rev-parse', 'HEAD');
+  const session = 'cliora-windows-review';
+  const request = {session, directory: repo, executable: 'git', args: ['status', '--short'], environment: []};
+  const packed = Buffer.from(JSON.stringify(request)).toString('base64');
+  const launch = () => run('python.exe', ['-I', helper, 'launch', packed], dir);
+  const started = launch();
+  assert.equal(started.status, 0, started.stderr);
+  assert.match(started.stdout, /cliora-windows-review;ready/);
+  assert.match(started.stdout, /cliora-windows-review;ended/);
+  git(repo, 'commit', '--allow-empty', '-qm', 'second');
+  assert.notEqual(launch().status, 0);
+
+  const inspect = () => {
+    const result = run('python.exe', ['-I', helper, 'inspect'], dir, JSON.stringify({session, directory: repo}) + '\n');
+    assert.ok(result.stdout.startsWith('cliora-review/1\n'), result.stderr);
+    return {status: result.status, ...JSON.parse(result.stdout.slice('cliora-review/1\n'.length))};
+  };
+  const first = inspect();
+  assert.equal(first.status, 0, JSON.stringify(first));
+  assert.equal(first.baseline, original);
+  assert.equal(first.headOid, git(repo, 'rev-parse', 'HEAD'));
+  assert.match(first.root, /^[A-Z]:\/.*\/目录 with spaces$/);
+  assert.match(first.worktreeIdentity, /^[0-9a-f]{64}$/);
+  assert.equal(inspect().worktreeIdentity, first.worktreeIdentity);
+  const moved = repo + '.original';
+  renameSync(repo, moved);
+  git(dir, 'clone', '-q', moved, repo);
+  assert.deepEqual(inspect(), {status: 2, error: 'worktree_changed'});
+});
+
 test('captures a remote launch baseline in the actual linked worktree and refuses a replacement checkout', {skip: process.platform === 'win32'}, t => {
   const dir = mkdtempSync(path.join(tmpdir(),'cliora-review-'));
   t.after(() => rmSync(dir,{recursive:true,force:true}));

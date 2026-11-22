@@ -17,17 +17,38 @@ fn program() -> &'static str {
         let mut compressed = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
         compressed.write_all(SCRIPT).expect("in-memory compression");
         let packed = base64::engine::general_purpose::STANDARD.encode(compressed.finish().expect("in-memory compression"));
-        format!("python3 -I -c \"import base64,zlib;exec(zlib.decompress(base64.b64decode('{packed}')))\"")
+        format!("-I -c \"import base64,zlib;exec(zlib.decompress(base64.b64decode('{packed}')))\"")
     })
 }
 
 pub(crate) fn record_command(session: &str) -> String {
     // The actual pane captures its own checkout immediately before starting the CLI.
     format!(
-        "{} record '{}' >/dev/null 2>&1 || true",
+        "python3 {} record '{}' >/dev/null 2>&1 || true",
         program(),
         session.replace('\'', "'\\''")
     )
+}
+
+pub(crate) fn windows_launch_command(
+    directory: &str,
+    executable: &str,
+    args: &[String],
+    session: &str,
+    environment: crate::adapters::RemoteLaunchEnvironment,
+) -> Result<String, &'static str> {
+    if !crate::twiglane::remote_review::path(directory) {
+        return Err("Windows 项目必须使用绝对盘符路径");
+    }
+    let request = json!({"directory":directory,"executable":executable,"args":args,"session":session,"environment":environment.environment});
+    let packed = base64::engine::general_purpose::STANDARD.encode(request.to_string());
+    let command = format!("python.exe {} launch {packed}", program());
+    // Windows OpenSSH supports cmd.exe as its default shell. Keep the complete
+    // command below its 8191-character limit, including the server's wrapper.
+    if command.len() > 7800 {
+        return Err("远程启动参数超过 Windows OpenSSH 的命令长度");
+    }
+    Ok(command)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,8 +104,13 @@ pub(crate) fn read(
     }
     let (mut command, context) = snapshot.command(expected.map(|b| b.peer_revision.as_str()))?;
     configure_ssh(&mut command, target)?;
+    let launcher = if crate::twiglane::remote_review::windows_path(&origin.directory) {
+        "python.exe"
+    } else {
+        "exec python3"
+    };
     command
-        .arg(format!("exec {} inspect", program()))
+        .arg(format!("{launcher} {} inspect", program()))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());

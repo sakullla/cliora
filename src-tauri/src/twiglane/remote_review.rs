@@ -1,4 +1,5 @@
 use super::{LinkEvent, ReviewState};
+use crate::database::Database;
 use std::collections::BTreeMap;
 
 const LIMIT: usize = 8192;
@@ -11,7 +12,7 @@ const REASONS: &[&str] = &[
     "busy",
     "invalid_baseline",
 ];
-fn id(value: &str) -> bool {
+pub(crate) fn id(value: &str) -> bool {
     uuid::Uuid::parse_str(value).is_ok_and(|id| id.hyphenated().to_string() == value)
 }
 fn hex(value: &str) -> bool {
@@ -22,13 +23,71 @@ fn hex(value: &str) -> bool {
 fn oid(value: &str) -> bool {
     matches!(value.len(), 40 | 64) && hex(value)
 }
-fn path(value: &str) -> bool {
-    value.starts_with('/')
-        && !value.chars().any(char::is_control)
-        && (value == "/"
-            || value[1..]
-                .split('/')
-                .all(|part| !matches!(part, "" | "." | "..")))
+pub(crate) fn receipt_revision(value: &str) -> Option<u64> {
+    let revision = value.parse::<u64>().ok()?;
+    (revision > 0 && revision <= 9_007_199_254_740_991 && value == revision.to_string())
+        .then_some(revision)
+}
+
+pub(crate) fn windows_path(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
+}
+
+pub(crate) fn path(value: &str) -> bool {
+    if value.chars().any(char::is_control) {
+        return false;
+    }
+    let suffix = if let Some(suffix) = value.strip_prefix('/') {
+        suffix
+    } else if windows_path(value) {
+        &value[3..]
+    } else {
+        return false;
+    };
+    let windows = windows_path(value);
+    suffix.is_empty()
+        || suffix.split(|c| c == '/' || (windows && c == '\\')).all(|part| {
+            !matches!(part, "" | "." | "..")
+                && (!windows || !part.contains([':', '<', '>', '"', '|', '?', '*']))
+        })
+}
+
+pub(crate) fn store_result(db: &Database, state: &ReviewState) -> Result<(), String> {
+    let binding = state.remote_binding.as_ref().ok_or("missing review binding")?;
+    let outcome = state.outcome.as_deref().ok_or("missing review outcome")?;
+    let worktree = state.worktree_state.as_deref().ok_or("missing worktree state")?;
+    let revision = i64::try_from(state.result_revision).map_err(|err| err.to_string())?;
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO twiglane_remote_review_results
+             (review_id, session_id, result_revision, target_id, outcome, head_oid, worktree_state)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(review_id, session_id, result_revision) DO NOTHING",
+            rusqlite::params![state.review_id, state.session_id, revision, binding.target_id, outcome, state.head_oid, worktree],
+        ).map_err(|err| err.to_string())?;
+        Ok(())
+    })
+}
+
+pub(crate) fn stored_result(
+    db: &Database,
+    review_id: &str,
+    session_id: &str,
+    revision: u64,
+) -> Result<bool, String> {
+    let revision = i64::try_from(revision).map_err(|err| err.to_string())?;
+    db.with_read_connection(|conn| {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM twiglane_remote_review_results
+             WHERE review_id = ?1 AND session_id = ?2 AND result_revision = ?3)",
+            rusqlite::params![review_id, session_id, revision],
+            |row| row.get(0),
+        ).map_err(|err| err.to_string())
+    })
 }
 pub(super) fn request(state: &ReviewState) -> Result<String, &'static str> {
     let source = state.remote_binding.as_ref().ok_or("target_changed")?;
@@ -118,19 +177,15 @@ pub(super) fn event(raw: &str) -> Result<LinkEvent, &'static str> {
         },
         "returned" => {
             let seq = q.remove("resultRevision").ok_or(BAD)?;
-            let seqnum = seq
-                .parse::<u64>()
-                .ok()
-                .filter(|n| *n > 0 && seq == n.to_string())
-                .ok_or(BAD)?;
+            let seqnum = receipt_revision(&seq).ok_or(BAD)?;
             revision = Some(seqnum);
             let outcome = q
                 .remove("outcome")
-                .filter(|s| matches!(s.as_str(), "reviewed" | "committed"))
+                .filter(|s| matches!(s.as_str(), "reviewed" | "committed" | "merged"))
                 .ok_or(BAD)?;
             let head_oid = q.remove("headOid");
             if head_oid.as_deref().is_some_and(|s| !oid(s))
-                || (outcome == "committed" && head_oid.is_none())
+                || (matches!(outcome.as_str(), "committed" | "merged") && head_oid.is_none())
             {
                 return Err(BAD);
             }
@@ -267,7 +322,8 @@ mod tests {
             "returned"
         );
         assert!(!registry
-            .checked_remote_return(&first, CodeStatus::unknown(session, None, "read_failed")));
+            .checked_remote_return(&first, CodeStatus::unknown(session, None, "read_failed"), |_| panic!("stale result must not persist"))
+            .unwrap());
         assert_eq!(
             registry
                 .apply(event(&format!("{returned}&resultRevision=1")).unwrap())
@@ -283,8 +339,9 @@ mod tests {
         let latest = registry.latest_for_session(session).unwrap();
         assert!(registry.checked_remote_return(
             &latest,
-            CodeStatus::unknown(session, None, "target_changed")
-        ));
+            CodeStatus::unknown(session, None, "target_changed"),
+            |_| panic!("unverified result must not persist"),
+        ).unwrap());
         assert_eq!(
             registry
                 .latest_for_session(session)
@@ -295,5 +352,63 @@ mod tests {
                 .as_deref(),
             Some("target_changed")
         );
+    }
+
+    #[test]
+    fn windows_paths_and_result_receipts_preserve_source_and_stage() {
+        let session = "998aaaaa-1111-4222-8333-444444444444";
+        let root = "D:/目录 with spaces/linked";
+        let mut review = new_review(session, root, Some("a".repeat(40)));
+        review.protocol_version = 1;
+        let database_file = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+        let database = Database::open(&database_file).unwrap();
+        let target = crate::remote::save_target(&database, crate::remote::RemoteTarget {
+            id: String::new(), name: "Fixture".into(), host: "example.test".into(),
+            user: "git".into(), port: 22, auth_method: "key".into(),
+            identity_file: None, ssh_config: None, default_path: None,
+            enabled: true, created_at: 0, updated_at: 0,
+        }).unwrap();
+        review.remote_binding = Some(crate::remote::twiglane_review::Binding {
+            target_id: target.id,
+            target_revision: "a".repeat(64), peer_revision: "b".repeat(64),
+            peer_identity: "c".repeat(64), remote_session: "cliora-windows".into(),
+            project_id: "windows".into(), directory: root.into(),
+            worktree_identity: "d".repeat(64), worktree_key: "e".repeat(64),
+        });
+        let url = url::Url::parse(&request(&review).unwrap()).unwrap();
+        assert_eq!(url.query_pairs().find(|(key, _)| key == "worktreePath").unwrap().1, root);
+        for invalid in ["C:relative", "C://strip", "C:/../other", "C:/dir:stream", "C:/dir\\..\\elsewhere"] {
+            assert!(!path(invalid), "{invalid}");
+        }
+        let review_id = review.review_id.clone();
+        let base = format!("cliora://remote-review?v=1&reviewId={review_id}&sessionId={session}");
+        let registry = ReviewRegistry::default();
+        registry.begin(review);
+        let returned = |revision: u64, outcome: &str, head: &str| {
+            event(&format!("{base}&event=returned&resultRevision={revision}&outcome={outcome}&worktreeState=clean&headOid={head}")).unwrap()
+        };
+        for (revision, outcome, digit) in [(1, "reviewed", "a"), (2, "committed", "b"), (3, "merged", "c")] {
+            let oid = digit.repeat(40);
+            let incoming = returned(revision, outcome, &oid);
+            assert_eq!(registry.apply(incoming.clone()).kind, "returned");
+            let latest = registry.latest_for_session(session).unwrap();
+            let mut dirty = CodeStatus::unknown(session, Some(root.into()), "read_failed");
+            dirty.state = "ready";
+            dirty.head_oid = Some(oid.clone());
+            dirty.uncommitted_files = Some(1);
+            assert!(registry.checked_remote_return(&latest, dirty.clone(), |_| panic!("dirty worktree must not confirm clean claim")).unwrap());
+            assert!(!stored_result(&database, &review_id, session, revision).unwrap());
+            assert_eq!(registry.apply(incoming.clone()).reason.as_deref(), Some("duplicate_result"));
+            assert!(registry.remote_return_retry(&incoming).is_some());
+            assert!(registry.remote_return_retry(&returned(revision, outcome, &"f".repeat(40))).is_none());
+            dirty.uncommitted_files = Some(0);
+            assert!(registry.checked_remote_return(&latest, dirty, |entry| store_result(&database, entry)).unwrap());
+            assert!(stored_result(&database, &review_id, session, revision).unwrap());
+        }
+        let remote = Database::open_read_only(&database_file).unwrap();
+        assert!(stored_result(&remote, &review_id, session, 3).unwrap());
+        assert!(!stored_result(&remote, &review_id, "other-session", 3).unwrap());
+        assert_eq!(registry.apply(returned(4, "reviewed", &"c".repeat(40))).reason.as_deref(), Some("late_result"));
+        assert!(event(&format!("{base}&event=returned&resultRevision=4&outcome=merged&worktreeState=clean")).is_err());
     }
 }

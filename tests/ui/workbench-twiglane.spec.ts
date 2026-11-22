@@ -9,8 +9,8 @@ const NEXT = '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d';
  * reviewId rules as the Rust registry (only the latest review of a session is
  * accepted) and records every call the tests assert on.
  */
-async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair' | 'remote'; tool?: 'claude_code' | 'codex'; replay?: string; ended?: boolean; resume?: 'available' | 'unsupported' } = {}) {
-  await page.addInitScript(({ base, pairing, tool, replay, ended, resume }) => {
+async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair' | 'remote'; tool?: 'claude_code' | 'codex'; replay?: string; ended?: boolean; resume?: 'available' | 'unsupported'; remotePath?: string } = {}) {
+  await page.addInitScript(({ base, pairing, tool, replay, ended, resume, remotePath }) => {
     type Review = {
       reviewId: string;
       sessionId: string;
@@ -38,7 +38,7 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
         ]
       : pairingRemote
         ? [
-            { id: 's1', toolId: 'claude_code', projectId: 'remote:p1', directory: '/srv/alpha', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() - 60_000, connectionState: 'connected' },
+            { id: 's1', toolId: 'claude_code', projectId: 'remote:p1', directory: remotePath, mode: 'normal', running: true, exitCode: null, startedAt: Date.now() - 60_000, connectionState: 'connected' },
           ]
         : [
             { id: 's1', toolId: tool, projectId: null, directory: 'C:/work/alpha', mode: 'normal', running: !ended, exitCode: ended ? 0 : null, startedAt: Date.now() - 60_000 },
@@ -92,7 +92,7 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
             ? [{ id: 'r1', name: 'Build box', host: 'build.example', port: 22, user: 'me', authMethod: 'key', identityFile: null, sshConfig: null, defaultPath: null, enabled: true, createdAt: 1, updatedAt: 1 }]
             : [];
           if (command === 'list_remote_projects') return pairingRemote
-            ? [{ id: 'p1', targetId: 'r1', name: 'alpha', path: '/srv/alpha', preferredTool: null, updatedAt: 1 }]
+            ? [{ id: 'p1', targetId: 'r1', name: 'alpha', path: remotePath, preferredTool: null, updatedAt: 1 }]
             : [];
           // resume/history 端口就是「会话横幅能恢复」的依据；resume 为 unsupported 的 CLI（如 cursor 一类的
           // 通用 CLI）只能重启新会话，界面不该提示去点不存在的恢复入口。
@@ -156,7 +156,7 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
             if (args.sessionId !== 's1' && args.sessionId !== 's2') throw { code: 'session_unknown', message: '找不到这个会话' };
             return {
               sessionId: args.sessionId,
-              worktreePath: pairingRemote ? '/srv/alpha' : args.sessionId === 's1' ? 'C:/work/alpha' : 'C:/work/beta',
+              worktreePath: pairingRemote ? remotePath : args.sessionId === 's1' ? 'C:/work/alpha' : 'C:/work/beta',
               branch: args.sessionId === 's1' ? 'feature/twiglane' : 'feature/beta',
               headOid: harness.headOid,
               uncommittedFiles: harness.files,
@@ -170,7 +170,7 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
             const review: Review = {
               reviewId,
               sessionId: args.sessionId,
-              worktreePath: pairingRemote ? '/srv/alpha' : args.sessionId === 's1' ? 'C:/work/alpha' : 'C:/work/beta',
+              worktreePath: pairingRemote ? remotePath : args.sessionId === 's1' ? 'C:/work/alpha' : 'C:/work/beta',
               protocolVersion: pairingRemote ? 1 : 2,
               baseline: pairingRemote ? null : harness.headOid,
               status: 'opening',
@@ -248,7 +248,7 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
         },
       },
     });
-  }, { base: BASE, pairing: options.sessions ?? 'single', tool: options.tool ?? 'claude_code', replay: options.replay ?? 'ready', ended: options.ended === true, resume: options.resume ?? 'available' });
+  }, { base: BASE, pairing: options.sessions ?? 'single', tool: options.tool ?? 'claude_code', replay: options.replay ?? 'ready', ended: options.ended === true, resume: options.resume ?? 'available', remotePath: options.remotePath ?? '/srv/alpha' });
 }
 
 async function openWorkbench(page: Page) {
@@ -666,6 +666,27 @@ test('a remote session reviews its own worktree, stays pending during installati
   if (!await group.isVisible()) await page.getByRole('button', {name:'在 Twiglane 中审查', exact:true}).click();
   await group.getByRole('menuitem',{name:'在 Twiglane 中审查'}).click();
   await expect(group.getByRole('alert')).toContainText('请在目标工作树重新开启远端会话');
+});
+
+test('a Windows remote review shows the verified merged result for its drive checkout', async ({ page }) => {
+  const repository = 'C:/目录 with spaces/alpha';
+  await installDesktop(page, { sessions: 'remote', remotePath: repository });
+  await openWorkbench(page);
+  await page.getByRole('button', { name: '在 Twiglane 中审查', exact: true }).click();
+  const group = page.getByRole('menu', { name: '在 Twiglane 中审查' }).getByRole('group', { name: '在 Twiglane 中审查' });
+  await expect(group).toContainText('Build box · ' + repository);
+  await group.getByRole('menuitem', { name: '在 Twiglane 中审查' }).click();
+  await page.evaluate((oid) => {
+    const bridge = window as unknown as {
+      __harness: { starts: { reviewId: string }[]; headOid: string; files: number };
+      __emitDeepLink: (url: string) => void;
+    };
+    const review = bridge.__harness.starts[0];
+    bridge.__harness.headOid = oid;
+    bridge.__harness.files = 0;
+    bridge.__emitDeepLink('cliora://remote-review?v=1&event=returned&outcome=merged&worktreeState=clean&resultRevision=3&sessionId=s1&reviewId=' + review.reviewId + '&headOid=' + oid);
+  }, NEXT);
+  await expect(page.getByText('Twiglane 已合入 ' + NEXT.slice(0, 7) + '。').first()).toBeVisible();
 });
 
 /** A review link may only read: it never starts a session and never writes Git. */

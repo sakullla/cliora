@@ -30,15 +30,16 @@ fn evaluate(command: &mut Command) -> Result<String> {
 
 impl Profile {
     pub fn read(command: &Command) -> Result<Self> {
-        let trace = tempfile::NamedTempFile::new().map_err(|_| "ssh_configuration_unavailable")?;
+        let trace_dir = tempfile::tempdir().map_err(|_| "ssh_configuration_unavailable")?;
+        let trace = trace_dir.path().join("ssh-profile.log");
         let args: Vec<_> = command.get_args().map(OsString::from).collect();
         let mut traced = Command::new("ssh");
         traced
             .args(["-G", "-v", "-E"])
-            .arg(trace.path())
+            .arg(&trace)
             .args(&args);
         let text = evaluate(&mut traced)?;
-        let logs = fs::read_to_string(trace.path()).map_err(|_| "ssh_configuration_unavailable")?;
+        let logs = fs::read_to_string(trace).map_err(|_| "ssh_configuration_unavailable")?;
         let mut trust_directives: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for source in logs
             .lines()
@@ -77,7 +78,7 @@ impl Profile {
             return Ok(Vec::new());
         }
         if !value.contains(char::is_whitespace) {
-            return Ok(vec![value.into()]);
+            return Ok(vec![trust_operand(value.into())?]);
         }
         let mut candidates = BTreeSet::new();
         for raw in self.trust_directives.get(key).into_iter().flatten() {
@@ -116,7 +117,7 @@ impl Profile {
             return Err("ambiguous_known_hosts_paths");
         }
         if let Some(parts) = candidates.into_iter().next() {
-            return Ok(parts);
+            return parts.into_iter().map(trust_operand).collect();
         }
         let defaults = defaults
             .get_or_init(|| {
@@ -132,8 +133,8 @@ impl Profile {
         {
             return Err("ambiguous_known_hosts_paths");
         }
-        // Built-in OpenSSH defaults have absolute paths and no source directive. Preserve
-        // an absolute home prefix as one token on platforms with spaces in usernames.
+        // Built-in OpenSSH defaults have no source directive. Preserve a home
+        // prefix as one token on platforms with spaces in usernames.
         let home = dirs::home_dir().ok_or("ssh_configuration_unavailable")?;
         let prefix = format!("{}/", home.display());
         let text = value.replace(&prefix, "~/");
@@ -142,7 +143,7 @@ impl Profile {
             let path = if let Some(suffix) = part.strip_prefix("~/") {
                 home.join(suffix)
             } else {
-                PathBuf::from(part)
+                trust_operand(PathBuf::from(part))?
             };
             if !path.is_absolute() {
                 return Err("ambiguous_known_hosts_paths");
@@ -151,6 +152,41 @@ impl Profile {
         }
         Ok(paths)
     }
+}
+
+fn trust_operand(path: PathBuf) -> Result<PathBuf> {
+    #[cfg(windows)]
+    if let Some(relative) = path.to_str().and_then(|value| value.strip_prefix("__PROGRAMDATA__")) {
+        let tail = relative.strip_prefix(['/', '\\']).ok_or("ssh_configuration_unavailable")?;
+        let tail = Path::new(tail);
+        if tail.as_os_str().is_empty() || tail.components().any(|part| !matches!(part, std::path::Component::Normal(_))) {
+            return Err("ssh_configuration_unavailable");
+        }
+        return Ok(program_data()?.join(tail));
+    }
+    Ok(path)
+}
+
+#[cfg(windows)]
+fn program_data() -> Result<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    // Match the Windows common application data directory that OpenSSH
+    // substitutes at use time. Its displayed -G operands keep the sentinel.
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn SHGetFolderPathW(window: isize, folder: i32, token: isize, flags: u32, out: *mut u16) -> i32;
+    }
+    let mut buffer = [0u16; 260];
+    const CSIDL_COMMON_APPDATA: i32 = 0x23;
+    // SAFETY: CSIDL resolution needs no window or token. The API writes at
+    // most MAX_PATH UTF-16 code units to the supplied writable buffer.
+    if unsafe { SHGetFolderPathW(0, CSIDL_COMMON_APPDATA, 0, 0, buffer.as_mut_ptr()) } < 0 {
+        return Err("ssh_configuration_unavailable");
+    }
+    let end = buffer.iter().position(|unit| *unit == 0).ok_or("ssh_configuration_unavailable")?;
+    let path = PathBuf::from(OsString::from_wide(&buffer[..end]));
+    if !path.is_absolute() { return Err("ssh_configuration_unavailable"); }
+    Ok(path)
 }
 
 fn marked_operands(raw: &str) -> Result<String> {
@@ -208,7 +244,7 @@ impl Trust {
             if value == "none" {
                 Vec::new()
             } else {
-                vec![PathBuf::from(value)]
+                vec![trust_operand(PathBuf::from(value))?]
             }
         } else {
             profile.paths(key, value, defaults)?
@@ -261,5 +297,28 @@ impl Trust {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_openssh_default_known_hosts_are_absolute_snapshot_operands() {
+        let mut command = Command::new("ssh");
+        command.args(["-G", "-F", "none", "--", "cliora-default.invalid"]);
+        let profile = Profile::read(&command).unwrap();
+        let hosts = profile.text.lines()
+            .find_map(|line| line.strip_prefix("globalknownhostsfile ")).unwrap();
+        let paths = profile.paths("globalknownhostsfile", hosts, &DefaultTrust::new()).unwrap();
+        assert!(paths.iter().all(|path| path.is_absolute()));
+        if hosts.contains("__PROGRAMDATA__") {
+            assert_eq!(
+                paths,
+                ["ssh_known_hosts", "ssh_known_hosts2"].map(|name| program_data().unwrap().join("ssh").join(name)),
+            );
+        }
+        assert!(trust_operand(PathBuf::from(r"__PROGRAMDATA__\..\known_hosts")).is_err());
     }
 }

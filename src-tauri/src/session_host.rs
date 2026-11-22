@@ -861,8 +861,7 @@ pub(crate) fn with_remote_upload_cleanup(remote_id: &str, cleanup: impl FnOnce()
 pub fn close_with_cleanup(id: &str, cleanup: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
     let session = lookup(id)?;
     let _operation = session.operation.lock().map_err(|_| "会话状态不可用")?;
-    if session.remote {
-        let args = session.remote_end_args.as_ref().ok_or("远程会话缺少结束上下文，保留记录以便核查")?;
+    if let Some(args) = session.remote_end_args.as_ref().filter(|_| session.remote) {
         let result = crate::remote::run_session_control(&session.executable, args, &session.environment);
         let (end_result, error) = remote_end_outcome(result, session.remote_session_id.as_deref().unwrap_or_default());
         let confirmed = end_result.outcome == "confirmed_absent";
@@ -873,6 +872,8 @@ pub fn close_with_cleanup(id: &str, cleanup: impl FnOnce() -> Result<(), String>
             return Err(error.unwrap_or_else(|| "远程结束结果未知，记录已保留，请重试结束以核查".into()));
         }
         session.connection.store(REMOTE_ENDED, Ordering::SeqCst);
+    } else if session.remote && session.connection.load(Ordering::SeqCst) != REMOTE_ENDED {
+        return Err("无法确认 Windows SSH 会话已结束。请先在终端退出 CLI；若连接已断开，请在远端核查进程。".into());
     }
     // Keep the attachment addressable if persistent cleanup fails. A retry can
     // verify absence again and finish storage cleanup without losing recovery.
@@ -946,7 +947,7 @@ pub fn reattach(id: &str, requested_size: Option<(u16, u16)>) -> Result<(), Stri
     if session.running.load(Ordering::SeqCst) {
         return Err("会话仍已连接".into());
     }
-    let mut args = session.remote_end_args.clone().ok_or("远程会话缺少持久上下文")?;
+    let mut args = session.remote_end_args.clone().ok_or("Windows SSH 会话无法重新附着，请启动新的会话")?;
     let _ = args.pop();
     if let Some(tty) = args.iter_mut().find(|arg| arg.as_str() == "-T") { *tty = "-tt".into(); }
     let remote_id = session.remote_session_id.clone().ok_or("远程会话缺少稳定 ID")?;
@@ -1282,7 +1283,7 @@ impl Session {
             started_at: self.started_at,
             connection_state: if !self.remote { if running { "connected" } else { "closed" } } else { match connection { CONNECTING => "connecting", CONNECTED => "connected", DISCONNECTED => "disconnected", REMOTE_ENDED => "remote_ended", _ => "unknown" } },
             exit_reason: if running { "running" } else if !self.remote { "process_exit" } else { match connection { DISCONNECTED => "connection_lost", REMOTE_ENDED => "remote_ended", _ => "unknown" } },
-            reattachable: self.remote && !running && connection != REMOTE_ENDED,
+            reattachable: self.remote && self.remote_end_args.is_some() && !running && connection != REMOTE_ENDED,
             remote_session_id: self.remote_session_id.clone(),
             remote_end_result: self.remote_end_result.lock().ok().and_then(|result| result.clone()),
             state_revision: self.state_revision.load(Ordering::SeqCst),

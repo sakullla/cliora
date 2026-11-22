@@ -19,7 +19,7 @@ pub struct Database {
     read_path: Option<std::path::PathBuf>,
 }
 
-const LATEST_VERSION: u32 = 36;
+const LATEST_VERSION: u32 = 37;
 
 impl Database {
     /// Independent consumers can read a configured desktop without creating or migrating its DB.
@@ -800,6 +800,23 @@ impl Database {
             )?;
             tx.commit()?;
         }
+        if version < 37 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS twiglane_remote_review_results (
+                   review_id TEXT NOT NULL,
+                   session_id TEXT NOT NULL,
+                   result_revision INTEGER NOT NULL,
+                   target_id TEXT NOT NULL REFERENCES remote_targets(id) ON DELETE CASCADE,
+                   outcome TEXT NOT NULL,
+                   head_oid TEXT,
+                   worktree_state TEXT NOT NULL,
+                   PRIMARY KEY (review_id, session_id, result_revision)
+                 );
+                 PRAGMA user_version = 37;",
+            )?;
+            tx.commit()?;
+        }
         crate::secrets::audit::prune(&connection, crate::prompts::timestamp())?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -1096,7 +1113,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 36);
+            assert_eq!(version, LATEST_VERSION);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
@@ -1147,7 +1164,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|error| error.to_string())?;
-            assert_eq!(version, 36);
+            assert_eq!(version, LATEST_VERSION);
             let secrets: i64 = conn
                 .query_row("SELECT COUNT(*) FROM prompt_secrets", [], |row| row.get(0))
                 .map_err(|error| error.to_string())?;
@@ -1169,7 +1186,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|error| error.to_string())?;
-            assert_eq!(version, 36);
+            assert_eq!(version, LATEST_VERSION);
             Ok(())
         })
         .unwrap();
@@ -1200,7 +1217,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|error| error.to_string())?;
-            assert_eq!(version, 36);
+            assert_eq!(version, LATEST_VERSION);
             // Pre-existing secret metadata survives; grants start empty because a
             // database from v34 never recorded one.
             let (alias, grants): (String, i64) = (
@@ -1226,7 +1243,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|error| error.to_string())?;
-            assert_eq!(version, 36);
+            assert_eq!(version, LATEST_VERSION);
             Ok(())
         })
         .unwrap();
@@ -1259,7 +1276,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|error| error.to_string())?;
-            assert_eq!(version, 36);
+            assert_eq!(version, LATEST_VERSION);
             // 迁移只建关联表：不自动关联已有主机，也不改写目标行或其修订。
             let links: i64 = conn
                 .query_row("SELECT COUNT(*) FROM remote_host_links", [], |row| row.get(0))
