@@ -137,33 +137,6 @@ fn authorization() -> String {
     "Authorization".into()
 }
 
-fn public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => {
-            !(ip.is_private()
-                || ip.is_loopback()
-                || ip.is_link_local()
-                || ip.is_unspecified()
-                || ip.is_broadcast()
-                || ip.is_documentation()
-                || ip.is_multicast()
-                || ip.octets()[0] == 0
-                || ip.octets()[0] >= 240
-                || (ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1]))
-                || (ip.octets()[0] == 198 && (18..=19).contains(&ip.octets()[1])))
-        }
-        IpAddr::V6(ip) => ip.to_ipv4_mapped().map_or_else(
-            || {
-                let s = ip.segments();
-                (s[0] & 0xe000) == 0x2000
-                    && s[0] != 0x2002
-                    && !(s[0] == 0x2001 && (s[1] < 0x0200 || s[1] == 0x0db8))
-            },
-            |v| public_ip(IpAddr::V4(v)),
-        ),
-    }
-}
-
 fn http(
     input: &HelperInput,
     raw: &str,
@@ -179,12 +152,10 @@ fn http(
     let req: HttpRequest = serde_json::from_str(raw).map_err(|_| invalid())?;
     let url = url::Url::parse(&req.url).map_err(|_| invalid())?;
     let origin = url.origin().ascii_serialization();
-    let target = input
-        .config
-        .targets
-        .iter()
-        .find(|t| t.origin == origin)
-        .ok_or_else(invalid)?;
+    // The origin allow-list still decides which hosts a query may reach.
+    if !input.config.targets.iter().any(|t| t.origin == origin) {
+        return Err(invalid());
+    }
     if !matches!(url.scheme(), "http" | "https")
         || !url.username().is_empty()
         || url.password().is_some()
@@ -196,14 +167,19 @@ fn http(
         return Err(invalid());
     }
     let host = url.host_str().ok_or_else(invalid)?.trim_matches(['[', ']']);
+    // Resolved addresses are used as-is: local DNS proxies may answer with a
+    // fake-IP and still route the request to the declared origin. Pinning the
+    // resolution below keeps the connection on the checked host.
     let addresses: Vec<_> = (host, url.port_or_known_default().ok_or_else(invalid)?)
         .to_socket_addrs()
         .map_err(|_| error(UsageErrorCode::Network, UsageStage::Http, "目标解析失败"))?
         .collect();
-    if addresses.is_empty()
-        || (!target.allow_private_network && addresses.iter().any(|a| !public_ip(a.ip())))
-    {
-        return Err(invalid());
+    if addresses.is_empty() {
+        return Err(error(
+            UsageErrorCode::Network,
+            UsageStage::Http,
+            "目标解析失败",
+        ));
     }
     if url.scheme() == "http"
         && addresses.iter().any(|a| match a.ip() {

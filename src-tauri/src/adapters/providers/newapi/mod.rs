@@ -1,5 +1,5 @@
 use super::{site::SiteProvider, QueryConfig, UsageError};
-pub(super) static ADAPTER: SiteProvider = SiteProvider { id:"newapi",title:"New API",description:"填写独立站点 origin；默认保留原始 quota 单位。仅在明确站点换算时同时设置 unitsPerCurrency 与 currency；套餐价格不是换算依据。",user_instructions:"填写具有对应读取权限的本站点用户 PAT/面板访问令牌；模型 API Key 不适用。旧站点可设置普通参数 userId。",source:include_str!("query.js"),extra_parameters:&["unitsPerCurrency","currency","userId"],validate_parameters:validate };
+pub(super) static ADAPTER: SiteProvider = SiteProvider { id:"newapi",title:"New API",description:"填写独立站点 origin；Key 可读取自身额度，站点允许时同时显示该 Key 可见的账户钱包。仅当站点明确换算时同时设置 unitsPerCurrency 与 currency。",user_instructions:"填写具有 profile:read 与 wallet:read 权限的本站点用户 PAT；模型 API Key 只能用于 Key 查询。旧站点可设置普通参数 userId。",source:include_str!("query.js"),extra_parameters:&["unitsPerCurrency","currency","userId"],validate_parameters:validate };
 fn validate(config: &QueryConfig) -> Result<(), UsageError> {
     match (
         config.parameters.get("unitsPerCurrency"),

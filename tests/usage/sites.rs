@@ -174,10 +174,116 @@ fn sub2api_gateway_does_not_call_billing_or_invent_unlimited() {
     assert_eq!(result.metrics[0].subject, UsageSubject::Account);
     let result = parse(
         "sub2api-key",
-        json!({"/v1/usage":{"mode":"unrestricted","subscription":{"daily_limit_usd":10,"daily_usage_usd":2,"weekly_limit_usd":0,"monthly_limit_usd":null}}}),
+        json!({"/v1/usage":{"mode":"unrestricted","subscription":{"daily_limit_usd":10,"daily_usage_usd":2,"weekly_limit_usd":50,"weekly_usage_usd":12,"weekly_window_start":"2026-10-02T00:00:00Z","monthly_limit_usd":null}}}),
     );
-    assert_eq!(result.metrics.len(), 1);
+    assert_eq!(result.metrics.len(), 2);
     assert_eq!(result.metrics[0].subject, UsageSubject::Plan);
+    assert!(result.metrics[0].window.as_ref().unwrap().resets_at.is_none());
+    let weekly = result
+        .metrics
+        .iter()
+        .find(|m| m.id == "sub2api-plan-weekly")
+        .unwrap();
+    assert_eq!(
+        weekly.window.as_ref().unwrap().resets_at.as_deref(),
+        Some("2026-10-09T00:00:00.000Z")
+    );
+}
+
+#[test]
+fn sub2api_go_zero_times_are_unknown_not_year_one() {
+    let mut responses = fixture("sub2api");
+    let progress = &mut responses["/api/v1/subscriptions/progress"]["data"][0]["progress"];
+    progress["expires_at"] = "0001-01-01T00:00:00Z".into();
+    progress["daily"]["resets_at"] = "0001-01-01T00:00:00Z".into();
+    let result = parse("sub2api-account-plans", responses);
+    assert_eq!(result.status, UsageStatus::Partial);
+    let daily = result
+        .metrics
+        .iter()
+        .find(|m| m.id == "sub2api-plan-21-daily")
+        .unwrap();
+    assert!(daily.window.as_ref().unwrap().resets_at.is_none());
+    assert!(daily.expires_at.is_none());
+    assert!(daily.missing_reason.is_some());
+}
+
+#[test]
+fn sub2api_fresh_subscription_uses_group_caps_before_first_usage() {
+    let mut responses = fixture("sub2api");
+    let item = &mut responses["/api/v1/subscriptions/progress"]["data"][0];
+    for key in ["daily", "weekly", "monthly"] {
+        item["progress"].as_object_mut().unwrap().remove(key);
+    }
+    let sub = &mut item["subscription"];
+    sub["daily_usage_usd"] = 0.into();
+    sub["weekly_usage_usd"] = 0.into();
+    sub["monthly_usage_usd"] = 0.into();
+    sub["group"] = json!({
+        "daily_limit_usd": 10,
+        "weekly_limit_usd": 50,
+        "monthly_limit_usd": 100
+    });
+    let result = parse("sub2api-account-plans", responses.clone());
+    assert_eq!(result.status, UsageStatus::Success);
+    for (period, total, duration) in [
+        ("daily", 10.0, Some(86400u32)),
+        ("weekly", 50.0, Some(604800u32)),
+        ("monthly", 100.0, None),
+    ] {
+        let metric = result
+            .metrics
+            .iter()
+            .find(|m| m.id == format!("sub2api-plan-21-{period}"))
+            .unwrap();
+        assert_eq!(metric.used, Some(0.0));
+        assert_eq!(metric.total, Some(total));
+        assert_eq!(
+            metric.window.as_ref().unwrap().duration_seconds,
+            duration
+        );
+        assert!(metric.window.as_ref().unwrap().resets_at.is_none());
+    }
+    // A capped group with no configured limit is access for the subscription
+    // lifetime, not an unknown zero.
+    let mut responses = responses;
+    let sub = &mut responses["/api/v1/subscriptions/progress"]["data"][0]["subscription"];
+    sub["group"] = json!({
+        "daily_limit_usd": null,
+        "weekly_limit_usd": null,
+        "monthly_limit_usd": null
+    });
+    let result = parse("sub2api-account-plans", responses);
+    let unlimited = result
+        .metrics
+        .iter()
+        .find(|m| m.id == "sub2api-plan-21-unlimited")
+        .unwrap();
+    assert!(unlimited.unlimited);
+    assert_eq!(unlimited.total, None);
+    assert!(unlimited.expires_at.is_some());
+}
+
+#[test]
+fn newapi_key_owner_wallet_is_optional_and_kept_separate() {
+    let result = parse("newapi-key", fixture("newapi"));
+    assert_eq!(result.status, UsageStatus::Success);
+    assert_eq!(result.metrics.len(), 2);
+    assert_eq!(result.metrics[0].subject, UsageSubject::Key);
+    assert_eq!(result.metrics[1].id, "newapi-key-owner-wallet");
+    assert_eq!(result.metrics[1].subject, UsageSubject::Account);
+    assert_eq!(result.metrics[1].used, Some(10000000.0));
+    assert_eq!(result.metrics[1].remaining, Some(90000000.0));
+    let mut responses = fixture("newapi");
+    responses["/api/usage/token/"]["data"]
+        .as_object_mut()
+        .unwrap()
+        .remove("user_quota");
+    assert_eq!(
+        parse("newapi-key", responses).metrics.len(),
+        1,
+        "older sites omit the optional owner wallet"
+    );
 }
 
 #[test]

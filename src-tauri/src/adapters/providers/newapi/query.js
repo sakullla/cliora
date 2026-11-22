@@ -18,6 +18,12 @@ async function query(ctx) {
     if (data.unlimited_quota) { m.unlimited = true; m.used = nonnegative(value(data.total_used)); }
     else quota(m, value(data.total_used), value(data.total_available), value(data.total_granted), errors);
     expiry(m, data.expires_at, errors, true, true); metrics.push(m);
+    // Newer sites expose the owner's wallet to keys allowed to query user quota.
+    if (data.user_quota && typeof data.user_quota === 'object') {
+      const owner = siteMetric('newapi-key-owner-wallet', 'Key 可见账户钱包余额', 'account', unit);
+      quota(owner, value(data.user_quota.total_used), value(data.user_quota.total_available), null, errors);
+      metrics.push(owner);
+    }
     return finish(metrics, errors);
   }
   if (mode === 'account' || mode === 'account-plans') {

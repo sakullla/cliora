@@ -15,7 +15,7 @@ async function query(ctx) {
       if (Array.isArray(root.rate_limits)) for (let i = 0; i < root.rate_limits.length; i++) {
         const item = root.rate_limits[i];
         if (!item || typeof item !== 'object') { errors.push(failure('parse', 'Key 的部分周期字段无效')); continue; }
-        const m = siteMetric('sub2api-key-window-' + i, 'Key 周期额度 ' + (i + 1), 'key', usd);
+        const m = siteMetric('sub2api-key-window-' + i, 'Key 周期额度 · ' + (typeof item.window === 'string' ? item.window : i + 1), 'key', usd);
         quota(m, item.used, item.remaining, item.limit, errors);
         m.window = { durationSeconds: { '5h': 18000, '1d': 86400, '7d': 604800 }[item.window] || null,
           resetsAt: instant(item.reset_at), recovery: 'fixed' };
@@ -29,7 +29,11 @@ async function query(ctx) {
           if (limit === null || limit === 0) continue; // absent caps are not fabricated unlimited windows
           const m = siteMetric('sub2api-plan-' + period, 'Key 所属套餐 · ' + period, 'plan', usd);
           quota(m, sub[period + '_usage_usd'], null, limit, errors);
-          m.window = { durationSeconds: duration, resetsAt: null, recovery: 'unknown' };
+          // The gateway exposes the weekly window start; daily/monthly starts are not returned.
+          const start = period === 'weekly' ? instant(sub.weekly_window_start) : null;
+          m.window = { durationSeconds: duration,
+            resetsAt: start ? new Date(Date.parse(start) + 604800000).toISOString() : null,
+            recovery: 'fixed' };
           expiry(m, sub.expires_at, errors); metrics.push(m);
         }
         if (!metrics.length) errors.push(failure('parse', '此 Key 的套餐未返回可识别的周期限额，请使用用户套餐查询'));
@@ -69,6 +73,29 @@ async function query(ctx) {
           quota(m, window.used_usd, window.remaining_usd, window.limit_usd, errors);
           m.window = { durationSeconds: duration, resetsAt: instant(window.resets_at), recovery: 'fixed' };
           expiry(m, p.expires_at, errors); metrics.push(m); count++;
+        }
+        // A freshly assigned subscription has no window start yet, so the site
+        // omits daily/weekly/monthly progress. The group still carries the
+        // configured caps and the subscription carries usage (zero until used).
+        const sub = item.subscription, group = sub && sub.group;
+        if (!count && group && typeof group === 'object') {
+          for (const [period, duration, limitKey, usedKey] of [
+            ['daily', 86400, 'daily_limit_usd', 'daily_usage_usd'],
+            ['weekly', 604800, 'weekly_limit_usd', 'weekly_usage_usd'],
+            ['monthly', null, 'monthly_limit_usd', 'monthly_usage_usd'],
+          ]) {
+            const limit = nonnegative(group[limitKey]);
+            if (limit === null || limit <= 0) continue;
+            const m = siteMetric('sub2api-plan-' + id + '-' + period, '套餐 ' + id + ' · ' + period, 'plan', usd, id);
+            quota(m, nonnegative(sub[usedKey]) ?? 0, null, limit, errors);
+            m.window = { durationSeconds: duration, resetsAt: null, recovery: 'fixed' };
+            expiry(m, p.expires_at, errors); metrics.push(m); count++;
+          }
+          if (!count) {
+            // No caps means the subscription grants access for its lifetime.
+            const m = siteMetric('sub2api-plan-' + id + '-unlimited', '套餐 ' + id, 'plan', usd, id);
+            m.unlimited = true; expiry(m, p.expires_at, errors); metrics.push(m); count++;
+          }
         }
         if (!count) errors.push(failure('parse', '套餐 ' + id + ' 未提供日周月周期额度'));
       }

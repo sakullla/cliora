@@ -32,10 +32,10 @@ Quota cards use the same result semantics for official subscriptions, five bundl
 | Provider | Bundled modes and boundaries |
 | --- | --- |
 | GLM / Z.ai | Regional Coding Plan windows and additional resource pools; correct regional subscription API key required |
-| Kimi For Coding | Regional Code usages; old count and new percentage pools; a Moonshot API key is not interchangeable |
+| Kimi For Coding | Regional Code usages; absolute count windows win over lagging ratio pools, and the shared monthly ratio is separate; a Moonshot API key is not interchangeable |
 | MiniMax | Regional Token/M Plan and older Coding Plan presets; subscription keys are distinct from ordinary pay-as-you-go keys |
-| Sub2API | Separate site Key, account, plan and account-plus-plans modes; active subscriptions/progress preserve daily, weekly and monthly windows. `/v1/sub2api/billing` is not a balance endpoint |
-| New API | Separate site token, account and subscription modes; quota units remain raw unless the user explicitly configures a conversion and currency |
+| Sub2API | Separate site Key, account, plan and account-plus-plans modes; active subscriptions/progress preserve daily, weekly and monthly windows, and a subscription without a window start yet uses the group's configured caps. `/v1/sub2api/billing` is not a balance endpoint. User access JWTs usually expire within 24 hours and are not refreshed; Key mode is the durable option |
+| New API | Separate site token, account and subscription modes; quota units remain raw unless the user explicitly configures a conversion and currency. A dashboard PAT needs `profile:read` and `wallet:read`. A Key can also expose its owner's wallet when the site allows user quota queries |
 
 Missing data remains unknown, unlimited is explicit, overages may exceed 100%, and reset time is separate from entitlement expiry. Codex preserves each native quota bucket and window, uses source percentages without inventing token totals, and shows optional workspace credits/individual limits/reset counts only when supplied. It does not infer permission to send requests from a percentage or a reset time. Local history estimates remain separate. Manual refresh is the default; optional automatic refresh starts at 60 seconds, coalesces repeated requests, backs off after failures, and pauses on authentication errors. A refresh failure preserves the last successful result as stale; a changed official identity invalidates it. Unrecognized optional fields can remain unavailable, and fixture compatibility does not establish live provider compatibility.
 
