@@ -37,6 +37,7 @@ async function install(page: Page, remote = false) {
           calls.push({ command, args });
           allCalls.push({ command, text: JSON.stringify(args, (_key, value) => typeof value === 'function' ? undefined : value) });
           if (command.includes('secret')) secretCalls.push(command);
+          if (command === 'list_prompt_secret_page') return { items: secrets.map(describe), total: secrets.length, matched: secrets.length, grantCounts: {}, offset: 0 };
           if (command === 'list_prompt_secrets') return secrets.map(describe);
           if (command === 'create_prompt_secret') {
             if (state.failCreate) throw { message: 'fixture: 秘密原值写入失败' };
@@ -116,7 +117,10 @@ test('a created secret inserts only its reference and never reaches prompt conte
   await library(page);
   const dialog = await newPrompt(page);
   await titleOf(dialog).fill('部署步骤');
+  // A first-time user sees what the panel does before anything is stored.
+  await expect(secretPanel(dialog).locator('[data-secret-empty]')).toBeVisible();
   const row = await createSecret(dialog, '生产口令', CANARY);
+  await expect(secretPanel(dialog).locator('[data-secret-empty]')).toHaveCount(0);
   const id = await row.getAttribute('data-secret-id');
   const reference = referenceOf(id!);
   await expect(row).toHaveAttribute('data-secret-status', 'available');
@@ -147,14 +151,16 @@ test('alias and value updates keep the same reference and never render the store
   const reference = referenceOf(id!);
   await expect(bodyOf(dialog)).toHaveValue(reference);
 
-  await panel.locator('[data-secret-rename]').click();
+  await panel.locator('[data-secret-id] button[aria-haspopup="menu"]').click();
+  await dialog.locator('[data-secret-rename]').click();
   await panel.locator('[data-secret-rename-value]').fill('新别名');
   await panel.locator('[data-secret-rename-save]').click();
   await expect(panel.locator('[data-secret-id]').filter({ hasText: '新别名' })).toHaveCount(1);
   await expect(panel.locator(`[data-secret-reference="${reference}"]`)).toContainText('新别名');
   await expect(bodyOf(dialog)).toHaveValue(reference);
 
-  await panel.locator('[data-secret-update]').click();
+  await panel.locator('[data-secret-id] button[aria-haspopup="menu"]').click();
+  await dialog.locator('[data-secret-update]').click();
   await panel.locator('[data-secret-update-value]').fill('replacement-value-77');
   await panel.locator('[data-secret-update-save]').click();
   await expect(panel.locator('[data-secret-update-value]')).toHaveCount(0);
@@ -174,11 +180,14 @@ test('deleting a secret invalidates old references even after recreating the ali
   const reference = referenceOf((await row.getAttribute('data-secret-id'))!);
   await expect(bodyOf(dialog)).toHaveValue(reference);
 
-  await panel.locator('[data-secret-remove]').click();
+  await panel.locator('[data-secret-id] button[aria-haspopup="menu"]').click();
+  await dialog.locator('[data-secret-remove]').click();
   const confirm = page.getByRole('dialog', { name: '删除秘密' });
   await confirm.getByRole('button', { name: '删除秘密', exact: true }).click();
   await expect(panel.locator('[data-secret-id]')).toHaveCount(0);
   await expect(panel.locator(`[data-secret-reference="${reference}"]`)).toHaveAttribute('data-secret-reference-status', 'unknown');
+  // A broken reference turns the whole strip into a warning instead of a quiet chip.
+  await expect(panel.locator('[data-secret-references]')).toHaveAttribute('data-problem', 'true');
   // The prompt body keeps the reference text so the draft stays editable.
   await expect(bodyOf(dialog)).toHaveValue(reference);
 

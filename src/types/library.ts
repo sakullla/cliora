@@ -15,3 +15,5 @@ export type LibraryDraft = Pick<LibraryItem, 'kind' | 'title' | 'body' | 'catego
   id: string | null;
   expectedVersion: number | null;
 };
+
+export type LibraryTitle = Pick<LibraryItem, 'id' | 'kind' | 'title' | 'category'>;

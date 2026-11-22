@@ -10,6 +10,10 @@ import type { SecretInstallationKind } from '../types/secrets';
  */
 
 export type SecretUsageSecret = { id: string; alias: string };
+export function grantedSecretAliases(grants: Array<{ secretId: string; alias: string }>): SecretUsageSecret[] {
+  const aliases = new Map(grants.map(grant => [grant.secretId, grant.alias]));
+  return [...aliases].map(([id, alias]) => ({ id, alias }));
+}
 export type SecretUsageExecutor = { id: string; label: string };
 export type SecretUsageGrant = { secretId: string; executorId: string };
 
@@ -33,7 +37,13 @@ export function quoteArgument(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-function command(input: SecretUsageInput, rest: string[]): string {
+type CliCommandContext = Pick<SecretUsageInput, 'executable' | 'entry' | 'installationId'>;
+
+export function grantedScriptCommand(context: CliCommandContext, grant: SecretUsageGrant): string {
+  return command(context, ['use', '--secret', grant.secretId, '--executor', grant.executorId]);
+}
+
+function command(input: CliCommandContext, rest: string[]): string {
   return [input.executable, input.entry, '--installation', input.installationId, ...rest].map(quoteArgument).join(' ');
 }
 
@@ -163,7 +173,7 @@ export function buildSecretUsageInstructions(input: SecretUsageInput): string {
     grantedExecutors(input, secret.id).forEach(executor => {
       lines.push(`${copy.alias} ${secret.alias} · ${copy.executor} ${executor.label}:`);
       lines.push('```');
-      lines.push(command(input, ['use', '--secret', secret.id, '--executor', executor.id]));
+      lines.push(grantedScriptCommand(input, { secretId: secret.id, executorId: executor.id }));
       lines.push('```');
     });
   });

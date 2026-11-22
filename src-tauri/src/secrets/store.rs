@@ -162,6 +162,49 @@ pub fn list(db: &Database, store: &dyn CredentialStore) -> Result<Vec<PromptSecr
     Ok(rows.into_iter().map(|row| describe(row, store)).collect())
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretPage {
+    items: Vec<PromptSecret>,
+    total: u32,
+    matched: u32,
+    offset: u32,
+    grant_counts: std::collections::BTreeMap<String, u32>,
+}
+
+pub fn page(db: &Database, store: &dyn CredentialStore, search: &str, offset: u32, references: &str) -> Result<SecretPage, String> {
+    const SIZE: u32 = 30;
+    let ids = serde_json::to_string(&reference::references(references)).map_err(|e| e.to_string())?;
+    let search = search.trim();
+    let (total, matched, offset, rows) = db.with_read_connection(|conn| {
+        let (total, matched): (u32, u32) = conn.query_row(
+            "SELECT COUNT(*), COUNT(CASE WHEN instr(lower(alias),lower(?1)) OR instr(id,lower(?1)) THEN 1 END) FROM prompt_secrets",
+            [search], |r| Ok((r.get(0)?, r.get(1)?)),
+        ).map_err(sql)?;
+        let offset = offset.min(matched.saturating_sub(1)) / SIZE * SIZE;
+        let mut statement = conn.prepare(
+            "WITH page AS (
+                SELECT id,alias,credential_id,version,created_at,updated_at,
+                       id IN (SELECT value FROM json_each(?2)) AS referenced
+                FROM prompt_secrets WHERE instr(lower(alias),lower(?1)) OR instr(id,lower(?1))
+                ORDER BY referenced DESC,alias COLLATE NOCASE,id LIMIT ?3 OFFSET ?4)
+             SELECT p.id,p.alias,p.credential_id,p.version,p.created_at,p.updated_at,COUNT(g.executor_id)
+             FROM page p LEFT JOIN secret_grants g ON g.secret_id=p.id GROUP BY p.id
+             ORDER BY p.referenced DESC,p.alias COLLATE NOCASE,p.id"
+        ).map_err(sql)?;
+        let rows = statement.query_map(params![search, ids, SIZE, offset], |r| {
+            Ok((row_from(r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?),r.get::<_,u32>(6)?))
+        }).map_err(sql)?.collect::<Result<Vec<_>, _>>().map_err(sql)?;
+        Ok((total, matched, offset, rows))
+    })?;
+    let mut grant_counts = std::collections::BTreeMap::new();
+    let items = rows.into_iter().map(|(row, count)| {
+        if count > 0 { grant_counts.insert(row.id.clone(), count); }
+        describe(row, store)
+    }).collect();
+    Ok(SecretPage { items, total, matched, offset, grant_counts })
+}
+
 /// Create the value first, then the metadata row. A metadata failure removes the
 /// new value so a failed save never leaves an unreferenced secret behind.
 pub fn create(

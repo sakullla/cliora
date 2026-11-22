@@ -71,6 +71,26 @@ fn row_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<LibraryItem> {
     })
 }
 
+#[derive(Serialize)]
+pub struct LibraryTitle {
+    id: String,
+    kind: LibraryKind,
+    title: String,
+    category: String,
+}
+
+pub fn list_titles(db: &Database, kind: LibraryKind) -> Result<Vec<LibraryTitle>, String> {
+    db.with_read_connection(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT id,title,category FROM library_items WHERE kind=?1 ORDER BY updated_at DESC,title COLLATE NOCASE"
+        ).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([kind.text()], |row| Ok(LibraryTitle {
+            id: row.get(0)?, kind, title: row.get(1)?, category: row.get(2)?,
+        })).map_err(|e| e.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())
+    })
+}
+
 pub fn list(
     db: &Database,
     kind: LibraryKind,

@@ -168,25 +168,59 @@ pub fn revoke_installation(db: &Database, id: &str) -> Result<(), String> {
     })
 }
 
+/// Explicit recovery re-enables the id embedded in existing local CLI instructions.
+pub fn restore_cli_installation(db: &Database, id: &str) -> Result<(), String> {
+    db.with_connection(|conn| {
+        let tx = conn.transaction().map_err(sql)?;
+        let changed = tx.execute(
+            "UPDATE secret_installations SET revoked=0, revoked_at=NULL
+             WHERE id=?1 AND kind='cli' AND target_id IS NULL AND revoked=1",
+            [id],
+        ).map_err(sql)?;
+        if changed == 0 {
+            return Err("只能恢复已撤销的本地 CLI 身份".into());
+        }
+        // Older versions could write a grant concurrently with revocation.
+        tx.execute("DELETE FROM secret_grants WHERE installation_id=?1", [id]).map_err(sql)?;
+        tx.commit().map_err(sql)
+    })
+}
+
+pub fn delete_cli_installation(db: &Database, id: &str) -> Result<(), String> {
+    db.with_connection(|conn| {
+        let changed = conn.execute(
+            "DELETE FROM secret_installations WHERE id=?1 AND kind='cli' AND target_id IS NULL AND revoked=1",
+            [id],
+        ).map_err(sql)?;
+        if changed == 0 {
+            return Err("只能删除已撤销的本地 CLI 身份".into());
+        }
+        Ok(())
+    })
+}
+
 /// A grant binds one installation, one local secret and one registered executor.
 /// There is no wildcard: widening the scope is another explicit user action.
 pub fn grant(db: &Database, installation_id: &str, secret_id: &str, executor_id: &str) -> Result<(), String> {
-    let installation = load_installation(db, installation_id)?.ok_or_else(|| "安装标识已不存在".to_string())?;
-    if installation.revoked {
-        return Err("安装标识已撤销，不能新增绑定".into());
-    }
     if !store::exists(db, secret_id)? {
         return Err("秘密已不存在，请重新选择引用".into());
     }
     executor::load(db, executor_id)?;
     db.with_connection(|conn| {
-        conn.execute(
+        let tx = conn.transaction().map_err(sql)?;
+        let live: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM secret_installations WHERE id=?1 AND revoked=0)",
+            [installation_id], |row| row.get(0),
+        ).map_err(sql)?;
+        if !live {
+            return Err("安装标识已失效，不能新增绑定".into());
+        }
+        tx.execute(
             "INSERT INTO secret_grants(installation_id,secret_id,executor_id,created_at) VALUES(?1,?2,?3,?4)
              ON CONFLICT(installation_id,secret_id,executor_id) DO NOTHING",
             params![installation_id, secret_id, executor_id, crate::prompts::timestamp() as i64],
-        )
-        .map(|_| ())
-        .map_err(sql)
+        ).map_err(sql)?;
+        tx.commit().map_err(sql)
     })
 }
 
@@ -205,6 +239,10 @@ pub fn revoke_grant(db: &Database, installation_id: &str, secret_id: &str, execu
 }
 
 pub fn list_grants(db: &Database) -> Result<Vec<Grant>, String> {
+    grants_for_secret(db, None)
+}
+
+pub fn grants_for_secret(db: &Database, secret_id: Option<&str>) -> Result<Vec<Grant>, String> {
     db.with_read_connection(|conn| {
         let mut statement = conn
             .prepare(
@@ -212,11 +250,12 @@ pub fn list_grants(db: &Database) -> Result<Vec<Grant>, String> {
                  FROM secret_grants g
                  JOIN prompt_secrets s ON s.id = g.secret_id
                  JOIN secret_executors e ON e.id = g.executor_id
+                 WHERE ?1 IS NULL OR g.secret_id=?1
                  ORDER BY g.created_at DESC, g.secret_id",
             )
             .map_err(sql)?;
         let rows = statement
-            .query_map([], |row| {
+            .query_map([secret_id], |row| {
                 Ok(Grant {
                     installation_id: row.get(0)?,
                     secret_id: row.get(1)?,

@@ -57,7 +57,7 @@
 .providerCard { display: grid; gap: var(--space-3); min-width: 0; padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-xs); scroll-margin-top: 104px; }
 .stepHead { display: flex; align-items: flex-start; gap: var(--space-2_5); min-width: 0; }
 .stepIndex { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; margin-top: 1px; border-radius: 50%; background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent-line); color: var(--accent); font-size: var(--fs-micro); font-weight: var(--fw-bold); font-variant-numeric: tabular-nums; }
-.stepHeading { flex: 1; display: grid; gap: 2px; min-width: 0; }
+.stepHeading { flex: 1; display: grid; gap: var(--space-0_5); min-width: 0; }
 .stepHeading > .sectionTitle { line-height: 22px; }
 .stepMeta { min-width: 0; overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .stepMeta code { font-family: var(--font-mono); font-size: var(--fs-micro); font-weight: var(--fw-medium); color: var(--text-2); }
@@ -104,7 +104,7 @@
 .modelRowHead { display: flex; align-items: center; gap: var(--space-2); min-width: 0; padding-right: var(--space-2); }
 .modelRowButton { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-2); min-height: 44px; padding: var(--space-2) var(--space-3); text-align: left; justify-content: flex-start; border: 0; border-radius: var(--radius); background: transparent; box-shadow: none; transition: background-color var(--fast) var(--ease); }
 .modelRowButton:hover:not(:disabled) { background: var(--surface-2); border-color: transparent; }
-.modelRowText { display: grid; gap: 2px; flex: 1; min-width: 0; }
+.modelRowText { display: grid; gap: var(--space-0_5); flex: 1; min-width: 0; }
 .modelRowName { font-size: var(--fs-control); font-weight: var(--fw-semibold); color: var(--text); overflow-wrap: anywhere; }
 .modelRowSub { font-size: var(--fs-caption); font-weight: var(--fw-regular); color: var(--text-3); overflow-wrap: anywhere; }
 .modelBadge, .countBadge { flex: none; }

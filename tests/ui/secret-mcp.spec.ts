@@ -50,11 +50,13 @@ async function install(page: Page, options: { initial: Status; enabled: Status; 
       if (command === 'check_secret_mcp_health') { state.current = clone(settings.healthy); return clone(state.current); }
       if (command === 'revoke_secret_mcp_installation') { state.current = clone(settings.revoked); return clone(state.current); }
       // Local metadata only: aliases, identifiers and grants. No value is ever returned.
-      if (command === 'secret_cli_context') return { executable: '/Applications/Cliora.app/Contents/MacOS/cliora', entry: '--cliora-internal-secret-cli-v1' };
-      if (command === 'list_prompt_secrets') return [{ id: 'sec-1', alias: 'deploy-token', version: 1 }, { id: 'sec-2', alias: 'unused-token', version: 1 }];
-      if (command === 'list_secret_executors') return [{ id: 'ex-1', label: '本机命令', version: 1 }, { id: 'ex-2', label: '暂未授权', version: 1 }];
-      if (command === 'list_secret_installations') return [{ id: settings.initial.installationId, label: '秘密 MCP · Codex', kind: 'mcp', targetId: 'codex', revoked: false, version: 1 }];
-      if (command === 'list_secret_grants') return [{ installationId: settings.initial.installationId, secretId: 'sec-1', executorId: 'ex-1' }];
+      if (command === 'secret_access_options') return {
+        cli: { executable: '/Applications/Cliora.app/Contents/MacOS/cliora', entry: '--cliora-internal-secret-cli-v1' },
+        executors: [{ id: 'ex-1', label: '本机命令' }, { id: 'ex-2', label: '暂未授权' }],
+        installations: [{ id: settings.initial.installationId, label: '秘密 MCP · Codex', kind: 'mcp', targetId: 'codex', revoked: false }],
+        grants: [{ installationId: settings.initial.installationId, secretId: 'sec-1', alias: 'deploy-token', executorId: 'ex-1' }],
+        availablePrograms: [],
+      };
       if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
       if (command === 'get_tray_status') return { available: false, error: null };
       if (command.startsWith('plugin:event|')) return 1;

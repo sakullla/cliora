@@ -24,6 +24,7 @@ use crate::database::Database;
 use crate::native::profile::{RegisteredCommon, RegisteredProfile};
 
 pub mod twiglane;
+pub mod twiglane_sync;
 pub(crate) mod twiglane_review;
 mod twiglane_config;
 mod twiglane_peer;
@@ -1612,36 +1613,40 @@ pub fn validate_target(target: &RemoteTarget) -> Result<(), RemoteError> {
     Ok(())
 }
 
-pub fn list_targets(db: &Database) -> Result<Vec<RemoteTarget>, RemoteError> {
-    db.with_connection(|conn| {
-        let mut statement = conn
-            .prepare("SELECT id,name,host,port,user_name,auth_method,identity_file,ssh_config,default_path,enabled,created_at,updated_at FROM remote_targets ORDER BY name COLLATE NOCASE, id")
-            .map_err(|error| error.to_string())?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok(RemoteTarget {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    host: row.get(2)?,
-                    port: row.get::<_, i64>(3)?.try_into().unwrap_or(22),
-                    user: row.get(4)?,
-                    auth_method: row.get(5)?,
-                    identity_file: row.get(6)?,
-                    ssh_config: row.get(7)?,
-                    default_path: row.get(8)?,
-                    enabled: row.get::<_, i64>(9)? != 0,
-                    created_at: row.get(10)?,
-                    updated_at: row.get(11)?,
-                })
-            })
-            .map_err(|error| error.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
+const TARGET_COLUMNS: &str = "id,name,host,port,user_name,auth_method,identity_file,ssh_config,default_path,enabled,created_at,updated_at";
+
+fn target_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RemoteTarget> {
+    Ok(RemoteTarget {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        host: row.get(2)?,
+        port: row.get::<_, i64>(3)?.try_into().unwrap_or(22),
+        user: row.get(4)?,
+        auth_method: row.get(5)?,
+        identity_file: row.get(6)?,
+        ssh_config: row.get(7)?,
+        default_path: row.get(8)?,
+        enabled: row.get::<_, i64>(9)? != 0,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
     })
-    .map_err(RemoteError::Storage)
+}
+
+fn lookup_target(conn: &rusqlite::Connection, id: &str) -> rusqlite::Result<Option<RemoteTarget>> {
+    conn.query_row(&format!("SELECT {TARGET_COLUMNS} FROM remote_targets WHERE id=?1"), [id], target_row).optional()
+}
+
+pub fn list_targets(db: &Database) -> Result<Vec<RemoteTarget>, RemoteError> {
+    db.with_read_connection(|conn| {
+        let mut statement = conn.prepare(&format!("SELECT {TARGET_COLUMNS} FROM remote_targets ORDER BY name COLLATE NOCASE,id")).map_err(|e| e.to_string())?;
+        let rows = statement.query_map([], target_row).map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    }).map_err(RemoteError::Storage)
 }
 
 pub fn target(db: &Database, id: &str) -> Result<RemoteTarget, RemoteError> {
-    list_targets(db)?.into_iter().find(|item| item.id == id).ok_or(RemoteError::NotFound)
+    db.with_read_connection(|conn| lookup_target(conn, id).map_err(|e| e.to_string()))
+        .map_err(RemoteError::Storage)?.ok_or(RemoteError::NotFound)
 }
 
 fn library_json(target: &RemoteTarget) -> Result<Vec<crate::library::LibraryItem>, RemoteError> {
@@ -1942,30 +1947,37 @@ pub fn save_target_with_auth_change(db: &Database, mut target: RemoteTarget, aut
     if target.id.trim().is_empty() {
         target.id = Uuid::new_v4().to_string();
     }
-    let timestamp = now();
-    let previous = list_targets(db)?.into_iter().find(|value| value.id == target.id);
-    let rename_revision = previous.filter(|value| {
-        let mut comparison = target.clone(); comparison.name = value.name.clone(); comparison.created_at = value.created_at; comparison.updated_at = value.updated_at;
-        !auth_changed && value.name != target.name && comparison == *value
-    }).map(|value| value.updated_at);
     db.with_connection(|conn| {
-        let existing: Option<i64> = conn
-            .query_row("SELECT MAX(created_at,updated_at) FROM remote_targets WHERE id=?1", [&target.id], |row| row.get(0))
-            .optional()
-            .map_err(|error| error.to_string())?;
-        target.created_at = if existing.is_some() { conn.query_row("SELECT created_at FROM remote_targets WHERE id=?1", [&target.id], |row| row.get(0)).map_err(|error| error.to_string())? } else { timestamp };
-        target.updated_at = rename_revision.filter(|revision| Some(*revision) == existing).unwrap_or_else(|| existing.map(|previous| timestamp.max(previous.saturating_add(1))).unwrap_or(timestamp));
-        conn.execute(
-            "INSERT INTO remote_targets (id,name,host,port,user_name,auth_method,identity_file,ssh_config,default_path,enabled,created_at,updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
-             ON CONFLICT(id) DO UPDATE SET name=excluded.name,host=excluded.host,port=excluded.port,user_name=excluded.user_name,
-             auth_method=excluded.auth_method,identity_file=excluded.identity_file,ssh_config=excluded.ssh_config,default_path=excluded.default_path,enabled=excluded.enabled,updated_at=excluded.updated_at",
-            params![target.id, target.name, target.host, target.port, target.user, target.auth_method, target.identity_file, target.ssh_config, target.default_path, target.enabled as i64, target.created_at, target.updated_at],
-        )
-        .map_err(|error| error.to_string())?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
+        let previous = lookup_target(&tx, &target.id).map_err(|e| e.to_string())?;
+        write_target(&tx, &mut target, previous.as_ref(), auth_changed)?;
+        tx.commit().map_err(|e| e.to_string())?;
         Ok(target)
-    })
-    .map_err(RemoteError::Storage)
+    }).map_err(RemoteError::Storage)
+}
+
+fn write_target(conn: &rusqlite::Connection, target: &mut RemoteTarget, previous: Option<&RemoteTarget>, auth_changed: bool) -> Result<(), String> {
+    let timestamp = now();
+    target.created_at = previous.map_or(timestamp, |old| old.created_at);
+    target.updated_at = previous.map_or(timestamp, |old| {
+        let mut comparison = target.clone();
+        comparison.name.clone_from(&old.name);
+        comparison.updated_at = old.updated_at;
+        if !auth_changed && old.name != target.name && comparison == *old {
+            old.updated_at
+        } else {
+            timestamp.max(old.created_at.max(old.updated_at).saturating_add(1))
+        }
+    });
+    conn.execute(
+        "INSERT INTO remote_targets (id,name,host,port,user_name,auth_method,identity_file,ssh_config,default_path,enabled,created_at,updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+         ON CONFLICT(id) DO UPDATE SET name=excluded.name,host=excluded.host,port=excluded.port,user_name=excluded.user_name,
+         auth_method=excluded.auth_method,identity_file=excluded.identity_file,ssh_config=excluded.ssh_config,default_path=excluded.default_path,enabled=excluded.enabled,updated_at=excluded.updated_at",
+        params![target.id, target.name, target.host, target.port, target.user, target.auth_method, target.identity_file, target.ssh_config, target.default_path, target.enabled as i64, target.created_at, target.updated_at],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 pub fn delete_target(db: &Database, id: &str) -> Result<(), RemoteError> {

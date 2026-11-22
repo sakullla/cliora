@@ -12,8 +12,8 @@ import type { AgentSnapshot, AgentRequest, AgentResult, PluginTarget, PluginRequ
 import type { Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, MemoryAggregate, MemoryReadRequest, MemoryReadResult, MemoryDelete, MemoryDocument, MemoryEnable, MemoryList, MemorySave, MemoryTarget, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, SavedWorkbenchSession, TerminalId, TrayStatus, TwiglaneLinkOutcome, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchGitContext, WorkbenchWorktree, WorkbenchReplay, WorkbenchSession, WorkbenchTerminalSize, RemoteSessionIndexEntry, WorktreeBase, WorktreeBasePreview, WorktreeCleanupReport, WorktreeLedgerEntry, WorktreeMenuStatus, WorktreePrepareCommand } from '../types/launch';
-import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
-import type { NewSecretExecutor, PromptSecret, PromptSecretReference, SecretAuditEntry, SecretBrokerStatus, SecretCliContext, SecretExecutor, SecretGrant, SecretInstallation, SecretInstallationKind, SecretMcpState, SecretMcpTarget } from '../types/secrets';
+import type { LibraryDraft, LibraryItem, LibraryTitle, LibraryKind } from '../types/library';
+import type { ScriptAccessOptions, NewSecretExecutor, PromptSecret, PromptSecretPage, PromptSecretReference, SecretAuditEntry, SecretBrokerStatus, SecretCliContext, SecretExecutor, SecretGrant, SecretInstallation, SecretInstallationKind, SecretMcpState, SecretMcpTarget } from '../types/secrets';
 import type { McpDefinition, McpDraft, McpDraftPreview, McpDraftTargetRequest, McpCommitResult, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpStore, NativeRuleFile, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue, SkillManifest, SkillFileListing, SkillFilePreview } from '../types/resources';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, RemoteHistorySnapshot, ScanStatus, UsageReport } from '../types/history';
 import { markOnboardingLaunched } from './onboarding';
@@ -248,6 +248,7 @@ export const native = {
   recordPromptUsage: (context: PromptContext, id: string, favorite: boolean | null, used: boolean) => command<void>('record_prompt_usage', { targetId: context.targetId && context.targetId !== 'local' ? context.targetId : null, id, favorite, used }),
   // Prompt secrets are device-local: these wrappers never carry a target id, so a
   // remote library context cannot create, list or resolve a local secret.
+  listPromptSecretPage: (search: string, offset: number, references: string) => command<PromptSecretPage>('list_prompt_secret_page', { search, offset, references }),
   listPromptSecrets: () => command<PromptSecret[]>('list_prompt_secrets'),
   createPromptSecret: (alias: string, value: string) => command<PromptSecret>('create_prompt_secret', { alias, value }),
   renamePromptSecret: (id: string, expectedVersion: number, alias: string) => command<PromptSecret>('rename_prompt_secret', { id, expectedVersion, alias }),
@@ -262,13 +263,16 @@ export const native = {
   listSecretInstallations: () => command<SecretInstallation[]>('list_secret_installations'),
   createSecretInstallation: (label: string, kind: SecretInstallationKind, targetId: string | null) => command<SecretInstallation>('create_secret_installation', { label, kind, targetId }),
   revokeSecretInstallation: (id: string) => command<void>('revoke_secret_installation', { id }),
-  listSecretGrants: () => command<SecretGrant[]>('list_secret_grants'),
+  restoreCliInstallation: (id: string) => command<void>('restore_cli_installation', { id }),
+  deleteCliInstallation: (id: string) => command<void>('delete_cli_installation', { id }),
+  listSecretGrants: (secretId?: string) => command<SecretGrant[]>('list_secret_grants', { secretId }),
   grantSecretUsage: (installationId: string, secretId: string, executorId: string) => command<void>('grant_secret_usage', { installationId, secretId, executorId }),
   revokeSecretUsage: (installationId: string, secretId: string, executorId: string) => command<void>('revoke_secret_usage', { installationId, secretId, executorId }),
   secretBrokerStatus: () => command<SecretBrokerStatus>('secret_broker_status'),
   /** Answers one read approval by id. A repeated or unknown id answers nothing. */
   answerPromptSecretApproval: (approvalId: string, accepted: boolean) => command<void>('answer_prompt_secret_approval', { approvalId, accepted }),
   listSecretAudit: (limit: number) => command<SecretAuditEntry[]>('list_secret_audit', { limit }),
+  secretAccessOptions: (secretId?: string) => command<ScriptAccessOptions>('secret_access_options', { secretId }),
   secretCliContext: () => command<SecretCliContext>('secret_cli_context'),
   // The secret MCP entry is per target and goes through the shared MCP preview,
   // commit and compare-and-swap flow. Status keeps placement, protocol health and
@@ -410,6 +414,7 @@ export const native = {
   installSkill: (packageId: string, toolId: string, scope: Scope, projectPath: string | null, previewToken: string | null, allowTakeover: boolean) => command<SkillTargetResult>('install_skill', { packageId, toolId, scope, projectPath, previewToken, allowTakeover }),
   removeSkill: (packageId: string, toolId: string, scope: Scope, projectPath: string | null, expectedContextId: string | null = null) => command<SkillTargetResult>('remove_skill', { expectedContextId, packageId, toolId, scope, projectPath }),
   deleteSkillPackage: (packageId: string) => command<void>('delete_skill_package', { packageId }),
+  listLibraryTitles: (kind: LibraryKind) => command<LibraryTitle[]>('list_library_titles', { kind }),
   listLibraryItems: (kind: LibraryKind, projectId: string | null, search: string) => command<LibraryItem[]>('list_library_items', { kind, projectId, search }),
   saveLibraryItem: (draft: LibraryDraft) => command<LibraryItem>('save_library_item', { draft }),
   deleteLibraryItem: (id: string, expectedVersion: number) => command<void>('delete_library_item', { id, expectedVersion }),

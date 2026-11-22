@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { native } from '../../lib/native';
 import { writeClipboard } from '../../lib/clipboard';
 import { formatFailure } from '../../lib/feedback';
-import { buildSecretUsageFromMetadata } from '../../lib/secretCommands';
+import { buildSecretUsageFromMetadata, grantedSecretAliases } from '../../lib/secretCommands';
 import { Icon } from '../../components/Icon';
 import { Badge, Button } from '../../components/ui';
 import type { Tone } from '../../lib/statusTone';
@@ -69,20 +69,11 @@ export function SecretMcpPanel({ toolId, scope, projectPath, contextId }: {
   /** The fallback is built from this device's metadata: ids, aliases and grants only. */
   const loadFallback = useCallback(async () => {
     try {
-      const [context, secrets, executors, installations, grants] = await Promise.all([
-        native.secretCliContext(),
-        native.listPromptSecrets(),
-        native.listSecretExecutors(),
-        native.listSecretInstallations(),
-        native.listSecretGrants(),
-      ]);
+      const { cli, installations, executors, grants } = await native.secretAccessOptions();
       if (!mounted.current) return '';
       const text = buildSecretUsageFromMetadata({
-        context,
-        installations: installations ?? [],
-        secrets: (secrets ?? []).map(secret => ({ id: secret.id, alias: secret.alias })),
-        executors: (executors ?? []).map(executor => ({ id: executor.id, label: executor.label })),
-        grants: (grants ?? []).map(grant => ({ installationId: grant.installationId, secretId: grant.secretId, executorId: grant.executorId })),
+        context: cli, installations, executors, grants,
+        secrets: grantedSecretAliases(grants),
         // The fallback names the installation this panel manages when it exists.
         preferredId: state?.installationId ?? null,
         locale: i18n.language?.startsWith('en') ? 'en' : 'zh',

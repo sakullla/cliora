@@ -68,7 +68,7 @@ async function installDesktop(page: Page, projects: unknown[] = []) {
           };
           if (command === 'get_registered_tool_workspace') return workspace();
           if (command === 'list_projects') return seed;
-          if (command === 'list_library_items' || command === 'list_history_sessions' || command === 'list_history_prices' || command === 'refresh_history' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp' || command === 'list_portable_items') return [];
+          if ((command === 'list_library_items' || command === 'list_library_titles') || command === 'list_history_sessions' || command === 'list_history_prices' || command === 'refresh_history' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp' || command === 'list_portable_items') return [];
           if (command === 'get_usage_report') return usage();
           if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_tray_status') return { available: false, error: null };
@@ -659,7 +659,7 @@ async function installPaletteData(page: Page) {
         if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], resume: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
         if (command === 'list_projects') return [];
         if (command === 'list_history_sessions') return sessions;
-        if (command === 'list_library_items') return args.kind === 'rule' ? rules : prompts;
+        if ((command === 'list_library_items' || command === 'list_library_titles')) return args.kind === 'rule' ? rules : prompts;
         if (command === 'resume_history_session') { resumes.push(args); return { mode: args.mode, status: 'terminal_requested' }; }
         if (command === 'refresh_history') return [];
         if (command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'list_native_mcp' || command === 'list_history_prices' || command === 'list_history_scans' || command === 'list_portable_items') return [];
@@ -689,7 +689,7 @@ test('command palette lists indexed sessions and library entries without scannin
   // The palette reads the indexed snapshot only: opening it never triggers a scan.
   const opened = await page.evaluate(() => (window as typeof window & { __commands: string[] }).__commands);
   expect(opened).toContain('list_history_sessions');
-  expect(opened).toContain('list_library_items');
+  expect(opened).toContain('list_library_titles');
   expect(opened).not.toContain('refresh_history');
   // Choosing a session reuses the Records resume command and its default mode.
   await dialog.getByRole('option', { name: '面板会话1' }).click();
@@ -768,7 +768,7 @@ test('a desktop command-palette resume failure stays on the current page', async
         invoke: async (command: string, args: Record<string, any> = {}) => {
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['cursor', 'codex'], theme: 'light' }, tools: [{ id: 'cursor', name: 'Cursor' }, { id: 'codex', name: 'Codex' }] };
           if (command === 'list_cli_adapters') return { registered: [{ id: 'cursor', name: 'Cursor', launchForm: 'desktop', interfaceFormats: [], history: { state: 'available', reason: '' } }, { id: 'codex', name: 'Codex', launchForm: 'terminal', interfaceFormats: [], history: { state: 'available', reason: '' } }], managedIds: ['cursor', 'codex'], preservedUnknown: [] };
-          if (command === 'list_projects' || command === 'list_library_items' || command === 'list_history_prices') return [];
+          if (command === 'list_projects' || (command === 'list_library_items' || command === 'list_library_titles') || command === 'list_history_prices') return [];
           if (command === 'list_history_sessions') return sessions;
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_tray_status') return { available: false, error: null };
@@ -852,7 +852,7 @@ test('command palette preserves local navigation when async sources fail and can
             if (failSources) throw new Error('projects read failed');
             return [{ id: 'p-recovered', name: '恢复后的项目', path: 'C:/recovered', available: true, preferredTool: 'codex', lastOpened: 10, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {} }];
           }
-          if (command === 'list_history_sessions' || command === 'list_library_items') {
+          if (command === 'list_history_sessions' || (command === 'list_library_items' || command === 'list_library_titles')) {
             if (failSources) throw new Error('history read failed');
             return [];
           }
@@ -927,7 +927,7 @@ test('workbench separates two sessions, marks a self-exit, and returns to manage
           if (command === 'close_workbench_session') { closed.push(args.sessionId); const index = sessions.findIndex((item) => item.id === args.sessionId); if (index >= 0) sessions.splice(index, 1); return null; }
           if (command === 'set_theme') return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: args.theme }, tools: [] };
           if (command === 'get_registered_tool_workspace') return { probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' }, profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null };
-          if (command === 'list_library_items' || command === 'list_history_sessions' || command === 'list_history_prices' || command === 'refresh_history' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'list_rule_placements' || command === 'list_portable_items' || command === 'list_native_mcp' || command === 'scan_native_skills') return [];
+          if ((command === 'list_library_items' || command === 'list_library_titles') || command === 'list_history_sessions' || command === 'list_history_prices' || command === 'refresh_history' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'list_rule_placements' || command === 'list_portable_items' || command === 'list_native_mcp' || command === 'scan_native_skills') return [];
           if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
           if (command === 'get_usage_report') return { generatedAt: 0, from: null, to: null, bucket: 'day', currency: 'USD', previous: null, timeline: [], totals: { requests: 0, usageRecords: 0, unknownRequestRecords: 0, sessions: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, total: 0, cost: null, unpricedTokens: 0 }, byModel: [], byTool: [], byProject: [], topSessions: [], models: [], untimedRequests: 0, duplicateRequests: 0, partialSessions: 0, staleSessions: 0, mixedCurrency: false, latestEventAt: null, priceSources: [], scans: [] };
           if (command === 'get_webdav_status') return { configured: false, enabled: false, endpoint: null, lastSuccess: null, lastError: null, retryAfter: null, uploaded: 0, downloaded: 0, pendingChanges: 0, conflicts: [] };
@@ -1150,7 +1150,7 @@ test('workbench modal dialog scales to 40+ CLIs, supports on-demand composer, fi
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: 'light' }, tools: Object.entries(names).map(([id, name]) => ({ id, name, installation: 'not_checked', configuration: 'not_checked' })) };
           if (command === 'list_cli_adapters') return { registered: Object.entries(names).map(([id, name]) => ({ id, name, interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: true, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } })), managedIds: Object.keys(names), preservedUnknown: [] };
           if (command === 'list_projects') return [{ id: 'p1', name: 'Alpha', path: 'C:/alpha', available: true, preferredTool: 'claude_code', lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} }];
-          if (command === 'list_library_items') return args.kind === 'prompt' ? [{ id: 'pr1', kind: 'prompt', title: '代码审查', body: '请审查当前改动', category: '开发', projectId: null, version: 1, updatedAt: 1 }, ...Array.from({ length: 31 }, (_, index) => ({ id: `pr${index + 2}`, kind: 'prompt', title: `提示词 ${index + 2}`, body: `第 ${index + 2} 条提示词正文`, category: '开发', projectId: null, version: 1, updatedAt: 1 }))] : [];
+          if ((command === 'list_library_items' || command === 'list_library_titles')) return args.kind === 'prompt' ? [{ id: 'pr1', kind: 'prompt', title: '代码审查', body: '请审查当前改动', category: '开发', projectId: null, version: 1, updatedAt: 1 }, ...Array.from({ length: 31 }, (_, index) => ({ id: `pr${index + 2}`, kind: 'prompt', title: `提示词 ${index + 2}`, body: `第 ${index + 2} 条提示词正文`, category: '开发', projectId: null, version: 1, updatedAt: 1 }))] : [];
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
@@ -1288,7 +1288,7 @@ test('workbench re-reads library prompts after the library changes', async ({ pa
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'light' }, tools: [{ id: 'claude_code', name: 'Claude Code', installation: 'not_checked', configuration: 'not_checked' }] };
           if (command === 'list_cli_adapters') return { registered: [{ id: 'claude_code', name: 'Claude Code', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: true, projectModelOverride: false, launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }], managedIds: ['claude_code'], preservedUnknown: [] };
           if (command === 'list_projects') return [{ id: 'p1', name: 'Alpha', path: 'C:/alpha', available: true, preferredTool: 'claude_code', lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} }];
-          if (command === 'list_library_items') return args.kind === 'prompt' ? library.prompts.map((item) => ({ ...item })) : [];
+          if ((command === 'list_library_items' || command === 'list_library_titles')) return args.kind === 'prompt' ? library.prompts.map((item) => ({ ...item })) : [];
           if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));

@@ -6,7 +6,7 @@
 
 /* Unified hero header: profile name + quick/advanced switch on one compact row. */
 .heroBar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2_5) var(--space-3); padding: var(--space-0_5) 0; min-width: 0; }
-.level { flex: none; display: inline-flex; align-items: center; gap: 2px; width: fit-content; max-width: 100%; margin: 0; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface-2); }
+.level { flex: none; display: inline-flex; align-items: center; gap: var(--space-0_5); width: fit-content; max-width: 100%; margin: 0; padding: var(--space-0_75); border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface-2); }
 .level button { min-height: 28px; padding: 0 var(--space-3); border: 0; border-radius: var(--radius-pill); background: transparent; box-shadow: none; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-medium); white-space: nowrap; transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease), box-shadow var(--fast) var(--ease); }
 .level button:hover:not(:disabled):not([aria-pressed='true']) { background: color-mix(in srgb, var(--surface) 75%, transparent); color: var(--text); }
 .level button[aria-pressed='true'] { background: var(--surface); color: var(--text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-xs); }
@@ -16,7 +16,7 @@
    card. Multi-provider editors mark theirs required: without a provider and address there is
    nothing to send a key to and no model can be added, so quick keeps it. */
 .quickEditor :global([data-config-step='connection']:not([data-config-required])) { display: none !important; }
-.tabs { display: inline-flex; align-items: center; width: fit-content; max-width: 100%; gap: 2px; flex-wrap: nowrap; margin: 0 0 var(--space-2); padding: 3px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: none; }
+.tabs { display: inline-flex; align-items: center; width: fit-content; max-width: 100%; gap: var(--space-0_5); flex-wrap: nowrap; margin: 0 0 var(--space-2); padding: var(--space-0_75); background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: none; }
 .tabs button { position: relative; min-height: 30px; padding: 0 var(--space-3); border: 0; border-radius: var(--radius-sm); background: none; box-shadow: none; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-medium); transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease); }
 .tabs button::after { display: none; }
 .tabs button:hover:not(:disabled) { background: color-mix(in srgb, var(--surface) 75%, transparent); border-color: transparent; color: var(--text); }
@@ -30,7 +30,7 @@
 .scroll .name[data-empty] > input { border-color: var(--warning-line); background: var(--surface); }
 .scroll .name > input:focus { border-color: var(--accent); background: var(--surface); outline: 2px solid var(--accent); outline-offset: -1px; box-shadow: 0 0 0 4px var(--accent-ring); }
 
-.fileTabs { display: flex; flex-wrap: wrap; gap: var(--space-1); width: fit-content; max-width: 100%; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.fileTabs { display: flex; flex-wrap: wrap; gap: var(--space-1); width: fit-content; max-width: 100%; padding: var(--space-0_75); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
 .fileTabs button { min-height: 27px; padding: 0 var(--space-3); border: 0; border-radius: var(--radius-sm); background: transparent; box-shadow: none; color: var(--text-2); font-family: var(--font-mono); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .fileTabs button:hover:not(:disabled):not([aria-pressed='true']) { background: color-mix(in srgb, var(--surface) 70%, transparent); color: var(--text); }
 .fileTabs [aria-pressed='true'] { background: var(--surface); color: var(--text); box-shadow: var(--shadow-xs), inset 0 0 0 1px var(--line); }
@@ -103,9 +103,9 @@
 .sourcePicker [role='radio']:disabled { opacity: .55; cursor: default; }
 .sourceIcon { flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: var(--radius-sm); background: var(--surface); border: 1px solid var(--line); color: var(--text-2); transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease); }
 .sourcePicker [role='radio'][aria-checked='true'] .sourceIcon { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.sourceMark { flex: none; width: 14px; height: 14px; margin-top: 2px; margin-left: auto; border: 1.5px solid var(--line-strong); border-radius: 50%; background: var(--surface); transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease); }
+.sourceMark { flex: none; width: 14px; height: 14px; margin-top: var(--space-0_5); margin-left: auto; border: 1.5px solid var(--line-strong); border-radius: 50%; background: var(--surface); transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease); }
 .sourcePicker [role='radio'][aria-checked='true'] .sourceMark { border-color: var(--accent); box-shadow: inset 0 0 0 3px var(--accent-soft), inset 0 0 0 7px var(--accent); }
-.sourceCopy { flex: 1; display: grid; gap: 3px; min-width: 0; }
+.sourceCopy { flex: 1; display: grid; gap: var(--space-0_75); min-width: 0; }
 .sourceCopy strong { font-size: var(--fs-control); font-weight: var(--fw-semibold); color: var(--text); line-height: 1.3; }
 .sourceCopy small { font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.4; color: var(--text-3); }
 .sourcePicker [role='radio'][aria-checked='true'] .sourceCopy small { color: var(--text-2); }

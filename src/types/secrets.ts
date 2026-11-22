@@ -9,6 +9,7 @@ export type PromptSecret = {
   updatedAt: number;
   status: PromptSecretStatus;
 };
+export type PromptSecretPage = { items: PromptSecret[]; total: number; matched: number; offset: number; grantCounts: Record<string, number> };
 export type PromptSecretReference = {
   id: string;
   reference: string;
@@ -129,3 +130,5 @@ export type SecretMcpState = {
   available: boolean;
   cliFallback: boolean;
 };
+
+export type ScriptAccessOptions = { cli: SecretCliContext; installations: SecretInstallation[]; executors: SecretExecutor[]; grants: SecretGrant[]; availablePrograms: string[] };

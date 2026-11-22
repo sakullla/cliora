@@ -19,7 +19,7 @@ pub struct Database {
     read_path: Option<std::path::PathBuf>,
 }
 
-const LATEST_VERSION: u32 = 35;
+const LATEST_VERSION: u32 = 36;
 
 impl Database {
     /// Independent consumers can read a configured desktop without creating or migrating its DB.
@@ -782,6 +782,24 @@ impl Database {
             )?;
             tx.commit()?;
         }
+        if version < 36 {
+            let tx = connection.transaction()?;
+            // Cross-application host identity for host-sync v1. It lives in its own
+            // table so linking a host never rewrites a target row or its revision,
+            // and a shared id can only point at one local record.
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS remote_host_links (
+                   target_id TEXT PRIMARY KEY NOT NULL,
+                   shared_host_id TEXT NOT NULL,
+                   updated_at INTEGER NOT NULL,
+                   FOREIGN KEY(target_id) REFERENCES remote_targets(id) ON DELETE CASCADE
+                 );
+                 CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_host_links_shared
+                   ON remote_host_links(shared_host_id);
+                 PRAGMA user_version = 36;",
+            )?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection: Mutex::new(connection),
             read_path: (path != Path::new(":memory:") && !path.as_os_str().is_empty())
@@ -865,6 +883,9 @@ impl Database {
 /// strict CREATE TABLE checks and never repair a contradictory user_version.
 #[cfg(test)]
 pub(crate) fn remove_later_fixture_tables(conn: &Connection, target_version: u32) -> rusqlite::Result<()> {
+    if target_version < 36 {
+        conn.execute_batch("DROP TABLE IF EXISTS remote_host_links;")?;
+    }
     if target_version < 35 {
         for table in ["secret_audit", "secret_grants", "secret_installations", "secret_executors"] {
             conn.execute_batch(&format!("DROP TABLE IF EXISTS {table};"))?;
@@ -1074,7 +1095,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 35);
+            assert_eq!(version, 36);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
@@ -1125,7 +1146,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|error| error.to_string())?;
-            assert_eq!(version, 35);
+            assert_eq!(version, 36);
             let secrets: i64 = conn
                 .query_row("SELECT COUNT(*) FROM prompt_secrets", [], |row| row.get(0))
                 .map_err(|error| error.to_string())?;
@@ -1147,7 +1168,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|error| error.to_string())?;
-            assert_eq!(version, 35);
+            assert_eq!(version, 36);
             Ok(())
         })
         .unwrap();
@@ -1178,7 +1199,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|error| error.to_string())?;
-            assert_eq!(version, 35);
+            assert_eq!(version, 36);
             // Pre-existing secret metadata survives; grants start empty because a
             // database from v34 never recorded one.
             let (alias, grants): (String, i64) = (
@@ -1198,13 +1219,60 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        // Reopening a v35 database is a no-op.
+        // Reopening an already-migrated database is a no-op.
         let db = Database::open(&path).unwrap();
         db.with_connection(|conn| {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|error| error.to_string())?;
-            assert_eq!(version, 35);
+            assert_eq!(version, 36);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn v35_database_gains_the_host_link_table_without_touching_targets() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cliora.db");
+        {
+            let db = Database::open(&path).unwrap();
+            db.with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO remote_targets
+                       (id,name,host,port,user_name,auth_method,identity_file,ssh_config,default_path,enabled,created_at,updated_at)
+                     VALUES ('host-a','prod','example.test',22,'deploy','password',NULL,NULL,'/srv/app',1,10,10)",
+                    [],
+                )
+                .map_err(|error| error.to_string())?;
+                super::remove_later_fixture_tables(conn, 35)
+                    .map_err(|error| error.to_string())?;
+                conn.execute_batch("PRAGMA user_version = 35;")
+                    .map_err(|error| error.to_string())?;
+                Ok(())
+            })
+            .unwrap();
+        }
+        let db = Database::open(&path).unwrap();
+        db.with_connection(|conn| {
+            let version: u32 = conn
+                .query_row("PRAGMA user_version", [], |row| row.get(0))
+                .map_err(|error| error.to_string())?;
+            assert_eq!(version, 36);
+            // 迁移只建关联表：不自动关联已有主机，也不改写目标行或其修订。
+            let links: i64 = conn
+                .query_row("SELECT COUNT(*) FROM remote_host_links", [], |row| row.get(0))
+                .map_err(|error| error.to_string())?;
+            assert_eq!(links, 0);
+            let (name, updated_at): (String, i64) = conn
+                .query_row(
+                    "SELECT name, updated_at FROM remote_targets WHERE id='host-a'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(|error| error.to_string())?;
+            assert_eq!(name, "prod");
+            assert_eq!(updated_at, 10);
             Ok(())
         })
         .unwrap();

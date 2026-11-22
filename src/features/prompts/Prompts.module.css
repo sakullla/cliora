@@ -157,65 +157,10 @@
 .dupe > svg { flex: none; }
 .batchRow textarea { min-height: 110px; }
 
-/* ---- Prompt secrets ---- */
-/* The panel lists aliases and reference status only; the value never renders back. */
-.secrets { display: grid; gap: var(--space-2_5); min-width: 0; padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-2); }
-.secretHead { display: flex; align-items: center; gap: var(--space-1_5); color: var(--text-3); font-size: var(--fs-caption); }
-.secretTitleGroup { display: inline-flex; align-items: center; gap: var(--space-1_5); min-width: 0; }
-.secretShield { flex: none; color: var(--accent); }
-.secretHead strong { color: var(--text); font-size: var(--fs-control); font-weight: var(--fw-semibold); }
-.secretCount { padding: 1px var(--space-1_5); border-radius: var(--radius-pill); background: var(--surface); border: 1px solid var(--line); color: var(--text-3); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; }
-.secretGap { flex: 1; }
-.secretSteps { display: flex; flex-wrap: wrap; gap: var(--space-1_5); margin: 0; padding: 0; list-style: none; }
-.secretSteps li { padding: var(--space-1) var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-2); font-size: var(--fs-micro); line-height: 1.4; }
-.secretCardForm { display: grid; gap: var(--space-2_5); padding: var(--space-3); border: 1px solid var(--accent-line); border-radius: var(--radius); background: var(--surface); }
-.secretFormGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-2_5); }
-.secretCardForm label, .secretInlineCard label { display: grid; gap: var(--space-1); color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
-.secretFormFooter { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2); }
-.secretForm { display: grid; gap: var(--space-2); min-width: 0; }
-.secretForm label { display: grid; gap: var(--space-1); color: var(--text-2); font-size: var(--fs-caption); }
-.secretForm input { width: 100%; min-width: 0; }
-.secretActions { display: flex; justify-content: flex-end; gap: var(--space-1_5); flex: none; }
-.secretList { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; min-width: 0; }
-.secretRow { display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-1_5) var(--space-2); border: 1px solid transparent; border-radius: var(--radius-sm); background: var(--surface); transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease); }
-.secretRow:hover, .secretRow:focus-within { border-color: var(--line); }
-.secretRowMain { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1_5); min-width: 0; min-height: var(--control-h-sm); }
-.secretRowIcon { flex: none; color: var(--text-3); }
-.secretAlias { min-width: 0; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
-.secretInBody { padding: 1px var(--space-1_5); border-radius: var(--radius-xs); background: var(--accent-soft); color: var(--accent); font-size: var(--fs-micro); white-space: nowrap; }
-.secretRowControls { display: inline-flex; align-items: center; gap: var(--space-1); flex: none; }
-.secretDangerBtn:hover:not(:disabled) { color: var(--danger); background: var(--danger-soft); }
-.secretInlineEdit { display: flex; align-items: center; gap: var(--space-1_5); padding-top: var(--space-1_5); border-top: 1px solid var(--line); }
-.secretInlineEdit input { flex: 1 1 160px; min-width: 120px; }
-.secretInlineCard { display: grid; gap: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--line); }
-.secretInlineCard select { width: 100%; padding: var(--space-1) var(--space-1_5); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; }
-.secretRefs { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1_5); padding: var(--space-1_5) var(--space-2); border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); min-width: 0; }
-.secretRefsLabel { color: var(--text-3); font-size: var(--fs-micro); font-weight: var(--fw-medium); }
-.secretRef { display: inline-flex; align-items: center; gap: var(--space-1); max-width: 100%; min-width: 0; padding: 2px var(--space-1_5); border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface-2); color: var(--text-2); font-size: var(--fs-micro); }
-.secretRef > svg { flex: none; color: var(--text-3); }
-.secretRef > span:first-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.secretBroker { display: grid; gap: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--line); min-width: 0; }
-.secretBrokerToggle { display: flex; align-items: center; gap: var(--space-1_5); width: 100%; min-width: 0; padding: var(--space-1) var(--space-1_5); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-medium); text-align: start; cursor: pointer; box-shadow: none; transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease); }
-.secretBrokerToggle:hover { background: var(--surface); color: var(--text); }
-.secretBrokerToggle svg { flex: none; color: var(--text-3); }
-.secretBrokerBody { display: grid; gap: var(--space-2_5); min-width: 0; }
-.secretBrokerSummary { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2); padding: var(--space-2_5); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
-.secretBrokerMeta { display: grid; gap: var(--space-1); flex: 1 1 240px; min-width: 0; }
-.secretStatusLine { margin: 0; color: var(--text-2); font-size: var(--fs-micro); font-family: var(--font-mono); overflow-wrap: anywhere; }
-.secretSubSection { display: grid; gap: var(--space-1_5); padding: var(--space-2_5); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); min-width: 0; }
-.secretSubHead { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-1_5); }
-.secretSubHead strong { color: var(--text); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
-.secretCompactRow { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1_5); min-width: 0; padding: var(--space-1) var(--space-1_5); border-radius: var(--radius-xs); background: var(--surface-2); }
-.secretQuickAdd { display: grid; grid-template-columns: minmax(140px, 1fr) 88px auto; gap: var(--space-1_5); align-items: center; padding-top: var(--space-1); }
-.secretBroker .secretForm { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-2); align-items: end; padding-top: var(--space-1_5); border-top: 1px solid var(--line); }
-.secretBroker select { width: 100%; padding: var(--space-1) var(--space-1_5); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; }
-.secretBroker textarea { width: 100%; resize: vertical; padding: var(--space-1) var(--space-1_5); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; }
-.secretId { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); font-size: var(--fs-micro); }
-
 @media (max-width: 760px) {
   .browser, .scopeRow { grid-template-columns: 1fr; }
   .browser { grid-template-rows: minmax(0, 3fr) minmax(0, 2fr); }
   .cardHead { flex-wrap: wrap; }
   .cardHead .rowButton { max-width: calc(100% - 140px); }
   .cardMeta { flex-basis: 100%; order: 3; padding-inline-start: calc(var(--space-3) + var(--space-2_5)); }
-  }
+}

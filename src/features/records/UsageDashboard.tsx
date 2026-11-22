@@ -287,6 +287,9 @@ export function UsageDashboard({ search, onSearchChange, favoriteOnly, onClearSe
     return () => { window.clearTimeout(timer); request.current++; };
   }, [filter, active, scanVersion, retry]);
 
+  // Keep the report and filter state, and release the hidden chart and table nodes.
+  if (!active) return null;
+
   const toolName = (id: string) => tools.find((item) => item.id === id)?.name ?? id;
   const totals = report?.totals ?? null;
   const previous = report?.previous ?? null;

@@ -1156,6 +1156,7 @@ test('hidden records release message DOM, ignore late detail reads and restore t
   await page.getByRole('combobox', { name: '恢复模式' }).selectOption('yolo');
   await nav.getByRole('button', { name: '首页' }).click();
   await expect(page.getByText('RELEASE_THIS_TRANSCRIPT')).toHaveCount(0);
+  await expect(page.locator('[data-session-id="saved"]')).toHaveCount(0);
   await page.evaluate(() => { (window as any).recordMemoryProbe.hold = true; });
   await nav.getByRole('button', { name: '记录' }).click();
   await expect.poll(() => page.evaluate(() => (window as any).recordMemoryProbe.reads)).toBe(2);

@@ -145,7 +145,7 @@ fn validate_executable(executable: &str) -> Result<(), String> {
     if executable.len() > MAX_EXECUTABLE
         || executable.contains('\0')
         || executable.chars().any(char::is_control)
-        || executable.contains(char::is_whitespace)
+        || (!path.is_absolute() && executable.contains(char::is_whitespace))
     {
         return Err("执行入口程序无效".into());
     }
@@ -287,6 +287,22 @@ fn row_from(row: &rusqlite::Row<'_>) -> rusqlite::Result<SecretExecutor> {
 }
 
 const COLUMNS: &str = "id,label,description,executable,args_json,cwd,channel,env_name,digest,created_at,updated_at";
+
+/// Probe the same inherited PATH used by a bare executor without starting the program.
+pub fn preset_available(name: &str) -> bool {
+    let Some(paths) = std::env::var_os("PATH") else { return false };
+    let filename = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+    std::env::split_paths(&paths).filter(|dir| dir.is_absolute()).any(|dir| {
+        let Ok(meta) = dir.join(&filename).metadata() else { return false };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            meta.is_file() && meta.permissions().mode() & 0o111 != 0
+        }
+        #[cfg(not(unix))]
+        { meta.is_file() }
+    })
+}
 
 /// Registers a fixpoint of the execution definition. A duplicate label is
 /// refused instead of replacing an entry that existing grants point at.

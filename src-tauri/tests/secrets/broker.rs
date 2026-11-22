@@ -288,7 +288,7 @@ fn an_edited_absolute_executable_invalidates_the_registered_digest() {
     use sha2::{Digest, Sha256};
     use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().unwrap();
-    let script = directory.path().join("deploy.sh");
+    let script = directory.path().join("deploy script.sh");
     let write = |body: &str| {
         std::fs::write(&script, body).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -711,4 +711,45 @@ fn status_reports_the_local_transport() {
     // The broker is not started in unit tests, so it reports itself as unavailable
     // instead of pretending to accept requests.
     assert!(!status.running || ipc::start_status().is_ok());
+}
+
+#[test]
+fn a_local_cli_can_be_restored_without_grants_or_deleted_with_its_audit_intact() {
+    let database = db();
+    let store = MemoryCredentials::default();
+    let secret = create_secret(&database, &store, "部署", CANARY);
+    let executor = register(&database, "部署脚本", "env", &[], Channel::Env, Some("CLIORATEST"));
+    let cli = create_installation(&database, "local-cli", Kind::Cli, None).unwrap();
+    grant(&database, &cli.id, &secret.id, &executor.id).unwrap();
+    assert!(delete_cli_installation(&database, &cli.id).is_err());
+    revoke_installation(&database, &cli.id).unwrap();
+    assert!(!list(&database, &store, &cli.id).ok);
+    assert!(grant(&database, &cli.id, &secret.id, &executor.id).is_err());
+    restore_cli_installation(&database, &cli.id).unwrap();
+    let restored = load_installation(&database, &cli.id).unwrap().unwrap();
+    assert!(!restored.revoked);
+    assert!(restored.revoked_at.is_none());
+    assert!(list(&database, &store, &cli.id).ok);
+    assert_eq!(use_request(&database, &store, &cli.id, &secret.id, &executor.id).code, audit::code::GRANT_MISSING);
+    revoke_installation(&database, &cli.id).unwrap();
+    let audit_before = audit::list(&database, 20).unwrap();
+    assert!(audit_before.iter().any(|entry| entry.installation_id.as_ref() == Some(&cli.id)));
+    delete_cli_installation(&database, &cli.id).unwrap();
+    assert!(load_installation(&database, &cli.id).unwrap().is_none());
+    assert_eq!(audit::list(&database, 20).unwrap().len(), audit_before.len());
+    assert!(restore_cli_installation(&database, &cli.id).is_err());
+    assert!(!list(&database, &store, &cli.id).ok);
+    assert!(crate::secrets::store::exists(&database, &secret.id).unwrap());
+}
+
+#[test]
+fn local_cli_recovery_and_deletion_leave_managed_connections_alone() {
+    let database = db();
+    for (kind, target) in [(Kind::Mcp, None), (Kind::Mcp, Some("fixture")), (Kind::Cli, Some("fixture"))] {
+        let item = create_installation(&database, "fixture", kind, target).unwrap();
+        revoke_installation(&database, &item.id).unwrap();
+        assert!(restore_cli_installation(&database, &item.id).is_err());
+        assert!(delete_cli_installation(&database, &item.id).is_err());
+        assert!(load_installation(&database, &item.id).unwrap().unwrap().revoked);
+    }
 }

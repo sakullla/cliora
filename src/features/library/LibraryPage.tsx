@@ -824,7 +824,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
         {filtering && shown.length > 0 && <Button variant="ghost" size="sm" className={styles.clearFiltersInline} onClick={clearFilters}>{t('library.page.clearFilters')}</Button>}
       </div>}
       <div className={styles.list} aria-label={t('library.page.listAria', { kind: kindName(kind) })}>
-        {listBody() ?? shown.map((item) => <Card className={styles.card} interactive key={item.id} data-library-id={item.id} data-source={item.projectId ? 'project' : 'global'}>
+        {active && (listBody() ?? shown.map((item) => <Card className={styles.card} interactive key={item.id} data-library-id={item.id} data-source={item.projectId ? 'project' : 'global'}>
           <div className={styles.cardHead}>
           <button className={styles.cardTitle} type="button" data-card-title onClick={() => choose(item)} onKeyDown={(event) => {
             if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
@@ -851,7 +851,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
               return { pressed: true, state: 'drifted', status: t('library.page.markDrifted') };
             }} />
           </div> : null}
-        </Card>)}
+        </Card>))}
       </div>
     </div>
     <GuideDialog open={!!draft} closeDisabled={busy} title={draft?.id ? t('library.page.editTitle', { kind: kindName(kind) }) : t('library.page.newTitle', { kind: kindName(kind) })} hint={kind === 'rule' ? t('library.page.ruleHint') : t('library.page.promptHint')} onClose={() => { void (async () => { if (await canReplace()) { setDraft(null); setSavedText(''); clearDialogResult(); } })(); }}>

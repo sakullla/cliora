@@ -35,6 +35,10 @@ export function installPromptFixtureBridge() {
     };
     const applies = (scope, query) => query.scopeFilter ? JSON.stringify(scope) === JSON.stringify(query.scopeFilter) : query.includeOtherScopes || scope.kind === 'global' || (scope.kind === 'workspace' && scope.workspaceId === query.workspaceId) || (scope.kind === 'repository' && scope.repositoryId === query.repositoryId);
     internals.invoke = async (command, args = {}) => {
+      if (command === 'list_prompt_secret_page') {
+        const page = await original(command, args);
+        return page?.items ? page : { items: [], total: 0, matched: 0, offset: 0, grantCounts: {} };
+      }
       if (command === 'get_remote_write_snapshot') return fixture.snapshots[args.requestId] ?? await original(command, args);
       if (command === 'list_business_workspaces') {
         const current = await original(command, args);
