@@ -16,6 +16,7 @@ async function install(page: Page, remote = false) {
     const secretCalls: string[] = [];
     const copied: string[] = [];
     const secrets: Array<{ id: string; alias: string; version: number; value: string }> = [];
+    const grants: Array<{ secretId: string; installationId: string; alias: string; executorId: string; executorLabel: string }> = [];
     const state = { failCreate: false };
     const reference = (id: string) => `{{cliora-secret:${id}}}`;
     const describe = (secret: { id: string; alias: string; version: number }) => ({ id: secret.id, alias: secret.alias, reference: reference(secret.id), version: secret.version, createdAt: 1, updatedAt: 1, status: 'available' });
@@ -37,6 +38,18 @@ async function install(page: Page, remote = false) {
           calls.push({ command, args });
           allCalls.push({ command, text: JSON.stringify(args, (_key, value) => typeof value === 'function' ? undefined : value) });
           if (command.includes('secret')) secretCalls.push(command);
+          if (command === 'secret_access_options') return {
+            cli: { executable: 'C:\\Cliora\\cliora.exe', entry: '--cliora-internal-secret-cli-v1' },
+            installations: [{ id: 'local-fixture', kind: 'cli', targetId: null, revoked: false }],
+            grants, executors: [], availablePrograms: ['node'],
+          };
+          if (command === 'save_secret_executor') return { ...args.executor, id: 'fixture-action' };
+          if (command === 'grant_secret_usage') {
+            grants.push({ secretId: args.secretId, installationId: args.installationId, alias: secrets.find(s => s.id === args.secretId)!.alias, executorId: args.executorId, executorLabel: '测试传递' });
+            return null;
+          }
+          if (command === 'list_secret_grants') return grants.filter(grant => grant.secretId === args.secretId);
+          if (command === 'launch_cli') return { toolId: 'codex', terminal: 'workbench', status: 'session_started', sessionId: null };
           if (command === 'list_prompt_secret_page') return { items: secrets.map(describe), total: secrets.length, matched: secrets.length, grantCounts: {}, offset: 0 };
           if (command === 'list_prompt_secrets') return secrets.map(describe);
           if (command === 'create_prompt_secret') {
@@ -298,4 +311,34 @@ test('a new session keeps the reference text and creates no secret', async ({ pa
   await picker.getByRole('button', { name: '插入草稿', exact: true }).click();
   await expect(session.getByRole('textbox', { name: '初始提示词（可选）' })).toHaveValue(reference);
   expect(await page.evaluate(() => (window as unknown as { __secretCalls: string[] }).__secretCalls.length)).toBe(before);
+});
+
+test('launching a saved bare reference supplies the existing action without reading the secret', async ({ page }) => {
+  await install(page);
+  const list = await library(page);
+  const editor = await newPrompt(page);
+  await titleOf(editor).fill('引用启动');
+  const row = await createSecret(editor, '测试口令', CANARY);
+  const id = (await row.getAttribute('data-secret-id'))!;
+  await row.locator('[data-secret-grant-save]').click();
+  await expect(row.locator('[data-secret-grant-row]')).toBeVisible();
+  const body = '用这个令牌完成已授权的操作 ' + referenceOf(id);
+  await bodyOf(editor).fill(body);
+  await editor.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(editor).not.toBeVisible();
+  await list.getByRole('textbox', { name: '搜索资料' }).fill('引用启动');
+  await list.locator('article').filter({ hasText: '引用启动' }).getByRole('button', { name: '启动会话' }).click();
+  const launch = page.getByRole('dialog', { name: '用这条提示词启动' });
+  await expect(launch.getByLabel('启动提示词')).toHaveValue(body);
+  await launch.locator('[data-dialog-save]').click();
+  const sent = () => page.evaluate(() => {
+    const calls = (window as unknown as { __allCalls: Array<{command: string; text: string}> }).__allCalls;
+    const call = calls.find(item => item.command === 'launch_cli');
+    return call ? JSON.parse(call.text).request.initialPrompt : '';
+  });
+  await expect.poll(sent).toContain('use --secret ' + id + ' --executor fixture-action');
+  const outgoing = await sent();
+  expect(outgoing).toContain(body);
+  expect(outgoing).toContain('read --secret ' + id);
+  expect(outgoing).not.toContain(CANARY);
 });

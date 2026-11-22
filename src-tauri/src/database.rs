@@ -800,6 +800,7 @@ impl Database {
             )?;
             tx.commit()?;
         }
+        crate::secrets::audit::prune(&connection, crate::prompts::timestamp())?;
         Ok(Self {
             connection: Mutex::new(connection),
             read_path: (path != Path::new(":memory:") && !path.as_os_str().is_empty())

@@ -7,7 +7,7 @@ import { createPortal } from 'react-dom';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open } from '@tauri-apps/plugin-dialog';
-import { native, nativeAvailable, onLaunchSettingsChange } from '../../lib/native';
+import { localSessionPrompt, native, nativeAvailable, onLaunchSettingsChange } from '../../lib/native';
 import type { WindowChrome } from '../../components/WindowControls';
 import { formatFailure } from '../../lib/feedback';
 import { displayPath, shortPath } from '../../lib/paths';
@@ -712,6 +712,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerDrafts, setComposerDrafts] = useState<Record<string, string>>({});
+  const composerSending = useRef(new Set<string>());
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
     const node = composerInputRef.current;
@@ -2521,11 +2522,23 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   async function submitComposer() {
     if (peekSessionIdRef.current) return;
-    if (!selected || !selected.running) return;
+    if (!selected || !selected.running || composerSending.current.has(selected.id)) return;
     const text = composerDrafts[selected.id] ?? '';
-    if (!await sendToSession(selected, text ? `${text}\r` : '\r')) return;
-    if (text) setComposerDrafts((current) => current[selected.id] === text ? { ...current, [selected.id]: '' } : current);
-    if (selectedIdRef.current === selected.id) requestAnimationFrame(() => composerInputRef.current?.focus());
+    composerSending.current.add(selected.id);
+    try {
+      const local = !selected.remoteSessionId && !selected.projectId?.startsWith('remote:');
+      const outgoing = local ? await localSessionPrompt(text) : text;
+      if (selectedIdRef.current !== selected.id || peekSessionIdRef.current) return;
+      const input = outgoing.includes('\n') && handles.current.get(selected.id)?.bracketedPaste
+        ? `\x1b[200~${outgoing.replace(/\x1b/g, '')}\x1b[201~` : outgoing;
+      if (!await sendToSession(selected, input + '\r')) return;
+      if (text) setComposerDrafts((current) => current[selected.id] === text ? { ...current, [selected.id]: '' } : current);
+      if (selectedIdRef.current === selected.id) requestAnimationFrame(() => composerInputRef.current?.focus());
+    } catch (error) {
+      bridge.current.writeError(error);
+    } finally {
+      composerSending.current.delete(selected.id);
+    }
   }
 
   function updateComposerDraft(text: string) {

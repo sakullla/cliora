@@ -37,6 +37,9 @@ fn a_use_invocation_requires_both_identifiers() {
     // Flags are order-independent, but a list never carries identifiers.
     let reordered = parse(&args(&["use", "--executor", &executor, "--secret", &secret, "--installation", &id])).unwrap();
     assert_eq!(reordered, invocation);
+    let reference = crate::secrets::format_reference(&secret);
+    assert_eq!(parse(&args(&["use", "--executor", &executor, "--secret", &reference, "--installation", &id])).unwrap(), invocation);
+    assert!(parse(&args(&["use", "--executor", &executor, "--secret", &format!("other {reference}"), "--installation", &id])).is_err());
     assert!(parse(&args(&["list", "--installation", &id, "--secret", &secret, "--executor", &executor])).is_err());
     assert_eq!(invocation.secret_id.as_deref(), Some(secret.as_str()));
     assert_eq!(invocation.executor_id.as_deref(), Some(executor.as_str()));

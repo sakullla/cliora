@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildSecretUsageInstructions, grantedExecutors, quoteArgument } from '../../src/lib/secretCommands.ts';
+import { buildSecretUsageInstructions, grantedExecutors, prepareLocalSecretPrompt, quoteArgument } from '../../src/lib/secretCommands.ts';
 
 const input = {
   executable: '/Applications/Cliora.app/Contents/MacOS/cliora',
@@ -75,4 +75,31 @@ test('the English text keeps the same commands and identifiers', () => {
   assert.match(text, /use --secret 11111111-2222-4333-8444-555555555555 --executor aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/);
   assert.match(text, /each read asks for confirmation/);
   assert.doesNotMatch(text, /别名/);
+});
+
+test('local prompts carry literal references, scoped actions and a distinct approval-only read command', async () => {
+  const { id, alias } = input.secrets[0];
+  const token = '{{cliora-secret:' + id + '}}';
+  const body = '传递 ' + token + '\n需要时运行已授权的操作 ' + token;
+  const grant = { installationId: input.installationId, secretId: id, alias, executorId: input.executors[0].id, executorLabel: '测试传递' };
+  const installation = { id: input.installationId, kind: 'cli', targetId: null, revoked: false };
+  const metadata = {
+    cli: { executable: "C:\\Program Files\\O'Brien\\cliora.exe", entry: input.entry },
+    installations: [installation, { ...installation, id: 'other-target', targetId: 'other' }, { ...installation, id: 'revoked', revoked: true }],
+    grants: [grant, { ...grant, installationId: 'other-target' }, { ...grant, installationId: 'revoked' }, { ...grant, secretId: input.secrets[1].id }],
+  };
+  const outgoing = await prepareLocalSecretPrompt(body, async () => metadata, false);
+  assert.ok(outgoing.startsWith(body + '\n'));
+  assert.ok(outgoing.includes(alias + ' ' + token));
+  const commands = outgoing.split('\n').filter(line => line.includes('--installation'));
+  assert.equal(commands.length, 3);
+  assert.ok(commands.every(line => line.startsWith("& 'C:\\Program Files\\O''Brien\\cliora.exe' ")));
+  assert.ok(commands.some(line => line.endsWith(' use --secret ' + id + ' --executor ' + grant.executorId)));
+  assert.ok(commands.some(line => line.endsWith(' read --secret ' + id)));
+  assert.ok(commands.some(line => line.endsWith(' list')));
+  assert.doesNotMatch(outgoing, /revoked|other-target|99999999/);
+  const unavailable = await prepareLocalSecretPrompt(body, async () => ({ ...metadata, grants: [] }), true);
+  assert.match(unavailable, /no authorized local CLI action/);
+  assert.doesNotMatch(unavailable, /--installation/);
+  assert.equal(await prepareLocalSecretPrompt('plain text', () => assert.fail('unexpected metadata lookup'), false), 'plain text');
 });

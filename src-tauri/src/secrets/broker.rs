@@ -337,62 +337,33 @@ fn record(db: &Database, event: audit::Event<'_>) {
     let _ = audit::record(db, event);
 }
 
+fn live_installation(db: &Database, id: &str) -> Result<Installation, (&'static str, &'static str)> {
+    match load_installation(db, id) {
+        Ok(Some(installation)) if !installation.revoked => Ok(installation),
+        Ok(Some(_)) => Err((audit::code::INSTALLATION_REVOKED, "安装标识已撤销；请在资料库重新启用受控使用")),
+        Ok(None) => Err((audit::code::INSTALLATION_UNKNOWN, "安装标识无效；请在资料库查看命令说明")),
+        Err(_) => Err((audit::code::STORAGE_FAILED, "本机秘密数据暂时不可用")),
+    }
+}
+
 fn installation_checked(
     db: &Database,
     installation_id: &str,
     operation: audit::Operation,
 ) -> Result<Installation, Box<ipc::Response>> {
-    match load_installation(db, installation_id) {
-        Ok(Some(installation)) if !installation.revoked => Ok(installation),
-        Ok(Some(_)) => {
-            record(
-                db,
-                audit::Event {
-                    operation,
-                    decision: audit::Decision::Denied,
-                    code: audit::code::INSTALLATION_REVOKED,
-                    secret_id: None,
-                    installation_id: Some(installation_id),
-                    executor_id: None,
-                },
-            );
-            Err(Box::new(denied(audit::code::INSTALLATION_REVOKED, "安装标识已撤销；请在资料库重新启用受控使用")))
-        }
-        Ok(None) => {
-            record(
-                db,
-                audit::Event {
-                    operation,
-                    decision: audit::Decision::Denied,
-                    code: audit::code::INSTALLATION_UNKNOWN,
-                    secret_id: None,
-                    installation_id: Some(installation_id),
-                    executor_id: None,
-                },
-            );
-            Err(Box::new(denied(audit::code::INSTALLATION_UNKNOWN, "安装标识无效；请在资料库查看命令说明")))
-        }
-        Err(_) => Err(Box::new(denied(audit::code::STORAGE_FAILED, "本机秘密数据暂时不可用"))),
-    }
-}
-
-/// A failed installation re-check records the response's own closed-set code, so a
-/// storage failure is not filed as a revocation and no free text is ever stored.
-fn recheck_code(code: &str) -> &'static str {
-    match code {
-        audit::code::INSTALLATION_UNKNOWN => audit::code::INSTALLATION_UNKNOWN,
-        audit::code::INSTALLATION_REVOKED => audit::code::INSTALLATION_REVOKED,
-        audit::code::INVALID_REQUEST => audit::code::INVALID_REQUEST,
-        audit::code::STORAGE_FAILED => audit::code::STORAGE_FAILED,
-        _ => audit::code::INSTALLATION_REVOKED,
-    }
+    live_installation(db, installation_id).map_err(|(code, message)| {
+        record(db, audit::Event {
+            operation, decision: audit::Decision::Denied, code, secret_id: None,
+            installation_id: Some(installation_id), executor_id: None,
+        });
+        Box::new(denied(code, message))
+    })
 }
 
 fn source_label(installation: &Installation) -> String {
     match (&installation.target_id, installation.kind) {
         (Some(target), Kind::Cli) => format!("{SOURCE_CLI} · {} · {target}", installation.label),
         (_, Kind::Cli) => format!("{SOURCE_CLI} · {}", installation.label),
-        (Some(target), Kind::Mcp) => format!("MCP · {} · {target}", installation.label),
         (_, Kind::Mcp) => format!("MCP · {}", installation.label),
     }
 }
@@ -438,6 +409,21 @@ pub fn list(db: &Database, store: &dyn CredentialStore, installation_id: &str) -
     )
 }
 
+fn check_grant(db: &Database, installation: &str, secret: &str, executor: Option<&str>) -> Result<(), (&'static str, &'static str)> {
+    let granted = db.with_read_connection(|conn| {
+        conn.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM secret_grants g JOIN secret_installations i ON i.id = g.installation_id
+               JOIN prompt_secrets s ON s.id = g.secret_id JOIN secret_executors e ON e.id = g.executor_id
+               WHERE i.revoked=0 AND i.id=?1 AND g.secret_id=?2 AND (?3 IS NULL OR g.executor_id=?3)
+             )",
+            params![installation, secret, executor],
+            |row| row.get::<_, bool>(0),
+        ).map_err(sql)
+    }).map_err(|_| (audit::code::STORAGE_FAILED, "本机秘密数据暂时不可用"))?;
+    if granted { Ok(()) } else { Err((audit::code::GRANT_MISSING, "该连接缺少对应的秘密操作授权")) }
+}
+
 /// Controlled use: the value only reaches the registered child process, and every
 /// text returned to the caller is masked first.
 pub fn use_secret(
@@ -466,25 +452,8 @@ pub fn use_secret(
         );
         denied(code, message)
     };
-    // The grant must match exactly: an unknown secret, an unknown executor or a
-    // different pairing is refused before any value is read.
-    let Ok(granted) = db.with_read_connection(|conn| {
-        conn.query_row(
-            "SELECT EXISTS(
-               SELECT 1 FROM secret_grants g
-               JOIN prompt_secrets s ON s.id = g.secret_id
-               JOIN secret_executors e ON e.id = g.executor_id
-               WHERE g.installation_id=?1 AND g.secret_id=?2 AND g.executor_id=?3
-             )",
-            params![installation.id, secret_id, executor_id],
-            |row| row.get::<_, bool>(0),
-        )
-        .map_err(sql)
-    }) else {
-        return fail(audit::code::STORAGE_FAILED, "本机秘密数据暂时不可用");
-    };
-    if !granted {
-        return fail(audit::code::GRANT_MISSING, "该安装标识未获授权使用这个执行入口和秘密");
+    if let Err((code, message)) = check_grant(db, &installation.id, secret_id, Some(executor_id)) {
+        return fail(code, message);
     }
     let Ok(exists) = store::exists(db, secret_id) else {
         return fail(audit::code::STORAGE_FAILED, "本机秘密数据暂时不可用");
@@ -578,28 +547,21 @@ pub fn read_secret(
         );
         return denied(audit::code::SECRET_UNKNOWN, "秘密已不存在，请重新选择引用");
     };
+    if let Err((code, message)) = check_grant(db, installation_id, secret_id, None) {
+        record(db, audit::Event {
+            operation: audit::Operation::Read, decision: audit::Decision::Denied, code,
+            secret_id: Some(secret_id), installation_id: Some(installation_id), executor_id: None,
+        });
+        return denied(code, message);
+    }
     let source = source_label(&installation);
     let verdict = approval::request(host, &alias, &source);
     let (response, decision, code) = match verdict {
         approval::Verdict::Accepted => {
-            record(
-                db,
-                audit::Event {
-                    operation: audit::Operation::Approve,
-                    decision: audit::Decision::Allowed,
-                    code: audit::code::OK,
-                    secret_id: Some(secret_id),
-                    installation_id: Some(&installation.id),
-                    executor_id: None,
-                },
-            );
             // The installation may have been revoked while the window was open, and
             // the value may have changed or disappeared: resolve both again.
-            match installation_checked(db, installation_id, audit::Operation::Read) {
-                Err(response) => {
-                    let code = recheck_code(&response.code);
-                    (*response, audit::Decision::Denied, code)
-                }
+            match live_installation(db, installation_id).and_then(|_| check_grant(db, installation_id, secret_id, None)) {
+                Err((code, message)) => (denied(code, message), audit::Decision::Denied, code),
                 Ok(_) => match read_value(store, secret_id) {
                     Ok(Some(value)) => (
                         ipc::Response::success(
@@ -622,20 +584,9 @@ pub fn read_secret(
                 },
             }
         }
-        approval::Verdict::Declined => {
-            record(
-                db,
-                audit::Event {
-                    operation: audit::Operation::Decline,
-                    decision: audit::Decision::Denied,
-                    code: audit::code::DECLINED,
-                    secret_id: Some(secret_id),
-                    installation_id: Some(&installation.id),
-                    executor_id: None,
-                },
-            );
-            (denied(audit::code::DECLINED, "已拒绝本次原值读取"), audit::Decision::Denied, audit::code::DECLINED)
-        }
+        approval::Verdict::Declined => (
+            denied(audit::code::DECLINED, "已拒绝本次原值读取"), audit::Decision::Denied, audit::code::DECLINED
+        ),
         approval::Verdict::Expired => (
             denied(audit::code::EXPIRED, "确认请求已过期，未返回原值"),
             audit::Decision::Denied,

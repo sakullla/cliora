@@ -177,7 +177,9 @@ test('the broker panel lists metadata and inserts complete CLI instructions', as
   await expect(broker.locator(`[data-secret-executor="${EXECUTOR_ID}"]`)).toContainText('部署脚本');
   await expect(broker.locator('[data-secret-audit-code]')).toHaveCount(0);
   await broker.locator('details').filter({ hasText: '最近访问记录' }).locator('summary').click();
-  await expect(broker.locator('[data-secret-audit-code="declined"]')).toHaveCount(1);
+  await expect(broker.getByText('最近 30 天，最多 100 次访问。')).toBeVisible();
+  await expect(broker.locator('[data-secret-audit-code="declined"]')).toContainText('生产口令');
+  await expect(broker.locator('[data-secret-audit-code="declined"]')).toContainText('已拒绝');
   await openSecrets(dialog);
   await expect(dialog.locator('[data-secret-id]')).toContainText('1 项授权');
   await dialog.locator('[data-secret-grant]').click();

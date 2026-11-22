@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { native } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
 import { formatFailure } from '../../lib/feedback';
-import { buildSecretUsageFromMetadata, grantedScriptCommand, grantedSecretAliases } from '../../lib/secretCommands';
+import { buildSecretUsageFromMetadata, grantedScriptCommand, grantedSecretAliases, promptSecretTokens } from '../../lib/secretCommands';
 import { SecretScriptAccess } from './SecretScriptAccess';
 import { RowMenu } from '../../components/RowMenu';
 import { Icon } from '../../components/Icon';
@@ -111,14 +111,7 @@ export function PromptSecrets({ local, body, disabled, onInsert }: { local: bool
   const [auditRevision, setAuditRevision] = useState(0);
   const pageRequest = useRef(0);
   const brokerRequest = useRef(0);
-  const referenceText = useMemo(() => {
-    const tokens = new Set<string>();
-    for (const match of body.matchAll(/\{\{cliora-secret:(?:urn:uuid:)?(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\}\}/g)) {
-      tokens.add(match[0]);
-      if (tokens.size === 256) break;
-    }
-    return [...tokens].join(' ');
-  }, [body]);
+  const referenceText = useMemo(() => promptSecretTokens(body).join(' '), [body]);
 
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -158,7 +151,7 @@ export function PromptSecrets({ local, body, disabled, onInsert }: { local: bool
     if (!local || tab !== 'access' || !auditOpen) return;
     let current = true;
     setAuditError('');
-    void native.listSecretAudit(20).then(rows => { if (current) setAudit(rows); })
+    void native.listSecretAudit(100).then(rows => { if (current) setAudit(rows); })
       .catch(failure => { if (current) setAuditError(formatFailure(failure, t('library.secrets.readFailed'), t('library.secrets.retry'))); });
     return () => { current = false; };
   }, [local, tab, auditOpen, auditRevision]);
@@ -221,6 +214,7 @@ export function PromptSecrets({ local, body, disabled, onInsert }: { local: bool
       announce(t('library.secrets.created', { name: created.alias }));
       setRevision(value => value + 1);
       onInsert(created.reference);
+      setGrantSecretId(created.id);
     } catch (failure) { if (mounted.current) setError(formatFailure(failure, t('library.secrets.createFailed'), t('library.secrets.retry'))); }
     finally { if (mounted.current) setBusy(false); }
   }
@@ -599,14 +593,15 @@ export function PromptSecrets({ local, body, disabled, onInsert }: { local: bool
       </details>}
       <details className={styles.details} open={auditOpen} onToggle={event => setAuditOpen(event.currentTarget.open)}>
         <summary><span>{t('library.secrets.broker.audit')}</span>{audit.length > 0 && <span className={styles.count}>{audit.length}</span>}</summary>
+        {auditOpen && <p className={styles.muted}>{t('library.secrets.broker.retention')}</p>}
         {auditError && <p role="alert">{auditError} <Button size="sm" onClick={() => setAuditRevision(n => n + 1)}>{t('library.secrets.retry')}</Button></p>}
-        {auditOpen && (!audit.length ? <p className={styles.muted} data-secret-audit-empty>{t('library.secrets.broker.auditEmpty')}</p> : <ul className={styles.rows}>
+        {auditOpen && (!audit.length ? <p className={styles.muted} data-secret-audit-empty>{t('library.secrets.broker.auditEmpty')}</p> : <ul className={`${styles.rows} ${styles.auditRows}`}>
           {audit.map(entry => <li className={styles.row} key={entry.id} data-secret-audit={entry.id} data-secret-audit-code={entry.code}>
-            <span className={styles.dot} data-tone={entry.decision === 'allowed' ? 'success' : 'danger'} aria-hidden="true" />
+            <span className={styles.dot} data-tone={entry.code === 'ok' ? 'success' : 'danger'} aria-hidden="true" />
             <span className={styles.rowText}>
               <span className={styles.rowTitle}>{t(`library.secrets.broker.operation.${entry.operation}`)}</span>
-              <Badge tone={entry.decision === 'allowed' ? 'success' : 'danger'}>{t(`library.secrets.broker.decision.${entry.decision}`)}</Badge>
-              <code className={styles.rowCode}>{entry.code}</code>
+              <span className={styles.rowTitle}>{grants.find(grant => grant.secretId === entry.secretId)?.alias ?? secrets.find(secret => secret.id === entry.secretId)?.alias}</span>
+              {entry.code !== 'ok' && <Badge tone="danger">{t(`library.secrets.broker.result.${entry.code}`, { defaultValue: entry.code })}</Badge>}
             </span>
             <span className={styles.rowTime}>{relativeTime(entry.at, locale)}</span>
           </li>)}

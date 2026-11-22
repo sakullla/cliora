@@ -406,6 +406,8 @@ fn every_read_needs_its_own_approval() {
     create_secret(&database, &store, "无关口令", OTHER);
     store.lookups.store(0, Ordering::Relaxed);
     let installation = installation(&database);
+    let executor = register(&database, "测试传递", "node", &[], Channel::Stdin, None);
+    grant(&database, &installation.id, &secret.id, &executor.id).unwrap();
     let host = FakeHost::new(Answer::Accept);
     for _ in 0..2 {
         let response = read_secret(&database, &store, &host, &installation.id, &secret.id);
@@ -417,9 +419,9 @@ fn every_read_needs_its_own_approval() {
     let asked = host.asked();
     assert_eq!(store.lookups.load(Ordering::Relaxed), 2, "each approval reads only the selected credential once");
     assert_eq!(asked.len(), 2, "each read must create its own request");
-    // Accepting is audited on its own, once per accepted read.
+    // Each completed read keeps its own access record.
     let rows = audit::list(&database, 20).unwrap();
-    assert_eq!(rows.iter().filter(|row| row.operation == "approve").count(), 2);
+    assert_eq!(rows.iter().filter(|row| row.operation == "read" && row.code == audit::code::OK).count(), 2);
     assert!(rows.iter().all(|row| row.code.len() < 32));
     assert_ne!(asked[0].approval_id, asked[1].approval_id);
     // The window only ever sees the alias, the source and how long it waits.
@@ -432,12 +434,28 @@ fn every_read_needs_its_own_approval() {
 }
 
 #[test]
+fn a_reference_without_a_grant_cannot_prompt_for_or_read_a_value() {
+    let db = db();
+    let store = MemoryCredentials::default();
+    let secret = create_secret(&db, &store, "未授权口令", CANARY);
+    let installation = installation(&db);
+    let host = FakeHost::new(Answer::Accept);
+    store.lookups.store(0, Ordering::Relaxed);
+    let result = read_secret(&db, &store, &host, &installation.id, &secret.id);
+    assert_eq!(result.code, audit::code::GRANT_MISSING);
+    assert!(host.asked().is_empty());
+    assert_eq!(store.lookups.load(Ordering::Relaxed), 0);
+}
+
+#[test]
 fn a_declined_read_returns_no_value_and_authorizes_nothing_later() {
     let database = db();
     let store = MemoryCredentials::default();
     let secret = create_secret(&database, &store, "拒绝口令", CANARY);
     store.lookups.store(0, Ordering::Relaxed);
     let installation = installation(&database);
+    let executor = register(&database, "测试传递", "node", &[], Channel::Stdin, None);
+    grant(&database, &installation.id, &secret.id, &executor.id).unwrap();
     let host = FakeHost::new(Answer::Decline);
     let response = read_secret(&database, &store, &host, &installation.id, &secret.id);
     assert!(!response.ok);
@@ -446,7 +464,7 @@ fn a_declined_read_returns_no_value_and_authorizes_nothing_later() {
     assert_eq!(store.lookups.load(Ordering::Relaxed), 0);
     assert!(!body(&response).contains(CANARY));
     let rows = audit::list(&database, 10).unwrap();
-    assert!(rows.iter().any(|row| row.operation == "decline" && row.decision == "denied"));
+    assert_eq!(rows.len(), 1);
     assert!(rows
         .iter()
         .any(|row| row.operation == "read" && row.decision == "denied" && row.code == audit::code::DECLINED));
@@ -461,6 +479,8 @@ fn a_repeated_answer_cannot_authorize_a_second_read() {
     let store = MemoryCredentials::default();
     let secret = create_secret(&database, &store, "重复口令", CANARY);
     let installation = installation(&database);
+    let executor = register(&database, "测试传递", "node", &[], Channel::Stdin, None);
+    grant(&database, &installation.id, &secret.id, &executor.id).unwrap();
     let host = FakeHost::new(Answer::Twice);
     let response = read_secret(&database, &store, &host, &installation.id, &secret.id);
     assert!(response.ok, "{}", response.message);
@@ -476,6 +496,8 @@ fn an_unavailable_window_or_an_expired_request_returns_no_value() {
     let store = MemoryCredentials::default();
     let secret = create_secret(&database, &store, "窗口口令", CANARY);
     let installation = installation(&database);
+    let executor = register(&database, "测试传递", "node", &[], Channel::Stdin, None);
+    grant(&database, &installation.id, &secret.id, &executor.id).unwrap();
     let hidden = FakeHost::new(Answer::Unavailable);
     let response = read_secret(&database, &store, &hidden, &installation.id, &secret.id);
     assert!(!response.ok);
@@ -572,13 +594,69 @@ fn an_audit_row_keeps_only_opaque_identifiers() {
 }
 
 #[test]
-fn a_failed_recheck_records_the_response_code() {
-    // Only codes from the closed set are stored; the fallback stays a revocation.
-    assert_eq!(recheck_code(audit::code::INSTALLATION_REVOKED), audit::code::INSTALLATION_REVOKED);
-    assert_eq!(recheck_code(audit::code::INSTALLATION_UNKNOWN), audit::code::INSTALLATION_UNKNOWN);
-    assert_eq!(recheck_code(audit::code::INVALID_REQUEST), audit::code::INVALID_REQUEST);
-    assert_eq!(recheck_code(audit::code::STORAGE_FAILED), audit::code::STORAGE_FAILED);
-    assert_eq!(recheck_code("本机秘密数据暂时不可用"), audit::code::INSTALLATION_REVOKED);
+fn a_reference_from_list_runs_the_granted_action_without_a_raw_read() {
+    let db = db();
+    let store = MemoryCredentials::default();
+    let secret = create_secret(&db, &store, "测试口令", CANARY);
+    let installation = installation(&db);
+    let executor = register(&db, "测试传递", "node", &["-e", "process.stdout.write(require('fs').readFileSync(0).length ? 'OK' : 'EMPTY')"], Channel::Stdin, None);
+    grant(&db, &installation.id, &secret.id, &executor.id).unwrap();
+    let listed = list(&db, &store, &installation.id);
+    assert!(!body(&listed).contains(CANARY));
+    let data = listed.data.unwrap();
+    let token = data["secrets"][0]["reference"].as_str().unwrap();
+    assert_eq!(token, secret.reference);
+    let invocation = crate::secrets::cli::parse(&[
+        "--installation".into(), installation.id.clone(), "use".into(), "--secret".into(), token.into(),
+        "--executor".into(), executor.id.clone(),
+    ]).unwrap();
+    let used = use_request(&db, &store, &installation.id, invocation.secret_id.as_ref().unwrap(), &executor.id);
+    assert!(!body(&used).contains(CANARY));
+    assert_eq!(used.data.unwrap()["stdout"], "OK");
+    let rows = audit::list(&db, 100).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!((rows[0].operation.as_str(), rows[0].code.as_str()), ("use", "ok"));
+}
+
+#[test]
+fn recent_access_is_pruned_on_open_write_and_read() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("audit.db");
+    let now = crate::prompts::timestamp() as i64;
+    let database = Database::open(&path).unwrap();
+    database.with_connection(|conn| {
+        for _ in 0..105 {
+            conn.execute("INSERT INTO secret_audit(at,operation,decision,result_code) VALUES(?1,'read','allowed','ok')", [now]).unwrap();
+        }
+        conn.execute("INSERT INTO secret_audit(at,operation,decision,result_code) VALUES(?1,'approve','allowed','ok')", [now]).unwrap();
+        conn.execute("INSERT INTO secret_audit(at,operation,decision,result_code) VALUES(?1,'decline','denied','declined')", [now]).unwrap();
+        Ok(())
+    }).unwrap();
+    drop(database);
+    let database = Database::open(&path).unwrap();
+    let stored = || database.with_connection(|conn| conn.query_row("SELECT count(*) FROM secret_audit", [], |r| r.get::<_, u32>(0)).map_err(sql)).unwrap();
+    assert_eq!(stored(), 100);
+    let result = audit::list(&database, 500).unwrap();
+    assert_eq!((result[0].id, result.last().unwrap().id), (105, 6));
+    record(&database, audit::Event { operation: audit::Operation::Use, decision: audit::Decision::Allowed, code: audit::code::OK,
+        installation_id: None, secret_id: None, executor_id: None });
+    assert_eq!(stored(), 100);
+    database.with_connection(|conn| {
+        conn.execute("UPDATE secret_audit SET at=?1 WHERE operation='read'", [now - 31 * 86400]).unwrap();
+        Ok(())
+    }).unwrap();
+    assert_eq!(audit::list(&database, 100).unwrap().len(), 1);
+    assert_eq!(stored(), 1);
+}
+
+#[test]
+fn installation_rechecks_preserve_the_denial_code_without_logging_a_second_access() {
+    let db = db();
+    let connection = installation(&db);
+    revoke_installation(&db, &connection.id).unwrap();
+    assert_eq!(live_installation(&db, &connection.id).unwrap_err().0, audit::code::INSTALLATION_REVOKED);
+    assert_eq!(live_installation(&db, &uuid::Uuid::new_v4().to_string()).unwrap_err().0, audit::code::INSTALLATION_UNKNOWN);
+    assert!(audit::list(&db, 100).unwrap().is_empty());
 }
 
 #[test]
@@ -586,7 +664,7 @@ fn a_recreated_alias_never_restores_the_old_grant() {
     let database = db();
     let store = MemoryCredentials::default();
     let secret = create_secret(&database, &store, "同名口令", CANARY);
-    let executor = register(&database, "env 读取", "/usr/bin/env", &[], Channel::Env, Some("CLIORATEST"));
+    let executor = register(&database, "env 读取", "node", &[], Channel::Env, Some("CLIORATEST"));
     let installation = installation(&database);
     grant(&database, &installation.id, &secret.id, &executor.id).unwrap();
     crate::secrets::delete(&database, &store, &secret.id, secret.version).unwrap();
@@ -606,7 +684,7 @@ fn a_missing_credential_fails_without_running_anything() {
     let database = db();
     let store = MemoryCredentials::default();
     let secret = create_secret(&database, &store, "缺少原值", CANARY);
-    let executor = register(&database, "env 读取", "/usr/bin/env", &[], Channel::Env, Some("CLIORATEST"));
+    let executor = register(&database, "env 读取", "node", &[], Channel::Env, Some("CLIORATEST"));
     let installation = installation(&database);
     grant(&database, &installation.id, &secret.id, &executor.id).unwrap();
     let credential = crate::secrets::reference::credential_id(&secret.id).unwrap();
@@ -648,7 +726,7 @@ fn grant_and_executor_validation_rejects_widening_attempts() {
     let store = MemoryCredentials::default();
     let secret = create_secret(&database, &store, "范围口令", CANARY);
     let installation = installation(&database);
-    register(&database, "重复标签", "/usr/bin/env", &[], Channel::Env, Some("CLIORATEST"));
+    register(&database, "重复标签", "node", &[], Channel::Env, Some("CLIORATEST"));
     // A duplicate label must not replace the registered definition: grants point at
     // the stored digest, so an overwrite would widen what a grant allows.
     let duplicate = executor::register(
@@ -656,7 +734,7 @@ fn grant_and_executor_validation_rejects_widening_attempts() {
         NewExecutor {
             label: "重复标签".into(),
             description: String::new(),
-            executable: "/bin/cat".into(),
+            executable: "node".into(),
             args: vec![],
             cwd: None,
             channel: Channel::Stdin,
@@ -684,7 +762,7 @@ fn grant_and_executor_validation_rejects_widening_attempts() {
         NewExecutor {
             label: "缺少变量名".into(),
             description: String::new(),
-            executable: "/usr/bin/env".into(),
+            executable: "node".into(),
             args: vec![],
             cwd: None,
             channel: Channel::Env,

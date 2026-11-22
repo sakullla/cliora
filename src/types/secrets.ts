@@ -62,7 +62,7 @@ export type SecretGrant = {
   executorLabel: string;
   createdAt: number;
 };
-export type SecretAuditOperation = 'list' | 'use' | 'read' | 'approve' | 'decline' | 'error';
+export type SecretAuditOperation = 'list' | 'use' | 'read' | 'error';
 export type SecretAuditDecision = 'allowed' | 'denied';
 /** Audit rows hold identifiers and result codes only, never a value or a script. */
 export type SecretAuditEntry = {

@@ -17,7 +17,7 @@ const USAGE: &str = "\
 
 命令：
   list                                       列出该安装标识可用的秘密和执行入口
-  use --secret <uuid> --executor <uuid>      通过已登记的执行入口受控使用秘密
+  use --secret <uuid或引用> --executor <uuid> 通过已登记的执行入口受控使用秘密
   read --secret <uuid>                       读取原值（每次都需要在栖点确认）
 
 read 会把原值写入本次 stdout，原值可能进入模型上下文与 CLI 会话记录。";
@@ -61,14 +61,10 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
         Some("read") => Operation::Read,
         _ => return Err("缺少命令：list、use 或 read".into()),
     };
-    let validate = |value: &Option<String>, name: &str| -> Result<Option<String>, String> {
-        match value {
-            Some(value) if uuid::Uuid::parse_str(value).is_err() => Err(format!("--{name} 需要秘密标识")),
-            _ => Ok(value.clone()),
-        }
-    };
-    let secret_id = validate(&secret_id, "secret")?;
-    let executor_id = validate(&executor_id, "executor")?;
+    let secret_id = secret_id.as_deref().map(super::reference::argument_id).transpose()?;
+    if executor_id.as_deref().is_some_and(|id| uuid::Uuid::parse_str(id).is_err()) {
+        return Err("--executor 需要执行入口标识".into());
+    }
     match operation {
         Operation::List if secret_id.is_some() || executor_id.is_some() => {
             return Err("list 不接受 --secret 或 --executor".into())

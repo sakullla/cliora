@@ -48,6 +48,7 @@ export type TerminalHandle = {
   hasSelection: () => boolean;
   copySelection: () => boolean;
   paste: (text: string) => void;
+  readonly bracketedPaste: boolean;
   pasteAttachments: (payloads: string[]) => Promise<void>;
   pasteFiles: (files: File[]) => void;
   readOutput: () => string;
@@ -902,6 +903,7 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       hasSelection: () => !disposed && term.hasSelection(),
       copySelection: () => !disposed && copySelection(),
       paste: (text: string) => { if (!disposed && activeRef.current && runningRef.current && text) term.paste(text); },
+      get bracketedPaste() { return term.modes.bracketedPasteMode; },
       pasteFiles,
       pasteAttachments: async (payloads: string[]) => {
         if (disposed || !runningRef.current) throw new Error('Session is no longer running');
