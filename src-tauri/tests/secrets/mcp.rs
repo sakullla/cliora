@@ -8,24 +8,17 @@
 //! without a broker fails closed and no tool result carries a value unless an
 //! approved `read_secret` returned one.
 use super::*;
-#[cfg(unix)]
 use crate::secrets::approval::{Host, Prompt};
-#[cfg(unix)]
 use crate::secrets::audit;
-#[cfg(unix)]
 use crate::secrets::executor::{self, Channel, NewExecutor};
 use serde_json::json;
-#[cfg(unix)]
 use serde_json::Value;
 use std::collections::BTreeMap;
-#[cfg(unix)]
 use std::sync::atomic::AtomicBool;
-#[cfg(unix)]
 use std::sync::Arc;
 use std::sync::Mutex;
 
 const CANARY: &str = "canary-synthetic-mcp-51fa7c";
-#[cfg(unix)]
 const OTHER: &str = "canary-other-mcp-b3d2";
 
 fn args(values: &[&str]) -> Vec<String> {
@@ -58,7 +51,6 @@ impl CredentialStore for MemoryCredentials {
     }
 }
 
-#[cfg(unix)]
 struct Uses {
     database: Arc<Database>,
     credentials: Arc<MemoryCredentials>,
@@ -67,7 +59,6 @@ struct Uses {
     executor: executor::SecretExecutor,
 }
 
-#[cfg(unix)]
 fn uses() -> Uses {
     let database = Arc::new(Database::open(std::path::Path::new(":memory:")).unwrap());
     let credentials = Arc::new(MemoryCredentials::default());
@@ -77,7 +68,7 @@ fn uses() -> Uses {
         NewExecutor {
             label: "env 读取".into(),
             description: String::new(),
-            executable: "/usr/bin/env".into(),
+            executable: if cfg!(windows) { "cmd.exe" } else { "/usr/bin/env" }.into(),
             args: Vec::new(),
             cwd: None,
             channel: Channel::Env,
@@ -157,10 +148,9 @@ fn the_server_publishes_the_four_tools_without_a_value_in_their_metadata() {
     assert!(read_text.contains("approval"), "{read_text}");
     assert!(read_text.contains("model context"), "{read_text}");
     assert!(read_text.contains("use_secret"), "{read_text}");
-    // The read schema carries the secret id only; the executor is not a read input.
+    // Both read shapes are documented, with the original single-secret form intact.
     let read_properties = read.input_schema.get("properties").unwrap().as_object().unwrap();
-    assert_eq!(read_properties.keys().map(String::as_str).collect::<Vec<_>>(), vec!["secretId"]);
-    assert_eq!(read.input_schema.get("required").unwrap(), &json!(["secretId"]));
+    assert_eq!(read_properties.keys().map(String::as_str).collect::<Vec<_>>(), vec!["secretId", "secretIds"]);
 
     let use_secret = by_name("use_secret");
     let use_properties = use_secret.input_schema.get("properties").unwrap().as_object().unwrap();
@@ -182,6 +172,19 @@ fn an_unknown_executor_field_is_refused_by_the_schema() {
     assert_eq!(accepted.executor_id, "b");
     let read = serde_json::from_value::<ReadSecretArgs>(json!({ "secretId": "a", "executorId": "b" }));
     assert!(read.is_err());
+}
+
+#[test]
+fn read_secret_accepts_exactly_one_valid_input_shape() {
+    let id = identifier();
+    let reference = crate::secrets::format_reference(&id);
+    let parse = |data| serde_json::from_value::<ReadSecretArgs>(data).unwrap().into_ids();
+    assert_eq!(parse(json!({ "secretId": reference })).unwrap(), (vec![id.clone()], false));
+    assert_eq!(parse(json!({ "secretIds": [reference] })).unwrap(), (vec![id.clone()], true));
+    assert!(parse(json!({ "secretIds": [] })).is_err());
+    assert!(parse(json!({})).is_err());
+    assert!(parse(json!({ "secretId": id, "secretIds": [reference] })).is_err());
+    assert!(parse(json!({ "secretIds": [id, "invalid"] })).is_err());
 }
 
 #[test]
@@ -208,42 +211,42 @@ fn executor_metadata_is_derived_from_the_authorized_list() {
 // Protocol, over a real broker
 // ---------------------------------------------------------------------------
 
-#[cfg(unix)]
 fn isolated() -> (tempfile::TempDir, std::sync::MutexGuard<'static, ()>) {
     let guard = ipc::test_lock();
     let directory = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
     ipc::set_test_root(Some(directory.path().to_path_buf()));
+    #[cfg(windows)]
+    ipc::set_test_root(Some(format!(r"\\.\pipe\cliora-secret-mcp-test-{}", identifier())));
     (directory, guard)
 }
 
 /// Stands in for the confirmation window at the public answer entry point.
-#[cfg(unix)]
 struct Window {
     accept: bool,
+    remember: bool,
+    asked: Arc<Mutex<Vec<Prompt>>>,
 }
 
-#[cfg(unix)]
 impl Host for Window {
     fn ask(&self, prompt: &Prompt) -> Result<(), String> {
         let id = prompt.approval_id.clone();
         let accept = self.accept;
-        std::thread::spawn(move || {
-            let _ = crate::secrets::approval::answer(&id, accept);
-        });
+        self.asked.lock().unwrap().push(prompt.clone());
+        crate::secrets::approval::answer_scoped(&id, accept, self.remember)?;
         Ok(())
     }
 }
 
 /// The broker's request handling, unchanged from the application: an installation
 /// check, the grants, the executor run, the approval and the audit row.
-#[cfg(unix)]
 struct Proxy {
     database: Arc<Database>,
     credentials: Arc<MemoryCredentials>,
-    accept_reads: bool,
+    window: Window,
+    last_read_session: Arc<Mutex<Option<String>>>,
 }
 
-#[cfg(unix)]
 impl ipc::Handler for Proxy {
     fn handle(&self, request: ipc::Request, cancel: &AtomicBool) -> ipc::Response {
         match request.operation {
@@ -259,33 +262,26 @@ impl ipc::Handler for Proxy {
                 ),
                 _ => ipc::Response::failure(audit::code::INVALID_REQUEST, "use 需要 secretId 和 executorId"),
             },
-            Operation::Read => match request.secret_id.as_deref() {
-                Some(secret_id) => broker::read_secret(
-                    &self.database,
-                    &*self.credentials,
-                    &Window { accept: self.accept_reads },
-                    &request.installation,
-                    secret_id,
-                ),
-                None => ipc::Response::failure(audit::code::INVALID_REQUEST, "read 需要 secretId"),
-            },
+            Operation::Read => {
+                self.last_read_session.lock().unwrap().clone_from(&request.session);
+                broker::read_request(&self.database, &*self.credentials, &self.window, &request, cancel)
+            }
         }
     }
 }
 
-#[cfg(unix)]
 fn broker_for(uses: &Uses, accept_reads: bool) -> ipc::Broker {
     ipc::serve(Arc::new(Proxy {
         database: uses.database.clone(),
         credentials: uses.credentials.clone(),
-        accept_reads,
+        window: Window { accept: accept_reads, remember: false, asked: Arc::default() },
+        last_read_session: Arc::default(),
     }))
     .unwrap()
 }
 
 /// Runs the server and a client over one duplex stream, exactly as the stdio
 /// transport connects them, and returns `(isError, text)` per call.
-#[cfg(unix)]
 fn exchange(installation: &str, calls: Vec<(&'static str, Value)>) -> Vec<(bool, String)> {
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
     runtime.block_on(async move {
@@ -319,10 +315,8 @@ fn exchange(installation: &str, calls: Vec<(&'static str, Value)>) -> Vec<(bool,
     })
 }
 
-#[cfg(unix)]
 const PROTO_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[cfg(unix)]
 #[test]
 fn a_list_over_the_protocol_returns_metadata_only() {
     let (_directory, _guard) = isolated();
@@ -344,7 +338,6 @@ fn a_list_over_the_protocol_returns_metadata_only() {
     drop(broker);
 }
 
-#[cfg(unix)]
 #[test]
 fn a_use_without_a_grant_is_refused_without_a_value() {
     let (_directory, _guard) = isolated();
@@ -361,8 +354,8 @@ fn a_use_without_a_grant_is_refused_without_a_value() {
     drop(broker);
 }
 
-#[cfg(unix)]
 #[test]
+#[cfg(unix)]
 fn an_approved_use_runs_the_executor_and_masks_the_output() {
     let (_directory, _guard) = isolated();
     let uses = uses();
@@ -386,7 +379,6 @@ fn an_approved_use_runs_the_executor_and_masks_the_output() {
     drop(broker);
 }
 
-#[cfg(unix)]
 #[test]
 fn a_declined_read_returns_no_value_at_the_protocol_level() {
     let (_directory, _guard) = isolated();
@@ -402,7 +394,6 @@ fn a_declined_read_returns_no_value_at_the_protocol_level() {
     drop(broker);
 }
 
-#[cfg(unix)]
 #[test]
 fn an_accepted_read_returns_the_value_only_after_the_native_approval() {
     let (_directory, _guard) = isolated();
@@ -423,7 +414,58 @@ fn an_accepted_read_returns_the_value_only_after_the_native_approval() {
     drop(broker);
 }
 
-#[cfg(unix)]
+#[test]
+fn batch_approval_is_reused_only_by_this_mcp_connection() {
+    let (_directory, _guard) = isolated();
+    let uses = uses();
+    let second = crate::secrets::create(&uses.database, &*uses.credentials, "第二个口令", OTHER).unwrap();
+    let installation = &uses.installation.id;
+    for id in [&uses.secret.id, &second.id] {
+        broker::grant(&uses.database, installation, id, &uses.executor.id).unwrap();
+    }
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let last_read_session = Arc::new(Mutex::new(None));
+    let _broker = ipc::serve(Arc::new(Proxy {
+        database: uses.database.clone(),
+        credentials: uses.credentials.clone(),
+        window: Window { accept: true, remember: true, asked: asked.clone() },
+        last_read_session: last_read_session.clone(),
+    })).unwrap();
+    let batch = json!({ "secretIds": [uses.secret.reference, second.id, uses.secret.id] });
+    let single = json!({ "secretId": uses.secret.id });
+    let incomplete = json!({ "secretIds": [uses.secret.id, identifier()] });
+    let results = exchange(installation, vec![
+        ("read_secret", batch), ("read_secret", single.clone()), ("read_secret", incomplete),
+    ]);
+    assert!(!results[0].0 && !results[1].0);
+    assert!(results[2].0 && !results[2].1.contains(CANARY) && !results[2].1.contains(OTHER));
+    let values: Value = serde_json::from_str(&results[0].1).unwrap();
+    assert_eq!(values["secrets"].as_array().unwrap().len(), 2);
+    assert_eq!(values["secrets"][0]["id"], uses.secret.id);
+    assert_eq!(values["secrets"][1]["value"], OTHER);
+    assert_eq!(serde_json::from_str::<Value>(&results[1].1).unwrap()["value"], CANARY);
+    let prompts = asked.lock().unwrap().clone();
+    assert_eq!(prompts.len(), 1);
+    assert!(prompts[0].session_available);
+    assert_eq!(prompts[0].aliases, vec![uses.secret.alias, second.alias]);
+    let ended = last_read_session.lock().unwrap().clone().unwrap();
+    // The helper's control connection has closed. Even its old opaque token
+    // loses access once the server processes EOF.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let stale = ipc::read(installation, std::slice::from_ref(&uses.secret.id), false, Some(&ended)).unwrap();
+        if stale.code == ipc::CODE_SESSION_ENDED {
+            assert!(stale.data.is_none());
+            break;
+        }
+        assert!(stale.ok && std::time::Instant::now() < deadline, "MCP access outlived the connection");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let next = exchange(installation, vec![("read_secret", single)]);
+    assert!(!next[0].0);
+    assert_eq!(asked.lock().unwrap().len(), 2);
+}
+
 #[test]
 fn an_offline_broker_fails_closed_and_returns_no_value() {
     let (_directory, _guard) = isolated();
@@ -440,7 +482,6 @@ fn an_offline_broker_fails_closed_and_returns_no_value() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn an_installation_without_identity_is_refused_before_any_value() {
     let (_directory, _guard) = isolated();
@@ -457,7 +498,6 @@ fn an_installation_without_identity_is_refused_before_any_value() {
     drop(broker);
 }
 
-#[cfg(unix)]
 #[test]
 fn a_revoked_installation_loses_access_without_being_replaced() {
     let (_directory, _guard) = isolated();

@@ -46,7 +46,7 @@ test('the usage text names the real executable, entry and installation', () => {
   assert.match(text, /别名 生产部署口令 · 执行入口 部署脚本/);
   // The read section documents the confirmation and warns about the model context.
   assert.match(text, /read --secret 11111111-2222-4333-8444-555555555555/);
-  assert.match(text, /每次都要在栖点确认/);
+  assert.match(text, /允许本次会话/);
   assert.match(text, /模型上下文/);
 });
 
@@ -77,7 +77,7 @@ test('the English text keeps the same commands and identifiers', () => {
   assert.match(text, /Cliora secret broker \(local CLI\)/);
   assert.match(text, /Installation: codex-cli/);
   assert.match(text, /use --secret 11111111-2222-4333-8444-555555555555 --executor aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/);
-  assert.match(text, /each read asks for confirmation/);
+  assert.match(text, /Allow for this session/);
   assert.doesNotMatch(text, /别名/);
 });
 

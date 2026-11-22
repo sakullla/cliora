@@ -154,10 +154,10 @@ stdout, stderr and messages. Both ids must come from list_secrets/list_secret_ex
 installation; an unregistered pair is refused. A prompt reference `{{cliora-secret:<secret-id>}}` identifies the \
 secret id. Prefer this tool over reading a value.";
 
-const READ_SECRET_DESCRIPTION: &str = "Return the raw value of one secret. Every call asks the person in Cliora \
-for a fresh approval; a model or MCP client cannot approve it, and a refused, expired or unavailable approval \
-returns no value. The returned value enters the model context and the CLI session history, so use use_secret \
-unless the task needs the text itself.";
+const READ_SECRET_DESCRIPTION: &str = "Read one raw value with secretId, or request several together with secretIds. \
+Cliora asks for approval of the requested references. The person can allow one read or allow those references for \
+this MCP connection. A batch returns secrets in request order with id, alias and value. A failed batch returns no values. \
+Returned values enter the model context and the CLI session history. Prefer use_secret unless the task needs the text.";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -171,8 +171,22 @@ pub struct UseSecretArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReadSecretArgs {
-    /// Secret id or complete `{{cliora-secret:<secret-id>}}` reference from list_secrets.
-    pub secret_id: String,
+    /// Single id or complete prompt reference. Supply exactly one of secretId and secretIds.
+    pub secret_id: Option<String>,
+    /// A nonempty list of ids or prompt references to read together.
+    pub secret_ids: Option<Vec<String>>,
+}
+
+impl ReadSecretArgs {
+    fn into_ids(self) -> Result<(Vec<String>, bool), String> {
+        let (ids, batch) = match (self.secret_id, self.secret_ids) {
+            (Some(id), None) => (vec![id], false),
+            (None, Some(ids)) if !ids.is_empty() => (ids, true),
+            _ => return Err("read_secret 需要 secretId 或非空的 secretIds，请只选一项".into()),
+        };
+        let ids = ids.iter().map(|id| super::reference::argument_id(id)).collect::<Result<_, _>>()?;
+        Ok((ids, batch))
+    }
 }
 
 /// One stdio server for one installation. Every tool forwards to the broker, so
@@ -180,12 +194,15 @@ pub struct ReadSecretArgs {
 #[derive(Clone)]
 pub struct SecretMcp {
     installation: Arc<String>,
+    // The control connection closes with this stdio server. Tool arguments
+    // never carry the broker-issued token.
+    session: Arc<Mutex<Option<ipc::McpSession>>>,
     tool_router: ToolRouter<Self>,
 }
 
 impl SecretMcp {
     pub fn new(installation: impl Into<String>) -> Self {
-        Self { installation: Arc::new(installation.into()), tool_router: Self::tool_router() }
+        Self { installation: Arc::new(installation.into()), session: Arc::default(), tool_router: Self::tool_router() }
     }
 
     /// The tools this server publishes. A test asserts their names and that no
@@ -205,10 +222,12 @@ impl SecretMcp {
             .map_err(|message| failure_document(super::audit::code::INVALID_REQUEST, message))?;
         // The IPC call blocks on the broker (a read waits for its approval), so it
         // runs off the protocol task.
-        let attempt = tokio::task::spawn_blocking(move || {
+        Self::broker_result(tokio::task::spawn_blocking(move || {
             ipc::call(&installation, operation, secret_id.as_deref(), executor_id.as_deref())
-        })
-        .await;
+        }).await)
+    }
+
+    fn broker_result(attempt: Result<Result<ipc::Response, String>, tokio::task::JoinError>) -> Result<Json<Value>, String> {
         match attempt {
             Ok(Ok(response)) if response.ok => Ok(Json(response.data.unwrap_or(Value::Null))),
             Ok(Ok(response)) => Err(failure_document(&response.code, &response.message)),
@@ -246,8 +265,32 @@ impl SecretMcp {
 
     #[tool(name = "read_secret", description = READ_SECRET_DESCRIPTION)]
     async fn read_secret(&self, args: Parameters<ReadSecretArgs>) -> Result<Json<Value>, String> {
-        let Parameters(ReadSecretArgs { secret_id }) = args;
-        self.forward(Operation::Read, Some(secret_id), None).await
+        let (ids, batch) = args.0.into_ids()
+            .map_err(|message| failure_document(super::audit::code::INVALID_REQUEST, &message))?;
+        let installation = self.installation.clone();
+        let sessions = Arc::downgrade(&self.session);
+        Self::broker_result(tokio::task::spawn_blocking(move || {
+            let token = {
+                let owner = sessions.upgrade().ok_or("MCP 会话已结束")?;
+                let mut session = owner.lock().map_err(|_| "MCP 会话不可用")?;
+                if session.is_none() {
+                    *session = Some(ipc::open_mcp_session(&installation)?);
+                }
+                session.as_ref().ok_or("MCP 会话不可用")?.token().to_owned()
+            };
+            let response = ipc::read(&installation, &ids, batch, Some(&token))?;
+            // After a broker restart the old connection no longer owns a
+            // session. A subsequent call can establish a new one and ask again.
+            if response.code == ipc::CODE_SESSION_ENDED {
+                if let Some(owner) = sessions.upgrade() {
+                    let mut session = owner.lock().map_err(|_| "MCP 会话不可用")?;
+                    if session.as_ref().is_some_and(|current| current.token() == token) {
+                        *session = None;
+                    }
+                }
+            }
+            Ok(response)
+        }).await)
     }
 }
 

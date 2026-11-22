@@ -18,7 +18,7 @@ const USAGE: &str = "\
 命令：
   list                                       列出该安装标识可用的秘密和执行入口
   use --secret <uuid或引用> --executor <uuid> 通过已登记的执行入口受控使用秘密
-  read --secret <uuid>                       读取原值（每次都需要在栖点确认）
+  read --secret <uuid或引用> [--secret ...]    一次确认读取多个原值。工作台 CLI 可允许本次会话
 
 read 会把原值写入本次 stdout，原值可能进入模型上下文与 CLI 会话记录。";
 
@@ -26,25 +26,24 @@ read 会把原值写入本次 stdout，原值可能进入模型上下文与 CLI 
 pub struct Invocation {
     pub installation: String,
     pub operation: Operation,
-    pub secret_id: Option<String>,
+    pub secret_ids: Vec<String>,
     pub executor_id: Option<String>,
 }
 
-/// Parses the arguments that follow the entry argument. Unknown flags, repeated
-/// flags and missing requirements are refused before any IPC request is made.
+/// Validate every requested reference before opening an IPC connection.
 pub fn parse(args: &[String]) -> Result<Invocation, String> {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         return Err(String::new());
     }
     let mut installation: Option<String> = None;
-    let mut secret_id: Option<String> = None;
+    let mut secret_ids = Vec::new();
     let mut executor_id: Option<String> = None;
     let mut operation: Option<String> = None;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "--installation" => installation = Some(take(&mut rest, "--installation")?),
-            "--secret" => secret_id = Some(take(&mut rest, "--secret")?),
+            "--secret" => secret_ids.push(super::reference::argument_id(&take(&mut rest, "--secret")?)?),
             "--executor" => executor_id = Some(take(&mut rest, "--executor")?),
             "list" | "use" | "read" if operation.is_none() => operation = Some(arg.clone()),
             other if other.starts_with('-') => return Err(format!("未知参数：{other}")),
@@ -61,22 +60,21 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
         Some("read") => Operation::Read,
         _ => return Err("缺少命令：list、use 或 read".into()),
     };
-    let secret_id = secret_id.as_deref().map(super::reference::argument_id).transpose()?;
     if executor_id.as_deref().is_some_and(|id| uuid::Uuid::parse_str(id).is_err()) {
         return Err("--executor 需要执行入口标识".into());
     }
     match operation {
-        Operation::List if secret_id.is_some() || executor_id.is_some() => {
+        Operation::List if !secret_ids.is_empty() || executor_id.is_some() => {
             return Err("list 不接受 --secret 或 --executor".into())
         }
-        Operation::Use if secret_id.is_none() || executor_id.is_none() => {
-            return Err("use 需要 --secret 和 --executor".into())
+        Operation::Use if secret_ids.len() != 1 || executor_id.is_none() => {
+            return Err("use 需要一个 --secret 和一个 --executor".into())
         }
-        Operation::Read if secret_id.is_none() => return Err("read 需要 --secret".into()),
+        Operation::Read if secret_ids.is_empty() => return Err("read 需要 --secret".into()),
         Operation::Read if executor_id.is_some() => return Err("read 不接受 --executor".into()),
         _ => {}
     }
-    Ok(Invocation { installation, operation, secret_id, executor_id })
+    Ok(Invocation { installation, operation, secret_ids, executor_id })
 }
 
 fn take<'a>(rest: &mut std::slice::Iter<'a, String>, flag: &str) -> Result<String, String> {
@@ -84,7 +82,7 @@ fn take<'a>(rest: &mut std::slice::Iter<'a, String>, flag: &str) -> Result<Strin
 }
 
 /// The document printed for one operation. A read is the only command whose
-/// output contains a value, and only after its own approval.
+/// output contains a value, and only with the user's approval.
 pub fn document(operation: Operation, response: &Response) -> Value {
     match (response.ok, operation) {
         (true, _) => json!({ "ok": true, "code": response.code, "data": response.data }),
@@ -93,17 +91,25 @@ pub fn document(operation: Operation, response: &Response) -> Value {
 }
 
 fn execute(invocation: &Invocation) -> i32 {
-    let response = ipc::call(
-        &invocation.installation,
-        invocation.operation,
-        invocation.secret_id.as_deref(),
-        invocation.executor_id.as_deref(),
-    )
-    .unwrap_or_else(|message| Response::failure(ipc::CODE_OFFLINE, message));
+    let session = std::env::var(super::session::ENV).ok();
+    let response = dispatch(invocation, session.as_deref())
+        .unwrap_or_else(|message| Response::failure(ipc::CODE_OFFLINE, message));
     let ok = response.ok;
     let document = document(invocation.operation, &response);
     println!("{}", serde_json::to_string(&document).unwrap_or_else(|_| "{\"ok\":false}".into()));
     if ok { 0 } else { 1 }
+}
+
+fn dispatch(invocation: &Invocation, session: Option<&str>) -> Result<Response, String> {
+    if invocation.operation == Operation::Read {
+        return ipc::read(&invocation.installation, &invocation.secret_ids, invocation.secret_ids.len() > 1, session);
+    }
+    ipc::call(
+        &invocation.installation,
+        invocation.operation,
+        invocation.secret_ids.first().map(String::as_str),
+        invocation.executor_id.as_deref(),
+    )
 }
 
 /// Dispatches before Tauri starts. Returns false for a normal application start.

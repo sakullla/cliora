@@ -22,9 +22,9 @@
     },
     {
       "name": "read_secret",
-      "required": ["secretId"],
-      "properties": ["secretId"],
-      "descriptionContains": ["approval", "model context", "session history", "use_secret"]
+      "required": [],
+      "properties": ["secretId", "secretIds"],
+      "descriptionContains": ["approval", "this MCP connection", "model context", "session history", "use_secret"]
     }
   ],
   "noInputNamed": ["value", "secretValue", "raw", "env", "stdin", "command", "path"],

@@ -52,7 +52,7 @@ test('the fallback for an MCP installation runs the CLI helper with that install
   assert.match(text, /use --secret 11111111-2222-4333-8444-555555555555 --executor aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/);
   // The read section documents the confirmation and the model-context warning.
   assert.match(text, /read --secret 11111111-2222-4333-8444-555555555555/);
-  assert.match(text, /每次都要在栖点确认/);
+  assert.match(text, /允许本次会话/);
   assert.match(text, /模型上下文/);
 });
 
@@ -92,6 +92,6 @@ test('the english fallback states the same facts', () => {
   assert.ok(text);
   assert.match(text, /## Cliora secret broker \(local CLI\)/);
   assert.match(text, /Installation: 秘密 MCP · pi/);
-  assert.match(text, /asks for confirmation in Cliora/);
+  assert.match(text, /Allow for this session/);
   assert.match(text, /model context and the CLI session history/);
 });

@@ -4,7 +4,6 @@
 //! broker fails closed, an invalid frame does not break the endpoint, and a caller
 //! that stops waiting cancels the run it started.
 use super::*;
-#[cfg(unix)]
 use crate::secrets::ipc::{self, Handler, Request};
 use crate::secrets::ipc::Response;
 use serde_json::json;
@@ -23,7 +22,7 @@ fn a_list_invocation_carries_only_the_installation() {
     let invocation = parse(&args(&["--installation", &id, "list"])).unwrap();
     assert_eq!(invocation.installation, id);
     assert_eq!(invocation.operation, Operation::List);
-    assert!(invocation.secret_id.is_none());
+    assert!(invocation.secret_ids.is_empty());
     assert!(invocation.executor_id.is_none());
 }
 
@@ -41,7 +40,7 @@ fn a_use_invocation_requires_both_identifiers() {
     assert_eq!(parse(&args(&["use", "--executor", &executor, "--secret", &reference, "--installation", &id])).unwrap(), invocation);
     assert!(parse(&args(&["use", "--executor", &executor, "--secret", &format!("other {reference}"), "--installation", &id])).is_err());
     assert!(parse(&args(&["list", "--installation", &id, "--secret", &secret, "--executor", &executor])).is_err());
-    assert_eq!(invocation.secret_id.as_deref(), Some(secret.as_str()));
+    assert_eq!(invocation.secret_ids, vec![secret.clone()]);
     assert_eq!(invocation.executor_id.as_deref(), Some(executor.as_str()));
     assert!(parse(&args(&["--installation", &id, "use", "--secret", &secret])).is_err());
     assert!(parse(&args(&["--installation", &id, "use", "--executor", &executor])).is_err());
@@ -54,11 +53,23 @@ fn a_read_invocation_refuses_a_controlled_use_executor() {
     let executor = uuid::Uuid::new_v4().to_string();
     let invocation = parse(&args(&["read", "--installation", &id, "--secret", &secret])).unwrap();
     assert_eq!(invocation.operation, Operation::Read);
-    assert_eq!(invocation.secret_id.as_deref(), Some(secret.as_str()));
+    assert_eq!(invocation.secret_ids, vec![secret.clone()]);
     let refused = parse(&args(&["read", "--installation", &id, "--secret", &secret, "--executor", &executor]));
     assert!(refused.is_err());
     // A missing secret is a usage error, not an approval prompt.
     assert!(parse(&args(&["read", "--installation", &id])).is_err());
+}
+
+#[test]
+fn only_read_accepts_multiple_secret_references() {
+    let id = installation();
+    let first = installation();
+    let second = installation();
+    let reference = crate::secrets::format_reference(&second);
+    let parsed = parse(&args(&["read", "--installation", &id, "--secret", &first, "--secret", &reference])).unwrap();
+    assert_eq!(parsed.secret_ids, vec![first.clone(), second]);
+    assert!(parse(&args(&["read", "--installation", &id, "--secret", &first, "--secret", "invalid"])).is_err());
+    assert!(parse(&args(&["use", "--installation", &id, "--secret", &first, "--secret", &reference, "--executor", &id])).is_err());
 }
 
 #[test]
@@ -104,22 +115,43 @@ fn a_document_keeps_the_value_in_data_only() {
     assert!(printed.get("data").is_none());
 }
 
-#[cfg(unix)]
 fn isolated() -> (tempfile::TempDir, std::sync::MutexGuard<'static, ()>) {
     let guard = ipc::test_lock();
     let directory = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
     ipc::set_test_root(Some(directory.path().to_path_buf()));
+    #[cfg(windows)]
+    ipc::set_test_root(Some(format!(r"\\.\pipe\cliora-secret-cli-test-{}", installation())));
     (directory, guard)
 }
 
-#[cfg(unix)]
 struct Forward;
 
-#[cfg(unix)]
 impl Handler for Forward {
     fn handle(&self, request: Request, _: &std::sync::atomic::AtomicBool) -> Response {
-        Response::success("ok", json!({ "operation": request.operation, "installation": request.installation }))
+        Response::success("ok", json!({
+            "operation": request.operation, "installation": request.installation,
+            "secretId": request.secret_id, "secretIds": request.secret_ids, "hasSession": request.session.is_some(),
+        }))
     }
+}
+
+#[test]
+fn a_workbench_cli_passes_its_lease_and_an_external_batch_has_none() {
+    let (_directory, _guard) = isolated();
+    let _broker = ipc::serve(std::sync::Arc::new(Forward)).unwrap();
+    let id = installation();
+    let first = installation();
+    let second = installation();
+    let external = parse(&args(&["read", "--installation", &id, "--secret", &first, "--secret", &second])).unwrap();
+    let data = dispatch(&external, None).unwrap().data.unwrap();
+    assert_eq!(data["secretIds"], json!([first, second]));
+    assert_eq!(data["hasSession"], false);
+    let local = parse(&args(&["read", "--installation", &id, "--secret", &first])).unwrap();
+    let lease = crate::secrets::session::LocalSession::new();
+    let data = dispatch(&local, Some(lease.token())).unwrap().data.unwrap();
+    assert_eq!(data["secretId"], first);
+    assert_eq!(data["hasSession"], true);
 }
 
 #[cfg(unix)]

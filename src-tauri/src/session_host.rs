@@ -487,6 +487,7 @@ struct Session {
     project_id: Option<String>,
     directory: Mutex<String>,
     paste_files: Mutex<Vec<tempfile::TempDir>>,
+    secret_session: Mutex<Option<crate::secrets::session::LocalSession>>,
     mode: LaunchMode,
     running: AtomicBool,
     exit_code: Mutex<Option<i32>>,
@@ -545,6 +546,14 @@ pub(crate) fn start_with_baseline(plan: LaunchPlan, credential: Option<&(String,
         command.env("TERM", "xterm-256color");
     }
     apply_environment(&mut command, &plan, credential);
+    let secret_session = if remote {
+        command.env_remove(crate::secrets::session::ENV);
+        None
+    } else {
+        let session = crate::secrets::session::LocalSession::new();
+        command.env(crate::secrets::session::ENV, session.token());
+        Some(session)
+    };
     let id = uuid::Uuid::new_v4().to_string();
     // Record where this session starts before the CLI can change anything, so
     // "changes" and the review baseline later mean what this session did.
@@ -596,6 +605,7 @@ pub(crate) fn start_with_baseline(plan: LaunchPlan, credential: Option<&(String,
         project_id: plan.project_id.clone(),
         directory: Mutex::new(directory),
         paste_files: Mutex::new(Vec::new()),
+        secret_session: Mutex::new(secret_session),
         mode: plan.mode,
         running: AtomicBool::new(true),
         exit_code: Mutex::new(None),
@@ -666,12 +676,10 @@ fn attach_reader(session: Arc<Session>, reader: Box<dyn Read + Send>) -> Result<
     // ConPTY keeps its output pipe open until the master closes, even after
     // a process exits. Windows local sessions need the same close handshake;
     // the watcher also waits for descendants when a launch shim hands off.
-    if session.remote || cfg!(windows) {
-        thread::Builder::new()
-            .name(format!("cliora-session-exit-{}", session.id))
-            .spawn(move || watch_child(session, generation))
-            .map_err(|error| format!("无法监视会话进程：{error}"))?;
-    }
+    thread::Builder::new()
+        .name(format!("cliora-session-exit-{}", session.id))
+        .spawn(move || watch_child(session, generation))
+        .map_err(|error| format!("无法监视会话进程：{error}"))?;
     Ok(())
 }
 
@@ -698,9 +706,12 @@ fn watch_child(session: Arc<Session>, generation: u64) {
     }
     let Ok(_operation) = session.operation.lock() else { return };
     if session.transport_generation.load(Ordering::SeqCst) == generation {
+        // The ended session stays in the UI for replay. Its read authorization
+        // ends with the processes, even if a descendant still has the Unix PTY.
+        session.end_secret_access();
         #[cfg(windows)]
         if let Ok(mut job) = session.job.lock() { *job = None; }
-        close_pty(&session);
+        if session.remote || cfg!(windows) { close_pty(&session); }
     }
 }
 
@@ -954,6 +965,7 @@ pub fn reattach(id: &str, requested_size: Option<(u16, u16)>) -> Result<(), Stri
     for (key, value) in &session.environment {
         command.env(key, value);
     }
+    command.env_remove(crate::secrets::session::ENV);
     let mut child = pair.slave.spawn_command(command).map_err(|error| format!("无法重新附着远程会话：{error}"))?;
     let reader = pair.master.try_clone_reader().map_err(|error| { let _ = child.kill(); format!("无法读取重新附着输出：{error}") })?;
     let writer = pair.master.take_writer().map_err(|error| { let _ = child.kill(); format!("无法写入重新附着会话：{error}") })?;
@@ -998,6 +1010,7 @@ fn lookup(id: &str) -> Result<Arc<Session>, String> {
 }
 
 fn end_child(session: &Session) {
+    session.end_secret_access();
     if let Ok(mut killer) = session.killer.lock() {
         let _ = killer.kill();
     }
@@ -1186,6 +1199,7 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>, generati
             consume_remote_absence(&session);
         }
     }
+    session.end_secret_access();
     session.running.store(false, Ordering::SeqCst);
     if let Ok(mut exit_code) = session.exit_code.lock() {
         *exit_code = code;
@@ -1244,6 +1258,10 @@ fn apply_environment(command: &mut CommandBuilder, plan: &LaunchPlan, credential
 }
 
 impl Session {
+    fn end_secret_access(&self) {
+        self.secret_session.lock().unwrap_or_else(|error| error.into_inner()).take();
+    }
+
     fn notify_state(&self) -> u64 {
         let revision = self.state_revision.fetch_add(1, Ordering::SeqCst) + 1;
         emit(STATE_EVENT, self.snapshot());
@@ -1346,7 +1364,8 @@ fn local_process_exit_closes_conpty_and_preserves_the_tail() {
     let _guard = lock_for_tests();
     let directory = tempfile::tempdir().unwrap();
     let script = directory.path().join("exit.ps1");
-    std::fs::write(&script, "[Console]::WriteLine('LOCAL_READY')\n$null = [Console]::ReadLine()\n[Console]::WriteLine('LOCAL_EXIT_TAIL')\nexit 42\n").unwrap();
+    let marker = crate::secrets::session::ENV;
+    std::fs::write(&script, format!("if (!$env:{marker}) {{ exit 43 }}\n[Console]::WriteLine('LOCAL_READY')\n$null = [Console]::ReadLine()\n[Console]::WriteLine('LOCAL_EXIT_TAIL')\nexit 42\n")).unwrap();
     let plan = LaunchPlan {
         resume_native_id: None, account_version: None, account_context: None,
         tool_id: "controlled".into(), project_id: None, mode: LaunchMode::Normal,
@@ -1369,6 +1388,7 @@ fn local_process_exit_closes_conpty_and_preserves_the_tail() {
         thread::sleep(Duration::from_millis(20));
     }
     let snapshot = session.snapshot();
+    assert!(session.secret_session.lock().unwrap().is_none());
     assert_eq!(snapshot.exit_code, Some(42));
     assert_eq!(snapshot.connection_state, "closed");
     assert_eq!(snapshot.exit_reason, "process_exit");
