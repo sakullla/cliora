@@ -2,12 +2,12 @@
 //!
 //! One process handles every entry point: the local CLI helper, and later the MCP
 //! stdio helper. It resolves installations and grants, runs a registered executor
-//! with a fixed argv, asks for a fresh approval on every value read, masks the
+//! with a fixed argv, checks one-time or session approval for raw reads, masks the
 //! value out of any text it returns and writes one audit row per decision. A
 //! failed check never falls back to another secret.
 use crate::credentials::CredentialStore;
 use crate::database::Database;
-use crate::secrets::{approval, audit, executor, ipc, reference, store};
+use crate::secrets::{approval, audit, executor, ipc, reference, session, store};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::AtomicBool;
@@ -164,7 +164,9 @@ pub fn revoke_installation(db: &Database, id: &str) -> Result<(), String> {
             };
         }
         tx.execute("DELETE FROM secret_grants WHERE installation_id=?1", [id]).map_err(sql)?;
-        tx.commit().map_err(sql)
+        tx.commit().map_err(sql)?;
+        session::invalidate(Some(id), None);
+        Ok(())
     })
 }
 
@@ -226,11 +228,12 @@ pub fn grant(db: &Database, installation_id: &str, secret_id: &str, executor_id:
 
 pub fn revoke_grant(db: &Database, installation_id: &str, secret_id: &str, executor_id: &str) -> Result<(), String> {
     let changed = db.with_connection(|conn| {
-        conn.execute(
+        let count = conn.execute(
             "DELETE FROM secret_grants WHERE installation_id=?1 AND secret_id=?2 AND executor_id=?3",
             params![installation_id, secret_id, executor_id],
-        )
-        .map_err(sql)
+        ).map_err(sql)?;
+        if count != 0 { session::invalidate(Some(installation_id), Some(secret_id)); }
+        Ok(count)
     })?;
     if changed != 1 {
         return Err("绑定已不存在".into());
@@ -360,8 +363,8 @@ fn installation_checked(
     })
 }
 
-fn source_label(installation: &Installation) -> String {
-    match (&installation.target_id, installation.kind) {
+fn source_label(installation: &Installation, kind: Kind) -> String {
+    match (&installation.target_id, kind) {
         (Some(target), Kind::Cli) => format!("{SOURCE_CLI} · {} · {target}", installation.label),
         (_, Kind::Cli) => format!("{SOURCE_CLI} · {}", installation.label),
         (_, Kind::Mcp) => format!("MCP · {}", installation.label),
@@ -405,7 +408,7 @@ pub fn list(db: &Database, store: &dyn CredentialStore, installation_id: &str) -
     }
     ipc::Response::success(
         audit::code::OK,
-        serde_json::json!(SecretList { installation_label: source_label(&installation), secrets: visible }),
+        serde_json::json!(SecretList { installation_label: source_label(&installation, installation.kind), secrets: visible }),
     )
 }
 
@@ -517,98 +520,121 @@ pub fn use_secret(
     }
 }
 
-/// Raw read: a fresh approval is required every time, and only this call receives
-/// the value. An accepted controlled use is not an accepted read.
+/// Single-value entry used by legacy clients and contract tests.
 pub fn read_secret(
-    db: &Database,
-    store: &dyn CredentialStore,
-    host: &dyn approval::Host,
-    installation_id: &str,
-    secret_id: &str,
+    db: &Database, store: &dyn CredentialStore, host: &dyn approval::Host, installation: &str, secret: &str,
 ) -> ipc::Response {
-    let installation = match installation_checked(db, installation_id, audit::Operation::Read) {
-        Ok(installation) => installation,
-        Err(response) => return *response,
+    read_secrets(db, store, host, installation, &[secret.to_owned()], false, None, &AtomicBool::new(false))
+}
+
+pub fn read_request(
+    db: &Database, store: &dyn CredentialStore, host: &dyn approval::Host, request: &ipc::Request, cancel: &AtomicBool,
+) -> ipc::Response {
+    let (ids, batch) = match (&request.secret_id, &request.secret_ids, &request.executor_id) {
+        (Some(id), None, None) => (std::slice::from_ref(id), false),
+        (None, Some(ids), None) => (ids.as_slice(), true),
+        _ => return denied(audit::code::INVALID_REQUEST, "read 需要 secretId 或 secretIds"),
     };
-    let Ok(alias) = store::metadata_alias(db, secret_id) else {
-        return denied(audit::code::STORAGE_FAILED, "本机秘密数据暂时不可用");
-    };
-    let Some(alias) = alias else {
-        record(
-            db,
-            audit::Event {
-                operation: audit::Operation::Read,
-                decision: audit::Decision::Denied,
-                code: audit::code::SECRET_UNKNOWN,
-                secret_id: Some(secret_id),
-                installation_id: Some(&installation.id),
-                executor_id: None,
-            },
-        );
-        return denied(audit::code::SECRET_UNKNOWN, "秘密已不存在，请重新选择引用");
-    };
-    if let Err((code, message)) = check_grant(db, installation_id, secret_id, None) {
-        record(db, audit::Event {
-            operation: audit::Operation::Read, decision: audit::Decision::Denied, code,
-            secret_id: Some(secret_id), installation_id: Some(installation_id), executor_id: None,
-        });
-        return denied(code, message);
-    }
-    let source = source_label(&installation);
-    let verdict = approval::request(host, &alias, &source);
-    let (response, decision, code) = match verdict {
-        approval::Verdict::Accepted => {
-            // The installation may have been revoked while the window was open, and
-            // the value may have changed or disappeared: resolve both again.
-            match live_installation(db, installation_id).and_then(|_| check_grant(db, installation_id, secret_id, None)) {
-                Err((code, message)) => (denied(code, message), audit::Decision::Denied, code),
-                Ok(_) => match read_value(store, secret_id) {
-                    Ok(Some(value)) => (
-                        ipc::Response::success(
-                            audit::code::OK,
-                            serde_json::json!(ReadResult { alias, value }),
-                        ),
-                        audit::Decision::Allowed,
-                        audit::code::OK,
-                    ),
-                    Ok(None) => (
-                        denied(audit::code::CREDENTIAL_MISSING, "本机缺少这个秘密的原值，未返回"),
-                        audit::Decision::Denied,
-                        audit::code::CREDENTIAL_MISSING,
-                    ),
-                    Err(_) => (
-                        denied(audit::code::CREDENTIAL_UNREADABLE, "无法读取秘密原值，未返回"),
-                        audit::Decision::Denied,
-                        audit::code::CREDENTIAL_UNREADABLE,
-                    ),
-                },
+    read_secrets(db, store, host, &request.installation, ids, batch, request.session.as_deref(), cancel)
+}
+
+type ReadError = (&'static str, &'static str);
+
+/// Check every member against the same database snapshot before showing aliases.
+fn read_aliases(db: &Database, installation: &str, ids: &[String]) -> Result<Vec<String>, ReadError> {
+    db.with_read_connection(|conn| {
+        let mut query = conn.prepare(
+            "SELECT s.alias, EXISTS(
+                SELECT 1 FROM secret_grants g JOIN secret_installations i ON i.id=g.installation_id
+                JOIN secret_executors e ON e.id=g.executor_id
+                WHERE i.id=?1 AND i.revoked=0 AND g.secret_id=s.id
+             ) FROM prompt_secrets s WHERE s.id=?2"
+        ).map_err(sql)?;
+        let mut aliases = Vec::with_capacity(ids.len());
+        for id in ids {
+            let row = query.query_row(params![installation, id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
+            }).optional().map_err(sql)?;
+            match row {
+                None => return Ok(Err((audit::code::SECRET_UNKNOWN, "秘密已不存在，请重新选择引用"))),
+                Some((_, false)) => return Ok(Err((audit::code::GRANT_MISSING, "该连接缺少对应的秘密操作授权"))),
+                Some((alias, true)) => aliases.push(alias),
             }
         }
-        approval::Verdict::Declined => (
-            denied(audit::code::DECLINED, "已拒绝本次原值读取"), audit::Decision::Denied, audit::code::DECLINED
-        ),
-        approval::Verdict::Expired => (
-            denied(audit::code::EXPIRED, "确认请求已过期，未返回原值"),
-            audit::Decision::Denied,
-            audit::code::EXPIRED,
-        ),
-        approval::Verdict::Unavailable => (
-            denied(audit::code::APPROVAL_UNAVAILABLE, "确认窗口不可用，未返回原值"),
-            audit::Decision::Denied,
-            audit::code::APPROVAL_UNAVAILABLE,
-        ),
+        Ok(Ok(aliases))
+    }).map_err(|_| (audit::code::STORAGE_FAILED, "本机秘密数据暂时不可用"))?
+}
+
+fn read_secrets(
+    db: &Database, store: &dyn CredentialStore, host: &dyn approval::Host, installation_id: &str,
+    requested: &[String], batch: bool, token: Option<&str>, cancel: &AtomicBool,
+) -> ipc::Response {
+    if requested.is_empty() || requested.len() > 256 {
+        return denied(audit::code::INVALID_REQUEST, "每次可请求 1 至 256 个秘密引用");
+    }
+    let mut ids = Vec::with_capacity(requested.len());
+    for input in requested {
+        let Ok(id) = reference::argument_id(input) else {
+            return denied(audit::code::INVALID_REQUEST, "秘密引用格式无效");
+        };
+        if !ids.contains(&id) { ids.push(id); }
+    }
+    let outcome = (|| {
+        let installation = live_installation(db, installation_id)?;
+        let aliases = read_aliases(db, installation_id, &ids)?;
+        let ended = (ipc::CODE_SESSION_ENDED, "工具会话已结束，请重新请求");
+        let changed = (audit::code::EXPIRED, "会话、引用或绑定已变更，请重新请求");
+        let scope = session::ReadScope::open(token, installation_id, installation.kind, &ids).ok_or(ended)?;
+        let cancelled = (audit::code::CANCELLED, "读取请求已取消");
+        if cancel.load(std::sync::atomic::Ordering::SeqCst) { return Err(cancelled); }
+
+        let mut remember = false;
+        if !scope.pending.is_empty() {
+            let mut source = source_label(&installation, scope.source);
+            if let Some(display) = &scope.display { source.push_str(&format!(" · #{display}")); }
+            let pending = scope.pending.iter().map(|&index| aliases[index].clone()).collect();
+            match approval::request_batch(host, pending, &source, scope.display.is_some(), approval::APPROVAL_TIMEOUT) {
+                approval::Verdict::Accepted => {}
+                approval::Verdict::Session => remember = true,
+                approval::Verdict::Declined => return Err((audit::code::DECLINED, "已拒绝本次原值读取")),
+                approval::Verdict::Expired => return Err((audit::code::EXPIRED, "确认请求已过期，未返回原值")),
+                approval::Verdict::Unavailable => return Err((audit::code::APPROVAL_UNAVAILABLE, "确认窗口不可用，未返回原值")),
+            }
+        }
+        live_installation(db, installation_id)?;
+        let current_aliases = read_aliases(db, installation_id, &ids)?;
+        if current_aliases != aliases || !scope.finish(false) { return Err(changed); }
+        if cancel.load(std::sync::atomic::Ordering::SeqCst) { return Err(cancelled); }
+
+        let mut results = Vec::with_capacity(ids.len());
+        for (id, alias) in ids.iter().zip(aliases) {
+            let value = read_value(store, id)
+                .map_err(|_| (audit::code::CREDENTIAL_UNREADABLE, "无法读取秘密原值，未返回"))?
+                .ok_or((audit::code::CREDENTIAL_MISSING, "本机缺少这个秘密的原值，未返回"))?;
+            let mut result = serde_json::json!(ReadResult { alias, value });
+            if batch { result["id"] = serde_json::json!(id); }
+            results.push(result);
+        }
+        let data = if batch { serde_json::json!({ "secrets": results }) } else { results.remove(0) };
+        let response = ipc::Response::success(audit::code::OK, data);
+        if !ipc::fits_response(&response) { return Err((audit::code::OUTPUT_LIMIT, "结果超过上限，请减少本次引用数")); }
+        if cancel.load(std::sync::atomic::Ordering::SeqCst) { return Err(cancelled); }
+        if !scope.finish(remember) { return Err(changed); }
+        Ok(response)
+    })();
+    let (response, decision, audit_code) = match outcome {
+        Ok(response) => (response, audit::Decision::Allowed, audit::code::OK),
+        Err((code, message)) => {
+            let stored = if code == ipc::CODE_SESSION_ENDED { audit::code::EXPIRED } else { code };
+            (denied(code, message), audit::Decision::Denied, stored)
+        }
     };
-    record(
-        db,
-        audit::Event {
-            operation: audit::Operation::Read,
-            decision,
-            code,
-            secret_id: Some(secret_id),
-            installation_id: Some(&installation.id),
-            executor_id: None,
-        },
-    );
+    for id in &ids {
+        record(db, audit::Event {
+            operation: audit::Operation::Read, decision, code: audit_code,
+            secret_id: Some(id), installation_id: Some(installation_id), executor_id: None,
+        });
+    }
     response
 }
 

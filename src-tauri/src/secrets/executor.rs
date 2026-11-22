@@ -368,8 +368,18 @@ pub fn list(db: &Database) -> Result<Vec<SecretExecutor>, String> {
 /// with the same label never inherits the old authorization.
 pub fn remove(db: &Database, id: &str) -> Result<(), String> {
     let changed = db.with_connection(|conn| {
-        conn.execute("DELETE FROM secret_executors WHERE id=?1", [id])
-            .map_err(sql)
+        let tx = conn.transaction().map_err(sql)?;
+        let bindings = {
+            let mut statement = tx.prepare("SELECT installation_id,secret_id FROM secret_grants WHERE executor_id=?1").map_err(sql)?;
+            let rows = statement.query_map([id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).map_err(sql)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(sql)?
+        };
+        let changed = tx.execute("DELETE FROM secret_executors WHERE id=?1", [id]).map_err(sql)?;
+        tx.commit().map_err(sql)?;
+        for (installation, secret) in bindings {
+            super::session::invalidate(Some(&installation), Some(&secret));
+        }
+        Ok(changed)
     })?;
     if changed != 1 {
         return Err("执行入口已不存在".into());

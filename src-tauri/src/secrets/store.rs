@@ -143,10 +143,6 @@ pub fn exists(db: &Database, id: &str) -> Result<bool, String> {
     Ok(db.with_read_connection(|conn| read_row(conn, id))?.is_some())
 }
 
-pub(super) fn metadata_alias(db: &Database, id: &str) -> Result<Option<String>, String> {
-    Ok(db.with_read_connection(|conn| read_row(conn, id))?.map(|row| row.alias))
-}
-
 /// Local secrets with their reference status. Only aliases and reference ids cross
 /// this boundary; values stay in the credential store.
 pub fn list(db: &Database, store: &dyn CredentialStore) -> Result<Vec<PromptSecret>, String> {
@@ -375,7 +371,9 @@ pub fn delete(
             .map_err(|error| format!("无法从本机凭据库删除秘密原值：{error}"))?;
         tx.execute("DELETE FROM prompt_secrets WHERE id=?1 AND version=?2", params![id, expected_version as i64])
             .map_err(sql)?;
-        tx.commit().map_err(sql)
+        tx.commit().map_err(sql)?;
+        super::session::invalidate(None, Some(id));
+        Ok(())
     })
 }
 

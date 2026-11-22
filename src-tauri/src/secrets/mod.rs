@@ -3,8 +3,8 @@
 //! boundary and never enters SQLite, search previews, copies or hand-offs.
 //!
 //! The broker resolves a reference only for a registered installation and an
-//! explicit grant, runs a fixed executor without a shell, asks for a fresh
-//! approval on every value read, masks the value out of returned text and audits
+//! explicit grant, runs a fixed executor without a shell, verifies one-time or
+//! live tool-session approval for raw reads, masks executor output and audits
 //! each decision. The MCP stdio helper and the CLI helper reach the same broker
 //! over the per-user local IPC address and never open the database themselves.
 pub mod approval;
@@ -15,6 +15,7 @@ pub mod executor;
 pub mod ipc;
 pub mod mcp;
 pub mod reference;
+pub(crate) mod session;
 pub mod store;
 
 pub use reference::{format as format_reference, references as parse_references};

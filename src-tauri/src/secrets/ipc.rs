@@ -20,6 +20,8 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub const CODE_PROTOCOL: &str = "protocol_invalid";
 pub const CODE_BUSY: &str = "proxy_busy";
 pub const CODE_OFFLINE: &str = "proxy_offline";
+pub const CODE_SESSION_ENDED: &str = "session_ended";
+const MAX_MCP_SESSIONS: usize = 64;
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_CONNECTIONS: usize = 8;
@@ -45,6 +47,10 @@ pub struct Request {
     pub secret_id: Option<String>,
     #[serde(default)]
     pub executor_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_ids: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
 }
 
 /// One response. `data` is the only field that can hold a result; failures carry a
@@ -85,6 +91,7 @@ fn read_frame(reader: &mut impl Read, max: usize) -> Result<Vec<u8>, String> {
             Ok(read) => {
                 bytes.extend_from_slice(&chunk[..read]);
                 if let Some(end) = bytes.iter().position(|byte| *byte == b'\n') {
+                    if end > max { return Err("消息超过上限".into()); }
                     bytes.truncate(end);
                     return Ok(bytes);
                 }
@@ -98,6 +105,10 @@ fn read_frame(reader: &mut impl Read, max: usize) -> Result<Vec<u8>, String> {
     }
 }
 
+pub(super) fn fits_response(response: &Response) -> bool {
+    serde_json::to_vec(response).is_ok_and(|bytes| bytes.len() <= MAX_RESPONSE_BYTES)
+}
+
 fn write_frame(writer: &mut impl Write, response: &Response) -> Result<(), String> {
     let mut bytes = serde_json::to_vec(response).map_err(|_| "无法整理代理结果".to_string())?;
     if bytes.len() > MAX_RESPONSE_BYTES {
@@ -108,10 +119,49 @@ fn write_frame(writer: &mut impl Write, response: &Response) -> Result<(), Strin
     writer.write_all(&bytes).and_then(|_| writer.flush()).map_err(|_| "无法写入代理结果".to_string())
 }
 
-fn handle_connection(handler: Arc<dyn Handler>, mut stream: platform::Stream) {
-    let mut peer = stream.try_clone_stream();
-    let request = match read_frame(&mut stream, MAX_REQUEST_BYTES)
-        .and_then(|bytes| serde_json::from_slice::<Request>(&bytes).map_err(|_| "请求格式无效".to_string()))
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LeaseRequest {
+    version: u32,
+    open_mcp_session: String,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Frame {
+    Call(Request),
+    Lease(LeaseRequest),
+}
+
+/// A request checks the control connection itself, even if the thread watching
+/// for its EOF has not run yet. No socket operation here may block.
+pub(super) struct McpPeer {
+    stream: platform::Stream,
+    stopped: Arc<AtomicBool>,
+}
+
+impl McpPeer {
+    pub(super) fn live(&mut self) -> bool {
+        !self.stopped.load(Ordering::SeqCst) && !self.stream.closed_now()
+    }
+}
+
+struct Slot(Arc<AtomicUsize>);
+
+impl Slot {
+    fn acquire(count: &Arc<AtomicUsize>, limit: usize) -> Option<Self> {
+        let slot = Self(count.clone());
+        (count.fetch_add(1, Ordering::SeqCst) < limit).then_some(slot)
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) { self.0.fetch_sub(1, Ordering::SeqCst); }
+}
+
+fn handle_connection(handler: Arc<dyn Handler>, mut stream: platform::Stream, request_slot: Slot, leases: Arc<AtomicUsize>, broker_stopped: Arc<AtomicBool>) {
+    let frame = match read_frame(&mut stream, MAX_REQUEST_BYTES)
+        .and_then(|bytes| serde_json::from_slice::<Frame>(&bytes).map_err(|_| "请求格式无效".to_string()))
     {
         Ok(request) => request,
         Err(message) => {
@@ -119,40 +169,52 @@ fn handle_connection(handler: Arc<dyn Handler>, mut stream: platform::Stream) {
             return;
         }
     };
+    let request = match frame {
+        Frame::Call(request) => request,
+        Frame::Lease(lease) => {
+            if lease.version != PROTOCOL_VERSION || uuid::Uuid::parse_str(&lease.open_mcp_session).is_err() {
+                let _ = write_frame(&mut stream, &Response::failure(CODE_PROTOCOL, "会话请求无效"));
+                return;
+            }
+            let Some(_lease_slot) = Slot::acquire(&leases, MAX_MCP_SESSIONS) else {
+                let _ = write_frame(&mut stream, &Response::failure(CODE_BUSY, "MCP 会话过多"));
+                return;
+            };
+            drop(request_slot);
+            let Some(peer) = stream.try_clone_stream() else { return };
+            let session = super::session::LocalSession::mcp(&lease.open_mcp_session,
+                McpPeer { stream: peer, stopped: broker_stopped.clone() });
+            let response = Response::success("ok", serde_json::json!({ "token": session.token() }));
+            if write_frame(&mut stream, &response).is_ok() {
+                while !broker_stopped.load(Ordering::SeqCst) && !stream.closed_now() {
+                    thread::sleep(ACCEPT_POLL);
+                }
+            }
+            return;
+        }
+    };
     if request.version != PROTOCOL_VERSION {
         let _ = write_frame(&mut stream, &Response::failure(CODE_PROTOCOL, "协议版本不受支持"));
+        return;
+    }
+    if request.operation != Operation::Read && (request.secret_ids.is_some() || request.session.is_some()) {
+        let _ = write_frame(&mut stream, &Response::failure(CODE_PROTOCOL, "该操作不接受批量或会话参数"));
         return;
     }
     let cancel = Arc::new(AtomicBool::new(false));
     let stopped = Arc::new(AtomicBool::new(false));
     // The caller stays connected while it waits; an early close cancels the run.
-    let monitor = peer.take().map(|mut peer| {
+    let monitor = stream.try_clone_stream().map(|mut peer| {
         let cancel = cancel.clone();
         let stopped = stopped.clone();
         thread::spawn(move || {
             // A refused timeout is not a reason to stop watching: the peer is
             // already gone in that case, so the read below returns end-of-stream.
             let _ = peer.set_read_timeout(Some(ACCEPT_POLL));
-            let mut byte = [0u8; 1];
             while !stopped.load(Ordering::SeqCst) {
-                match peer.read(&mut byte) {
-                    // End of stream or unexpected extra bytes both mean the caller
-                    // is no longer waiting for this answer.
-                    Ok(0) | Ok(_) => {
-                        cancel.store(true, Ordering::SeqCst);
-                        return;
-                    }
-                    Err(error)
-                        if matches!(
-                            error.kind(),
-                            std::io::ErrorKind::WouldBlock
-                                | std::io::ErrorKind::TimedOut
-                                | std::io::ErrorKind::Interrupted
-                        ) => {}
-                    Err(_) => {
-                        cancel.store(true, Ordering::SeqCst);
-                        return;
-                    }
+                if peer.disconnected() {
+                    cancel.store(true, Ordering::SeqCst);
+                    return;
                 }
             }
         })
@@ -180,6 +242,9 @@ pub struct Broker {
 impl Drop for Broker {
     fn drop(&mut self) {
         self.stopped.store(true, Ordering::SeqCst);
+        // Wake the Windows listener blocked inside ConnectNamedPipe.
+        #[cfg(windows)]
+        drop(platform::Stream::connect(&self.address));
         if let Some(listener) = self.listener.take() {
             // The accept loop wakes within one poll interval; a stuck platform
             // wait must not hang application shutdown.
@@ -209,6 +274,7 @@ pub fn serve(handler: Arc<dyn Handler>) -> Result<Broker, String> {
     let _ = listener.set_blocking(false);
     let stopped = Arc::new(AtomicBool::new(false));
     let active = Arc::new(AtomicUsize::new(0));
+    let leases = Arc::new(AtomicUsize::new(0));
     let loop_stop = stopped.clone();
     let thread = thread::spawn(move || {
         while !loop_stop.load(Ordering::SeqCst) {
@@ -216,18 +282,16 @@ pub fn serve(handler: Arc<dyn Handler>) -> Result<Broker, String> {
                 thread::sleep(ACCEPT_POLL);
                 continue;
             };
-            if active.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
-                active.fetch_sub(1, Ordering::SeqCst);
+            if loop_stop.load(Ordering::SeqCst) { break; }
+            let Some(slot) = Slot::acquire(&active, MAX_CONNECTIONS) else {
                 let mut stream = stream;
                 let _ = write_frame(&mut stream, &Response::failure(CODE_BUSY, "秘密代理请求过多，请稍后重试"));
                 continue;
-            }
+            };
             let handler = handler.clone();
-            let active = active.clone();
-            thread::spawn(move || {
-                handle_connection(handler, stream);
-                active.fetch_sub(1, Ordering::SeqCst);
-            });
+            let leases = leases.clone();
+            let broker_stopped = loop_stop.clone();
+            thread::spawn(move || handle_connection(handler, stream, slot, leases, broker_stopped));
         }
     });
     Ok(Broker { address, stopped, listener: Some(thread) })
@@ -242,18 +306,59 @@ pub fn call(installation: &str, operation: Operation, secret_id: Option<&str>, e
         operation,
         secret_id: secret_id.map(str::to_owned),
         executor_id: executor_id.map(str::to_owned),
+        secret_ids: None,
+        session: None,
     };
+    exchange(&request).map(|(_, response)| response)
+}
+
+pub fn read(installation: &str, ids: &[String], batch: bool, session: Option<&str>) -> Result<Response, String> {
+    if ids.is_empty() || (!batch && ids.len() != 1) {
+        return Err("读取请求缺少有效秘密标识".into());
+    }
+    let request = Request {
+        version: PROTOCOL_VERSION,
+        installation: installation.to_owned(),
+        operation: Operation::Read,
+        secret_id: (!batch).then(|| ids[0].clone()),
+        secret_ids: batch.then(|| ids.to_vec()),
+        executor_id: None,
+        session: session.map(str::to_owned),
+    };
+    exchange(&request).map(|(_, response)| response)
+}
+
+pub struct McpSession {
+    token: String,
+    _stream: platform::Stream,
+}
+
+impl McpSession {
+    pub fn token(&self) -> &str { &self.token }
+}
+
+pub fn open_mcp_session(installation: &str) -> Result<McpSession, String> {
+    let (stream, response) = exchange(&LeaseRequest { version: PROTOCOL_VERSION, open_mcp_session: installation.to_owned() })?;
+    if !response.ok { return Err(response.message); }
+    let token = response.data.as_ref().and_then(|data| data.get("token")).and_then(|token| token.as_str())
+        .and_then(|token| uuid::Uuid::parse_str(token).ok()).ok_or("会话响应无效")?;
+    Ok(McpSession { token: token.to_string(), _stream: stream })
+}
+
+fn exchange(request: &impl Serialize) -> Result<(platform::Stream, Response), String> {
     let address = platform::address()?;
     let mut stream = platform::Stream::connect(&address)
         .map_err(|_| "未找到正在运行的栖点秘密代理；请先打开栖点".to_string())?;
-    let mut bytes = serde_json::to_vec(&request).map_err(|_| "无法整理代理请求".to_string())?;
+    let mut bytes = serde_json::to_vec(request).map_err(|_| "无法整理代理请求".to_string())?;
+    if bytes.len() > MAX_REQUEST_BYTES { return Err("代理请求超过上限，请减少本次引用数".into()); }
     bytes.push(b'\n');
     stream
         .write_all(&bytes)
         .and_then(|_| stream.flush())
         .map_err(|_| "无法连接本机秘密代理".to_string())?;
     let response = read_frame(&mut stream, MAX_RESPONSE_BYTES)?;
-    serde_json::from_slice(&response).map_err(|_| "本机秘密代理返回了无法识别的结果".to_string())
+    let response = serde_json::from_slice(&response).map_err(|_| "本机秘密代理返回了无法识别的结果".to_string())?;
+    Ok((stream, response))
 }
 
 /// Which rendezvous the running build uses. The UI shows it so a user can tell a
@@ -374,6 +479,15 @@ mod platform {
         pub fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
             self.0.set_read_timeout(timeout)
         }
+
+        pub fn disconnected(&mut self) -> bool {
+            !matches!(self.read(&mut [0u8; 1]), Err(ref e) if matches!(e.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted))
+        }
+
+        pub fn closed_now(&mut self) -> bool {
+            self.0.set_nonblocking(true).is_err() || self.disconnected()
+        }
     }
 
     impl Read for Stream {
@@ -455,13 +569,15 @@ mod platform {
 
     pub type Address = String;
 
-    /// Named pipes cannot be relocated, so the Windows tests use the real per-user
-    /// name and rely on the broker being absent.
+    /// The test process never connects to an installed desktop application.
     #[cfg(test)]
     pub static ROOT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[cfg(test)]
-    pub fn set_root(_: Option<Address>) {}
+    pub fn set_root(root: Option<Address>) { *ROOT.lock().unwrap() = root; }
+
+    #[cfg(test)]
+    static ROOT: Mutex<Option<Address>> = Mutex::new(None);
 
     fn wide(text: &str) -> Vec<u16> {
         OsStr::new(text).encode_wide().chain([0]).collect()
@@ -475,7 +591,10 @@ mod platform {
         let mut hasher = Sha256::new();
         hasher.update(sid.as_bytes());
         let hash: String = hasher.finalize().iter().take(8).map(|byte| format!("{byte:02x}")).collect();
-        Ok(format!(r"\\.\pipe\cliora-secret-broker-{hash}"))
+        let name = format!(r"\\.\pipe\cliora-secret-broker-{hash}");
+        #[cfg(test)]
+        let name = ROOT.lock().unwrap().clone().unwrap_or_else(|| format!("{name}-test-{}", std::process::id()));
+        Ok(name)
     }
 
     /// An owned pipe handle. A handle is an opaque kernel token rather than a
@@ -532,10 +651,26 @@ mod platform {
             Err("未找到正在运行的栖点秘密代理".into())
         }
 
-        /// A synchronous pipe handle cannot be polled for a disconnect without
-        /// overlapped I/O, so the Windows broker relies on the run budget.
         pub fn try_clone_stream(&self) -> Option<Self> {
-            None
+            use windows_sys::Win32::Foundation::{DuplicateHandle, DUPLICATE_SAME_ACCESS};
+            use windows_sys::Win32::System::Threading::GetCurrentProcess;
+            let process = unsafe { GetCurrentProcess() };
+            let mut handle = std::ptr::null_mut();
+            let ok = unsafe { DuplicateHandle(process, self.0.0, process, &mut handle, 0, 0, DUPLICATE_SAME_ACCESS) };
+            (ok != 0).then(|| Self(Handle(handle)))
+        }
+
+        pub fn closed_now(&mut self) -> bool {
+            use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+            let mut available = 0;
+            let ok = unsafe { PeekNamedPipe(self.0.0, std::ptr::null_mut(), 0, std::ptr::null_mut(), &mut available, std::ptr::null_mut()) };
+            ok == 0 || available != 0
+        }
+
+        pub fn disconnected(&mut self) -> bool {
+            if self.closed_now() { return true; }
+            std::thread::sleep(super::ACCEPT_POLL);
+            false
         }
 
         pub fn set_read_timeout(&self, _: Option<Duration>) -> io::Result<()> {

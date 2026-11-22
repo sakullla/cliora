@@ -7974,15 +7974,7 @@ impl crate::secrets::ipc::Handler for SecretBrokerHandler {
                             "use 需要 secretId 和 executorId",
                         ),
                     },
-                    ipc::Operation::Read => match request.secret_id.as_deref() {
-                        Some(secret_id) => {
-                            broker::read_secret(db, &AppCredentialStore, &approvals, &request.installation, secret_id)
-                        }
-                        None => ipc::Response::failure(
-                            crate::secrets::audit::code::INVALID_REQUEST,
-                            "read 需要 secretId",
-                        ),
-                    },
+                    ipc::Operation::Read => broker::read_request(db, &AppCredentialStore, &approvals, &request, cancel),
                 })
             })
             .unwrap_or_else(|_| {
@@ -8146,8 +8138,8 @@ pub fn secret_broker_status() -> crate::secrets::broker::BrokerStatus {
 /// authorized beyond the alias it already showed, and a repeated answer finds no
 /// pending request.
 #[tauri::command]
-pub fn answer_prompt_secret_approval(approval_id: String, accepted: bool) -> Result<(), ApiError> {
-    crate::secrets::approval::answer(&approval_id, accepted).map_err(native_error)
+pub fn answer_prompt_secret_approval(approval_id: String, accepted: bool, remember_session: Option<bool>) -> Result<(), ApiError> {
+    crate::secrets::approval::answer_scoped(&approval_id, accepted, remember_session.unwrap_or(false)).map_err(native_error)
 }
 
 #[tauri::command]

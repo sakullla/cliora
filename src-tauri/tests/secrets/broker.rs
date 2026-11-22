@@ -1,5 +1,5 @@
 //! Broker contracts: an installation, a grant and a fixed executor are needed
-//! before any value moves, returned text is masked, every read needs its own
+//! before any value moves. Raw reads need explicit one-time or live-session
 //! approval, and the audit trail never stores the value.
 use super::*;
 use crate::secrets::approval::{Host, Prompt, Verdict};
@@ -84,6 +84,7 @@ fn body(response: &ipc::Response) -> String {
 #[derive(Clone, Copy, PartialEq)]
 enum Answer {
     Accept,
+    Remember,
     Decline,
     Twice,
     Unavailable,
@@ -121,10 +122,10 @@ impl Host for FakeHost {
         match mode {
             Answer::Unavailable => Err("确认窗口不可用".to_string()),
             Answer::Silence => Ok(()),
-            Answer::Accept | Answer::Decline => {
-                let accept = mode == Answer::Accept;
+            Answer::Accept | Answer::Remember | Answer::Decline => {
+                let accept = mode != Answer::Decline;
                 std::thread::spawn(move || {
-                    let _ = approval::answer(&id, accept);
+                    let _ = approval::answer_scoped(&id, accept, mode == Answer::Remember);
                 });
                 Ok(())
             }
@@ -399,7 +400,7 @@ fn a_slow_run_times_out_without_returning_output() {
 }
 
 #[test]
-fn every_read_needs_its_own_approval() {
+fn each_sessionless_read_needs_its_own_approval() {
     let database = db();
     let store = MemoryCredentials::default();
     let secret = create_secret(&database, &store, "读取口令", CANARY);
@@ -431,6 +432,148 @@ fn every_read_needs_its_own_approval() {
         assert!(!prompt.source.contains(CANARY));
         assert_eq!(prompt.expires_in_seconds, 120);
     }
+}
+
+#[test]
+fn batch_reads_remember_only_approved_references_in_one_live_session() {
+    let database = db();
+    let credentials = MemoryCredentials::default();
+    let connection = installation(&database);
+    let second_connection = installation(&database);
+    let executor = register(&database, "测试传递", "node", &[], Channel::Stdin, None);
+    let a = create_secret(&database, &credentials, "用户名", CANARY);
+    let b = create_secret(&database, &credentials, "密码", OTHER);
+    let c = create_secret(&database, &credentials, "区域", "synthetic-region");
+    for install in [&connection, &second_connection] {
+        for id in [&a.id, &b.id, &c.id] {
+            grant(&database, &install.id, id, &executor.id).unwrap();
+        }
+    }
+
+    let session = session::LocalSession::new();
+    let next = session::LocalSession::new();
+    let host = FakeHost::new(Answer::Remember);
+    let read = |ids: &[String], token: &str, owner: &str| {
+        read_secrets(&database, &credentials, &host, owner, ids, true, Some(token), &AtomicBool::new(false))
+    };
+    let group = [a.reference.clone(), b.id.clone(), a.id.clone()];
+    let response = read(&group, session.token(), &connection.id);
+    assert!(response.ok, "{}", response.message);
+    let data = response.data.unwrap();
+    assert_eq!(data["secrets"].as_array().unwrap().len(), 2);
+    assert_eq!(data["secrets"][0]["value"], CANARY);
+    assert_eq!(data["secrets"][1]["id"], b.id);
+    assert_eq!(host.asked()[0].aliases, vec!["用户名", "密码"]);
+    assert!(host.asked()[0].session_available);
+    assert!(!host.asked()[0].source.contains(session.token()));
+    assert!(read(&group, session.token(), &connection.id).ok);
+    assert_eq!(host.asked().len(), 1);
+    assert!(read(&[a.id.clone(), c.id.clone()], session.token(), &connection.id).ok);
+    assert_eq!(host.asked()[1].aliases, vec!["区域"]);
+    assert!(read(&group, next.token(), &connection.id).ok);
+    assert!(read(&group, session.token(), &second_connection.id).ok);
+    assert_eq!(host.asked().len(), 4);
+
+    revoke_grant(&database, &connection.id, &a.id, &executor.id).unwrap();
+    let denied = read(&group, session.token(), &connection.id);
+    assert_eq!(denied.code, audit::code::GRANT_MISSING);
+    assert!(denied.data.is_none());
+    grant(&database, &connection.id, &a.id, &executor.id).unwrap();
+    assert!(read(&group, session.token(), &connection.id).ok);
+    assert_eq!(host.asked()[4].aliases, vec!["用户名"]);
+    let stale = session.token().to_owned();
+    drop(session);
+    assert_eq!(read(&group, &stale, &connection.id).code, ipc::CODE_SESSION_ENDED);
+    let rows = audit::list(&database, 100).unwrap();
+    assert_eq!(rows.iter().filter(|row| row.code == audit::code::GRANT_MISSING).count(), 2);
+    assert_eq!(rows.iter().filter(|row| row.code == audit::code::OK).count(), 12);
+}
+
+#[test]
+fn one_time_approval_inside_a_session_does_not_grant_future_reads() {
+    let database = db();
+    let credentials = MemoryCredentials::default();
+    let connection = create_installation(&database, "本机", Kind::Cli, None).unwrap();
+    let executor = register(&database, "测试传递", "node", &[], Channel::Stdin, None);
+    let a = create_secret(&database, &credentials, "A", CANARY);
+    grant(&database, &connection.id, &a.id, &executor.id).unwrap();
+    let session = session::LocalSession::new();
+    let read = |host: &FakeHost| read_secrets(&database, &credentials, host, &connection.id,
+        std::slice::from_ref(&a.id), false, Some(session.token()), &AtomicBool::new(false));
+
+    let once = FakeHost::new(Answer::Accept);
+    assert!(read(&once).ok);
+    assert!(read(&once).ok);
+    assert_eq!(once.asked().len(), 2);
+    assert!(once.asked().iter().all(|prompt| prompt.session_available));
+    let remember = FakeHost::new(Answer::Remember);
+    assert!(read(&remember).ok);
+    assert!(read(&remember).ok);
+    assert_eq!(remember.asked().len(), 1);
+
+    revoke_installation(&database, &connection.id).unwrap();
+    assert_eq!(read(&remember).code, audit::code::INSTALLATION_REVOKED);
+    restore_cli_installation(&database, &connection.id).unwrap();
+    assert_eq!(read(&remember).code, audit::code::GRANT_MISSING);
+    grant(&database, &connection.id, &a.id, &executor.id).unwrap();
+    assert!(read(&remember).ok);
+    assert_eq!(remember.asked().len(), 2);
+}
+
+#[test]
+fn a_failed_batch_returns_no_partial_values_and_remembers_nothing() {
+    let database = db();
+    let credentials = MemoryCredentials::default();
+    let connection = installation(&database);
+    let executor = register(&database, "测试传递", "node", &[], Channel::Stdin, None);
+    let a = create_secret(&database, &credentials, "A", CANARY);
+    let b = create_secret(&database, &credentials, "B", OTHER);
+    for id in [&a.id, &b.id] { grant(&database, &connection.id, id, &executor.id).unwrap(); }
+    let group = [a.id.clone(), b.id.clone()];
+    let session = session::LocalSession::new();
+    let host = FakeHost::new(Answer::Remember);
+    let read = |host: &FakeHost, token| {
+        read_secrets(&database, &credentials, host, &connection.id, &group, true, token, &AtomicBool::new(false))
+    };
+    credentials.delete(&reference::credential_id(&b.id).unwrap()).unwrap();
+    let missing = read(&host, Some(session.token()));
+    assert_eq!(missing.code, audit::code::CREDENTIAL_MISSING);
+    assert!(missing.data.is_none());
+    credentials.put(&reference::credential_id(&b.id).unwrap(), OTHER).unwrap();
+    assert!(read(&host, Some(session.token())).ok);
+    assert_eq!(host.asked().len(), 2);
+
+    // The client cannot grant itself session scope by submitting a forged
+    // remember decision to a one-time confirmation.
+    let external = read(&host, None);
+    assert_eq!(external.code, audit::code::DECLINED);
+    assert!(!host.asked()[2].session_available);
+    let reject = FakeHost::new(Answer::Decline);
+    assert_eq!(read(&reject, None).code, audit::code::DECLINED);
+    assert_eq!(reject.asked()[0].aliases.len(), 2);
+}
+
+#[test]
+fn revoking_and_regranting_during_confirmation_invalidates_the_pending_answer() {
+    struct RotatingHost<'a>(&'a Database, &'a str, &'a str, &'a str);
+    impl Host for RotatingHost<'_> {
+        fn ask(&self, prompt: &Prompt) -> Result<(), String> {
+            revoke_grant(self.0, self.1, self.2, self.3)?;
+            grant(self.0, self.1, self.2, self.3)?;
+            approval::answer_scoped(&prompt.approval_id, true, true)
+        }
+    }
+    let db = db();
+    let credentials = MemoryCredentials::default();
+    let connection = installation(&db);
+    let executor = register(&db, "测试传递", "node", &[], Channel::Stdin, None);
+    let a = create_secret(&db, &credentials, "A", CANARY);
+    grant(&db, &connection.id, &a.id, &executor.id).unwrap();
+    let session = session::LocalSession::new();
+    let response = read_secrets(&db, &credentials, &RotatingHost(&db, &connection.id, &a.id, &executor.id),
+        &connection.id, std::slice::from_ref(&a.id), false, Some(session.token()), &AtomicBool::new(false));
+    assert_eq!(response.code, audit::code::EXPIRED);
+    assert!(response.data.is_none());
 }
 
 #[test]
@@ -610,7 +753,7 @@ fn a_reference_from_list_runs_the_granted_action_without_a_raw_read() {
         "--installation".into(), installation.id.clone(), "use".into(), "--secret".into(), token.into(),
         "--executor".into(), executor.id.clone(),
     ]).unwrap();
-    let used = use_request(&db, &store, &installation.id, invocation.secret_id.as_ref().unwrap(), &executor.id);
+    let used = use_request(&db, &store, &installation.id, invocation.secret_ids.first().unwrap(), &executor.id);
     assert!(!body(&used).contains(CANARY));
     assert_eq!(used.data.unwrap()["stdout"], "OK");
     let rows = audit::list(&db, 100).unwrap();
