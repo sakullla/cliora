@@ -81,7 +81,7 @@ fn remote_plan_uses_persistent_mux_and_refuses_plain_ssh_fallback() {
         created_at: 0, updated_at: 0,
     }).unwrap();
     let project = crate::remote::save_project(&db, crate::remote::RemoteProject {
-        id: String::new(), target_id: target.id, name: "mux".into(), path: "/srv/mux".into(),
+        id: String::new(), target_id: target.id.clone(), name: "mux".into(), path: "/srv/mux".into(),
         preferred_tool: Some("codex".into()), updated_at: 0,
     }).unwrap();
     let plan = plan(&db, &Registry::builtins(), directory.path(), LaunchRequest {
@@ -106,6 +106,14 @@ fn remote_plan_uses_persistent_mux_and_refuses_plain_ssh_fallback() {
     assert!(plan.remote_end_args.is_some());
     let end_args = plan.remote_end_args.as_ref().unwrap();
     assert_eq!(end_args[0], "-T");
+    let pooled_args = crate::remote::connection_args(&target);
+    let expected_path = pooled_args.iter().find(|arg| arg.starts_with("ControlPath=")).map(String::as_str).unwrap_or("ControlPath=none");
+    for args in [&plan.cli_args, end_args] {
+        for option in ["ControlMaster=no", expected_path, "ControlPersist=no"] {
+            assert!(args.windows(2).any(|pair| pair[0] == "-o" && pair[1] == option));
+        }
+        assert!(!args.iter().any(|arg| arg == "ControlMaster=auto"));
+    }
     assert!(end_args.last().unwrap().contains("CLIORA_REMOTE_ABSENT:"));
     assert!(!end_args.last().unwrap().ends_with("|| true"));
     let reattach = crate::launch::remote_reattach_command(plan.remote_session_id.as_deref().unwrap());
@@ -423,6 +431,7 @@ fn remote_generated_commands_use_real_tmux_target_parsing_on_an_isolated_socket(
     let binary = remote_shell_quote(&std::env::var("CLIORA_TEST_TMUX").unwrap_or_else(|_| "tmux".into()));
     let libraries = remote_shell_quote(&std::env::var("CLIORA_TEST_TMUX_LIBRARY_PATH").unwrap_or_default());
     let reattach = remote_reattach_command("cliora-fixture");
+    let end = remote_end_command("cliora-fixture");
     let legacy = reattach.replace("set-option -t '=cliora-fixture:'", "set-option -t '=cliora-fixture'");
     assert_ne!(legacy, reattach, "negative control must reproduce the original target");
     let new = remote_persistent_command("/tmp", "sleep", &["60".into()], "cliora-fixture", Default::default());
@@ -494,7 +503,8 @@ printf 'REATTACH_RESULT:%s\n' "$reattach_output"
 [ "$(mux show-options -Av -t '=cliora-fixture:' mouse)" = on ]
 [ "$(mux show-options -Av -t '=cliora-fixture-long:' mouse)" = off ]
 [ "$(mux show-options -gv mouse)" = off ]
-mux kill-session -t '=cliora-fixture'
+end_output=$( ( set +e; {end} ) )
+[ "$end_output" = 'CLIORA_REMOTE_ABSENT:cliora-fixture' ]
 if missing_output=$( ( set +e; {reattach} ) ); then exit 83; else [ "$?" = 44 ] || exit 84; fi
 case "$missing_output" in *';ready'*) exit 85 ;; esac
 mux has-session -t '=cliora-fixture-long'

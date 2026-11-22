@@ -38,8 +38,10 @@ async function installDesktop(page: Page, layout: Layout) {
       nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' },
     }));
     const bridge: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } = { handlers: [], listens: {} };
+    const closed: string[] = [];
     Object.assign(window, {
       isTauri: true,
+      __closedSessions: closed,
       __emit: (event: string, payload: unknown) => bridge.handlers[bridge.listens[event]]?.({ payload }),
       __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
       __TAURI_INTERNALS__: {
@@ -59,7 +61,14 @@ async function installDesktop(page: Page, layout: Layout) {
           if (command === 'replay_workbench_session') return layout === 'long-folder'
             ? btoa(String.fromCharCode(...new TextEncoder().encode('\u001b]0;Write the API | e6-ms-tms-base-new-mes-fetch\u0007titlebar-fixture-ready\r\n> ')))
             : btoa('titlebar-fixture-ready\r\n> ');
-          if (command === 'write_workbench_session' || command === 'resize_workbench_session' || command === 'close_workbench_session') return null;
+          if (command === 'close_workbench_session') {
+            const id = String(args.sessionId);
+            closed.push(id);
+            const index = sessions.findIndex(session => session.id === id);
+            if (index !== -1) sessions.splice(index, 1);
+            return null;
+          }
+          if (command === 'write_workbench_session' || command === 'resize_workbench_session') return null;
           if (command === 'plugin:event|listen') { bridge.listens[String(args.event ?? '')] = Number(args.handler ?? 0); return args.handler ?? 0; }
           if (command === 'plugin:event|unlisten') return null;
           return [];
@@ -164,6 +173,22 @@ test('remote sessions that would read the same keep their id suffix', async ({ p
   await openWorkbench(page);
   await expect(page.getByRole('tab', { name: /aaaa1111/ })).toBeVisible();
   await expect(page.getByRole('tab', { name: /bbbb2222/ })).toBeVisible();
+});
+
+test('ending one remote session keeps the other SSH session connected', async ({ page }) => {
+  await installDesktop(page, 'remote-twins');
+  const stage = await openWorkbench(page);
+  const ending = page.locator('[role="tab"][data-session-id="rs1"]');
+  const remaining = page.locator('[role="tab"][data-session-id="rs2"]');
+  await ending.click();
+  await stage.getByRole('button', { name: '结束此会话', exact: true }).click();
+  await page.getByRole('dialog', { name: '结束这个会话？' }).getByRole('button', { name: '结束进程' }).click();
+  await expect(ending).toHaveCount(0);
+  await expect(remaining).toHaveAttribute('aria-selected', 'true');
+  await page.evaluate(() => (window as unknown as { __emit: (event: string, payload: unknown) => void }).__emit('cliora:session-exit', { sessionId: 'rs1', exitCode: 0 }));
+  await expect(stage).toContainText('SSH · 已连接');
+  await expect(stage.locator('textarea:visible')).toBeEnabled();
+  expect(await page.evaluate(() => (window as unknown as { __closedSessions: string[] }).__closedSessions)).toEqual(['rs1']);
 });
 
 test('non-running toolbar collapses, narrow/compact stage and status bars do not clip, and reduced motion disables screen sweep', async ({ page }) => {

@@ -1414,6 +1414,16 @@ pub fn quote_command_arg(value: &str) -> String {
 /// password negotiation, which otherwise add a round trip — or a multi-second
 /// Kerberos timeout — on every new connection.
 pub fn connection_args(target: &RemoteTarget) -> Vec<String> {
+    connection_args_with_pool(target, true)
+}
+
+/// A workbench PTY and its end command can borrow Cliora's detached master.
+/// If the socket is missing, OpenSSH opens a connection for this client alone.
+pub(crate) fn workbench_connection_args(target: &RemoteTarget) -> Vec<String> {
+    connection_args_with_pool(target, false)
+}
+
+fn connection_args_with_pool(target: &RemoteTarget, pool: bool) -> Vec<String> {
     let mut args = vec![
         "-o".into(),
         "StrictHostKeyChecking=yes".into(),
@@ -1476,19 +1486,21 @@ pub fn connection_args(target: &RemoteTarget) -> Vec<String> {
     // connection; `run_ssh` keeps that burst inside sshd's unauthenticated
     // connection limit and retries a handshake the server closes.
     let socket = control_path(target);
-    if let Some(path) = &socket {
+    if let Some(path) = socket {
         args.extend([
             "-o".into(),
-            "ControlMaster=auto".into(),
+            if pool { "ControlMaster=auto" } else { "ControlMaster=no" }.into(),
             "-o".into(),
-            "ControlPersist=60".into(),
+            if pool { "ControlPersist=60" } else { "ControlPersist=no" }.into(),
             "-o".into(),
             format!("ControlPath={path}"),
         ]);
-    }
-    #[cfg(not(windows))]
-    if socket.is_none() {
+    } else if !pool || cfg!(not(windows)) {
+        // Keep the client off arbitrary sockets inherited from ssh_config.
         args.extend(["-o".into(), "ControlMaster=no".into(), "-o".into(), "ControlPath=none".into()]);
+        if !pool {
+            args.extend(["-o".into(), "ControlPersist=no".into()]);
+        }
     }
     // A proxy enabled on this computer is tried first; the helper falls back to a
     // direct connection on its own.

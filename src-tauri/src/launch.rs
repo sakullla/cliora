@@ -649,7 +649,7 @@ fn remote_launch_plan(
     // Keep OpenSSH informational shutdown lines out of the interactive PTY;
     // the workbench already reports connection state in its status bar.
     let mut args = vec!["-tt".into(), "-o".into(), "LogLevel=ERROR".into()];
-    args.extend(crate::remote::connection_args(&target));
+    args.extend(crate::remote::workbench_connection_args(&target));
     let legacy_session = match request.session_id.as_deref() {
         Some(value) => Some(value.strip_prefix(REMOTE_REATTACH_PREFIX)
             .filter(|id| !id.is_empty())
