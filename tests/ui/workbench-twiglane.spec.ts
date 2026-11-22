@@ -196,7 +196,7 @@ async function installDesktop(page: Page, options: { sessions?: 'single' | 'pair
             const query = new URLSearchParams(url.split('?')[1] ?? '');
             const ignored = (reason: string) => ({ kind: 'ignored', sessionId: null, reviewId: null, outcome: null, headOid: null, worktreeState: null, reason });
             // 同原生解析：只接受 v2，v1 与其他版本在查注册表之前就被丢弃。
-            const remote = pairingRemote && url.startsWith('cliora://remote-review?') && query.get('v') === '1';
+            const remote = pairingRemote && (url.startsWith('cliora://remote-review?') || url.startsWith('cliora://remote-review/?')) && query.get('v') === '1';
             if (!remote && query.get('v') !== '2') return ignored('unsupported_version');
             const meta: Record<string, string> = {};
             for (const [key, value] of query) {
@@ -668,7 +668,7 @@ test('a remote session reviews its own worktree, stays pending during installati
   await expect(group.getByRole('alert')).toContainText('请在目标工作树重新开启远端会话');
 });
 
-test('a Windows remote review shows the verified merged result for its drive checkout', async ({ page }) => {
+test('a Windows remote review can resend the exact merged URL after an unverified return', async ({ page }) => {
   const repository = 'C:/目录 with spaces/alpha';
   await installDesktop(page, { sessions: 'remote', remotePath: repository });
   await openWorkbench(page);
@@ -676,17 +676,25 @@ test('a Windows remote review shows the verified merged result for its drive che
   const group = page.getByRole('menu', { name: '在 Twiglane 中审查' }).getByRole('group', { name: '在 Twiglane 中审查' });
   await expect(group).toContainText('Build box · ' + repository);
   await group.getByRole('menuitem', { name: '在 Twiglane 中审查' }).click();
-  await page.evaluate((oid) => {
+  const url = await page.evaluate((oid) => {
     const bridge = window as unknown as {
       __harness: { starts: { reviewId: string }[]; headOid: string; files: number };
-      __emitDeepLink: (url: string) => void;
     };
     const review = bridge.__harness.starts[0];
     bridge.__harness.headOid = oid;
-    bridge.__harness.files = 0;
-    bridge.__emitDeepLink('cliora://remote-review?v=1&event=returned&outcome=merged&worktreeState=clean&resultRevision=3&sessionId=s1&reviewId=' + review.reviewId + '&headOid=' + oid);
+    return 'cliora://remote-review/?v=1&event=returned&outcome=merged&worktreeState=clean&resultRevision=3&sessionId=s1&reviewId=' + review.reviewId + '&headOid=' + oid;
   }, NEXT);
+  const send = () => page.evaluate(value => (window as unknown as {__emitDeepLink: (link: string) => void}).__emitDeepLink(value), url);
+  await send();
+  await expect(page.getByText(/Twiglane 声明的工作区状态与当前真实状态不一致/).first()).toBeVisible();
+  await page.evaluate(() => {
+    const bridge = window as unknown as {__harness: { files: number }};
+    bridge.__harness.files = 0;
+  });
+  await send();
   await expect(page.getByText('Twiglane 已合入 ' + NEXT.slice(0, 7) + '。').first()).toBeVisible();
+  const repeats = await page.evaluate(value => (window as unknown as {__harness: {links: string[]}}).__harness.links.filter(link => link === value).length, url);
+  expect(repeats).toBe(2);
 });
 
 /** A review link may only read: it never starts a session and never writes Git. */

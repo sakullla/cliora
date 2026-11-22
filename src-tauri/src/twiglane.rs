@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::commands::ApiError;
 use crate::git_status::{is_oid, run_git};
@@ -63,7 +63,7 @@ pub(crate) const STATUS_REJECTED: &str = "rejected";
 pub(crate) const STATUS_RETURNED: &str = "returned";
 
 /// 一次已发起的审查。字段名与前端 camelCase 契约一致。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewState {
     #[serde(skip)]
@@ -143,7 +143,7 @@ pub(crate) enum LinkEvent {
 }
 
 /// 目标 worktree 的真实代码状态。state 为 unknown 时各项读取结果不可用，不能显示成 0。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodeStatus {
     pub session_id: String,
@@ -156,7 +156,7 @@ pub struct CodeStatus {
     pub session_files: Option<u64>,
     /// HEAD when the session started in this worktree.
     pub session_base: Option<String>,
-    pub state: &'static str,
+    pub state: String,
     pub reason: Option<String>,
 }
 
@@ -170,7 +170,7 @@ impl CodeStatus {
             uncommitted_files: None,
             session_files: None,
             session_base: None,
-            state: "unknown",
+            state: "unknown".into(),
             reason: Some(reason.into()),
         }
     }
@@ -324,7 +324,7 @@ pub(crate) fn source_review_url(state: &ReviewState) -> Result<String, &'static 
 
 /// 校验并解析回送的 cliora://review 事件。失败返回协议里的稳定错误码。
 pub(crate) fn parse_event_url(url: &str) -> Result<LinkEvent, &'static str> {
-    if url.starts_with("cliora://remote-review?") { return remote_review::event(url); }
+    if remote_review::is_event_url(url) { return remote_review::event(url); }
 
     if url.len() > MAX_URL_BYTES || has_raw_whitespace_or_control(url) {
         return Err("malformed_request");
@@ -560,6 +560,7 @@ impl ReviewRegistry {
                 let matches_result = |status: &CodeStatus| {
                     status.state == "ready"
                         && status.worktree_path.as_deref() == Some(entry.worktree_path.as_str())
+                        && status.session_base == entry.baseline
                         && (entry.head_oid.is_none() || entry.head_oid == status.head_oid)
                         && (!writes_head || (entry.head_oid.is_some() && entry.head_oid != entry.baseline))
                         && status.uncommitted_files.is_some_and(|files| !matches!((entry.worktree_state.as_deref(), files), (Some("clean"), 1..) | (Some("dirty"), 0)))
@@ -765,7 +766,7 @@ pub(crate) fn code_status(session_id: &str, directory: &Path) -> CodeStatus {
             uncommitted_files: Some(snapshot.files),
             session_files: start.as_ref().and_then(|start| crate::session_baseline::session_changes(start, &root).ok()),
             session_base: start.and_then(|start| start.head.clone()),
-            state: "ready",
+            state: "ready".into(),
             reason: None,
         },
         Err(reason) => CodeStatus::unknown(session_id, path, reason),
@@ -791,6 +792,7 @@ pub(crate) fn api_error(code: &'static str) -> ApiError {
         "target_changed" => ("远端会话、SSH 主机或工作树的身份已变化。", "重新选择原远端会话并核对配置。"),
         "remote_session" => ("会话没有本机工作树。", "从原远端会话重新发起审查。"),
         "invalid_path" => ("会话目录已经失效或无法读取。", "确认目录仍然存在后重试。"),
+        "invalid_baseline" => ("无法核实远端会话记录的 Git 基线。", "恢复原基线后重试，或在正确的工作树重新开启会话。"),
         "not_a_worktree" => ("这个目录不是 Git 工作树根目录。", "在会话所在的工作树根目录中重新发起。"),
         "git_missing" => ("找不到 Git，无法读取工作树状态。", "安装 Git 后重试。"),
         "path_too_long" => ("工作树路径太长，无法生成审查链接。", "把工作树放到更短的路径下再发起审查。"),

@@ -439,9 +439,7 @@ export default function App() {
     }
     let active = true;
     let stop: (() => void) | null = null;
-    // review 链接带一次审查唯一的 reviewId，同一串重复到达就是同一事件的重复投递；native 注册表
-    // 已经按 reviewId 与结果版本拒绝重放，所以这里继续按串去重。v2 workspace 链接不是这样：它对同一
-    // 成员是字节相同的固定输出，去重只能覆盖“这次意图尚未结算”的窗口（见 handle 内的说明）。
+    // 本地审查按完整 URL 去重。远端审查只合并同时到达的重复 URL，SSH 核验失败后原结果可重送。
     const handledReviews = new Set<string>();
     // 一批意见的深链只携带标识；同一串重复投递由这里和原生暂存共同拒绝。
     const handledFeedback = new Set<string>();
@@ -501,10 +499,12 @@ export default function App() {
       }
       if (handledReviews.has(url)) return;
       handledReviews.add(url);
+      const remoteReview = url.startsWith('cliora://remote-review?') || url.startsWith('cliora://remote-review/?');
       void native.twiglaneReviewLink(url).then(async (outcome) => {
+        if (remoteReview) handledReviews.delete(url);
         if (!active) return;
         if (outcome.kind === 'ignored') {
-          // unknown_review：注册表里从未有过这个 reviewId（重启或来源失效）；
+          // unknown_review：没有这次审查来源；
           // superseded_review：同一会话已经发起了更新的审查，迟到事件不覆盖新结果。
           if (outcome.reason === 'unknown_review' || outcome.reason === 'superseded_review') showReviewExpired();
           return;
@@ -515,8 +515,11 @@ export default function App() {
           const intent = ++returnIntent;
           const available = await sessionAvailable(sessionId, !!outcome.remoteTargetId);
           if (intent !== returnIntent) return;
-          if (!available || !active) {
-            if (active) showReviewExpired();
+          if (!active) return;
+          if (!available) {
+            // 远端来源独立于当前工作台连接。重新附着后会读取已保存的原任务状态。
+            if (outcome.remoteTargetId) await transitionRef.current('sessions', outcome.remoteTargetId);
+            else showReviewExpired();
             return;
           }
           if (!await transitionRef.current('sessions', outcome.remoteTargetId ?? 'local')) return;
@@ -524,7 +527,6 @@ export default function App() {
           return;
         }
         setReviewSignal((current) => ({ sessionId, token: (current?.token ?? 0) + 1 }));
-        // 只有传输失败没有结论：放开这一串，命令本身被拒绝时仍可重试同一事件。
       }).catch(() => { handledReviews.delete(url); });
     };
     // 浏览器 mock 或插件缺失时 unlisten 可能是拒绝的 promise；释放失败不打断任何事。

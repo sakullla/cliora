@@ -225,7 +225,8 @@ def read(session, path):
         if saved["key"] != key or saved["root"] != canonical_path(root): raise ValueError("worktree_changed")
         baseline = saved["baseline"]
     before = head(root)
-    baseline = usable_baseline(root, baseline, before)
+    if baseline is not None and usable_baseline(root, baseline, before) is None:
+        raise ValueError("invalid_baseline")
     branch = git(root, "symbolic-ref", "-q", "--short", "HEAD", optional=True)
     count = 0
     with subprocess.Popen(git_args(root, "status", "--porcelain=v2", "-z", "--untracked-files=all", "--ignore-submodules=none"),
@@ -293,7 +294,7 @@ if __name__ == "__main__":
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         if sys.argv[1] == "inspect":
             reason = str(error)
-            if reason not in ("remote_review_restart", "worktree_changed", "not_a_worktree"):
+            if reason not in ("remote_review_restart", "worktree_changed", "not_a_worktree", "invalid_baseline"):
                 reason = "read_failed"
             print(json.dumps({"error": reason}), flush=True)
         elif sys.argv[1] == "launch":

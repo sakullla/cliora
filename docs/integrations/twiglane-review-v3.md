@@ -197,15 +197,17 @@ Twiglane 的 `cliora_review_sources({resetPending})` 返回有界的 `{sources, 
 
 Cliora 通过 `twiglane://remote-review?v=1` 发送 `reviewId`、`sessionId`、`targetId`、`targetRevision`、`peerRevision`、`peerIdentity`、`worktreePath` 和 `worktreeIdentity`。启动时可用的完整提交 ID 通过可选的 `baseline` 发送。首次启动产生的记录绑定工作树，重复读取或重新打开同一记录不会移动基线。源会话更换主机、工作树被替换或已无可核实的来源时，需要从正确的远端工作树发起新审查。
 
+启动时确实没有基线的会话可以省略该字段。已记录的基线无法在当前历史中核实时，读取明确返回 `invalid_baseline`。用户可恢复原基线后重试，或在正确的工作树重新开启会话。
+
 POSIX 继续发送绝对路径。Windows 发送盘符大写、使用 `/` 分隔的规范路径，例如 `C:/项目 with spaces/repository`。Windows 工作树指纹是紧凑 ASCII JSON 的 SHA-256。数组包含小写物理 DNS 主机名、工作树根目录信息和该工作树的 Git 目录信息。每项目录信息包含规范路径、卷序列号和 64 位文件索引。POSIX 指纹仍使用原路径、设备号和 inode。
 
 Windows OpenSSH 的 Cliora 工作台使用前台会话，运行目录来自盘符项目。该主机需要能在 OpenSSH 命令路径找到 Git、Python 3 和原生 CLI 可执行文件。正常退出会回传结束标记，连接中断后可重新启动会话。POSIX 会话继续由 tmux 或 screen 管理。
 
 ### 返回和持久确认
 
-Twiglane 发送 `cliora://remote-review?v=1&event=returned`，并带原 `reviewId`、`sessionId`、正整数 `resultRevision`、`outcome` 和 `worktreeState`。结果阶段依次为 `reviewed`、`committed`、`merged`。后两种结果必须带完整 `headOid`。旧格式的来源和返回链接可继续解析。
+Twiglane 发送 `cliora://remote-review?v=1&event=returned`，并带原 `reviewId`、`sessionId`、正整数 `resultRevision`、`outcome` 和 `worktreeState`。结果阶段依次为 `reviewed`、`committed`、`merged`。后两种结果必须带完整 `headOid`。接收端同时接受系统规范化后的 `cliora://remote-review/?`。
 
-Cliora 校验当前来源、阶段和序号，对绑定的工作树重新读取实际 HEAD 与工作区状态。成功复核后将结果保存到本地数据库。旧来源和逆序结果不会覆盖新结果。未确认的结果允许重送同一序号和完全相同的载荷，已保存的重送不再次写入。
+Cliora 在打开 Twiglane 之前持久保存当前审查来源。返回时按原协议身份、远端会话、项目、主机和工作树重新核验，也适用于 Cliora 进程重启或工作台重新附着后更换本地标签的情况。成功复核 HEAD、基线和工作区状态后写入收据。旧来源和逆序结果不会覆盖新结果。未确认的结果允许重送同一序号和完全相同的载荷，已保存的重送不再次写入。
 
 `cliora --twiglane-remote-v1 version` 的 `capabilities` 包含 `reviewReceipt` 时，Twiglane 可调用以下只读确认。
 

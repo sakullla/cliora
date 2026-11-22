@@ -1,7 +1,7 @@
 //! Session review reads use a confirmed SSH connection even before Twiglane installs its agent.
 use super::{twiglane::configure_ssh, twiglane_config::Snapshot, twiglane_peer, RemoteTarget};
 use base64::Engine;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
     io::{Read, Write},
@@ -51,7 +51,7 @@ pub(crate) fn windows_launch_command(
     Ok(command)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct Binding {
     pub target_id: String,
     pub target_revision: String,
@@ -59,9 +59,20 @@ pub(crate) struct Binding {
     pub peer_identity: String,
     pub remote_session: String,
     pub project_id: String,
+    pub tool_id: String,
     pub directory: String,
     pub worktree_key: String,
     pub worktree_identity: String,
+}
+
+impl Binding {
+    pub(crate) fn matches_origin(&self, origin: &crate::launch::RemoteSessionIndexEntry) -> bool {
+        self.target_id == origin.target_id
+            && self.remote_session == origin.remote_session_id
+            && self.project_id == origin.project_id
+            && self.tool_id == origin.tool_id
+            && self.directory == origin.directory
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -94,11 +105,7 @@ pub(crate) fn read(
     }
     let snapshot = Snapshot::resolve(target)?;
     if expected.is_some_and(|source| {
-        source.target_id != target.id
-            || source.target_revision != snapshot.revision
-            || source.remote_session != origin.remote_session_id
-            || source.project_id != origin.project_id
-            || source.directory != origin.directory
+        !source.matches_origin(origin) || source.target_revision != snapshot.revision
     }) {
         return Err("target_changed");
     }
@@ -148,6 +155,7 @@ pub(crate) fn read(
                     "remote_review_restart" => "remote_review_restart",
                     "worktree_changed" => "target_changed",
                     "not_a_worktree" => "not_a_worktree",
+                    "invalid_baseline" => "invalid_baseline",
                     _ => "read_failed",
                 })
             }
@@ -164,6 +172,7 @@ pub(crate) fn read(
             peer_identity,
             remote_session: origin.remote_session_id.clone(),
             project_id: origin.project_id.clone(),
+            tool_id: origin.tool_id.clone(),
             directory: origin.directory.clone(),
             worktree_key: data.key,
             worktree_identity: data.worktree_identity,
@@ -176,7 +185,7 @@ pub(crate) fn read(
             uncommitted_files: Some(data.uncommitted),
             session_files: None,
             session_base: data.baseline,
-            state: "ready",
+            state: "ready".into(),
             reason: None,
         };
         Ok((binding, status))

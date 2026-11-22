@@ -19,7 +19,7 @@ pub struct Database {
     read_path: Option<std::path::PathBuf>,
 }
 
-const LATEST_VERSION: u32 = 37;
+const LATEST_VERSION: u32 = 38;
 
 impl Database {
     /// Independent consumers can read a configured desktop without creating or migrating its DB.
@@ -814,6 +814,25 @@ impl Database {
                    PRIMARY KEY (review_id, session_id, result_revision)
                  );
                  PRAGMA user_version = 37;",
+            )?;
+            tx.commit()?;
+        }
+        if version < 38 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS twiglane_remote_review_sources (
+                   position INTEGER PRIMARY KEY,
+                   review_id TEXT NOT NULL UNIQUE,
+                   session_id TEXT NOT NULL,
+                   target_id TEXT NOT NULL REFERENCES remote_targets(id) ON DELETE CASCADE,
+                   remote_session_id TEXT NOT NULL,
+                   state TEXT NOT NULL
+                 );
+                 CREATE INDEX IF NOT EXISTS idx_twiglane_remote_review_latest
+                   ON twiglane_remote_review_sources(target_id, remote_session_id, position DESC);
+                 CREATE INDEX IF NOT EXISTS idx_twiglane_remote_review_session
+                   ON twiglane_remote_review_sources(session_id, position DESC);
+                 PRAGMA user_version = 38;",
             )?;
             tx.commit()?;
         }

@@ -3969,29 +3969,41 @@ pub async fn git_worktrees(directory: String) -> Result<Vec<crate::git_context::
     }).await
 }
 
-/// Resolve a live workbench session to its original durable remote identity.
-fn remote_review_status(app: &AppHandle, session_id: &str, expected: Option<&crate::remote::twiglane_review::Binding>)
-    -> Result<(crate::remote::twiglane_review::Binding, crate::twiglane::CodeStatus), ApiError> {
-    let session = crate::session_host::list().into_iter().find(|s| s.id == session_id).ok_or_else(|| crate::twiglane::api_error("session_unknown"))?;
+fn live_remote_origin(db: &Database, session: &crate::session_host::SessionSnapshot) -> Result<launch::RemoteSessionIndexEntry, ApiError> {
     let (Some(project_id), Some(remote_id)) = (session.project_id.as_deref().and_then(|id| id.strip_prefix("remote:")), session.remote_session_id.as_deref()) else {
         return Err(crate::twiglane::api_error("target_changed"));
     };
-    let db = app.state::<AppState>().database(app)?;
-    crate::remote::ensure_enabled(&db).map_err(|_| crate::twiglane::api_error("target_changed"))?;
-    let project = crate::remote::list_projects(&db, None).map_err(|_| crate::twiglane::api_error("read_failed"))?.into_iter()
-        .find(|p| p.id == project_id).ok_or_else(|| crate::twiglane::api_error("target_changed"))?;
-    let mut origins = launch::list_remote_sessions(&db).map_err(native_error)?.into_iter().filter(|r| r.remote_session_id == remote_id &&
-        r.project_id == project_id && r.tool_id == session.tool_id && r.directory == session.directory);
-    let origin = origins.next().filter(|r| r.target_id == project.target_id)
-        .ok_or_else(|| crate::twiglane::api_error("target_changed"))?;
+    let mut origins = launch::list_remote_sessions(db).map_err(native_error)?.into_iter().filter(|entry| {
+        entry.remote_session_id == remote_id && entry.project_id == project_id
+            && entry.tool_id == session.tool_id && entry.directory == session.directory
+    });
+    let origin = origins.next().ok_or_else(|| crate::twiglane::api_error("target_changed"))?;
     if origins.next().is_some() { return Err(crate::twiglane::api_error("target_changed")); }
-    let target = crate::remote::target(&db, &origin.target_id).map_err(|_| crate::twiglane::api_error("target_changed"))?;
-    let data = crate::remote::twiglane_review::read(&target, &origin, session_id, expected).map_err(crate::twiglane::api_error)?;
-    let active = crate::session_host::list().into_iter().any(|s| s.id == session_id && s.project_id == session.project_id &&
-        s.remote_session_id == session.remote_session_id && s.directory == session.directory);
-    let same_target = crate::remote::target(&db, &target.id).is_ok_and(|now| crate::remote::operations::target_identity(&now) == crate::remote::operations::target_identity(&target));
-    let same_project = crate::remote::list_projects(&db, Some(&target.id)).is_ok_and(|projects| projects.iter().any(|p| p.id == project_id));
-    if !active || !same_target || !same_project { return Err(crate::twiglane::api_error("target_changed")); }
+    Ok(origin)
+}
+
+fn bound_remote_origin(db: &Database, binding: &crate::remote::twiglane_review::Binding) -> Result<launch::RemoteSessionIndexEntry, ApiError> {
+    launch::list_remote_sessions(db).map_err(native_error)?.into_iter()
+        .find(|origin| binding.matches_origin(origin))
+        .ok_or_else(|| crate::twiglane::api_error("target_changed"))
+}
+
+fn read_remote_review(
+    db: &Database,
+    origin: &launch::RemoteSessionIndexEntry,
+    session_id: &str,
+    expected: Option<&crate::remote::twiglane_review::Binding>,
+) -> Result<(crate::remote::twiglane_review::Binding, crate::twiglane::CodeStatus), ApiError> {
+    crate::remote::ensure_enabled(db).map_err(|_| crate::twiglane::api_error("target_changed"))?;
+    let target = crate::remote::target(db, &origin.target_id).map_err(|_| crate::twiglane::api_error("target_changed"))?;
+    let has_project = || crate::remote::list_projects(db, Some(&target.id))
+        .is_ok_and(|projects| projects.iter().any(|p| p.id == origin.project_id));
+    if !has_project() { return Err(crate::twiglane::api_error("target_changed")); }
+    let data = crate::remote::twiglane_review::read(&target, origin, session_id, expected).map_err(crate::twiglane::api_error)?;
+    let same_target = crate::remote::target(db, &target.id)
+        .is_ok_and(|now| crate::remote::operations::target_identity(&now) == crate::remote::operations::target_identity(&target));
+    bound_remote_origin(db, &data.0)?;
+    if !same_target || !has_project() { return Err(crate::twiglane::api_error("target_changed")); }
     Ok(data)
 }
 
@@ -3999,9 +4011,13 @@ fn remote_review_status(app: &AppHandle, session_id: &str, expected: Option<&cra
 pub async fn workbench_code_status(app: AppHandle, session_id: String) -> Result<crate::twiglane::CodeStatus, ApiError> {
     blocking(move || {
         if crate::session_host::remote_session_id(&session_id).is_some() {
-            let latest = app.state::<AppState>().reviews.latest_for_session(&session_id);
+            let db = app.state::<AppState>().database(&app)?;
+            let session = crate::session_host::list().into_iter().find(|s| s.id == session_id)
+                .ok_or_else(|| crate::twiglane::api_error("session_unknown"))?;
+            let origin = live_remote_origin(&db, &session)?;
+            let latest = crate::twiglane::remote_review::source_for_origin(&db, &origin).map_err(native_error)?;
             let pinned = latest.as_ref().and_then(|s| s.remote_binding.as_ref());
-            return remote_review_status(&app, &session_id, pinned).map(|(_,status)| status);
+            return read_remote_review(&db, &origin, &session_id, pinned).map(|(_,status)| status);
         }
         let directory = review_directory(&session_id)?;
         Ok(crate::twiglane::code_status(&session_id, &directory))
@@ -4023,14 +4039,24 @@ pub async fn twiglane_start_review(
 ) -> Result<crate::twiglane::ReviewState, ApiError> {
     blocking(move || {
         if crate::session_host::remote_session_id(&session_id).is_some() {
-            let (binding, status) = remote_review_status(&app, &session_id, None)?;
+            let db = app.state::<AppState>().database(&app)?;
+            let session = crate::session_host::list().into_iter().find(|s| s.id == session_id)
+                .ok_or_else(|| crate::twiglane::api_error("session_unknown"))?;
+            let origin = live_remote_origin(&db, &session)?;
+            let (binding, status) = read_remote_review(&db, &origin, &session_id, None)?;
+            let active = crate::session_host::list().into_iter().any(|s| s.id == session_id && s.project_id == session.project_id
+                && s.remote_session_id == session.remote_session_id && s.tool_id == session.tool_id && s.directory == session.directory);
+            if !active { return Err(crate::twiglane::api_error("target_changed")); }
             let root = status.worktree_path.as_deref().ok_or_else(|| crate::twiglane::api_error("not_a_worktree"))?;
             let mut state = crate::twiglane::new_review(&session_id, root, status.session_base.clone());
             state.protocol_version = 1;
             state.remote_binding = Some(binding);
             let url = crate::twiglane::source_review_url(&state).map_err(crate::twiglane::api_error)?;
-            return app.state::<AppState>().reviews.publish(state, || tauri_plugin_opener::open_url(&url, None::<&str>).map_err(|_| ()))
-                .map_err(crate::twiglane::api_error);
+            return crate::twiglane::remote_review::publish(&db, state, || {
+                tauri_plugin_opener::open_url(&url, None::<&str>).map_err(|_| ())
+            }).map_err(|error| {
+                if error == "open_failed" { crate::twiglane::api_error("open_failed") } else { native_error(error) }
+            });
         }
         let directory = review_directory(&session_id)?;
         let root = crate::twiglane::checked_worktree(&directory).map_err(crate::twiglane::api_error)?;
@@ -4063,7 +4089,27 @@ pub async fn twiglane_review_state(
     app: AppHandle,
     session_id: String,
 ) -> Result<Option<crate::twiglane::ReviewState>, ApiError> {
-    Ok(app.state::<AppState>().reviews.latest_for_session(&session_id))
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let remote = crate::session_host::list().into_iter().find(|session| {
+            session.id == session_id && session.remote_session_id.is_some()
+        });
+        if let Some(session) = remote {
+            let db = state.database(&app)?;
+            let origin = live_remote_origin(&db, &session)?;
+            let saved = crate::twiglane::remote_review::source_for_origin(&db, &origin).map_err(native_error)?;
+            return Ok(saved.map(|mut review| {
+                review.session_id = session_id.clone();
+                if let Some(checked) = review.remote_check.as_mut() { checked.session_id = session_id; }
+                review
+            }));
+        }
+        if let Some(review) = state.reviews.latest_for_session(&session_id) {
+            return Ok(Some(review));
+        }
+        let db = state.database(&app)?;
+        crate::twiglane::remote_review::source_for_session(&db, &session_id).map_err(native_error)
+    }).await
 }
 
 /// Apply one inbound cliora://review link. Invalid, unknown and superseded links
@@ -4077,48 +4123,39 @@ pub async fn twiglane_review_link(
         let event = match crate::twiglane::parse_event_url(&url) {
             Ok(value) => value, Err(code) => return Ok(crate::twiglane::LinkOutcome::ignored(code)),
         };
-        let remote_revision = match &event { crate::twiglane::LinkEvent::Remote { result_revision, .. } => *result_revision, _ => None };
         let state = app.state::<AppState>();
-        let mut outcome = state.reviews.apply(event.clone());
-        let retry = if outcome.reason.as_deref() == Some("duplicate_result") {
-            state.reviews.remote_return_retry(&event)
-        } else {
-            None
-        };
-        if let Some(source) = retry {
-            let database = state.database(&app)?;
-            if !crate::twiglane::remote_review::stored_result(
-                &database, &source.review_id, &source.session_id, source.result_revision,
-            ).map_err(native_error)? {
-                outcome = crate::twiglane::LinkOutcome {
-                    remote_target_id: source.remote_binding.as_ref().map(|binding| binding.target_id.clone()),
-                    kind: "returned".into(),
-                    session_id: Some(source.session_id),
-                    review_id: Some(source.review_id),
-                    outcome: source.outcome,
-                    head_oid: source.head_oid,
-                    worktree_state: source.worktree_state,
-                    reason: None,
-                };
+        if matches!(&event, crate::twiglane::LinkEvent::Remote { .. }) {
+            use crate::twiglane::remote_review;
+            let db = state.database(&app)?;
+            let (mut outcome, pending) = remote_review::apply_event(&db, event).map_err(native_error)?;
+            if let Some(source) = pending {
+                let binding = source.remote_binding.as_ref().ok_or_else(|| crate::twiglane::api_error("target_changed"))?;
+                let checked = bound_remote_origin(&db, binding)
+                    .and_then(|origin| read_remote_review(&db, &origin, &source.session_id, Some(binding)))
+                    .map(|(_, status)| status)
+                    .unwrap_or_else(|error| crate::twiglane::CodeStatus::unknown(
+                        &source.session_id, Some(source.worktree_path.clone()), error.code,
+                    ));
+                if !remote_review::verify_return(&db, &source, checked).map_err(native_error)? {
+                    return Ok(crate::twiglane::LinkOutcome::ignored("late_result"));
+                }
+                // A reattached pane receives a fresh local ID. Protocol IDs
+                // stay as originally registered in the durable source.
+                let mut attached = crate::session_host::list().into_iter().filter(|session| {
+                    session.remote_session_id.as_deref() == Some(binding.remote_session.as_str())
+                        && session.project_id.as_deref().and_then(|id| id.strip_prefix("remote:")) == Some(binding.project_id.as_str())
+                        && session.tool_id == binding.tool_id && session.directory == binding.directory
+                });
+                if let Some(session) = attached.next() {
+                    if attached.next().is_none() { outcome.session_id = Some(session.id); }
+                }
             }
+            return Ok(outcome);
         }
+        let outcome = state.reviews.apply(event);
         if outcome.kind == "returned" {
             if let Some(session_id) = outcome.session_id.as_deref() {
-                if let Some(revision) = remote_revision {
-                    let Some(source) = state.reviews.latest_for_session(session_id).filter(|s| Some(&s.review_id) == outcome.review_id.as_ref() && s.result_revision == revision) else {
-                        return Ok(crate::twiglane::LinkOutcome::ignored("late_result"));
-                    };
-                    let checked = match remote_review_status(&app, session_id, source.remote_binding.as_ref()) {
-                        Ok((_,status)) => status,
-                        Err(error) => crate::twiglane::CodeStatus::unknown(session_id, Some(source.worktree_path.clone()), error.code),
-                    };
-                    let database = state.database(&app)?;
-                    if !state.reviews.checked_remote_return(&source, checked, |entry| {
-                        crate::twiglane::remote_review::store_result(&database, entry)
-                    }).map_err(native_error)? {
-                        return Ok(crate::twiglane::LinkOutcome::ignored("late_result"));
-                    }
-                } else { state.reviews.recheck_return(session_id); }
+                state.reviews.recheck_return(session_id);
             }
         }
         Ok(outcome)

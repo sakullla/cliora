@@ -50,6 +50,23 @@ test('Windows launch records a drive checkout, keeps its original baseline, and 
   assert.match(first.root, /^[A-Z]:\/.*\/目录 with spaces$/);
   assert.match(first.worktreeIdentity, /^[0-9a-f]{64}$/);
   assert.equal(inspect().worktreeIdentity, first.worktreeIdentity);
+  git(repo, 'reset', '--hard', original);
+  git(repo, 'commit', '--amend', '--allow-empty', '-qm', 'rewritten start');
+  assert.deepEqual(inspect(), {status: 2, error: 'invalid_baseline'});
+  git(repo, 'reset', '--hard', original);
+  assert.equal(inspect().baseline, original);
+
+  const empty = path.join(dir, 'unborn');
+  const emptySession = 'cliora-windows-unborn';
+  mkdirSync(empty);
+  git(empty, 'init', '-qb', 'main');
+  const emptyLaunch = Buffer.from(JSON.stringify({...request, session: emptySession, directory: empty})).toString('base64');
+  assert.equal(run('python.exe', ['-I', helper, 'launch', emptyLaunch], dir).status, 0);
+  const emptyRead = run('python.exe', ['-I', helper, 'inspect'], dir,
+    JSON.stringify({session: emptySession, directory: empty}) + '\n');
+  assert.equal(emptyRead.status, 0, emptyRead.stderr);
+  assert.equal(JSON.parse(emptyRead.stdout.split('\n')[1]).baseline, null);
+
   const moved = repo + '.original';
   renameSync(repo, moved);
   git(dir, 'clone', '-q', moved, repo);
@@ -120,7 +137,7 @@ test('captures a remote launch baseline in the actual linked worktree and refuse
 
 });
 
-test('reads dirty submodules despite repository ignore settings and omits a rewritten start commit', {skip: process.platform === 'win32'}, t => {
+test('reads dirty submodules and rejects a recorded start commit that no longer belongs to HEAD', {skip: process.platform === 'win32'}, t => {
   const dir = mkdtempSync(path.join(tmpdir(),'cliora-review-history-'));
   t.after(() => rmSync(dir,{recursive:true,force:true}));
   const repo = path.join(dir,'repo'), sub = path.join(dir,'sub');
@@ -141,7 +158,12 @@ test('reads dirty submodules despite repository ignore settings and omits a rewr
   const original = git(repo,'rev-parse','HEAD');
   const id = 'cliora-rewrite';
   run('python3',['-I',helper,'record',id],repo);
-  const read = () => JSON.parse(run('python3',['-I',helper,'inspect'],repo,JSON.stringify({session:id,directory:repo})+'\n').split('\n')[1]);
+  const read = (status = 0) => {
+    const result = spawnSync('python3', ['-I',helper,'inspect'], {cwd:repo,env,encoding:'utf8',timeout:15000,
+      input: JSON.stringify({session:id,directory:repo})+'\n'});
+    assert.equal(result.status,status,result.stdout || result.stderr);
+    return JSON.parse(result.stdout.split('\n')[1]);
+  };
   git(repo,'config','submodule.mod.ignore','all');
   writeFileSync(path.join(repo,'mod','base'),'uncommitted\n');
   assert.equal(git(repo,'status','--porcelain'),'');
@@ -150,7 +172,7 @@ test('reads dirty submodules despite repository ignore settings and omits a rewr
   git(path.join(repo,'mod'),'restore','base');
   git(repo,'commit','--amend','-qm','rewritten baseline');
   assert.equal(git(repo,'merge-base',original,'HEAD'),parent);
-  assert.equal(read().baseline,null);
+  assert.equal(read(2).error,'invalid_baseline');
   git(repo,'switch','--detach',original);
   assert.equal(read().baseline,original); // receipt is still the exact start, not the common ancestor
   git(repo,'switch','-qc','topic',original);
@@ -160,5 +182,5 @@ test('reads dirty submodules despite repository ignore settings and omits a rewr
   git(repo,'commit','--allow-empty','-qm','upstream');
   git(repo,'rebase','--onto','upstream',parent,'topic');
   assert.equal(git(repo,'merge-base',original,'HEAD'),parent);
-  assert.equal(read().baseline,null);
+  assert.equal(read(2).error,'invalid_baseline');
 });

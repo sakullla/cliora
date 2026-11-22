@@ -2686,6 +2686,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     if (review.status === 'preparing') return { tone: 'pending', text: t('sessions.reviewRemotePreparing') };
     if (review.protocolVersion === 1 && review.status === 'returned') {
       status = review.remoteCheck ?? null;
+      if (status?.reason === 'invalid_baseline') return { tone: 'unconfirmed', text: t('sessions.reviewInvalidBaseline') };
       unknownStatus = !status || status.state !== 'ready';
     }
     if (review.status === 'opening' && review.protocolVersion === 1 && reviewClock - review.createdAt >= REVIEW_UNKNOWN_MS) {
