@@ -19,7 +19,7 @@ pub struct Database {
     read_path: Option<std::path::PathBuf>,
 }
 
-const LATEST_VERSION: u32 = 38;
+pub(crate) const LATEST_VERSION: u32 = 38;
 
 impl Database {
     /// Independent consumers can read a configured desktop without creating or migrating its DB.

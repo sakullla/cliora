@@ -222,7 +222,7 @@ mod tests {
             let value: String = connection.query_row("SELECT value FROM app_settings WHERE key = 'directory-fixture'", [], |row| row.get(0)).unwrap();
             assert_eq!(value, "keep");
             let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0)).unwrap();
-            assert_eq!(version, 36);
+            assert_eq!(version, crate::database::LATEST_VERSION);
             Ok(())
         }).unwrap();
     }
