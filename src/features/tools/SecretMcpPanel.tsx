@@ -24,11 +24,12 @@ const healthTone: Record<SecretMcpState['health'], Tone> = { unknown: 'neutral',
  * fallback text stays offered in every state because the value never travels in
  * it. Nothing here branches on a CLI id.
  */
-export function SecretMcpPanel({ toolId, scope, projectPath, contextId }: {
+export function SecretMcpPanel({ toolId, scope, projectPath, contextId, onConfigurationChanged }: {
   toolId: string;
   scope: Scope;
   projectPath: string | null;
   contextId?: string | null;
+  onConfigurationChanged: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const target: SecretMcpTarget = { toolId, scope, projectPath: scope === 'project' ? projectPath : null, contextId: contextId ?? null };
@@ -99,10 +100,31 @@ export function SecretMcpPanel({ toolId, scope, projectPath, contextId }: {
       setState(next);
       if (done) setNotice(t(done));
     } catch (failure) {
-      if (mounted.current) setError(formatFailure(failure, t('library.secrets.mcp.actionFailed'), t('library.secrets.retry')));
+      if (mounted.current) {
+        setNotice('');
+        setError(formatFailure(failure, t('library.secrets.mcp.actionFailed'), t('library.secrets.retry')));
+      }
     } finally {
       if (mounted.current) setBusy(false);
     }
+  }
+  async function checkProtocol() {
+    const next = await native.checkSecretMcpHealth(target);
+    if (mounted.current) setNotice(next.health === 'healthy' ? t('library.secrets.mcp.verifiedNotice') : '');
+    return next;
+  }
+  async function changeConfiguration(enable: boolean) {
+    const written = await native.setSecretMcpEnabled(target, enable);
+    if (!mounted.current) return written;
+    onConfigurationChanged();
+    setState(written);
+    if (!enable) {
+      setNotice(t('library.secrets.mcp.disabledNotice'));
+      return written;
+    }
+    if (!written.canCheck) return written;
+    setNotice(t('library.secrets.mcp.checkingNotice'));
+    return checkProtocol();
   }
   async function copyText(text: string, doneKey: string) {
     if (!text) return;
@@ -120,7 +142,8 @@ export function SecretMcpPanel({ toolId, scope, projectPath, contextId }: {
 
   if (!ready) return null;
   const enabled = state?.placement === 'enabled';
-  const verifyPrimary = enabled && state?.health !== 'healthy';
+  const canCheck = !!state?.canCheck;
+  const verifyPrimary = canCheck && state?.health !== 'healthy';
   const commandText = state?.command ? [state.command, ...state.args].join(' ') : '';
   const summaryTone = !state ? 'neutral' : state.available ? 'success' : state.health === 'failed' ? 'danger' : state.capability === 'unverified' ? 'warning' : 'neutral';
 
@@ -143,20 +166,16 @@ export function SecretMcpPanel({ toolId, scope, projectPath, contextId }: {
           {state.capability === 'unsupported' && <p className={styles.hint} data-secret-mcp-unsupported>{state.capabilityReason}</p>}
         </div>
         <div className={styles.actions}>
-          {state.capability !== 'unsupported' && <Button size="sm" variant={verifyPrimary ? undefined : 'primary'} data-secret-mcp-enable disabled={busy} onClick={() => void run(
-            () => native.setSecretMcpEnabled(target, !enabled),
-            enabled ? 'library.secrets.mcp.disabledNotice' : 'library.secrets.mcp.writtenNotice',
-          )}>{enabled ? t('library.secrets.mcp.disable') : t('library.secrets.mcp.enable')}</Button>}
-          {state.placement !== 'absent' && <Button size="sm" variant={verifyPrimary ? 'primary' : undefined} data-secret-mcp-verify disabled={busy} onClick={() => void run(
-            () => native.checkSecretMcpHealth(target),
-            'library.secrets.mcp.verifiedNotice',
-          )}>{t('library.secrets.mcp.verify')}</Button>}
-          {state.installationId && <Button size="sm" variant="ghost" data-secret-mcp-revoke disabled={busy} onClick={() => void run(
+          {state.capability !== 'unsupported' && !canCheck && <Button size="sm" variant="primary" data-secret-mcp-enable disabled={busy || loading} onClick={() => void run(() => changeConfiguration(true))}>{t('library.secrets.mcp.enable')}</Button>}
+          {enabled && <Button size="sm" data-secret-mcp-disable disabled={busy || loading} onClick={() => void run(() => changeConfiguration(false))}>{t('library.secrets.mcp.disable')}</Button>}
+          {canCheck && <Button size="sm" variant={verifyPrimary ? 'primary' : undefined} data-secret-mcp-verify disabled={busy || loading} onClick={() => void run(checkProtocol)}>{t('library.secrets.mcp.verify')}</Button>}
+          {state.installationId && <Button size="sm" variant="ghost" data-secret-mcp-revoke disabled={busy || loading} onClick={() => void run(
             () => native.revokeSecretMcpInstallation(target),
             'library.secrets.mcp.revokedNotice',
           )}>{t('library.secrets.mcp.revoke')}</Button>}
           <Button size="sm" variant="ghost" data-secret-mcp-refresh disabled={busy || loading} icon={<Icon name="refresh" size={12} />} onClick={() => void load()}>{t('library.secrets.refresh')}</Button>
         </div>
+        {canCheck && <p className={styles.hint}>{t('library.secrets.mcp.sessionHint', { installation: state.installationLabel ?? state.installationId })}</p>}
         <dl className={styles.facts}>
           <div><dt>{t('library.secrets.mcp.capability')}</dt><dd data-secret-mcp-capability={state.capability}>{state.capability}</dd></div>
           <div><dt>{t('library.secrets.mcp.placementLabel')}</dt><dd data-secret-mcp-placement={state.placement}>{t(`library.secrets.mcp.placement.${state.placement}`)}</dd></div>

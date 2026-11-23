@@ -388,3 +388,85 @@ div > .feedback { margin-bottom: var(--space-3); }
 
 .contextState { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); padding: var(--space-3) var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-card); }
 .contextState > p { margin: 0; color: var(--text-2); }
+
+/* ================= Tools workspace redesign =================
+   Goals: quieter chrome that never covers content, one status line instead of two,
+   each configuration as its own card, quota nested as a divider-separated section
+   (not a box inside a box inside a box), native file demoted to a footer. */
+.main { gap: var(--space-4); }
+.chrome {
+  top: 0;
+  border-radius: var(--radius-2xl);
+  /* The cover shadow hides content that scrolls through the gap above the sticky bar. */
+  box-shadow: 0 -14px 0 0 var(--bg), var(--shadow-card);
+  background: var(--surface);
+}
+.chromeTitle { min-height: 56px; padding: var(--space-2) var(--space-4); font-size: var(--fs-heading); }
+.taskBar { padding: var(--space-2) var(--space-4); background: transparent; border-top: 1px solid var(--line); }
+.views { gap: var(--space-1); padding: 0; background: transparent; }
+.views button { min-height: 32px; padding: 0 var(--space-3_5); border-radius: var(--radius-pill); color: var(--text-3); }
+.views button:hover { color: var(--text); background: var(--row-hover); }
+.views .selected,
+.views .selected:hover { background: var(--accent-soft); color: var(--accent); font-weight: var(--fw-semibold); box-shadow: inset 0 0 0 1px var(--accent-line); }
+.contextTrail { display: none; }
+.chrome:has(.chromeInstall details[open]) { box-shadow: var(--shadow-card); }
+
+.profileList { overflow: visible; border: 0; background: transparent; box-shadow: none; border-radius: 0; }
+.listHeading { padding: 0 var(--space-1) var(--space-3); border-bottom: 0; }
+.boardBody { gap: var(--space-3); }
+.profileCards, .profileGroup { gap: var(--space-3); }
+.profileFilter { padding: 0; border: 0; }
+
+.liveStrip {
+  margin: 0;
+  padding: var(--space-1_5) var(--space-3);
+  border-radius: var(--radius-pill);
+  width: fit-content;
+  max-width: 100%;
+  font-size: var(--fs-caption);
+}
+
+.profileRow {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.profileRow:hover { background: var(--surface); box-shadow: var(--shadow-card-hover); border-color: var(--line-strong); }
+.profileRow[data-active="true"],
+.profileRow[data-active="true"]:hover {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 70%, var(--surface)), var(--surface) 140px);
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 1px var(--accent-line), var(--shadow-card);
+}
+.profileGroup:last-child > .profileRow:last-child { border-bottom: 1px solid var(--line); }
+.profileHead { padding: var(--space-4) var(--space-4) var(--space-3); align-items: start; }
+.profileName { font-size: var(--fs-title); }
+.profileMeta { margin-top: var(--space-0_5); }
+.groupLabel { padding: var(--space-1) var(--space-1) 0; min-height: 0; }
+
+/* Quota: a divided section inside the card instead of a nested box. */
+.profileRow > section:not([data-empty="true"]),
+.profileRow[data-active="true"] > section:not([data-empty="true"]) {
+  margin: 0;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--surface-2) 40%, transparent);
+  box-shadow: none;
+}
+.profileRow[data-active="true"] > section:not([data-empty="true"]) { border-top-color: var(--accent-line); background: color-mix(in srgb, var(--accent-soft) 35%, transparent); }
+
+/* Native file: a quiet footer, not a fake profile. */
+.profileRow[data-kind="native"] {
+  order: 10;
+  min-height: 0;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-lg);
+  background: transparent;
+  box-shadow: none;
+}
+.profileRow[data-kind="native"]:hover { background: var(--row-hover); box-shadow: none; border-color: var(--line-strong); }

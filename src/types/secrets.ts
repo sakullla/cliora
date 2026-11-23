@@ -129,6 +129,7 @@ export type SecretMcpState = {
   placement: SecretMcpPlacement;
   health: SecretMcpHealth;
   healthDetail: string;
+  canCheck: boolean;
   available: boolean;
   cliFallback: boolean;
 };

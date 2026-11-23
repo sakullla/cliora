@@ -17,7 +17,7 @@ function status(overrides: Status): Status {
     installationId, installationLabel: '秘密 MCP · Codex',
     command: '/Applications/Cliora.app/Contents/MacOS/cliora',
     args: ['--cliora-internal-secret-mcp-v1', '--installation', installationId],
-    placement: 'absent', health: 'unknown', healthDetail: '',
+    placement: 'absent', health: 'unknown', healthDetail: '', canCheck: false,
     available: false, cliFallback: true,
     ...overrides,
   };
@@ -29,16 +29,19 @@ function status(overrides: Status): Status {
  * actually reported: placement, protocol health and capability stay separate.
  */
 async function install(page: Page, options: { initial: Status; enabled: Status; healthy: Status; revoked: Status }) {
-  await page.addInitScript((settings: { initial: Status; enabled: Status; healthy: Status; revoked: Status; canary: string }) => {
+  const toolId = options.initial.toolId;
+  const toolName = toolId === 'claude_code' ? 'Claude Code' : 'Codex';
+  await page.addInitScript((settings: { initial: Status; enabled: Status; healthy: Status; revoked: Status; canary: string; toolId: string; toolName: string }) => {
     const state = { current: settings.initial, calls: [] as Call[], canary: settings.canary };
+    const { toolId, toolName } = settings;
     const clone = (value: unknown) => JSON.parse(JSON.stringify(value));
     Object.assign(window, { isTauri: true, __secretMcp: state, __TAURI_INTERNALS__: { invoke: async (command: string, args: any = {}) => {
       state.calls.push({ command, args: clone(args) });
-      if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex' }] };
-      if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], nativeConfig: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+      if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: [toolId], theme: 'light' }, tools: [{ id: toolId, name: toolName }] };
+      if (command === 'list_cli_adapters') return { registered: [{ id: toolId, name: toolName, interfaceFormats: [], nativeConfig: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' } }], managedIds: [toolId], preservedUnknown: [] };
       if (command === 'list_projects') return [];
       if (command === 'get_registered_tool_workspace') return {
-        probe: { tool: 'codex', selectedPath: '/fixture/codex', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [] },
+        probe: { tool: toolId, selectedPath: `/fixture/${toolId}`, installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [] },
         profiles: [], common: null, binding: null, effectiveContextId: 'ctx-1', nativeContextError: null, snapshots: [], recoveryNeeded: [], customPath: null,
       };
       if (command === 'list_mcp_definitions') return [];
@@ -53,7 +56,7 @@ async function install(page: Page, options: { initial: Status; enabled: Status; 
       if (command === 'secret_access_options') return {
         cli: { executable: '/Applications/Cliora.app/Contents/MacOS/cliora', entry: '--cliora-internal-secret-cli-v1' },
         executors: [{ id: 'ex-1', label: '本机命令' }, { id: 'ex-2', label: '暂未授权' }],
-        installations: [{ id: settings.initial.installationId, label: '秘密 MCP · Codex', kind: 'mcp', targetId: 'codex', revoked: false }],
+        installations: [{ id: settings.initial.installationId, label: settings.initial.installationLabel, kind: 'mcp', targetId: toolId, revoked: false }],
         grants: [{ installationId: settings.initial.installationId, secretId: 'sec-1', alias: 'deploy-token', executorId: 'ex-1' }],
         availablePrograms: [],
       };
@@ -62,9 +65,9 @@ async function install(page: Page, options: { initial: Status; enabled: Status; 
       if (command.startsWith('plugin:event|')) return 1;
       throw new Error(`Unexpected IPC: ${command}`);
     } } });
-  }, { ...options, canary: CANARY });
+  }, { ...options, canary: CANARY, toolId, toolName });
   await page.goto('/');
-  await openCli(page, 'Codex');
+  await openCli(page, toolName);
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
 }
 
@@ -74,15 +77,16 @@ const calls = (page: Page) => page.evaluate(() => (window as any).__secretMcp.ca
 const lastCall = async (page: Page, command: string) => (await calls(page)).filter(call => call.command === command).at(-1);
 
 const unverified = status({});
-const written = status({ state: 'enabled', placement: 'enabled', health: 'unknown', reason: '原生条目已写入，协议状态尚未检查；也可继续使用 CLI 回退' });
+const written = status({ capability: 'supported', state: 'enabled', placement: 'enabled', canCheck: true, reason: '原生条目已写入，协议状态尚未检查；也可继续使用 CLI 回退' });
 const healthy = status({
-  state: 'enabled', placement: 'enabled', health: 'healthy', healthDetail: 'initialize 与 tools/list 已通过',
+  ...written, health: 'healthy', healthDetail: 'initialize 与 tools/list 已通过',
   available: true, reason: '原生条目已写入，协议握手与工具发现均已通过',
 });
-const revoked = status({ installationId: null, installationLabel: null, placement: 'absent', health: 'unknown', reason: '安装标识已撤销' });
+const revoked = status({ installationId: null, installationLabel: null, placement: 'enabled', health: 'unknown', reason: '安装标识已撤销' });
 
 test('the MCP tab keeps capability, placement and protocol health apart and still offers the CLI fallback', async ({ page }) => {
-  await install(page, { initial: unverified, enabled: written, healthy, revoked });
+  const target = { toolId: 'claude_code', capability: 'unverified', state: 'unverified', installationLabel: '秘密 MCP · claude_code', available: false };
+  await install(page, { initial: { ...unverified, ...target }, enabled: { ...written, ...target }, healthy: { ...healthy, ...target }, revoked: { ...target, ...revoked, toolId: target.toolId } });
   const section = panel(page);
   await expect(section).toHaveAttribute('data-secret-mcp-state', 'unverified');
   await expect(section).toHaveAttribute('data-secret-mcp-available', 'false');
@@ -108,32 +112,29 @@ test('the MCP tab keeps capability, placement and protocol health apart and stil
   await expect(text).not.toContainText('ex-2');
   await expect(page.locator('body')).not.toContainText(CANARY);
 
-  // Writing the entry is a placement change only: it never becomes available on its own.
   await page.locator('[data-secret-mcp-enable]').click();
-  const write = await lastCall(page, 'set_secret_mcp_enabled');
-  expect(write.args.target).toMatchObject({ toolId: 'codex', scope: 'global', projectPath: null });
-  expect(write.args.enabled).toBe(true);
-  await expect(page.locator('[data-secret-mcp-notice]')).toHaveText('秘密 MCP 配置已写入；协议状态需要另外检查。');
-  await expect(section).toHaveAttribute('data-secret-mcp-state', 'enabled');
+  await expect(page.locator('[data-secret-mcp-notice]')).toHaveText('已用本机代理检查协议握手与工具发现。');
+  const history = await calls(page);
+  const write = history.findIndex(call => call.command === 'set_secret_mcp_enabled');
+  expect(history[write].args).toMatchObject({ target: { toolId: 'claude_code', scope: 'global', projectPath: null }, enabled: true });
+  expect(history.findIndex(call => call.command === 'check_secret_mcp_health')).toBeGreaterThan(write);
+  expect(history.slice(write + 1).some(call => call.command === 'list_native_mcp')).toBe(true);
+  await expect(section).toHaveAttribute('data-secret-mcp-state', 'unverified');
   await expect(section).toHaveAttribute('data-secret-mcp-available', 'false');
   await expect(page.locator('[data-secret-mcp-placement]')).toHaveText('已写入');
-  await expect(page.locator('[data-secret-mcp-health]')).toHaveText('未检查');
-
-  // A real probe is the only thing that can make it available.
-  await page.locator('[data-secret-mcp-verify]').click();
-  await expect((await lastCall(page, 'check_secret_mcp_health')).args.target).toMatchObject({ toolId: 'codex' });
-  await expect(section).toHaveAttribute('data-secret-mcp-available', 'true');
   await expect(page.locator('[data-secret-mcp-health]')).toHaveText('已通过initialize 与 tools/list 已通过');
-  // The fallback is a documented path in every state, so a working entry does not remove it.
+  await expect(section.getByText(/授权给 秘密 MCP · claude_code/)).toBeVisible();
   await expect(fallback(page)).toContainText('--cliora-internal-secret-cli-v1');
   await expect(page.locator('body')).not.toContainText(CANARY);
 
   // Revoking drops the installation identity and the availability claim again.
   await page.locator('[data-secret-mcp-revoke]').click();
-  await expect((await lastCall(page, 'revoke_secret_mcp_installation')).args.target).toMatchObject({ toolId: 'codex' });
+  await expect((await lastCall(page, 'revoke_secret_mcp_installation')).args.target).toMatchObject({ toolId: 'claude_code' });
   await expect(page.locator('[data-secret-mcp-installation]')).toHaveText('尚未创建');
   await expect(section).toHaveAttribute('data-secret-mcp-available', 'false');
   await expect(page.locator('[data-secret-mcp-reason]')).toHaveText('安装标识已撤销');
+  await expect(page.locator('[data-secret-mcp-enable]')).toBeEnabled();
+  await expect(page.locator('[data-secret-mcp-verify]')).toHaveCount(0);
 });
 
 test('an unsupported adapter reports its own reason without an enable action and keeps the fallback', async ({ page }) => {
@@ -156,17 +157,19 @@ test('an unsupported adapter reports its own reason without an enable action and
 
 test('a failed protocol probe stays failed and never claims the entry works', async ({ page }) => {
   const failed = status({
-    state: 'enabled', placement: 'enabled', health: 'failed',
+    ...written, health: 'failed',
     healthDetail: 'initialize 失败：进程以非零状态退出',
     reason: '原生条目已写入，但协议握手失败；也可继续使用 CLI 回退',
   });
-  await install(page, { initial: failed, enabled: failed, healthy: failed, revoked: failed });
+  await install(page, { initial: written, enabled: written, healthy: failed, revoked });
   const section = panel(page);
   await expect(section).toHaveAttribute('data-secret-mcp-state', 'enabled');
   await expect(section).toHaveAttribute('data-secret-mcp-available', 'false');
   await section.locator('[data-secret-mcp-toggle]').click();
   await expect(page.locator('[data-secret-mcp-placement]')).toHaveText('已写入');
+  await page.locator('[data-secret-mcp-verify]').click();
   await expect(page.locator('[data-secret-mcp-health]')).toHaveText('未通过initialize 失败：进程以非零状态退出');
+  await expect(page.locator('[data-secret-mcp-notice]')).toHaveCount(0);
   await expect(fallback(page)).toContainText('use --secret sec-1 --executor ex-1');
   await expect(page.locator('body')).not.toContainText(CANARY);
 });

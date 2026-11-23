@@ -522,7 +522,7 @@ fn an_unsupported_adapter_reports_a_reason_and_no_written_entry() {
     let registry = Registry::builtins();
     let Some(unsupported) = registry.iter().find(|adapter| !adapter.supports_mcp()) else { return };
     let target = SecretMcpTarget { tool_id: unsupported.id().to_string(), scope: Scope::Global, project_path: None, context_id: None };
-    let state = status(&database, &registry, &target).unwrap();
+    let state = status(&database, &registry, Path::new("/"), &target).unwrap();
     assert_eq!(state.state, STATE_UNSUPPORTED);
     assert_eq!(state.capability, "unsupported");
     assert!(!state.capability_reason.is_empty());
@@ -544,7 +544,7 @@ fn a_supported_mapping_stays_unverified_and_claims_nothing_before_a_write() {
     // A mapping without a complete acceptance record is the unverified case.
     let Some(adapter) = registry.iter().find(|adapter| adapter.supports_mcp() && !adapter.secret_mcp_capability().is_supported()) else { return };
     let target = SecretMcpTarget { tool_id: adapter.id().to_string(), scope: Scope::Global, project_path: None, context_id: None };
-    let state = status(&database, &registry, &target).unwrap();
+    let state = status(&database, &registry, Path::new("/"), &target).unwrap();
     // T3 publishes the mapping only: real model acceptance is separate evidence.
     assert_eq!(state.capability, "unverified");
     assert_eq!(state.state, STATE_UNVERIFIED);
@@ -691,11 +691,39 @@ fn revoking_the_installation_leaves_the_native_entry_alone() {
     let state = set_enabled(&db, &MemoryCredentials::default(), &registry, temp.path(), &target, true).unwrap();
     let installation = state.installation_id.clone().unwrap();
 
-    let revoked = revoke(&db, &registry, &target).unwrap();
-    // A revoked identity starts over: the panel reports no installation until the
-    // next write creates one, and the written entry is not silently claimed again.
+    let revoked = revoke(&db, &registry, temp.path(), &target).unwrap();
     assert!(revoked.installation_id.is_none());
+    assert_eq!(revoked.placement, PLACEMENT_ENABLED);
+    assert!(!revoked.can_check);
     assert!(installation_for(&db, &target.tool_id).unwrap().is_none());
     let installations = broker::list_installations(&db).unwrap();
     assert!(installations.iter().any(|item| item.id == installation && item.revoked));
+}
+
+#[test]
+fn claude_global_secret_mcp_status_reads_back_the_native_entry() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let credentials = MemoryCredentials::default();
+    let native = temp.path().join(".claude.json");
+    let target = SecretMcpTarget { tool_id: "claude_code".into(), ..distribution_target() };
+    std::fs::write(&native, r#"{"mcpServers":{"existing":{"type":"stdio","command":"existing"}}}"#).unwrap();
+
+    let state = set_enabled(&db, &credentials, &registry, temp.path(), &target, true).unwrap();
+    assert_eq!(state.placement, PLACEMENT_ENABLED, "{}", state.reason);
+    assert!(state.can_check);
+    assert!(!state.available);
+    let mut document: Value = serde_json::from_slice(&std::fs::read(&native).unwrap()).unwrap();
+    let servers = document["mcpServers"].as_object_mut().unwrap();
+    assert_eq!(servers["existing"]["command"], "existing");
+    let entry = servers.remove("cliora-secrets-claude_code").unwrap();
+    assert_eq!(entry["type"], "stdio");
+    assert_eq!(entry["args"], json!(state.args));
+    std::fs::write(&native, serde_json::to_vec(&document).unwrap()).unwrap();
+
+    let removed = status(&db, &registry, temp.path(), &target).unwrap();
+    assert_eq!(removed.placement, PLACEMENT_ABSENT);
+    assert!(!removed.can_check);
+    assert!(!removed.available);
 }

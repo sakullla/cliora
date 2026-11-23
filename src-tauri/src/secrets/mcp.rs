@@ -382,6 +382,7 @@ pub struct SecretMcpState {
     /// `unknown`, `healthy` or `failed`, verified with the real helper.
     pub health: &'static str,
     pub health_detail: String,
+    pub can_check: bool,
     /// Only a supported adapter with a written entry and a verified protocol.
     pub available: bool,
     /// The CLI fallback is always offered; the value never travels in it.
@@ -449,15 +450,32 @@ fn draft(entry: &str, command: &str, args: &[String], version: Option<u64>) -> M
     }
 }
 
-/// Placement of the managed entry in this target scope. `None` means the entry
-/// was never written here; `Some(false)` means the native entry is disabled.
-fn placement(db: &Database, entry: &str, target: &SecretMcpTarget) -> Result<Option<bool>, String> {
-    let Some(definition) = find_definition(db, entry)? else { return Ok(None) };
-    resources::managed_enabled(db, &definition.id, &target.request(true))
+/// Verify the managed placement against the CLI's current configuration.
+fn placement(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    definition: &resources::McpDefinition,
+    target: &SecretMcpTarget,
+) -> Result<Option<bool>, String> {
+    let request = target.request(true);
+    let Some(enabled) = resources::managed_enabled(db, &definition.id, &request)? else { return Ok(None) };
+    let store = resources::list_native(db, registry, home, &request)?;
+    let Some(entry) = store.entries.iter().find(|entry| !entry.read_only && entry.name == definition.name) else {
+        // Some adapters disable a managed entry by removing it from the file.
+        return Ok((!enabled).then_some(false));
+    };
+    if entry.issue.is_some() || entry.enabled != enabled || entry.transport != resources::McpTransport::Stdio
+        || entry.command != definition.command || entry.args != definition.args
+        || !entry.cwd.is_empty() || !entry.env.is_empty() || !entry.headers.is_empty() || entry.protected_values
+    {
+        return Err("原生秘密 MCP 条目与栖点保存的配置不一致，请检查该条目".into());
+    }
+    Ok(Some(enabled))
 }
 
 /// One state document. Placement and health are read, never assumed.
-pub fn status(db: &Database, registry: &Registry, target: &SecretMcpTarget) -> Result<SecretMcpState, String> {
+pub fn status(db: &Database, registry: &Registry, home: &Path, target: &SecretMcpTarget) -> Result<SecretMcpState, String> {
     let capability = capability(registry, &target.tool_id);
     let entry = entry_name(&target.tool_id).ok();
     let installation = installation_for(db, &target.tool_id)?;
@@ -480,17 +498,12 @@ pub fn status(db: &Database, registry: &Registry, target: &SecretMcpTarget) -> R
         placement: PLACEMENT_ABSENT,
         health: HEALTH_UNKNOWN,
         health_detail: String::new(),
+        can_check: false,
         available: false,
         cli_fallback: true,
     };
-    if let Some(profile) = health_of(&target.tool_id, installation.as_ref().map(|installation| installation.id.as_str())) {
-        state.health = profile.state;
-        state.health_detail = profile.detail;
-    }
-    // The placement asks the shared MCP service which entry this definition owns
-    // in this scope; a project scope without a directory cannot be inspected.
-    let placed = match entry.as_deref() {
-        Some(entry) => placement(db, entry, target),
+    let placed = match definition.as_ref() {
+        Some(definition) => placement(db, registry, home, definition, target),
         None => Ok(None),
     };
     let placed = match placed {
@@ -506,6 +519,18 @@ pub fn status(db: &Database, registry: &Registry, target: &SecretMcpTarget) -> R
         Some(false) => PLACEMENT_DISABLED,
         Some(true) => PLACEMENT_ENABLED,
     };
+    if placed == Some(true) {
+        state.can_check = state.matches_current_helper()?;
+        if !state.can_check {
+            state.state = capability_state(capability);
+            state.reason = "原生条目已写入；请重新写入配置以使用当前栖点程序和安装标识".into();
+            return Ok(state);
+        }
+        if let Some(profile) = health_of(&target.tool_id, state.installation_id.as_deref()) {
+            state.health = profile.state;
+            state.health_detail = profile.detail;
+        }
+    }
     if !capability.is_supported() {
         state.state = capability_state(capability);
         state.reason = match state.placement {
@@ -538,7 +563,19 @@ pub fn status(db: &Database, registry: &Registry, target: &SecretMcpTarget) -> R
 }
 
 fn capability_state(capability: SecretMcpCapability) -> &'static str {
-    if capability.state == "unverified" { STATE_UNVERIFIED } else { STATE_UNSUPPORTED }
+    match capability.state {
+        "supported" => STATE_DISABLED,
+        "unverified" => STATE_UNVERIFIED,
+        _ => STATE_UNSUPPORTED,
+    }
+}
+
+impl SecretMcpState {
+    fn matches_current_helper(&self) -> Result<bool, String> {
+        let Some(id) = self.installation_id.as_deref() else { return Ok(false) };
+        let expected = command_line(&executable()?, id);
+        Ok(self.command == expected[0] && self.args == expected[1..])
+    }
 }
 
 /// Writes or disables this target's native entry through the shared preview,
@@ -633,17 +670,17 @@ pub fn set_enabled(
     // A write invalidates earlier protocol evidence for this target.
     let installation = installation_for(db, &target.tool_id)?;
     forget_health(&target.tool_id, installation.as_ref().map(|installation| installation.id.as_str()));
-    status(db, registry, target)
+    status(db, registry, home, target)
 }
 
 /// Replaces any current installation so a reconnect starts without the grants of
 /// the old one. Only reachable by an explicit user action.
-pub fn revoke(db: &Database, registry: &Registry, target: &SecretMcpTarget) -> Result<SecretMcpState, String> {
+pub fn revoke(db: &Database, registry: &Registry, home: &Path, target: &SecretMcpTarget) -> Result<SecretMcpState, String> {
     if let Some(installation) = installation_for(db, &target.tool_id)? {
         broker::revoke_installation(db, &installation.id)?;
     }
     forget_health(&target.tool_id, None);
-    status(db, registry, target)
+    status(db, registry, home, target)
 }
 
 // ---------------------------------------------------------------------------

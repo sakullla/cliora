@@ -483,7 +483,10 @@ export function McpWorkspace({ toolId, toolName = '', scopeLabel = '', scope, pr
       </>}
       list={listBody}
       listFooterLabel={t('library.secrets.mcp.title')}
-      listFooter={remoteTargetId ? null : <SecretMcpPanel toolId={toolId} scope={scope} projectPath={project} contextId={contextId ?? null} />}
+      listFooter={remoteTargetId ? null : <SecretMcpPanel
+        key={JSON.stringify([toolId, scope, project, contextId])} toolId={toolId} scope={scope} projectPath={project} contextId={contextId}
+        onConfigurationChanged={() => { void refreshNative(); }}
+      />}
       placeholder={!opened && entries.length > 0 ? <div className={doc.placeholder}>
         <span className={doc.placeholderIcon} aria-hidden="true"><Icon name="connections" size={22} /></span>
         <strong>{t('tools.mcp.selectHint')}</strong>

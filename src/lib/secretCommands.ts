@@ -112,8 +112,8 @@ export async function prepareLocalSecretPrompt(
     lines.push(english ? 'Find a reference by alias. Use its reference field directly.' : '按名称查找引用时，直接使用返回的 reference 字段。', ...listCommands);
   }
   const guidance = english
-    ? 'Keep literal references when quoting or passing them on. For a task, run the granted action and return its result. If no action matches, ask the user to grant one. Only read the values the user explicitly asks to see. Group those references in one CLI read or in the secretIds array of MCP read_secret when available. Stop if approval is declined or unavailable.'
-    : '转述或传递引用时，原样保留占位符。执行任务时，运行匹配的已授权操作，只返回操作结果。缺少合适的操作时，请用户授权。只读取用户明确要求查看的原值，多个引用可合并到一次 CLI read，或在提供 MCP read_secret 时一起传入 secretIds。被拒绝或无法确认时停止读取。';
+    ? 'Keep literal references when quoting or passing them on. If the Cliora secret MCP tools are available, call list_secrets and use_secret with the matching granted secretId and executorId. Otherwise use the matching authorized CLI command below. Return the action result. If no action matches, ask the user to grant one. Only read the values the user explicitly asks to see. Group those references in one CLI read or in the secretIds array of MCP read_secret when available. Stop if approval is declined or unavailable.'
+    : '转述或传递引用时，原样保留占位符。当前会话提供栖点秘密 MCP 工具时，调用 list_secrets 查找授权，再把对应的 secretId 和 executorId 传给 use_secret。否则使用下方匹配的已授权 CLI 命令。只返回操作结果。缺少合适的操作时，请用户授权。只读取用户明确要求查看的原值，多个引用可合并到一次 CLI read，或在提供 MCP read_secret 时一起传入 secretIds。被拒绝或无法确认时停止读取。';
   return [body, '', guidance, ...lines].join('\n');
 }
 

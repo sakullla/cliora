@@ -8273,7 +8273,7 @@ pub async fn secret_mcp_status(
     blocking(move || {
         let db = app.state::<AppState>().database(&app)?;
         let registry = crate::adapters::Registry::builtins();
-        crate::secrets::mcp::status(&db, &registry, &target).map_err(native_error)
+        crate::secrets::mcp::status(&db, &registry, &home()?, &target).map_err(native_error)
     })
     .await
 }
@@ -8301,23 +8301,12 @@ pub async fn check_secret_mcp_health(
     app: AppHandle,
     target: crate::secrets::mcp::SecretMcpTarget,
 ) -> Result<crate::secrets::mcp::SecretMcpState, ApiError> {
-    let lookup = target.clone();
-    let handle = app.clone();
-    let installation = blocking(move || {
-        let db = handle.state::<AppState>().database(&handle)?;
-        crate::secrets::mcp::installation_for(&db, &lookup.tool_id).map_err(native_error)
-    })
-    .await?;
-    let Some(installation) = installation else {
-        return Err(native_error("尚未创建此 CLI 的秘密 MCP 安装".into()));
+    let state = secret_mcp_status(app.clone(), target.clone()).await?;
+    let Some(installation_id) = state.installation_id.as_deref().filter(|_| state.can_check) else {
+        return Ok(state);
     };
-    crate::secrets::mcp::verify(&target.tool_id, &installation.id).await;
-    blocking(move || {
-        let db = app.state::<AppState>().database(&app)?;
-        let registry = crate::adapters::Registry::builtins();
-        crate::secrets::mcp::status(&db, &registry, &target).map_err(native_error)
-    })
-    .await
+    crate::secrets::mcp::verify(&target.tool_id, installation_id).await;
+    secret_mcp_status(app, target).await
 }
 
 /// Revokes this target's installation so a reconnect starts without the grants of
@@ -8330,7 +8319,7 @@ pub async fn revoke_secret_mcp_installation(
     blocking(move || {
         let db = app.state::<AppState>().database(&app)?;
         let registry = crate::adapters::Registry::builtins();
-        crate::secrets::mcp::revoke(&db, &registry, &target).map_err(native_error)
+        crate::secrets::mcp::revoke(&db, &registry, &home()?, &target).map_err(native_error)
     })
     .await
 }

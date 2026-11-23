@@ -288,11 +288,10 @@ fn row_from(row: &rusqlite::Row<'_>) -> rusqlite::Result<SecretExecutor> {
 
 const COLUMNS: &str = "id,label,description,executable,args_json,cwd,channel,env_name,digest,created_at,updated_at";
 
-/// Probe the same inherited PATH used by a bare executor without starting the program.
+/// Probe the same desktop PATH used by a bare executor without starting the program.
 pub fn preset_available(name: &str) -> bool {
-    let Some(paths) = std::env::var_os("PATH") else { return false };
     let filename = format!("{name}{}", std::env::consts::EXE_SUFFIX);
-    std::env::split_paths(&paths).filter(|dir| dir.is_absolute()).any(|dir| {
+    crate::process_environment::directories().into_iter().filter(|dir| dir.is_absolute()).any(|dir| {
         let Ok(meta) = dir.join(&filename).metadata() else { return false };
         #[cfg(unix)]
         {
@@ -468,6 +467,8 @@ pub fn run_with_timeout(
         ));
     }
     let mut command = Command::new(&executor.executable);
+    #[cfg(target_os = "macos")]
+    crate::process_environment::apply(&mut command);
     command.args(&executor.args);
     if let Some(dir) = &executor.cwd {
         command.current_dir(dir);
@@ -536,5 +537,50 @@ impl SecretExecutor {
     /// Recomputes the digest from the current definition and files.
     pub fn current_digest(&self) -> Result<String, String> {
         digest_of(&self.executable, &self.args, self.cwd.as_deref())
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn desktop_uses_login_shell_path_for_preset_and_execution() {
+        const BIN_ENV: &str = "CLIORA_TEST_EXECUTOR_BIN";
+        const PROGRAM: &str = "cliora-test-secret-node";
+        if std::env::var_os(BIN_ENV).is_some() {
+            assert!(preset_available(PROGRAM));
+            let db = Database::open(Path::new(":memory:")).unwrap();
+            let executor = register(&db, NewExecutor {
+                label: "Test login shell PATH".into(), description: String::new(),
+                executable: PROGRAM.into(), args: vec![], cwd: None,
+                channel: Channel::Stdin, env_name: None,
+            }).unwrap();
+            let result = run(&executor, "canary-desktop-path\n", &AtomicBool::new(false)).unwrap();
+            assert_eq!(result.exit_code, Some(0));
+            assert_eq!(result.stdout, "OK");
+            return;
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let shell = temp.path().join("login-shell");
+        let program = temp.path().join(PROGRAM);
+        for (path, script) in [
+            (&shell, "#!/bin/sh\nprintf '\\000CLIORA_PATH\\000%s\\000' \"$CLIORA_TEST_EXECUTOR_BIN\"\n"),
+            (&program, "#!/bin/sh\nread -r value && [ \"$value\" = canary-desktop-path ] && printf OK\n"),
+        ] {
+            std::fs::write(path, script).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let module = module_path!().split_once("::").unwrap().1;
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &format!("{module}::desktop_uses_login_shell_path_for_preset_and_execution")])
+            .env("PATH", "/usr/bin:/bin")
+            .env("SHELL", shell)
+            .env(BIN_ENV, temp.path())
+            .output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success() && stdout.contains("1 passed"), "{stdout}");
     }
 }
