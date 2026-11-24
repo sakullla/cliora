@@ -4,13 +4,16 @@
 //!
 //! OMP is a Pi fork, but its configuration evidence is independent: YAML files,
 //! `modelRoles`, named profiles below `~/.omp/profiles/<name>/agent` and native
-//! API keys that are environment variable names. This module therefore owns its
-//! own schema instead of reusing Pi's JSON shape.
+//! API keys that are either literal values or environment variable names. This
+//! module therefore owns its own schema instead of reusing Pi's JSON shape.
 //!
 //! Safety rules:
-//! - A document written by Cliora never contains a literal supplier key. It
-//!   contains only an environment reference (`${NAME}` or the native bare name
-//!   already on disk). The actual value stays in the shared credential store.
+//! - Drafts and named profiles never contain a literal supplier key; they hold
+//!   only an environment reference (`${NAME}` or the native bare name already
+//!   on disk). The managed key stays in the shared credential store.
+//! - Like Pi, applying a managed connection writes that key literally into the
+//!   global `models.yml`, so `omp` started from any terminal authenticates.
+//!   Reading such a file back withholds the key from every draft.
 //! - Project scope may carry environment references but never a managed secret.
 //! - Unknown fields, unedited roles, other providers and the old document are
 //!   preserved; the shared YAML transaction owns backup/recovery and CAS.
@@ -31,7 +34,7 @@ use super::super::configuration::{
 use crate::adapters::{InspectionFields, NativeCredentialRefs, PendingSecrets};
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{ConnectionPolicy, NativeFile, Scope};
-use crate::native::apply::NativeSecrets;
+use crate::native::apply::{read_secret, NativeSecrets};
 use crate::native::format::{self, FileKind};
 use crate::native::intake::NativeInspection;
 use crate::native::profile::{Connection, ModelRecord, RegisteredProfile};
@@ -423,7 +426,7 @@ pub(crate) fn connection_policy(scope: Scope) -> ConnectionPolicy {
     ConnectionPolicy {
         api_key: if scope == Scope::Project {
             crate::native::adapter::api_key_scope_denied(
-                "OMP 项目层只保存环境变量引用，不写入供应商密钥；请使用全局配置",
+                "OMP 项目层不读取 models.yml，不能写入供应商密钥；请使用全局配置",
             )
         } else {
             crate::native::adapter::api_key_writable()
@@ -441,8 +444,9 @@ pub(crate) fn connection_policy(scope: Scope) -> ConnectionPolicy {
 
 /// Accepts every native environment spelling OMP documents: a bare variable
 /// name, `${NAME}`, `$NAME` and `{env:NAME}`. A bare name is required for
-/// reading real OMP files, while Cliora writes `${NAME}` so the shared
-/// plaintext-secret gate can identify the reference.
+/// reading real OMP files, while Cliora's drafts store `${NAME}` so the shared
+/// plaintext-secret gate can identify the reference. OMP resolves any of these
+/// through its environment, so a managed key of this shape cannot be literal.
 pub(crate) fn omp_env_name(value: &str) -> Option<&str> {
     let value = value.trim();
     if value.is_empty() {
@@ -480,12 +484,6 @@ fn generated_env(connection: &Connection) -> Option<String> {    if let Some(nam
         })
         .collect::<String>();
     Some(format!("CLIORA_OMP_{provider}_API_KEY"))
-}
-
-/// Environment name a managed connection key is injected under at launch.
-/// The config file stores only this reference, so launch and apply must agree.
-pub(crate) fn launch_env_name(connection: &Connection) -> Option<String> {
-    generated_env(connection)
 }
 
 fn api_name(format: &str) -> Result<&'static str, String> {
@@ -736,8 +734,28 @@ fn has_literal_model_secret(models: &Value) -> bool {
         })
 }
 
+/// Literal keys — the managed key apply writes, or the user's own — make
+/// `models.yml` a sensitive file for backup and permission handling.
 pub(crate) fn has_native_secret(role: &str, root: &Value) -> bool {
     role == MODELS_ROLE && has_literal_model_secret(root)
+}
+
+/// A binding applied while OMP still received its managed key from the launch
+/// environment left that variable's bare name in the key slot. Apply now writes
+/// the key literally and refuses environment-shaped keys, so this shape can only
+/// be that older output (or a later hand edit); the binding then reads as
+/// changed and the existing re-apply action writes the literal key.
+pub(crate) fn outdated_applied_secret(
+    connection: &Connection,
+    role: &str,
+    path: &[String],
+    value: &Value,
+) -> bool {
+    connection.secret_ref.is_some()
+        && role == MODELS_ROLE
+        && matches!(path, [providers, provider, field]
+            if providers == "providers" && *provider == connection.provider_id && field == "apiKey")
+        && value.as_str().and_then(omp_env_name).is_some()
 }
 
 pub(crate) fn validate_draft(role: &str, parsed: &Value) -> Result<(), String> {
@@ -769,7 +787,7 @@ pub(crate) fn validate_draft(role: &str, parsed: &Value) -> Result<(), String> {
                     let entry = entry.as_object().ok_or("供应商条目必须是对象")?;
                     if literal_api_key(entry.get("apiKey")) {
                         return Err(format!(
-                            "供应商 {provider} 的 apiKey 是明文；OMP 配置只接受环境变量引用"
+                            "供应商 {provider} 的 apiKey 是明文；OMP 配置草稿只保存环境变量引用，受管密钥在应用时从系统凭据库写入"
                         ));
                     }
                     if let Some(api) = entry.get("api").and_then(Value::as_str) {
@@ -791,7 +809,7 @@ pub(crate) fn validate_draft(role: &str, parsed: &Value) -> Result<(), String> {
                                 return Err(format!("供应商 {provider} 有重复模型 ID"));
                             }
                             if literal_api_key(model.get("apiKey")) {
-                                return Err("模型 apiKey 是明文；OMP 配置只接受环境变量引用".into());
+                                return Err("模型 apiKey 是明文；OMP 配置草稿只保存环境变量引用".into());
                             }
                         }
                     }
@@ -806,9 +824,9 @@ pub(crate) fn validate_draft(role: &str, parsed: &Value) -> Result<(), String> {
     reject_omp_plaintext(parsed)
 }
 
-/// OMP treats a bare `apiKey` value as an environment variable name. The
-/// shared gate only knows `$NAME` spellings, so this adapter accepts both for
-/// apiKey while still rejecting every other plaintext credential field.
+/// Drafts accept OMP's bare variable name besides the `$NAME` spellings the
+/// shared gate knows for `apiKey`, and still reject every other plaintext
+/// credential field. A literal key exists only in an applied native file.
 fn reject_omp_plaintext(value: &Value) -> Result<(), String> {
     fn visit(value: &Value, path: &mut Vec<String>) -> Result<(), String> {
         match value {
@@ -898,6 +916,7 @@ pub(crate) fn connection_documents_for_existing(
     let mut models = existing
         .get(MODELS_ROLE)
         .cloned()
+        .map(without_literal_keys)
         .unwrap_or_else(|| json!({}));
     set_value(
         &mut models,
@@ -974,27 +993,61 @@ pub(crate) fn connection_documents_for_existing(
     ]))
 }
 
-/// The managed key stays in the shared credential store. OMP reads the value
-/// from its process environment, so no secret is ever rendered into YAML.
+/// Literal keys in a native document — a managed key an earlier apply wrote, or
+/// the user's own — stay in that file and never enter a profile document.
+fn without_literal_keys(mut models: Value) -> Value {
+    let providers = models.get_mut("providers").and_then(Value::as_object_mut);
+    for entry in providers.into_iter().flat_map(|providers| providers.values_mut()) {
+        let Some(entry) = entry.as_object_mut() else {
+            continue;
+        };
+        if literal_api_key(entry.get("apiKey")) {
+            entry.remove("apiKey");
+        }
+        let models = entry.get_mut("models").and_then(Value::as_array_mut);
+        for model in models.into_iter().flatten().filter_map(Value::as_object_mut) {
+            if literal_api_key(model.get("apiKey")) {
+                model.remove("apiKey");
+            }
+        }
+    }
+    models
+}
+
+/// Writes the managed key into the global `models.yml` the way Pi does for
+/// `models.json`: the value is read from the shared credential store at apply
+/// time and lands literally in `providers.<id>.apiKey`, so `omp` started from
+/// any terminal authenticates. Cliora's draft and profile keep `${NAME}`; only
+/// this apply-time plan carries the key.
 ///
-/// Cliora's draft and profile keep `${NAME}` so the shared plaintext gate can
-/// identify a reference. Real OMP resolves a **bare** variable name only (18.20.2
-/// returns `${NAME}` literally), so apply rewrites every reference to the bare
-/// name through `NativeSecrets`. The value written here is the variable name,
-/// not the credential.
+/// OMP runs a `!`-prefixed value as a shell command and resolves a value shaped
+/// like an environment reference through its environment, so such a key is
+/// refused instead of being reinterpreted.
+///
+/// User-authored references of other providers are rewritten to the bare native
+/// name (18.20.2 returns `${NAME}` literally); those values are variable names.
 pub(crate) fn write_connection_secret(
     profile: &RegisteredProfile,
-    _scope: Scope,
-    _credentials: &dyn CredentialStore,
+    scope: Scope,
+    credentials: &dyn CredentialStore,
     secrets: &mut NativeSecrets,
 ) -> Result<(), String> {
+    let mut managed = None;
     if let Some(connection) = &profile.connection {
-        if let Some(name) = generated_env(connection) {
-            secrets.put(
-                MODELS_ROLE,
-                &["providers", connection.provider_id.as_str(), "apiKey"],
-                name,
-            );
+        if let Some(id) = &connection.secret_ref {
+            if scope == Scope::Project {
+                return Err("OMP 项目层不读取 models.yml，不能写入供应商密钥；请使用全局配置".into());
+            }
+            let value = read_secret(id, credentials)?;
+            if value.starts_with('!') || omp_env_name(&value).is_some() {
+                return Err(
+                    "OMP 会把以 ! 开头的 apiKey 当作命令执行，把形如环境变量名（NAME、$NAME、${NAME}）的值当作环境变量读取；此 API 密钥无法按字面写入 models.yml，请确认密钥填写正确。原文件未修改"
+                        .into(),
+                );
+            }
+            let provider = connection.provider_id.as_str();
+            secrets.put(MODELS_ROLE, &["providers", provider, "apiKey"], value);
+            managed = Some(provider);
         }
     }
     let Some(text) = profile.files.get(MODELS_ROLE).filter(|text| !text.trim().is_empty()) else {
@@ -1007,6 +1060,9 @@ pub(crate) fn write_connection_secret(
                 return Err(format!(
                     "供应商 {provider} 含明文 apiKey；请先迁移为环境变量引用，原文件未修改"
                 ));
+            }
+            if managed == Some(provider.as_str()) {
+                continue;
             }
             if let Some(name) = entry.get("apiKey").and_then(Value::as_str).and_then(omp_env_name) {
                 secrets.put(
@@ -1113,11 +1169,17 @@ pub(crate) fn inspect_values(
     }
 }
 
+/// Explicit intake of a native `models.yml`, following Pi: environment
+/// references are canonicalised to `${NAME}`; the selected connection's literal
+/// key — the user's own or one an earlier apply wrote — moves to the credential
+/// store behind a fresh reference and is written back literally on apply. A
+/// literal on any other provider, or a `!command` value, is refused so no key is
+/// silently dropped or executed. The original file is never changed.
 pub(crate) fn import_literal_secrets(
     files: &mut BTreeMap<String, String>,
     found: &mut NativeInspection,
     pending: &mut PendingSecrets,
-    native_refs: &mut NativeCredentialRefs,
+    _native_refs: &mut NativeCredentialRefs,
 ) -> Result<(), String> {
     let Some(text) = files.get(MODELS_ROLE).cloned() else {
         return Ok(());
@@ -1145,6 +1207,9 @@ pub(crate) fn import_literal_secrets(
         let Some(current) = parsed.pointer(&pointer).and_then(Value::as_str).map(str::to_owned) else {
             continue;
         };
+        if current.is_empty() {
+            continue;
+        }
         if let Some(name) = omp_env_name(&current) {
             // OMP reads the bare name; a named profile stores the canonical
             // ${NAME} reference so the shared plaintext gate accepts it. Apply
@@ -1158,14 +1223,21 @@ pub(crate) fn import_literal_secrets(
             }
             continue;
         }
-        let Some(secret) = parsed.pointer_mut(&pointer).and_then(|value| {
-            let text = value.as_str()?.to_owned();
-            (!text.is_empty()).then_some((text, value))
-        }) else {
-            continue;
+        if current.starts_with('!') {
+            return Err(format!(
+                "OMP 供应商 {provider} 的 apiKey 是命令，不能作为字面密钥导入；原文件未更改"
+            ));
+        }
+        let Some(connection) = found
+            .connection
+            .as_mut()
+            .filter(|connection| connection.provider_id == provider)
+        else {
+            return Err(format!(
+                "OMP 供应商 {provider} 含字面 apiKey；请先在原生配置中把默认模型角色指向该供应商，再逐一安全接入。原文件未更改"
+            ));
         };
-        let (secret, slot) = secret;
-        if secret.len() > 16_384 {
+        if current.len() > 16_384 {
             return Err("OMP 原生 apiKey 超过系统凭据库限制；原文件未更改".into());
         }
         let name = format!(
@@ -1182,22 +1254,13 @@ pub(crate) fn import_literal_secrets(
                 })
                 .collect::<String>()
         );
-        *slot = json!(env_reference(&name));
         let id = format!("connection-{}", uuid::Uuid::new_v4());
-        native_refs
-            .entry(MODELS_ROLE.into())
-            .or_default()
-            .insert(name.clone(), id.clone());
-        pending.push((id.clone(), secret));
-        if found
-            .connection
-            .as_ref()
-            .is_some_and(|connection| connection.provider_id == provider)
-        {
-            let connection = found.connection.as_mut().unwrap();
-            connection.secret_ref = Some(id);
-            connection.auth_env_var = Some(name);
+        connection.secret_ref = Some(id.clone());
+        connection.auth_env_var = Some(name.clone());
+        if let Some(slot) = parsed.pointer_mut(&pointer) {
+            *slot = json!(env_reference(&name));
         }
+        pending.push((id, current));
         replaced = true;
     }
     if replaced {
@@ -1366,7 +1429,7 @@ impl ConfigurationAdapter for OmpConfiguration {
                 "baseUrl": entry.and_then(|entry| entry.get("baseUrl")),
                 "protocol": entry.and_then(|entry| entry.get("api")),
             },
-            "capabilityReason": "OMP 模型角色引用 provider/model；未编辑的角色与其他供应商保持原生值。API Key 只保存环境变量引用。",
+            "capabilityReason": "OMP 模型角色引用 provider/model；未编辑的角色与其他供应商保持原生值。草稿只保存 API Key 的环境变量引用，应用时受管密钥按字面写入全局 models.yml。",
         }))
     }
 
@@ -1742,7 +1805,7 @@ impl ConfigurationAdapter for OmpConfiguration {
                     issues.push(issue(
                         json!({"kind":"provider","provider":provider}),
                         "apiKey",
-                        "OMP 配置只保存环境变量引用，不能包含明文密钥",
+                        "OMP 配置草稿只保存环境变量引用，不能包含明文密钥；受管密钥在应用时写入",
                     ));
                 }
                 let Some(list) = entry.get("models").and_then(Value::as_array) else {

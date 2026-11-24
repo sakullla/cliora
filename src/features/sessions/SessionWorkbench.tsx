@@ -16,7 +16,7 @@ import { writeClipboard } from '../../lib/clipboard';
 import { uiAdapterFor } from '../../adapters';
 import { attachmentPastes } from '../../adapters/attachments';
 import { confirmAction } from '../../lib/confirm';
-import { modLabel } from '../../lib/shortcut';
+import { modAria, modLabel } from '../../lib/shortcut';
 import { FilterSelect, type FilterSelectOption } from '../../components/FilterSelect';
 import { GuideDialog } from '../../components/GuideDialog';
 import { Icon } from '../../components/Icon';
@@ -162,6 +162,31 @@ function toggleInSet(current: Set<string>, id: string, present: boolean): Set<st
   const next = new Set(current);
   if (present) next.add(id); else next.delete(id);
   return next;
+}
+
+/**
+ * The session that takes the selection when `closed` leave the list, the way closing a tab
+ * hands focus to its neighbour: the next one in list order, else the previous one. A list
+ * filtered down to nothing falls back to the remaining sessions, a running one first.
+ */
+function selectionAfterClose(current: string | null, closed: ReadonlySet<string>, order: readonly string[], remaining: readonly WorkbenchSession[]): string | null {
+  if (current && !closed.has(current)) return current;
+  const index = current ? order.indexOf(current) : -1;
+  if (index >= 0) {
+    for (let next = index + 1; next < order.length; next += 1) if (!closed.has(order[next])) return order[next];
+    for (let previous = index - 1; previous >= 0; previous -= 1) if (!closed.has(order[previous])) return order[previous];
+  }
+  const rest = remaining.filter((item) => !closed.has(item.id));
+  return rest.find((item) => item.running)?.id ?? rest[0]?.id ?? null;
+}
+
+const LAST_TOOL_KEY = 'cliora:workbench-last-tool';
+/** The CLI the last dialog launch used: the next opening starts there instead of the first tool. */
+function readLastLaunchTool(): string {
+  try { return localStorage.getItem(LAST_TOOL_KEY) ?? ''; } catch { return ''; }
+}
+function rememberLaunchTool(toolId: string) {
+  try { localStorage.setItem(LAST_TOOL_KEY, toolId); } catch { /* The choice still holds for this window. */ }
 }
 
 /** Rail display preferences. Only ids and states: never a prompt, a path or a review body. */
@@ -641,7 +666,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [splitRoom, setSplitRoom] = useState(true);
 
   const [newDialogOpen, setNewDialogOpen] = useState(false);
-  const [launchToolId, setLaunchToolId] = useState('');
+  const [launchToolId, setLaunchToolId] = useState(readLastLaunchTool);
   const [workspaceValue, setWorkspaceValue] = useState('__home');
   // The last name each workspace value had while it was still offered, so a vanished choice
   // can still be named when the user has to fix it.
@@ -2020,12 +2045,15 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     }
     setBusy(session.id);
     setActionError('');
+    // The list order is read now: closing hands the selection to the row the user saw beside it.
+    const order = arrangedSessions.map((item) => item.id);
     try {
       await native.closeWorkbenchSession(session.id);
       forgetSession(session.id);
+      const closed = new Set([session.id]);
       const rest = sessionsRef.current.filter((item) => item.id !== session.id);
       setSessions((current) => current.filter((item) => item.id !== session.id));
-      setSelectedId((current) => current === session.id ? (rest.find((item) => item.running)?.id ?? rest[0]?.id ?? null) : current);
+      setSelectedId((current) => selectionAfterClose(current, closed, order, rest));
     } catch (value) {
       setActionError(formatFailure(value, t('sessions.closeFailed'), t('sessions.closeNext')));
     } finally { setBusy(''); }
@@ -2050,19 +2078,26 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     if (!ended.length || busy) return;
     setBusy('__clear_ended');
     setActionError('');
+    const order = arrangedSessions.map((item) => item.id);
+    const closedIds = new Set<string>();
     try {
-      const closedIds = new Set<string>();
       for (const session of ended) {
         await native.closeWorkbenchSession(session.id);
         closedIds.add(session.id);
         forgetSession(session.id);
       }
-      const rest = scopedSessions.filter((item) => !closedIds.has(item.id));
-      setSessions((current) => current.filter((item) => !closedIds.has(item.id)));
-      setSelectedId((current) => current && closedIds.has(current) ? (rest.find((item) => item.running)?.id ?? rest[0]?.id ?? null) : current);
     } catch (value) {
       setActionError(formatFailure(value, t('sessions.closeFailed'), t('sessions.closeNext')));
-    } finally { setBusy(''); }
+    } finally {
+      // A failure part-way keeps the sessions it could not close; the ones already closed
+      // natively must still leave the list instead of lingering as dead rows.
+      if (closedIds.size) {
+        const rest = scopedSessions.filter((item) => !closedIds.has(item.id));
+        setSessions((current) => current.filter((item) => !closedIds.has(item.id)));
+        setSelectedId((current) => selectionAfterClose(current, closedIds, order, rest));
+      }
+      setBusy('');
+    }
   }
 
   async function retry() {
@@ -2331,6 +2366,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           : baseError || preview?.reason || t('sessions.worktreeBaseUnavailable'));
         return;
       }
+      rememberLaunchTool(effectiveLaunchToolId);
       const branchName = branchDraft.trim();
       const baseOf = (preview: WorktreeBasePreview): WorktreeBase => preview.kind === 'reference'
         ? { kind: 'reference', reference: preview.reference ?? '' }
@@ -3439,7 +3475,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         stepSession(step);
         return;
       }
-      if (event.key.toLowerCase() === 'n' && terminalTools.length > 0) {
+      // Option+N on macOS reports a dead key, so match the physical key as well.
+      if ((event.key.toLowerCase() === 'n' || event.code === 'KeyN') && terminalTools.length > 0) {
         event.preventDefault();
         openNewSessionDialog();
       }
@@ -4174,7 +4211,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       </div>
     </GuideDialog>
     {newDialogOpen && <GuideDialog open title={t('sessions.newSessionDialogTitle')} hint={t('sessions.newSessionDialogHint')} wide onClose={() => setNewDialogOpen(false)}>
-      <div className={styles.dialogForm}>
+      {/* Mod+Enter starts the session from any field, not only the task text: the dialog's
+          defaults are usually right, so the fastest path is open, check, start. */}
+      <div className={styles.dialogForm} onKeyDown={(event) => {
+        if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.key !== 'Enter' || event.nativeEvent.isComposing || event.defaultPrevented) return;
+        event.preventDefault();
+        if (!event.repeat && !launchingNew && effectiveLaunchToolId && !workspaceUnavailable) void launchFromDialog();
+      }}>
         {dialogError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{dialogError}</p></div></div>}
         <div className={styles.dialogPrimaryGrid}>
           <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.pickToolLabel')}</span><FilterSelect label={t('sessions.pickToolLabel')} value={effectiveLaunchToolId} options={cliSelectOptions} placeholder={t('home.launcher.pickTool')} searchLabel={t('sessions.searchCliTool')} onChange={pickLaunchTool} />
@@ -4209,7 +4252,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         {/* The task is optional, so it follows the choices that every launch needs. */}
         <div className={styles.dialogField} data-task-field="">
           <span className={styles.fieldLabel}>{t('sessions.initialPromptLabel')}</span>
-          <textarea rows={2} autoFocus className={styles.dialogTextarea} value={initialPrompt} placeholder={t('sessions.newSessionTaskPlaceholder')} aria-label={t('sessions.initialPromptLabel')} onChange={(event) => setInitialPrompt(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing && !launchingNew && effectiveLaunchToolId) { event.preventDefault(); void launchFromDialog(); } }} />
+          <textarea rows={2} autoFocus className={styles.dialogTextarea} value={initialPrompt} placeholder={t('sessions.newSessionTaskPlaceholder')} aria-label={t('sessions.initialPromptLabel')} onChange={(event) => setInitialPrompt(event.target.value)} />
           <PromptPicker active={active && newDialogOpen} className={styles.dialogPrompts} labelClassName={styles.dialogPromptLabel} context={dialogPromptContext} sourceKey={`new:${workspaceValue}:${activeTargetId}`} workspaces={businessWorkspaces} onPick={(prompt) => setInitialPrompt(previous => previous ? `${previous}\n${prompt.body}` : prompt.body)} />
         </div>
         {/* Where this launch runs belongs to the summary; only its details fold away. */}
@@ -4309,7 +4352,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           })()}
           {selectedLaunchTool?.resumeLatestAvailable && !activeRemoteTarget && <label className={styles.checkboxRow}><input type="checkbox" checked={resumeLatest} onChange={(event) => setResumeLatest(event.target.checked)} /><span>{t('sessions.resumeLatest')}</span></label>}
         </div>}
-        <div className={styles.dialogActions}><Button onClick={() => setNewDialogOpen(false)}>{t('common.dialog.cancel')}</Button><Button variant="primary" className={styles.dialogPrimary} data-dialog-save disabled={launchingNew || !effectiveLaunchToolId || workspaceUnavailable} onClick={() => void launchFromDialog()} icon={<Icon name="play" size={14} />}>{launchingNew ? t('sessions.startingSession') : t('sessions.startInWorkbench')}</Button></div>
+        <div className={styles.dialogActions}><Button onClick={() => setNewDialogOpen(false)}>{t('common.dialog.cancel')}</Button><Button variant="primary" className={styles.dialogPrimary} data-dialog-save disabled={launchingNew || !effectiveLaunchToolId || workspaceUnavailable} title={`${t('sessions.startInWorkbench')} (${modLabel}+Enter)`} aria-keyshortcuts={`${modAria}+Enter`} onClick={() => void launchFromDialog()} icon={<Icon name="play" size={14} />}>{launchingNew ? t('sessions.startingSession') : <>{t('sessions.startInWorkbench')}<kbd className={styles.dialogPrimaryKbd} aria-hidden="true">{modLabel}↵</kbd></>}</Button></div>
       </div>
     </GuideDialog>}
     {worktreeSetupDialog()}

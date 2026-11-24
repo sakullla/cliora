@@ -163,16 +163,6 @@ impl CliAdapter for Omp {
         configuration::connection_policy(scope)
     }
 
-    fn auth_env_name(&self, connection: &Connection) -> Option<String> {
-        configuration::launch_env_name(connection)
-    }
-
-    fn connection_secret_via_launch_env(&self) -> bool {
-        // OMP resolves a managed connection key from the child environment;
-        // the native YAML carries only the variable reference.
-        true
-    }
-
     fn connection_documents(
         &self,
         connection: &Connection,
@@ -212,6 +202,16 @@ impl CliAdapter for Omp {
 
     fn has_native_secret(&self, role: &str, root: &Value) -> bool {
         configuration::has_native_secret(role, root)
+    }
+
+    fn outdated_applied_secret(
+        &self,
+        connection: &Connection,
+        role: &str,
+        path: &[String],
+        value: &Value,
+    ) -> bool {
+        configuration::outdated_applied_secret(connection, role, path, value)
     }
 
     fn inspect_values(

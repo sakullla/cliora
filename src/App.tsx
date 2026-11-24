@@ -51,7 +51,7 @@ import { applyStoredLanguage, readStoredLanguage } from './i18n';
 import { native, nativeAvailable } from './lib/native';
 import { formatFailure, launchFailureDetail } from './lib/feedback';
 import { confirmAction } from './lib/confirm';
-import { isEditableTarget, modAria, modLabel, withMod } from './lib/shortcut';
+import { altLabel, isEditableTarget, modAria, modLabel, withMod } from './lib/shortcut';
 import { displayPath, shortPath } from './lib/paths';
 import { usePageScroll } from './lib/uiNavigation';
 import { useToasts } from './lib/toast';
@@ -1088,7 +1088,7 @@ export default function App() {
   });
   // Starting a session is the most common action, so it leads the palette instead of trailing the actions.
   const startCommands: CommandItem[] = canStartSession ? [
-    { id: 'new-session', group: t('common.palette.groupStart'), label: t('home.hero.newSession'), hint: 'Alt+N', keywords: 'new session terminal 新建 会话 终端', icon: 'plus', contextBoost: 4, run: startNewSession },
+    { id: 'new-session', group: t('common.palette.groupStart'), label: t('home.hero.newSession'), hint: `${altLabel}+N`, keywords: 'new session terminal 新建 会话 终端', icon: 'plus', contextBoost: 4, run: startNewSession },
   ] : [];
   const actionCommands: CommandItem[] = [
     { id: 'sidebar', group: t('common.palette.groupActions'), label: sidebarCollapsed ? t('common.shell.sidebarExpand') : t('common.shell.sidebarCollapse'), hint: `${modLabel}+\\`, icon: sidebarCollapsed ? 'sidebarOpen' : 'sidebarClose', run: toggleSidebar },
@@ -1228,7 +1228,7 @@ export default function App() {
       <div className="content-inner">
       {!nativeAvailable && <div className="environment-banner" role="status"><span className="banner-icon"><Icon name="info" size={16} /></span><span>{t('common.shell.previewBanner')}</span></div>}
       {(error || writeRecoveryFallback) && <div className="error-banner" role="alert"><span className="banner-icon"><Icon name="alert" size={16} /></span><div className="error-copy"><strong>{error?.message ?? t('common.remoteWrite.unknown')}</strong>{error && <span>{error.action}</span>}{writeRecoveryFallback && error && error.message !== t('common.remoteWrite.unknown') && <span>{t('common.remoteWrite.unknown')}</span>}{error?.data_directory && <code>{error.data_directory}</code>}</div>{writeRecoveryFallback && <IconButton size="sm" icon={<Icon name="refresh" size={14} />} onClick={() => requestWriteRecovery(remoteTargetId)} aria-label={t('common.remoteWrite.open')} title={t('common.remoteWrite.open')} />}{error && loaded && <button type="button" onClick={() => setError(null)} aria-label={t('common.dismissError')}><Icon name="close" size={14} /></button>}</div>}
-      {page === 'home' && <PageHeader compact title={title[0]} subtitle={title[1]} eyebrow={<><span className="page-eyebrow-dot" aria-hidden="true" />{t(`home.hero.${greetingPart()}`)}<span aria-hidden="true">·</span><time>{new Intl.DateTimeFormat(i18n.language?.startsWith('en') ? 'en-US' : 'zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }).format(new Date())}</time></>} actions={nativeAvailable && visibleDescriptors.some((item) => item.launchForm !== 'desktop') ? <Button variant="primary" icon={<Icon name="plus" size={15} />} title={`${t('home.hero.newSessionTitle')} (Alt+N)`} aria-keyshortcuts="Alt+N" onClick={startNewSession}>{t('home.hero.newSession')}</Button> : undefined} />}
+      {page === 'home' && <PageHeader compact title={title[0]} subtitle={title[1]} eyebrow={<><span className="page-eyebrow-dot" aria-hidden="true" />{t(`home.hero.${greetingPart()}`)}<span aria-hidden="true">·</span><time>{new Intl.DateTimeFormat(i18n.language?.startsWith('en') ? 'en-US' : 'zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }).format(new Date())}</time></>} actions={nativeAvailable && visibleDescriptors.some((item) => item.launchForm !== 'desktop') ? <Button variant="primary" icon={<Icon name="plus" size={15} />} title={`${t('home.hero.newSessionTitle')} (${altLabel}+N)`} aria-keyshortcuts="Alt+N" onClick={startNewSession}>{t('home.hero.newSession')}</Button> : undefined} />}
       {page !== 'sessions' && page !== 'home' && <PageHeader title={title[0]} subtitle={title[1]} compact={page === 'records' || page === 'connections' || page === 'library'} />}
       {loading ? <PageSkeleton /> : !loaded ? <EmptyState icon="alert" title={t('common.shell.loadFailedTitle')} detail={t('common.shell.loadFailedDetail')} action={<Button variant="primary" size="sm" className="empty-state-action" onClick={loadBootstrap}>{t('common.shell.loadFailedRetry')}</Button>} /> : <>
         {page === 'home' && onboardingVisible && <OnboardingCard

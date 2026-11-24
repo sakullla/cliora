@@ -1680,7 +1680,7 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
   gap: var(--space-2_5);
   min-width: 0;
   min-height: 58px;
-  padding: var(--space-2) calc(var(--space-10) + var(--space-1)) var(--space-2) var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-2);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface);
@@ -1693,15 +1693,13 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .toolChipName { display: grid; flex: 1 1 auto; gap: 1px; min-width: 0; }
 .toolChipName strong { overflow: hidden; font-size: var(--fs-control); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
 .toolChipName small { overflow: hidden; color: var(--text-3); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
-.toolChipAction { position: absolute; top: 50%; right: 10px; display: grid; place-items: center; width: 26px; height: 26px; margin-top: calc(var(--space-3) * -1); border-radius: var(--radius-sm); color: var(--text-3); opacity: 0; transform: translateX(-4px); transition: opacity var(--fast) var(--ease), transform var(--fast) var(--ease), background-color var(--fast) var(--ease); }
 .toolChip:hover:not(:disabled),
 .toolChip:focus-visible { border-color: var(--accent-line); background: var(--accent-soft); box-shadow: none; }
 .toolChip:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
-.toolChip:hover:not(:disabled) .toolChipAction,
-.toolChip:focus-visible .toolChipAction { background: var(--accent); color: var(--on-accent); opacity: 1; transform: none; }
+.toolChip:hover:not(:disabled) .launchToolIcon,
+.toolChip:focus-visible .launchToolIcon { border-color: var(--accent-line); background: var(--surface); }
 .toolChip[data-more] { padding-right: var(--space-3); border-style: dashed; background: transparent; box-shadow: none; color: var(--text-2); }
 .toolChip[data-more] .launchToolIcon { background: transparent; box-shadow: none; }
-.toolChip[data-more] .toolChipAction { display: none; }
 .recentsGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2_5); }
 .recentCard { display: flex; align-items: center; gap: var(--space-3); min-width: 0; min-height: 56px; padding: var(--space-2) var(--space-3) var(--space-2) var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); text-align: left; white-space: normal; box-shadow: none; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease); }
 .recentCard:hover:not(:disabled),
@@ -1716,10 +1714,6 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .recentCard:hover .recentAction,
 .recentCard:focus-visible .recentAction { color: var(--accent); transform: translateX(2px); }
 .emptyFoot { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--space-2) var(--space-4); padding-top: var(--space-1); }
-.shortcutsHint { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-0_5); color: var(--text-3); font-size: var(--fs-micro); }
-.shortcutsHint > span:not(.shortcutSep) { margin-right: var(--space-1); }
-.shortcutsHint kbd { min-width: 18px; background: var(--surface); font-size: var(--fs-micro); line-height: 16px; }
-.shortcutSep { margin: 0 var(--space-1); color: var(--line-strong); }
 .localOnly { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--text-3); font-size: var(--fs-micro); white-space: nowrap; }
 .hostSwitcher { display: inline-flex; align-items: center; gap: var(--space-1_5); color: var(--text-2); font-size: var(--fs-micro); white-space: nowrap; }
 .hostSwitcher select { max-width: 180px; min-height: 28px; padding: var(--space-0_5) var(--space-6) var(--space-0_5) var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface); color: var(--text); font: inherit; }
@@ -1863,6 +1857,7 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .dialogSummaryIcon { display: grid; flex: none; place-items: center; width: 36px; height: 36px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: none; }
 .dialogActions { position: sticky; bottom: -24px; z-index: 1; display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); margin: 0 calc(var(--space-6) * -1) calc(var(--space-6) * -1); padding: var(--space-3) var(--space-6) var(--space-4); border-top: 1px solid var(--line); background: var(--surface); }
 .dialogActions .dialogPrimary { min-width: 112px; }
+.dialogPrimaryKbd { margin-left: var(--space-1); padding: 0; border: 0; background: transparent; box-shadow: none; color: inherit; font-family: var(--font-sans); font-size: var(--fs-micro); opacity: .72; }
 .restoreCandidates { display: grid; gap: var(--space-2); min-width: min(560px, 78vw); }
 .restoreCandidate { display: flex; align-items: center; gap: var(--space-3); width: 100%; min-height: 64px; padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--text); box-shadow: none; text-align: left; }
 .restoreCandidate:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); box-shadow: none; }
@@ -1944,7 +1939,6 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
   .window[data-tone='live'] .screen::after,
   .emptyGlyphCursor { animation: none; }
   .toolChip,
-  .toolChipAction,
   .recentAction,
   .recentCard,
   .session,

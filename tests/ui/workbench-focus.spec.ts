@@ -404,7 +404,7 @@ test('selected rail row keeps metadata visible at rest, docked live keeps accent
   expect(stripPendingColor).not.toBe(stripEndedColor);
 });
 
-test('empty workbench tool chips reserve right padding for the hover arrow', async ({ page }) => {
+test('empty workbench tool chips show the full tool name', async ({ page }) => {
   await page.addInitScript(() => {
     const names: Record<string, string> = { codex: 'Codex', claude_code: 'Claude Code' };
     Object.assign(window, {
@@ -429,6 +429,7 @@ test('empty workbench tool chips reserve right padding for the hover arrow', asy
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
   const chip = page.getByRole('button', { name: 'Claude Code' });
   await expect(chip).toBeVisible();
-  const paddingRight = await chip.evaluate((el) => parseFloat(getComputedStyle(el).paddingRight));
-  expect(paddingRight).toBeGreaterThanOrEqual(40);
+  const name = chip.locator('strong');
+  const clipped = await name.evaluate((el) => el.scrollWidth > el.clientWidth);
+  expect(clipped).toBe(false);
 });

@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { GuideDialog } from './GuideDialog';
-import { modLabel } from '../lib/shortcut';
+import { altLabel, modLabel } from '../lib/shortcut';
 
 export function ShortcutHelp({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t } = useTranslation();
@@ -9,7 +9,7 @@ export function ShortcutHelp({ open, onClose }: { open: boolean; onClose: () => 
       <section><h3>{t('common.shortcuts.global')}</h3><dl>
         <div><dt><kbd>{modLabel}+K</kbd></dt><dd>{t('common.shortcuts.palette')}</dd></div>
         <div><dt><kbd>{modLabel}+,</kbd></dt><dd>{t('common.shortcuts.openSettings')}</dd></div>
-        <div><dt><kbd>Alt+N</kbd></dt><dd>{t('common.shortcuts.newSession')}</dd></div>
+        <div><dt><kbd>{altLabel}+N</kbd></dt><dd>{t('common.shortcuts.newSession')}</dd></div>
         <div><dt><kbd>{modLabel}+1…5</kbd></dt><dd>{t('common.shortcuts.switchPage')}</dd></div>
         <div><dt><kbd>{modLabel}+\</kbd></dt><dd>{t('common.shortcuts.toggleSidebar')}</dd></div>
         <div><dt><kbd>/</kbd> {t('common.shortcuts.or')} <kbd>{modLabel}+F</kbd></dt><dd>{t('common.shortcuts.focusSearch')}</dd></div>

@@ -5,6 +5,7 @@ import { Button } from '../../components/ui';
 import { HostSwitcher } from '../../components/HostSwitcher';
 import { ToolIcon } from '../../components/ToolIcon';
 import { displayPath, shortPath } from '../../lib/paths';
+import { altLabel } from '../../lib/shortcut';
 import type { Project } from '../../types/launch';
 import type { AdapterDescriptor } from '../../types/native';
 import type { RemoteTarget } from '../../types/remote';
@@ -41,10 +42,10 @@ export function WorkbenchEmpty({ tools, projects, remoteTargets = [], remoteEnab
         <h2>{t('sessions.emptyTitle')}</h2>
         <p>{t('sessions.emptyDetail')}</p>
         {/* One launcher bar, like a command field: the whole bar opens the new-session dialog. */}
-        {tools.length > 0 && <button type="button" className={styles.launcherBar} aria-label={t('sessions.newSession')} title={t('sessions.newSession') + ' (Alt+N)'} onClick={() => onNewSession()}>
+        {tools.length > 0 && <button type="button" className={styles.launcherBar} aria-label={t('sessions.newSession')} aria-keyshortcuts="Alt+N" title={`${t('sessions.newSession')} (${altLabel}+N)`} onClick={() => onNewSession()}>
           <span className={styles.launcherGlyph} aria-hidden="true"><Icon name="plus" size={18} /></span>
           <span className={styles.launcherCopy}><strong>{t('sessions.newSession')}</strong><small>{t('sessions.launcherHint')}</small></span>
-          <span className={styles.launcherKeys} aria-hidden="true"><kbd>Alt</kbd><kbd>N</kbd></span>
+          <span className={styles.launcherKeys} aria-hidden="true"><kbd>{altLabel}</kbd><kbd>N</kbd></span>
         </button>}
         {/* With tools, the launcher bar is the next step and the sidebar already reaches Home. */}
         {tools.length === 0 && <div className={styles.emptyActions}>
@@ -54,14 +55,13 @@ export function WorkbenchEmpty({ tools, projects, remoteTargets = [], remoteEnab
 
       {tools.length > 0 && <section className={styles.launchSection} aria-label={t('sessions.quickTools')}>
         <div className={styles.launchSectionHead}><span>{t('sessions.quickTools')}</span><small>{t('sessions.quickToolsHint')}</small></div>
+        {/* The whole chip is the action, so it spends its width on the tool name rather than a hover arrow. */}
         <div className={styles.toolGrid}>{quickTools.map((tool) => <button key={tool.id} type="button" className={styles.toolChip} title={t('sessions.quickToolTitle', { name: tool.name })} onClick={() => onNewSession({ toolId: tool.id })}>
           <span className={styles.launchToolIcon}><ToolIcon toolId={tool.id} size={22} /></span>
           <span className={styles.toolChipName}><strong>{tool.name}</strong>{!tool.yoloAvailable && <small>{t('sessions.toolNoYolo')}</small>}</span>
-          <span className={styles.toolChipAction} aria-hidden="true"><Icon name="arrowRight" size={14} /></span>
         </button>)}{tools.length > QUICK_TOOL_LIMIT && <button type="button" className={styles.toolChip} data-more onClick={() => onNewSession()}>
           <span className={styles.launchToolIcon}><Icon name="more" size={18} /></span>
           <span className={styles.toolChipName}><strong>{t('sessions.moreTools', { count: tools.length - QUICK_TOOL_LIMIT })}</strong></span>
-          <span className={styles.toolChipAction} aria-hidden="true"><Icon name="arrowRight" size={14} /></span>
         </button>}</div>
       </section>}
 
@@ -79,9 +79,8 @@ export function WorkbenchEmpty({ tools, projects, remoteTargets = [], remoteEnab
         })}</div>
       </section>}
 
+      {/* No session exists yet, so there is nothing to switch between: the footer only says where sessions run. */}
       <footer className={styles.emptyFoot}>
-        {/* Alt+N already sits on the launcher bar; the footer only teaches switching. */}
-        <span className={styles.shortcutsHint} aria-label={t('sessions.shortcutsHint')}>{tools.length === 0 && <><kbd>Alt</kbd><kbd>N</kbd><span>{t('sessions.shortcutNew')}</span><span className={styles.shortcutSep} aria-hidden="true">·</span></>}<kbd>Alt</kbd><kbd>↑</kbd><kbd>↓</kbd><span>{t('sessions.shortcutSwitch')}</span></span>
         {remoteEnabled ? <HostSwitcher variant="chip" targets={remoteTargets} value={activeTargetId} onChange={(targetId) => onTargetChange?.(targetId)} onManage={onManageHosts} /> : <span className={styles.localOnly}><Icon name="lock" size={12} />{t('sessions.localSessions')}</span>}
       </footer>
     </div>

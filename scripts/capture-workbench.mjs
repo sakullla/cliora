@@ -591,16 +591,16 @@ for (const width of widths) {
       '  3. No, and tell Codex what to do differently (esc)',
     ].join('\r\n')));
     await page.locator('[data-drag-id="s1"][data-task="needsYou"]').waitFor();
-    const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });
-    const taskMenu = async () => {
-      await stage.getByRole('button', { name: copy('更多终端操作', 'More terminal actions'), exact: true }).click();
-      return page.getByRole('menu', { name: copy('终端操作', 'Terminal actions'), exact: true });
+    // Marking and moving to the background arrange the list, so they live on the row's menu.
+    const taskMenu = async (id) => {
+      await page.locator(`[data-drag-id="${id}"] [data-session-id="${id}"]`).click({ button: 'right' });
+      return page.getByRole('menu', { name: new RegExp(copy('会话操作', 'session actions')) });
     };
     await page.locator('[data-drag-id="s2"] [data-session-id="s2"]').click();
-    await (await taskMenu()).getByRole('menuitem', { name: copy('标记待审阅', 'Mark for review'), exact: true }).click();
+    await (await taskMenu('s2')).getByRole('menuitem', { name: copy('标记待审阅', 'Mark for review'), exact: true }).click();
     await page.locator('[data-drag-id="s2"][data-task="readyReview"]').waitFor();
     await page.locator('[data-drag-id="s4"] [data-session-id="s4"]').click();
-    await (await taskMenu()).getByRole('menuitem', { name: copy('收起为后台', 'Move to background'), exact: true }).click();
+    await (await taskMenu('s4')).getByRole('menuitem', { name: copy('收起为后台', 'Move to background'), exact: true }).click();
     // A narrow window draws the rail as a horizontal strip, so the section only has to exist.
     await page.locator('[data-group="collapsed"]').waitFor({ state: 'attached' });
   });

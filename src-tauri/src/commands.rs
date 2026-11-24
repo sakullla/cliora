@@ -2456,7 +2456,8 @@ pub async fn get_registered_tool_workspace(
             } else if context_error.is_some() {
                 apply::AppliedFileState::Unknown
             } else {
-                apply::applied_file_state(saved.binding.as_ref(), &probe.native_files)
+                let adapter = registry.get(&tool_id).ok_or_else(|| native_error("此 CLI 适配器未注册".into()))?;
+                apply::applied_file_state(adapter, saved.binding.as_ref(), &probe.native_files)
             };
             if let Some(binding) = &mut saved.binding { binding.managed.clear(); }
             Ok(RegisteredToolWorkspace {

@@ -80,7 +80,6 @@ export default {
   launchpadHint: 'Start from a CLI or recent project',
   moreTools: 'All tools ({{count}} more)',
   recentProjects: 'Start from a recent project',
-  shortcutsHint: 'Alt ↑ ↓ switches sessions · Alt N starts a new one',
   shortcutSwitch: 'switches sessions',
   shortcutNew: 'starts a new session',
   clearEndedTitle: 'Close all ended session tabs',

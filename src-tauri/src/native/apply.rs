@@ -139,22 +139,27 @@ fn managed_value(value: Option<&Value>, marker: Option<&Value>, integrity: &[u8;
 }
 
 /// Advisory status only. Use the fields actually committed by apply, not a newly
-/// projected profile. Do not read credentials or compare secret hashes for a badge.
+/// projected profile. Do not read credentials or compare secret hashes for a badge;
+/// a secret slot is judged only by the adapter's shape check against the applied connection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AppliedFileState { Unchecked, Unchanged, Changed, Unknown }
 
-pub fn applied_file_state(binding: Option<&AppliedBinding>, files: &[NativeFile]) -> AppliedFileState {
+pub fn applied_file_state(adapter: &dyn crate::adapters::CliAdapter, binding: Option<&AppliedBinding>, files: &[NativeFile]) -> AppliedFileState {
     let Some(binding) = binding.filter(|binding| binding.applied_profile_available && binding.profile_version > 0) else {
         return AppliedFileState::Unchecked;
     };
+    let connection = binding.applied_profile.as_ref().and_then(|snapshot| snapshot.runtime_profile.connection.as_ref());
     let mut checked = false;
     let mut unknown = false;
     for (role, fields) in &binding.managed {
-        let visible: Vec<_> = fields.iter().filter(|(_, value)| value.get(SECRET_HASH).is_none()).collect();
-        if visible.is_empty() { continue; }
+        let (mut secrets, visible): (Vec<_>, Vec<_>) = fields.iter().partition(|(_, value)| value.get(SECRET_HASH).is_some());
+        if connection.is_none() { secrets.clear(); }
+        if visible.is_empty() && secrets.is_empty() { continue; }
+        // Secret slots alone never make the state unknown; they only add the adapter's shape check.
+        let required = !visible.is_empty();
         let Some(file) = files.iter().find(|file| file.role == role && !file.sensitive) else {
-            unknown = true;
+            unknown |= required;
             continue;
         };
         let kind = match file.format {
@@ -162,12 +167,12 @@ pub fn applied_file_state(binding: Option<&AppliedBinding>, files: &[NativeFile]
             "json" => format::FileKind::Json,
             "jsonc" => format::FileKind::Jsonc,
             "yaml" => format::FileKind::Yaml,
-            _ => { unknown = true; continue; }
+            _ => { unknown |= required; continue; }
         };
         let document = transaction::read_native(Path::new(&file.path))
             .and_then(|text| format::parse(kind, text.trim_start_matches('\u{feff}')));
-        let Ok(document) = document else { unknown = true; continue; };
-        checked = true;
+        let Ok(document) = document else { unknown |= required; continue; };
+        checked |= required;
         for (pointer, expected) in visible {
             let path = path_from_pointer(pointer);
             let actual = path.iter().try_fold(&document, |value, part| value.get(part));
@@ -175,6 +180,15 @@ pub fn applied_file_state(binding: Option<&AppliedBinding>, files: &[NativeFile]
                 actual.is_none()
             } else { actual == Some(expected) };
             if !matches { return AppliedFileState::Changed; }
+        }
+        if let Some(connection) = connection {
+            for (pointer, _) in secrets {
+                let path = path_from_pointer(pointer);
+                let actual = path.iter().try_fold(&document, |value, part| value.get(part));
+                if actual.is_some_and(|value| adapter.outdated_applied_secret(connection, role, &path, value)) {
+                    return AppliedFileState::Changed;
+                }
+            }
         }
     }
     if unknown { AppliedFileState::Unknown }
@@ -1211,22 +1225,24 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("config.toml");
         let mut file = native(&path);
+        let registry = crate::adapters::Registry::builtins();
+        let codex = registry.get("codex").unwrap();
         let mut binding: AppliedBinding = serde_json::from_value(json!({
             "scopeKey": "global", "tool": "extension-fixture", "profileId": "p", "profileVersion": 1,
             "managed": {"settings": {"/model": "one", "/context": 200000}},
             "appliedProfileAvailable": true, "appliedSummary": null
         })).unwrap();
         fs::write(&path, "model = 'one' # same value\ncontext = 200_000\n[mcp_servers.docs]\ncommand = 'npx'\n").unwrap();
-        assert_eq!(applied_file_state(Some(&binding), &[file.clone()]), AppliedFileState::Unchanged);
+        assert_eq!(applied_file_state(codex, Some(&binding), &[file.clone()]), AppliedFileState::Unchanged);
         fs::write(&path, "model = 'other'\ncontext = 200000\n").unwrap();
-        assert_eq!(applied_file_state(Some(&binding), &[file.clone()]), AppliedFileState::Changed);
+        assert_eq!(applied_file_state(codex, Some(&binding), &[file.clone()]), AppliedFileState::Changed);
         fs::write(&path, "model = [broken").unwrap();
-        assert_eq!(applied_file_state(Some(&binding), &[file.clone()]), AppliedFileState::Unknown);
+        assert_eq!(applied_file_state(codex, Some(&binding), &[file.clone()]), AppliedFileState::Unknown);
         fs::remove_file(&path).unwrap();
-        assert_eq!(applied_file_state(Some(&binding), &[file.clone()]), AppliedFileState::Changed);
-        assert_eq!(applied_file_state(None, &[file.clone()]), AppliedFileState::Unchecked);
+        assert_eq!(applied_file_state(codex, Some(&binding), &[file.clone()]), AppliedFileState::Changed);
+        assert_eq!(applied_file_state(codex, None, &[file.clone()]), AppliedFileState::Unchecked);
         file.sensitive = true;
-        assert_eq!(applied_file_state(Some(&binding), &[file.clone()]), AppliedFileState::Unknown);
+        assert_eq!(applied_file_state(codex, Some(&binding), &[file.clone()]), AppliedFileState::Unknown);
         file.sensitive = false;
         // Secrets do not require keyring access for a presentation-only check.
         binding.managed.get_mut("settings").unwrap().insert("/key".into(), json!({SECRET_HASH: "private-hash"}));
@@ -1236,11 +1252,11 @@ mod tests {
         ] {
             file.format = kind;
             fs::write(&path, text).unwrap();
-            assert_eq!(applied_file_state(Some(&binding), &[file.clone()]), AppliedFileState::Unchanged);
+            assert_eq!(applied_file_state(codex, Some(&binding), &[file.clone()]), AppliedFileState::Unchanged);
         }
         binding.managed.get_mut("settings").unwrap().insert("/removed".into(), json!({REMOVED_FIELD: true}));
         fs::write(&path, "model: one\ncontext: 200000\nremoved: true\n").unwrap();
-        assert_eq!(applied_file_state(Some(&binding), &[file]), AppliedFileState::Changed);
+        assert_eq!(applied_file_state(codex, Some(&binding), &[file]), AppliedFileState::Changed);
     }
 
     #[test]
@@ -1254,14 +1270,14 @@ mod tests {
         // Apply deliberately preserves equivalent native syntax.
         fs::write(&path, "model = 'one'\n[mcp_servers.docs]\ncommand = 'npx'\n").unwrap();
         apply_fixture(&db, &store, &profile, None, &files, "global", Scope::Global, true).unwrap();
+        let registry = crate::adapters::Registry::builtins();
         let state = || {
-            let saved = crate::native::workspace::saved_workspace(&crate::adapters::Registry::builtins(), &db, "codex", "global").unwrap();
-            applied_file_state(saved.binding.as_ref(), &files)
+            let saved = crate::native::workspace::saved_workspace(&registry, &db, "codex", "global").unwrap();
+            applied_file_state(registry.get("codex").unwrap(), saved.binding.as_ref(), &files)
         };
         assert_eq!(state(), AppliedFileState::Unchanged);
         fs::write(&path, "model = 'other'\n[mcp_servers.docs]\ncommand = 'npx'\n").unwrap();
         assert_eq!(state(), AppliedFileState::Changed);
-        let registry = crate::adapters::Registry::builtins();
         let registered = RegisteredProfile::from(profile);
         let comparison = BTreeMap::from([("settings".into(), fs::read_to_string(&path).unwrap())]);
         apply_registered_validated_compared(&registry, &db, &store, &registered, None, &files,

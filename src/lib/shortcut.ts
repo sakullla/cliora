@@ -3,6 +3,8 @@ import i18n from '../i18n';
 export const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
 export const modLabel = isMac ? '⌘' : 'Ctrl';
 export const modAria = isMac ? 'Meta' : 'Control';
+/** The Alt key as printed on this keyboard: macOS labels it Option (⌥). */
+export const altLabel = isMac ? '⌥' : 'Alt';
 
 export function withMod(event: KeyboardEvent | { ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean }) {
   return (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;

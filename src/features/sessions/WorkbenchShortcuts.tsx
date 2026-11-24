@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { Button, IconButton } from '../../components/ui';
-import { modLabel } from '../../lib/shortcut';
+import { altLabel, modLabel } from '../../lib/shortcut';
 import styles from './SessionWorkbench.module.css';
 
 /** Keyboard reference for the terminal. Every entry mirrors a handler in terminalKeyAction or the workbench. */
@@ -30,10 +30,10 @@ export function WorkbenchShortcuts({ open, onToggle, onClose }: { open: boolean;
 
   const groups: { title: string; items: { keys: string[][]; label: string }[] }[] = [
     { title: t('sessions.kbGroupSessions'), items: [
-      { keys: [['Alt', 'N']], label: t('sessions.shortcutNew') },
-      { keys: [['Alt', '↑'], ['Alt', '↓']], label: t('sessions.shortcutSwitch') },
+      { keys: [[altLabel, 'N']], label: t('sessions.shortcutNew') },
+      { keys: [[altLabel, '↑'], [altLabel, '↓']], label: t('sessions.shortcutSwitch') },
       { keys: [['Ctrl', 'Tab']], label: t('sessions.kbCycle') },
-      { keys: [['Alt', 'Shift', '↑'], ['Alt', 'Shift', '↓']], label: t('sessions.kbReorder') },
+      { keys: [[altLabel, 'Shift', '↑'], [altLabel, 'Shift', '↓']], label: t('sessions.kbReorder') },
       { keys: [[modLabel, 'Shift', 'D']], label: t('sessions.splitView') },
       { keys: [[modLabel, 'Shift', 'B']], label: t('sessions.kbToggleRail') },
     ] },

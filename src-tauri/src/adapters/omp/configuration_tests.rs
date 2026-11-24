@@ -477,9 +477,11 @@ fn literal_keys_are_rejected_and_imported_as_environment_references() {
     assert!(!files[MODELS_ROLE].contains("sk-literal"));
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].1, "sk-literal");
+    // Like Pi, the selected connection owns the imported key; apply writes it back literally.
+    assert!(native_refs.is_empty());
     assert_eq!(
-        native_refs[MODELS_ROLE]["OMP_ALPHA_API_KEY"],
-        pending[0].0
+        found.connection.as_ref().unwrap().secret_ref.as_deref(),
+        Some(pending[0].0.as_str())
     );
     assert_eq!(
         found.connection.unwrap().auth_env_var.as_deref(),
@@ -704,6 +706,57 @@ fn apply_rewrites_environment_references_to_the_native_bare_name() {
         .unwrap();
     assert!(text.contains("apiKey: OMP_ALPHA_API_KEY"), "{text}");
     assert!(!text.contains("${"), "{text}");
+}
+
+/// `omp` started outside Cliora reads `providers.<id>.apiKey` with no launch
+/// environment, so a managed connection key must land literally in models.yml.
+#[test]
+fn apply_writes_the_managed_key_literally_and_refuses_keys_omp_would_reinterpret() {
+    struct Store(&'static str);
+    impl CredentialStore for Store {
+        fn put(&self, _id: &str, _secret: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn get(&self, _id: &str) -> Result<String, String> {
+            Ok(self.0.into())
+        }
+        fn delete(&self, _id: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
+    let mut managed = profile();
+    managed.connection = Some(Connection {
+        provider_id: "alpha".into(),
+        interface_format: "openai_responses".into(),
+        base_url: "https://alpha.example.test/v1".into(),
+        model: "one".into(),
+        secret_ref: Some("connection-00000000-0000-4000-8000-000000000001".into()),
+        auth_env_var: None,
+        model_records: Vec::new(),
+    });
+    let mut secrets = NativeSecrets::default();
+    write_connection_secret(&managed, Scope::Global, &Store("sk-synthetic-1"), &mut secrets).unwrap();
+    let text = secrets
+        .apply_text(MODELS_ROLE, FileKind::Yaml, MODELS.to_owned())
+        .unwrap();
+    let parsed = format::parse(FileKind::Yaml, &text).unwrap();
+    assert_eq!(parsed["providers"]["alpha"]["apiKey"], "sk-synthetic-1");
+
+    for reinterpreted in ["!pass show key", "SOME_ENV_NAME", "$OTHER", "${OTHER}"] {
+        let mut secrets = NativeSecrets::default();
+        assert!(
+            write_connection_secret(&managed, Scope::Global, &Store(reinterpreted), &mut secrets).is_err(),
+            "{reinterpreted}"
+        );
+    }
+    assert!(write_connection_secret(&managed, Scope::Project, &Store("sk-synthetic-1"), &mut NativeSecrets::default()).is_err());
+
+    // A binding applied by the former launch-environment channel left the bare
+    // variable name behind: it reads as changed so re-applying repairs it.
+    let connection = managed.connection.as_ref().unwrap();
+    let path = ["providers".to_owned(), "alpha".to_owned(), "apiKey".to_owned()];
+    assert!(outdated_applied_secret(connection, MODELS_ROLE, &path, &json!("CLIORA_OMP_ALPHA_API_KEY")));
+    assert!(!outdated_applied_secret(connection, MODELS_ROLE, &path, &json!("sk-synthetic-1")));
 }
 
 #[test]

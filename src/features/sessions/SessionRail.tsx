@@ -4,7 +4,7 @@ import type { KeyboardEvent, MouseEvent, PointerEvent } from 'react';
 import { Icon } from '../../components/Icon';
 import { Button, IconButton } from '../../components/ui';
 import { ToolIcon } from '../../components/ToolIcon';
-import { modLabel } from '../../lib/shortcut';
+import { altLabel, modLabel } from '../../lib/shortcut';
 import { SessionActivityIcon } from './SessionActivityIcon';
 import { SessionTitle, stableTitle } from './SessionTitle';
 import { placeParts, type PlaceParts } from './railTitle';
@@ -306,9 +306,9 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
         <h1 className={narrow || compact || docked ? styles.srOnly : styles.railTitle} tabIndex={-1}>{t('common.pages.sessions.title')}</h1>
         {!compact && !narrow && !docked && total > 0 && <span className={styles.railCount} title={t('sessions.summary', { running, ended })}><span className={styles.liveDot} data-live={running > 0 || undefined} aria-hidden="true" />{running > 0 ? t('sessions.runningCount', { count: running }) : t('sessions.railQuiet')}</span>}
         <span className={styles.railCompactLabel} aria-hidden="true"><Icon name="terminal" size={16} /></span>
-        {canLaunch && (compact || narrow) && <IconButton size="sm" variant="primary" className={styles.newSessionBtn} aria-label={t('sessions.newSession')} title={t('sessions.newSession') + ' (Alt+N)'} onClick={onNewSession} icon={<Icon name="plus" size={16} />} />}
+        {canLaunch && (compact || narrow) && <IconButton size="sm" variant="primary" className={styles.newSessionBtn} aria-label={t('sessions.newSession')} title={`${t('sessions.newSession')} (${altLabel}+N)`} aria-keyshortcuts="Alt+N" onClick={onNewSession} icon={<Icon name="plus" size={16} />} />}
       </div>
-      {canLaunch && !compact && !narrow && !showSearch && <Button variant="primary" className={styles.railNewBtn} aria-label={t('sessions.newSession')} title={t('sessions.newSession') + ' (Alt+N)'} onClick={onNewSession} icon={<Icon name="plus" size={15} />}><span>{t('sessions.newSession')}</span><kbd className={styles.railNewKbd} aria-hidden="true">Alt N</kbd></Button>}
+      {canLaunch && !compact && !narrow && !showSearch && <Button variant="primary" className={styles.railNewBtn} aria-label={t('sessions.newSession')} title={`${t('sessions.newSession')} (${altLabel}+N)`} aria-keyshortcuts="Alt+N" onClick={onNewSession} icon={<Icon name="plus" size={15} />}><span>{t('sessions.newSession')}</span><kbd className={styles.railNewKbd} aria-hidden="true">{altLabel} N</kbd></Button>}
       {/* With enough sessions to search, search and new session share one row so the list starts higher. */}
       {showSearch && <div className={styles.railTools}>
         <div className={styles.railSearchField} data-field-frame="">
@@ -316,7 +316,7 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
           <input type="search" value={search} placeholder={t('sessions.searchPlaceholder')} aria-label={t('sessions.searchPlaceholder')} onChange={(event) => onSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && search) { event.preventDefault(); onSearch(''); } }} />
           {search && <button type="button" className={styles.railSearchClear} aria-label={t('sessions.clearFilter')} title={t('sessions.clearFilter')} onClick={() => onSearch('')}><Icon name="close" size={12} /></button>}
         </div>
-        {canLaunch && <IconButton variant="primary" className={styles.railNewSquare} aria-label={t('sessions.newSession')} title={t('sessions.newSession') + ' (Alt+N)'} aria-keyshortcuts="Alt+N" onClick={onNewSession} icon={<Icon name="plus" size={16} />} />}
+        {canLaunch && <IconButton variant="primary" className={styles.railNewSquare} aria-label={t('sessions.newSession')} title={`${t('sessions.newSession')} (${altLabel}+N)`} aria-keyshortcuts="Alt+N" onClick={onNewSession} icon={<Icon name="plus" size={16} />} />}
       </div>}
       {!compact && !narrow && waiting.length > 0 && <button type="button" className={styles.railAttention} title={waiting.map((item) => item.title || item.name).join('\n')} onClick={() => onSelect(waiting[0].session.id)}>
         <SessionActivityIcon tone="bell" slot="rail" className={styles.railAttentionIcon} />

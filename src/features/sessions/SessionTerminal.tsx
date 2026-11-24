@@ -250,7 +250,8 @@ export function terminalKeyAction(event: Pick<KeyboardEvent, 'key' | 'code' | 'c
   if (mod && !altKey && !shiftKey && (key === '-' || key === '_')) return { kind: 'shortcut', action: 'zoomOut' };
   if (mod && !altKey && !shiftKey && key === '0') return { kind: 'shortcut', action: 'zoomReset' };
   if (altKey && !ctrlKey && !metaKey && !shiftKey) {
-    if (lower === 'n') return { kind: 'shortcut', action: 'newSession' };
+    // macOS turns Option+N into a dead key (`key` is 'Dead'), so the physical key decides.
+    if (lower === 'n' || event.code === 'KeyN') return { kind: 'shortcut', action: 'newSession' };
     if (options.canSwitch && key === 'ArrowUp') return { kind: 'shortcut', action: 'prevSession' };
     if (options.canSwitch && key === 'ArrowDown') return { kind: 'shortcut', action: 'nextSession' };
   }

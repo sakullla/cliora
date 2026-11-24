@@ -1198,6 +1198,22 @@ pub trait CliAdapter: Sync {
         }
     }
     fn has_native_secret(&self, role: &str, root: &Value) -> bool;
+    /// Advisory drift for a key slot the last application wrote through the
+    /// credential channel. `value` is what the native file holds there now and
+    /// `connection` is the applied connection. True means the current apply
+    /// would never leave that value (for example a reference written by an
+    /// older credential channel), so the binding reads as changed and the
+    /// existing re-apply action rewrites it. Must judge shape only: never log,
+    /// return, or compare the value against stored credentials.
+    fn outdated_applied_secret(
+        &self,
+        _connection: &Connection,
+        _role: &str,
+        _path: &[String],
+        _value: &Value,
+    ) -> bool {
+        false
+    }
     fn inspect_values(
         &self,
         settings: &Value,
