@@ -4,7 +4,7 @@ import { mkdtempSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { buildSecretUsageInstructions, grantedExecutors, prepareLocalSecretPrompt, quoteArgument } from '../../src/lib/secretCommands.ts';
+import { buildSecretUsageInstructions, prepareLocalSecretPrompt, quoteArgument } from '../../src/lib/secretCommands.ts';
 
 const input = {
   executable: '/Applications/Cliora.app/Contents/MacOS/cliora',
@@ -32,18 +32,13 @@ test('one argument is quoted only when a shell would reinterpret it', () => {
   assert.equal(quoteArgument(''), "''");
 });
 
-test('only granted executors are offered for a secret', () => {
-  assert.deepEqual(grantedExecutors(input, input.secrets[0].id).map(executor => executor.label), ['部署脚本']);
-  assert.deepEqual(grantedExecutors(input, input.secrets[1].id), []);
-});
-
 test('the usage text names the real executable, entry and installation', () => {
   const text = buildSecretUsageInstructions(input);
   assert.match(text, /\/Applications\/Cliora\.app\/Contents\/MacOS\/cliora --cliora-internal-secret-cli-v1 --installation 4c2f8c9e-6b1a-4c44-9d5b-6f0a2b7c1234 list/);
-  assert.match(text, /安装标识: codex-cli \(4c2f8c9e-6b1a-4c44-9d5b-6f0a2b7c1234\)/);
+  assert.match(text, /安装标识: codex-cli/);
   // A granted pair produces one exact controlled-use command.
   assert.match(text, /use --secret 11111111-2222-4333-8444-555555555555 --executor aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/);
-  assert.match(text, /别名 生产部署口令 · 执行入口 部署脚本/);
+  assert.match(text, /生产部署口令 · 部署脚本/);
   // The read section documents the confirmation and warns about the model context.
   assert.match(text, /read --secret 11111111-2222-4333-8444-555555555555/);
   assert.match(text, /允许本次会话/);
@@ -62,7 +57,7 @@ test('an installation without grants gets instructions instead of a guessed comm
   assert.match(text, /list/);
   assert.doesNotMatch(text, /use --secret/);
   assert.doesNotMatch(text, /read --secret/);
-  assert.match(text, /还没有任何已授权的秘密与执行入口/);
+  assert.match(text, /此连接尚无已授权操作/);
 });
 
 test('an executable with spaces stays one quoted argument in every command', () => {
@@ -70,6 +65,16 @@ test('an executable with spaces stays one quoted argument in every command', () 
   for (const line of text.split('\n').filter(line => line.includes('--installation'))) {
     assert.ok(line.startsWith("'/Users/me/Cliora Beta/cliora' --cliora-internal-secret-cli-v1"), line);
   }
+});
+
+test('the copied CLI guide uses list and one granted example for a large inventory', () => {
+  const secrets = Array.from({ length: 350 }, (_, i) => ({ id: 'secret-' + i, alias: 'alias-' + i }));
+  const grants = secrets.map(secret => ({ secretId: secret.id, executorId: input.executors[0].id }));
+  const text = buildSecretUsageInstructions({ ...input, secrets, grants });
+  assert.equal(text.match(/--installation /g)?.length, 3);
+  assert.match(text, /alias-0 · 部署脚本/);
+  assert.match(text, /executors\[\]\.id/);
+  assert.doesNotMatch(text, /alias-349|secret-349/);
 });
 
 test('the English text keeps the same commands and identifiers', () => {
@@ -94,16 +99,17 @@ test('local prompts carry literal references, scoped actions and a distinct appr
   };
   const outgoing = await prepareLocalSecretPrompt(body, async () => metadata, false);
   assert.ok(outgoing.startsWith(body + '\n'));
-  assert.ok(outgoing.includes(alias + ' ' + token));
+  assert.ok(outgoing.includes(alias + ' · ' + grant.executorLabel));
+  assert.ok(!outgoing.slice(body.length).includes(token));
   const commands = outgoing.split('\n').filter(line => line.includes('--installation'));
-  assert.equal(commands.length, 3);
+  assert.equal(commands.length, 2);
   assert.ok(commands.every(line => line.startsWith("& 'C:\\Program Files\\O''Brien\\cliora.exe' ")));
   assert.ok(commands.some(line => line.endsWith(' use --secret ' + id + ' --executor ' + grant.executorId + ' | Out-String -Stream')));
   assert.ok(commands.some(line => line.endsWith(' read --secret ' + id + ' | Out-String -Stream')));
-  assert.ok(commands.some(line => line.endsWith(' list | Out-String -Stream')));
+  assert.ok(commands.every(line => !line.endsWith(' list | Out-String -Stream')));
   assert.doesNotMatch(outgoing, /revoked|other-target|99999999/);
   const unavailable = await prepareLocalSecretPrompt(body, async () => ({ ...metadata, grants: [] }), true);
-  assert.match(unavailable, /no authorized local CLI action/);
+  assert.match(unavailable, /No local CLI action granted/);
   assert.doesNotMatch(unavailable, /--installation/);
   assert.equal(await prepareLocalSecretPrompt('plain text', () => assert.fail('unexpected metadata lookup'), false), 'plain text');
 });

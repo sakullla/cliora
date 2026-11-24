@@ -90,7 +90,7 @@ export function ConfirmationHost() {
         <Button variant={request.destructive ? 'danger' : 'primary'} onClick={() => answerConfirmation(request.id, true)}>{request.confirmLabel ?? t('common.dialog.confirm')}</Button>
       </div>
     </dialog>}
-    {approval && <dialog key={approval.approvalId} ref={approvalDialog} className="confirmation-dialog secret-approval-dialog" aria-labelledby="secret-approval-title" aria-describedby="secret-approval-message"
+    {approval && <dialog key={approval.approvalId} ref={approvalDialog} className="confirmation-dialog secret-approval-dialog" aria-labelledby="secret-approval-title" aria-describedby="secret-approval-message secret-approval-risk secret-approval-scope"
       data-secret-approval={approval.approvalId}
       onCancel={event => { event.preventDefault(); void answerSecretApproval(approval.approvalId, false); }}>
       <div className="confirmation-head">
@@ -103,15 +103,12 @@ export function ConfirmationHost() {
               {aliases.map((alias, index) => <li key={index}>{alias}</li>)}
             </ul></dd></div>
           </dl>
-          <p className="secret-approval-risk" data-secret-approval-risk>{t('common.secretApproval.risk')}</p>
-          {approval.sessionAvailable && <p>{t('common.secretApproval.sessionHint')}</p>}
-          <div className="secret-approval-timer" data-urgent={secondsLeft > 0 && secondsLeft <= 15 || undefined} data-expired={secondsLeft === 0 && approval.expiresInSeconds > 0 || undefined}>
-            {approval.expiresInSeconds > 0 && <span className="secret-approval-meter" aria-hidden="true"><span style={{ transform: `scaleX(${Math.min(1, secondsLeft / approval.expiresInSeconds)})` }} /></span>}
-            <p className="secret-approval-timeout" data-secret-approval-timeout role="timer" aria-live="off">{secondsLeft === 0 && approval.expiresInSeconds > 0 ? t('common.secretApproval.expired') : t('common.secretApproval.timeout', { seconds: secondsLeft })}</p>
-          </div>
+          <p className="secret-approval-risk" id="secret-approval-risk" data-secret-approval-risk><Icon name="eye" size={14} />{t('common.secretApproval.risk')}</p>
+          <p className="secret-approval-scope" id="secret-approval-scope">{t(approval.sessionAvailable ? 'common.secretApproval.sessionHint' : 'common.secretApproval.onceHint')}</p>
         </div>
       </div>
       <div className="confirmation-actions">
+        <span className="secret-approval-timeout" data-secret-approval-timeout data-urgent={secondsLeft <= 15 || undefined} role="timer" aria-live="off">{secondsLeft === 0 ? t('common.secretApproval.expired') : t('common.secretApproval.timeout', { seconds: secondsLeft })}</span>
         <Button autoFocus data-secret-approval-decline onClick={() => void answerSecretApproval(approval.approvalId, false)}>{t('common.secretApproval.decline')}</Button>
         {/* The wider grant sits between refusing and the single read, which stays the emphasised choice. */}
         {approval.sessionAvailable && <Button data-secret-approval-session onClick={() => void answerSecretApproval(approval.approvalId, true, true)}>{t('common.secretApproval.session')}</Button>}

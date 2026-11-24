@@ -5,10 +5,10 @@ const host = {
   sshConfig: null, defaultPath: '/srv/project', enabled: true, createdAt: 1, updatedAt: 1,
 };
 const project = { id: 'proj-1', targetId: host.id, name: 'project', path: '/srv/project', preferredTool: 'codex', updatedAt: 1 };
-const longRemoteId = 'cliora-c1c75996-0e46-4936-9e6e-a5ae39726ed8-07921480e2c64e0cacc7951009d847eb';
+const longRemoteId = 'cliora-11111111-2222-4333-8444-555555555555-aaaaaaaaaaaabbbbccccdddddddddddd';
 
 type Layout = 'local' | 'remote' | 'remote-twins' | 'long-folder';
-const longFolder = '/Users/me/project/qsyn/e6-ms-tms-base-new-mes-fetch';
+const longFolder = '/Users/me/project/demo-group/demo-app-core-sample-api-fetch';
 
 /**
  * Minimal workbench desktop mock for the title bar. Browser mocks verify what the bar shows;
@@ -59,7 +59,7 @@ async function installDesktop(page: Page, layout: Layout) {
           if (command === 'restore_workbench_sessions') return { restored: {}, failures: [] };
           // The CLI titles its window "task | folder", as Codex does; the folder name has hyphens.
           if (command === 'replay_workbench_session') return layout === 'long-folder'
-            ? btoa(String.fromCharCode(...new TextEncoder().encode('\u001b]0;Write the API | e6-ms-tms-base-new-mes-fetch\u0007titlebar-fixture-ready\r\n> ')))
+            ? btoa(String.fromCharCode(...new TextEncoder().encode('\u001b]0;Write the API | demo-app-core-sample-api-fetch\u0007titlebar-fixture-ready\r\n> ')))
             : btoa('titlebar-fixture-ready\r\n> ');
           if (command === 'close_workbench_session') {
             const id = String(args.sessionId);
@@ -150,14 +150,14 @@ test('a hyphenated folder suffix leaves the task title, and the folder chip keep
   const stage = await openWorkbench(page);
   const bar = stage.locator('header').first();
   await expect(bar.getByRole('heading', { level: 2 })).toHaveText('Write the API');
-  await expect(page.getByRole('tab', { name: /Write the API/ })).not.toContainText('| e6-');
-  const chip = bar.getByRole('button', { name: /mes-fetch/ });
-  await expect(chip).toHaveText(/qsyn\/e6-ms-tms-base-new-mes-fetch$/);
-  await expect(chip).toHaveAttribute('title', /qsyn\/e6-ms-tms-base-new-mes-fetch/);
+  await expect(page.getByRole('tab', { name: /Write the API/ })).not.toContainText('| demo-');
+  const chip = bar.getByRole('button', { name: /api-fetch/ });
+  await expect(chip).toHaveText(/demo-group\/demo-app-core-sample-api-fetch$/);
+  await expect(chip).toHaveAttribute('title', /demo-group\/demo-app-core-sample-api-fetch/);
   // A short chip folds from the left: parent folders, then the folder's head; its end stays whole.
   await page.setViewportSize({ width: 1200, height: 800 });
-  await expect(chip.getByText('…/qsyn/')).toHaveJSProperty('clientWidth', 0);
-  const tail = chip.getByText('mes-fetch', { exact: true });
+  await expect(chip.getByText('…/demo-group/')).toHaveJSProperty('clientWidth', 0);
+  const tail = chip.getByText('api-fetch', { exact: true });
   await expect.poll(() => tail.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
   // Integer client/scroll widths can hide a fractional flex squeeze that still paints an ellipsis.
   await expect.poll(() => tail.evaluate((element) => {

@@ -435,6 +435,44 @@ fn each_sessionless_read_needs_its_own_approval() {
 }
 
 #[test]
+fn direct_use_needs_no_script_and_revoking_it_ends_session_consent() {
+    let database = db();
+    let credentials = MemoryCredentials::default();
+    let secret = create_secret(&database, &credentials, "Demo service fixture", CANARY);
+    let other = create_secret(&database, &credentials, "unselected", OTHER);
+    let before = credentials.lookups.load(Ordering::Relaxed);
+    for _ in 0..2 { set_direct_read(&database, &secret.id, true).unwrap(); }
+    assert_eq!(credentials.lookups.load(Ordering::Relaxed), before);
+    let installs = list_installations(&database).unwrap();
+    assert_eq!(installs.len(), 1);
+    let id = &installs[0].id;
+    assert!(executor::list(&database).unwrap().is_empty());
+    let listing = list(&database, &credentials, id);
+    assert!(body(&listing).contains("Demo service fixture"));
+    assert!(!body(&listing).contains("unselected"));
+    let declined = FakeHost::new(Answer::Decline);
+    assert!(!read_secret(&database, &credentials, &declined, id, &secret.id).ok);
+    let host = FakeHost::new(Answer::Remember);
+    let session = session::LocalSession::new();
+    let read = |ids: &[String]| read_secrets(&database, &credentials, &host, ReadSelection {
+        installation_id: id, requested: ids, batch: true, token: Some(session.token()),
+    }, &AtomicBool::new(false));
+    let ids = std::slice::from_ref(&secret.id);
+    assert!(body(&read(ids)).contains(CANARY));
+    assert!(read(ids).ok);
+    assert_eq!(host.asked().len(), 1);
+    assert_eq!(read(&[other.id, secret.id.clone()]).data, None);
+    set_direct_read(&database, &secret.id, false).unwrap();
+    assert_eq!(read(ids).code, audit::code::GRANT_MISSING);
+    set_direct_read(&database, &secret.id, true).unwrap();
+    assert!(read(ids).ok);
+    assert_eq!(host.asked().len(), 2);
+    revoke_installation(&database, id).unwrap();
+    assert!(direct_reads(&database, None).unwrap().is_empty());
+    assert!(!read(ids).ok);
+}
+
+#[test]
 fn batch_reads_remember_only_approved_references_in_one_live_session() {
     let database = db();
     let credentials = MemoryCredentials::default();

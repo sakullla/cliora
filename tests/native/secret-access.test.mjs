@@ -30,12 +30,67 @@ test('outgoing prompts group only the requested references by a live installatio
     grants: [grant('single', ids[0]), grant('shared', ids[0]), grant('shared', ids[1]), grant('other', ids[2])],
   }), true);
   assert.ok(outgoing.startsWith(body + '\n'));
+  const uses = outgoing.split('\n').filter(line => line.includes(' use --secret '));
+  assert.equal(uses.length, 3);
+  assert.ok(uses.some(line => line.endsWith('--installation shared use --secret ' + ids[0] + ' --executor script')));
+  assert.match(outgoing, /Replace only --secret in the command above/);
+  assert.ok(outgoing.includes(ids[1] + ' · ' + ids[1]));
   const commands = outgoing.split('\n').filter(line => line.includes(' read --secret '));
   assert.equal(commands.length, 2);
   assert.ok(commands.some(line => line.endsWith('--installation shared read --secret ' + ids[0] + ' --secret ' + ids[1])));
   assert.ok(commands.some(line => line.endsWith('--installation other read --secret ' + ids[2])));
-  assert.match(outgoing, /secretIds array of MCP read_secret/);
+  assert.match(outgoing, /read_secret \(secretIds\)/);
 });
+test('a diagnostic-only grant keeps recovery and explicit read consent distinct in both languages', async () => {
+  const ids = Array.from({ length: 350 }, (_, i) => `11111111-2222-4333-8444-${String(i).padStart(12, '0')}`);
+  const token = i => '{{cliora-secret:' + ids[i] + '}}';
+  const body = [token(349), token(21), token(24), token(349)].join(' ');
+  const metadata = {
+    cli: { executable: '/opt/cliora', entry: '--cliora-internal-secret-cli-v1' },
+    installations: [{ id: 'local', kind: 'cli', revoked: false }],
+    grants: ids.filter(id => id !== ids[21] && id !== ids[24]).map(id => ({
+      installationId: 'local', secretId: id, alias: id === ids[349] ? 'DEMO_SERVICE_TOKEN' : 'unrelated',
+      executorId: 'delivery-test', executorLabel: 'Test secret delivery',
+    })),
+  };
+  for (const english of [false, true]) {
+    const outgoing = await prepareLocalSecretPrompt(body, async () => metadata, english);
+    const appended = outgoing.slice(body.length);
+    assert.doesNotMatch(appended, /unrelated|\{\{cliora-secret:/);
+    assert.equal(appended.match(/ use --secret /g)?.length, 1);
+    assert.match(appended, /DEMO_SERVICE_TOKEN · Test secret delivery/);
+    const unbound = appended.split('\n').filter(line => line.includes(english ? 'No local CLI action' : '尚无本机 CLI 操作授权'));
+    assert.equal(unbound.length, 1);
+    assert.ok(unbound[0].includes(ids[21]) && unbound[0].includes(ids[24]));
+    assert.match(appended, english ? /delivery test only checks/ : /传递测试只验证/);
+    assert.match(appended, english ? /sanitized results/ : /脱敏结果/);
+    const readGate = appended.indexOf(english ? 'explicitly asks to see' : '明确要求查看原值');
+    assert.ok(readGate >= 0 && readGate < appended.indexOf(' read --secret '));
+    assert.doesNotMatch(appended, /--installation local list/);
+  }
+});
+
+test('direct credentials are requested only for named references on the opted-in installation', async () => {
+  const ids = ['11111111-2222-4333-8444-555555555551', '11111111-2222-4333-8444-555555555552'];
+  const body = 'Sign in and check logs {{cliora-secret:' + ids[0] + '}}';
+  const data = {
+    cli: { executable: '/opt/cliora', entry: '--cliora-internal-secret-cli-v1' },
+    installations: [{ id: 'direct', kind: 'cli', directReadOnly: true, targetId: 'cliora-direct', revoked: false }],
+    directReads: ids.map((secretId, i) => ({ installationId: 'direct', secretId, alias: i ? 'unrelated' : 'DEMO_SERVICE_TOKEN' })),
+    grants: [],
+  };
+  for (const english of [true, false]) {
+    const text = await prepareLocalSecretPrompt(body, async () => data, english);
+    assert.ok(text.startsWith(body));
+    assert.ok(text.includes('DEMO_SERVICE_TOKEN'));
+    assert.ok(text.includes('--installation direct read --secret ' + ids[0]));
+    assert.match(text, english ? /After approval, sign in/ : /获准后自行登录/);
+    assert.ok(!text.includes(ids[1]) && !text.includes('unrelated') && !text.includes('--executor'));
+  }
+  data.installations[0].revoked = true;
+  assert.doesNotMatch(await prepareLocalSecretPrompt(body, async () => data, true), /--installation direct/);
+});
+
 const plan = {
   helper: '/opt/cliora-fixture/Cliora',
   installationId: '4c2f8c9e-6b1a-4c44-9d5b-6f0a2b7c1234',

@@ -38,12 +38,12 @@ type Props = {
  */
 export function SecretScriptAccess({ availablePrograms, alias, installations, executors, grants, busy, onGrant, onInsert, onRevoke, onClose }: Props) {
   const { t } = useTranslation();
-  const live = installations.filter(item => !item.revoked);
+  const live = installations.filter(item => !item.revoked && !item.directReadOnly);
   const local = installations.filter(item => item.kind === 'cli' && !item.targetId);
   const [targetOverride, setTarget] = useState('');
   const target = targetOverride || local.find(item => !item.revoked)?.id || '';
   const [adding, setAdding] = useState(false);
-  const [script, setScript] = useState<string>('localCheck');
+  const [script, setScript] = useState<string | null>(null);
   const [path, setPath] = useState('');
   const [name, setName] = useState('');
   const [args, setArgs] = useState('');
@@ -62,7 +62,8 @@ export function SecretScriptAccess({ availablePrograms, alias, installations, ex
   const granted = grants.some(grant => grant.installationId === target && grant.executorId === grantExecutorId);
   const missingProgram = preset && !availablePrograms.includes(preset.executable) ? preset.executable : null;
   const targetReady = !!selected || (!target && autoCreate);
-  const customReady = !script && !!path.trim() && (channel === 'stdin' || !!envName.trim());
+  const custom = script === '';
+  const customReady = custom && !!path.trim() && (channel === 'stdin' || !!envName.trim());
   const ready = !missingProgram && targetReady && (!!preset || !!existing || customReady);
   const choosing = !grants.length || adding;
 
@@ -96,9 +97,9 @@ export function SecretScriptAccess({ availablePrograms, alias, installations, ex
   }
 
   const choices: Array<{ key: string; value: string; icon: IconName; title: string; detail: string; pressed: boolean }> = [
-    ...presets.map(item => ({ key: item.id, value: item.id, icon: item.icon as IconName, title: t(`library.secrets.broker.${item.id}`), detail: t(`library.secrets.broker.${item.id}Short`), pressed: script === item.id })),
-    { key: 'custom', value: '', icon: 'terminal', title: t('library.secrets.broker.newScript'), detail: t('library.secrets.broker.newScriptShort'), pressed: !script },
     ...(executors.length ? [{ key: 'saved', value: executors[0].id, icon: 'archive' as IconName, title: t('library.secrets.broker.executors'), detail: t('library.secrets.broker.savedShort'), pressed: !!existing }] : []),
+    { key: 'custom', value: '', icon: 'terminal', title: t('library.secrets.broker.newScript'), detail: t('library.secrets.broker.newScriptShort'), pressed: custom },
+    { key: 'github', value: 'github', icon: 'globe', title: t('library.secrets.broker.github'), detail: t('library.secrets.broker.githubShort'), pressed: script === 'github' },
   ];
 
   return <div ref={reveal} className={styles.sheet} data-secret-grant-form>
@@ -126,7 +127,7 @@ export function SecretScriptAccess({ availablePrograms, alias, installations, ex
       <span className={styles.footerNote} />
       <div className={styles.footerActions}>
         <Button size="sm" variant="ghost" disabled={busy} onClick={onClose}>{t('library.secrets.done')}</Button>
-        <Button size="sm" disabled={busy} icon={<Icon name="plus" size={12} />} onClick={() => { setScript('localCheck'); setAdding(true); }}>{t('library.secrets.broker.addAction')}</Button>
+        <Button size="sm" disabled={busy} icon={<Icon name="plus" size={12} />} onClick={() => { setScript(null); setAdding(true); }}>{t('library.secrets.broker.addAction')}</Button>
       </div>
     </div> : <>
       <fieldset className={styles.choices} disabled={busy}>
@@ -137,12 +138,13 @@ export function SecretScriptAccess({ availablePrograms, alias, installations, ex
           <span>{choice.detail}</span>
         </button>)}
       </fieldset>
+      <button type="button" className={styles.diagnostic} disabled={busy} data-secret-preset="localCheck" aria-pressed={script === 'localCheck'} onClick={() => setScript('localCheck')}><Icon name="terminal" size={13} />{t('library.secrets.broker.diagnostic')}</button>
       {missingProgram && <p role="status" className={styles.alert}>{t('library.secrets.missingProgram', { name: missingProgram })}</p>}
       {preset && <p className={styles.callout}><Icon name="info" size={13} /><span>{t(`library.secrets.broker.${preset.id}Hint`)}</span></p>}
 
       <div className={styles.grid2}>
         {existing && <label className={styles.field}>{t('library.secrets.broker.executors')}
-          <select data-secret-grant-executor value={script} disabled={busy} onChange={event => setScript(event.target.value)}>
+          <select data-secret-grant-executor value={existing.id} disabled={busy} onChange={event => setScript(event.target.value)}>
             {executors.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
           </select>
         </label>}
@@ -152,16 +154,16 @@ export function SecretScriptAccess({ availablePrograms, alias, installations, ex
             {live.map(item => <option key={item.id} value={item.id}>{item.label} · {item.id.slice(0, 8)}</option>)}
           </select>
         </label>}
-        {!script && <div className={styles.field}><label htmlFor="secret-script-path">{t('library.secrets.broker.executable')}</label>
+        {custom && <label className={styles.field}>{t('library.secrets.broker.executorLabel')}<input maxLength={80} value={name} disabled={busy} placeholder={t('library.secrets.broker.actionExample')} onChange={event => setName(event.target.value)} /></label>}
+        {custom && <div className={styles.field}><label htmlFor="secret-script-path">{t('library.secrets.broker.executable')}</label>
           <span className={styles.picker}><input id="secret-script-path" data-secret-executor-executable value={path} disabled={busy} placeholder={t('library.secrets.broker.executablePlaceholder')} onChange={event => setPath(event.target.value)} /><Button size="sm" disabled={busy} icon={<Icon name="folder" size={12} />} onClick={() => void chooseFile()}>{t('library.secrets.broker.chooseFile')}</Button></span>
         </div>}
       </div>
 
-      {!script && pickError && <p className={styles.alert} role="alert"><Icon name="alert" size={14} /><span>{t('library.secrets.broker.pickFailed')}</span></p>}
-      {!script && <details className={styles.details}>
+      {custom && pickError && <p className={styles.alert} role="alert"><Icon name="alert" size={14} /><span>{t('library.secrets.broker.pickFailed')}</span></p>}
+      {custom && <details className={styles.details}>
         <summary>{t('library.secrets.broker.scriptOptions')}</summary>
         <div className={styles.grid2}>
-          <label className={styles.field}>{t('library.secrets.broker.executorLabel')}<input maxLength={80} value={name} disabled={busy} onChange={event => setName(event.target.value)} /></label>
           <label className={styles.field}>{t('library.secrets.broker.channelLabel')}
             <select value={channel} disabled={busy} onChange={event => setChannel(event.target.value === 'env' ? 'env' : 'stdin')}>
               <option value="stdin">{t('library.secrets.broker.channel.stdin')}</option>

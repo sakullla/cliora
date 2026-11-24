@@ -8164,6 +8164,14 @@ pub async fn list_secret_grants(
 }
 
 #[tauri::command]
+pub async fn set_secret_direct_read(app: AppHandle, secret_id: String, enabled: bool) -> Result<(), ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::secrets::broker::set_direct_read(&db, &secret_id, enabled).map_err(native_error)
+    }).await
+}
+
+#[tauri::command]
 pub async fn grant_secret_usage(
     app: AppHandle,
     installation_id: String,
@@ -8239,6 +8247,7 @@ pub async fn secret_cli_context() -> Result<SecretCliContext, ApiError> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScriptAccessOptions {
+    direct_reads: Vec<crate::secrets::broker::DirectRead>,
     cli: SecretCliContext,
     installations: Vec<crate::secrets::broker::Installation>,
     executors: Vec<crate::secrets::executor::SecretExecutor>,
@@ -8252,6 +8261,7 @@ pub async fn secret_access_options(app: AppHandle, secret_id: Option<String>) ->
     blocking(move || {
         let db = app.state::<AppState>().database(&app)?;
         Ok(ScriptAccessOptions {
+            direct_reads: crate::secrets::broker::direct_reads(&db, secret_id.as_deref()).map_err(native_error)?,
             cli,
             installations: crate::secrets::broker::list_installations(&db).map_err(native_error)?,
             executors: crate::secrets::executor::list(&db).map_err(native_error)?,

@@ -293,6 +293,7 @@ pub fn run() {
             commands::delete_cli_installation,
             commands::list_secret_grants,
             commands::grant_secret_usage,
+            commands::set_secret_direct_read,
             commands::revoke_secret_usage,
             commands::secret_broker_status,
             commands::answer_prompt_secret_approval,

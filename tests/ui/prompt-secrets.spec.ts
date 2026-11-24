@@ -18,6 +18,7 @@ async function install(page: Page, remote = false) {
     const secrets: Array<{ id: string; alias: string; version: number; value: string }> = [];
     const grants: Array<{ secretId: string; installationId: string; alias: string; executorId: string; executorLabel: string }> = [];
     const state = { failCreate: false };
+    const direct = new Set<string>();
     const reference = (id: string) => `{{cliora-secret:${id}}}`;
     const describe = (secret: { id: string; alias: string; version: number }) => ({ id: secret.id, alias: secret.alias, reference: reference(secret.id), version: secret.version, createdAt: 1, updatedAt: 1, status: 'available' });
     const stale = () => { throw { message: '秘密已更新，请重新读取后再修改' }; };
@@ -40,7 +41,9 @@ async function install(page: Page, remote = false) {
           if (command.includes('secret')) secretCalls.push(command);
           if (command === 'secret_access_options') return {
             cli: { executable: 'C:\\Cliora\\cliora.exe', entry: '--cliora-internal-secret-cli-v1' },
-            installations: [{ id: 'local-fixture', kind: 'cli', targetId: null, revoked: false }],
+            installations: [{ id: 'local-fixture', kind: 'cli', targetId: null, revoked: false },
+              { id: 'ai-fixture', kind: 'cli', directReadOnly: true, targetId: 'cliora-direct', revoked: false }],
+            directReads: secrets.filter(s => direct.has(s.id)).map(s => ({ installationId: 'ai-fixture', secretId: s.id, alias: s.alias })),
             grants, executors: [], availablePrograms: ['node'],
           };
           if (command === 'save_secret_executor') return { ...args.executor, id: 'fixture-action' };
@@ -50,7 +53,11 @@ async function install(page: Page, remote = false) {
           }
           if (command === 'list_secret_grants') return grants.filter(grant => grant.secretId === args.secretId);
           if (command === 'launch_cli') return { toolId: 'codex', terminal: 'workbench', status: 'session_started', sessionId: null };
-          if (command === 'list_prompt_secret_page') return { items: secrets.map(describe), total: secrets.length, matched: secrets.length, grantCounts: {}, offset: 0 };
+          if (command === 'set_secret_direct_read') {
+            if (args.enabled) direct.add(args.secretId); else direct.delete(args.secretId);
+            return null;
+          }
+          if (command === 'list_prompt_secret_page') return { items: secrets.map(describe), total: secrets.length, matched: secrets.length, grantCounts: {}, directReadIds: [...direct], offset: 0 };
           if (command === 'list_prompt_secrets') return secrets.map(describe);
           if (command === 'create_prompt_secret') {
             if (state.failCreate) throw { message: 'fixture: 秘密原值写入失败' };
@@ -313,6 +320,35 @@ test('a new session keeps the reference text and creates no secret', async ({ pa
   expect(await page.evaluate(() => (window as unknown as { __secretCalls: string[] }).__secretCalls.length)).toBe(before);
 });
 
+test('a local AI can request a selected password for the task without configuring a script', async ({ page }) => {
+  await install(page);
+  const list = await library(page);
+  const editor = await newPrompt(page);
+  await titleOf(editor).fill('示例服务登录');
+  const row = await createSecret(editor, 'DEMO_SERVICE_TOKEN', CANARY);
+  const id = (await row.getAttribute('data-secret-id'))!;
+  await bodyOf(editor).fill('查这次请求的日志');
+  await row.getByRole('button', { name: '让 AI 使用', exact: true }).click();
+  await expect(bodyOf(editor)).toHaveValue('查这次请求的日志 ' + referenceOf(id));
+  await expect(row).toContainText('可申请使用');
+  await row.locator('button[aria-haspopup="menu"]').click();
+  await editor.getByRole('menuitem', { name: '关闭 AI 直接使用' }).click();
+  await expect(row.getByRole('button', { name: '让 AI 使用', exact: true })).toBeVisible();
+  await row.locator('[data-secret-direct]').click();
+  await expect(row).toContainText('可申请使用');
+  await editor.getByRole('button', { name: '保存', exact: true }).click();
+  await list.getByRole('textbox', { name: '搜索资料' }).fill('示例服务登录');
+  await list.locator('article').filter({ hasText: '示例服务登录' }).getByRole('button', { name: '启动会话' }).click();
+  await page.getByRole('dialog', { name: '用这条提示词启动' }).locator('[data-dialog-save]').click();
+  const sent = () => page.evaluate(() => {
+    const call = (window as unknown as { __allCalls: Array<{command: string; text: string}> }).__allCalls.find(item => item.command === 'launch_cli');
+    return call ? JSON.parse(call.text).request.initialPrompt : '';
+  });
+  await expect.poll(sent).toContain('--installation ai-fixture read --secret ' + id);
+  expect(await sent()).not.toMatch(/--executor|测试秘密传递|canary-ui/);
+  expect(await page.evaluate(() => (window as unknown as { __secretCalls: string[] }).__secretCalls)).not.toContain('save_secret_executor');
+});
+
 test('launching a saved bare reference supplies the existing action without reading the secret', async ({ page }) => {
   await install(page);
   const list = await library(page);
@@ -320,6 +356,10 @@ test('launching a saved bare reference supplies the existing action without read
   await titleOf(editor).fill('引用启动');
   const row = await createSecret(editor, '测试口令', CANARY);
   const id = (await row.getAttribute('data-secret-id'))!;
+  await expect(row.locator('[data-secret-grant-form]')).toHaveCount(0);
+  await row.locator('button[aria-haspopup=menu]').click();
+  await editor.getByRole('menuitem', { name: '脚本授权' }).click();
+  await row.locator('[data-secret-preset="localCheck"]').click();
   await row.locator('[data-secret-grant-save]').click();
   await expect(row.locator('[data-secret-grant-row]')).toBeVisible();
   const body = '用这个令牌完成已授权的操作 ' + referenceOf(id);
@@ -356,6 +396,9 @@ test('a synchronized reference can be configured and authorized without changing
   await editor.locator('[data-secret-submit]').click();
   await expect(editor.locator('[data-secret-reference-status="available"]')).toHaveCount(1);
   await expect(bodyOf(editor)).toHaveValue(body);
+  await editor.locator('[data-secret-id] button[aria-haspopup=menu]').click();
+  await editor.getByRole('menuitem', { name: '脚本授权' }).click();
+  await editor.locator('[data-secret-preset="localCheck"]').click();
   await editor.locator('[data-secret-grant-save]').click();
   await expect(editor.locator('[data-secret-grant-row]')).toBeVisible();
   await expect(bodyOf(editor)).toHaveValue(body);
@@ -377,9 +420,7 @@ test('a stale reference can be removed from the body and a known one copied or l
   await staleChip.locator('[data-secret-reference-remove]').click();
   await expect(bodyOf(dialog)).toHaveValue(`登录 后部署 ${reference}`);
   await expect(staleChip).toHaveCount(0);
-  // A usable reference has no remove control; its name points at its row.
-  await expect(panel.locator(`[data-secret-reference="${reference}"] [data-secret-reference-remove]`)).toHaveCount(0);
-  await panel.locator(`[data-secret-reference="${reference}"]`).getByRole('button', { name: '部署口令' }).click();
+  await panel.locator(`[data-secret-reference="${reference}"]`).getByRole('button', { name: '部署口令', exact: true }).click();
   await expect(row).toHaveAttribute('data-flash', 'true');
 
   await row.locator('button[aria-haspopup="menu"]').click();

@@ -15,6 +15,65 @@ use std::sync::atomic::AtomicBool;
 /// The label a CLI helper reports as its request source. The MCP helper (a later
 /// task) uses the same broker and reports its own source.
 pub const SOURCE_CLI: &str = "CLI";
+// A separate installation prevents a fixed-script grant from keeping a revoked
+// direct-read command usable. This built-in operation never launches a process.
+const DIRECT_TARGET: &str = "cliora-direct";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectRead {
+    secret_id: String,
+    installation_id: String,
+    alias: String,
+}
+
+pub fn direct_reads(db: &Database, secret_id: Option<&str>) -> Result<Vec<DirectRead>, String> {
+    db.with_read_connection(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT d.secret_id,d.installation_id,s.alias FROM secret_direct_reads d
+             JOIN prompt_secrets s ON s.id=d.secret_id
+             JOIN secret_installations i ON i.id=d.installation_id AND i.revoked=0
+             WHERE ?1 IS NULL OR d.secret_id=?1"
+        ).map_err(sql)?;
+        let rows = stmt.query_map([secret_id], |r| Ok(DirectRead {
+            secret_id: r.get(0)?, installation_id: r.get(1)?, alias: r.get(2)?,
+        })).map_err(sql)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(sql)
+    })
+}
+
+/// Desktop opt-in permits the broker to *ask* for this reference. The original
+/// value still requires a desktop decision on the read path.
+pub fn set_direct_read(db: &Database, secret_id: &str, enabled: bool) -> Result<(), String> {
+    db.with_connection(|conn| {
+        let tx = conn.transaction().map_err(sql)?;
+        if enabled {
+            let current: Option<String> = tx.query_row(
+                "SELECT id FROM secret_installations WHERE kind='cli' AND target_id=?1 AND revoked=0
+                 ORDER BY created_at DESC,id LIMIT 1", [DIRECT_TARGET], |r| r.get(0),
+            ).optional().map_err(sql)?;
+            let installation = match current {
+                Some(id) => id,
+                None => {
+                    let id = uuid::Uuid::new_v4().to_string();
+                    tx.execute("INSERT INTO secret_installations(id,label,kind,target_id,revoked,created_at)
+                                VALUES(?1,'Local AI','cli',?2,0,?3)",
+                               params![id, DIRECT_TARGET, crate::prompts::timestamp() as i64]).map_err(sql)?;
+                    id
+                }
+            };
+            tx.execute("INSERT INTO secret_direct_reads(secret_id,installation_id) VALUES(?1,?2)
+                        ON CONFLICT(secret_id) DO NOTHING", params![secret_id, installation]).map_err(sql)?;
+            tx.commit().map_err(sql)
+        } else {
+            let installation: Option<String> = tx.query_row("DELETE FROM secret_direct_reads WHERE secret_id=?1 RETURNING installation_id",
+                [secret_id], |r| r.get(0)).optional().map_err(sql)?;
+            tx.commit().map_err(sql)?;
+            if let Some(id) = installation { session::invalidate(Some(&id), Some(secret_id)); }
+            Ok(())
+        }
+    })
+}
 
 fn sql(error: rusqlite::Error) -> String {
     error.to_string()
@@ -50,6 +109,7 @@ impl Kind {
 #[serde(rename_all = "camelCase")]
 pub struct Installation {
     pub id: String,
+    pub direct_read_only: bool,
     pub label: String,
     pub kind: Kind,
     pub target_id: Option<String>,
@@ -71,11 +131,13 @@ pub struct Grant {
 
 fn installation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Installation> {
     let kind: String = row.get(2)?;
+    let target_id: Option<String> = row.get(3)?;
     Ok(Installation {
+        direct_read_only: kind == "cli" && target_id.as_deref() == Some(DIRECT_TARGET),
         id: row.get(0)?,
         label: row.get(1)?,
         kind: Kind::parse(&kind).unwrap_or(Kind::Cli),
-        target_id: row.get(3)?,
+        target_id,
         revoked: row.get::<_, i64>(4)? != 0,
         created_at: row.get::<_, i64>(5)?.max(0) as u64,
         revoked_at: row.get::<_, Option<i64>>(6)?.map(|value| value.max(0) as u64),
@@ -164,6 +226,7 @@ pub fn revoke_installation(db: &Database, id: &str) -> Result<(), String> {
             };
         }
         tx.execute("DELETE FROM secret_grants WHERE installation_id=?1", [id]).map_err(sql)?;
+        tx.execute("DELETE FROM secret_direct_reads WHERE installation_id=?1", [id]).map_err(sql)?;
         tx.commit().map_err(sql)?;
         session::invalidate(Some(id), None);
         Ok(())
@@ -211,8 +274,8 @@ pub fn grant(db: &Database, installation_id: &str, secret_id: &str, executor_id:
     db.with_connection(|conn| {
         let tx = conn.transaction().map_err(sql)?;
         let live: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM secret_installations WHERE id=?1 AND revoked=0)",
-            [installation_id], |row| row.get(0),
+            "SELECT EXISTS(SELECT 1 FROM secret_installations WHERE id=?1 AND revoked=0 AND (kind!='cli' OR target_id IS NOT ?2))",
+            params![installation_id, DIRECT_TARGET], |row| row.get(0),
         ).map_err(sql)?;
         if !live {
             return Err("安装标识已失效，不能新增绑定".into());
@@ -364,6 +427,7 @@ fn installation_checked(
 }
 
 fn source_label(installation: &Installation, kind: Kind) -> String {
+    if installation.direct_read_only { return format!("{SOURCE_CLI} · {}", installation.label); }
     match (&installation.target_id, kind) {
         (Some(target), Kind::Cli) => format!("{SOURCE_CLI} · {} · {target}", installation.label),
         (_, Kind::Cli) => format!("{SOURCE_CLI} · {}", installation.label),
@@ -377,6 +441,17 @@ pub fn list(db: &Database, store: &dyn CredentialStore, installation_id: &str) -
         Ok(installation) => installation,
         Err(response) => return *response,
     };
+    if installation.direct_read_only {
+        let Ok(secrets) = store::list_for_direct_installation(db, store, Some(&installation.id)) else {
+            return denied(audit::code::STORAGE_FAILED, "本机秘密数据暂时不可用");
+        };
+        let visible = secrets.into_iter().map(|secret| AvailableSecret {
+            id: secret.id, alias: secret.alias, reference: secret.reference, status: secret.status, executors: vec![],
+        }).collect();
+        return ipc::Response::success(audit::code::OK, serde_json::json!(SecretList {
+            installation_label: source_label(&installation, installation.kind), secrets: visible,
+        }));
+    }
     let Ok(grants) = list_grants(db) else {
         return denied(audit::code::STORAGE_FAILED, "本机秘密数据暂时不可用");
     };
@@ -552,6 +627,9 @@ fn read_aliases(db: &Database, installation: &str, ids: &[String]) -> Result<Vec
                 SELECT 1 FROM secret_grants g JOIN secret_installations i ON i.id=g.installation_id
                 JOIN secret_executors e ON e.id=g.executor_id
                 WHERE i.id=?1 AND i.revoked=0 AND g.secret_id=s.id
+             ) OR EXISTS (
+                SELECT 1 FROM secret_direct_reads d JOIN secret_installations i ON i.id=d.installation_id
+                WHERE i.id=?1 AND i.revoked=0 AND d.secret_id=s.id
              ) FROM prompt_secrets s WHERE s.id=?2"
         ).map_err(sql)?;
         let mut aliases = Vec::with_capacity(ids.len());

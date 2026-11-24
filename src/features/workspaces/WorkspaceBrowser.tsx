@@ -33,7 +33,7 @@ type WorkspaceViewMode = 'grid' | 'list';
 const GRID_AUTO_THRESHOLD = 8;
 const GROUP_BAR_THRESHOLD = 12;
 
-/** Derive smart prefix groups (e.g. `e6-common`, `e6-ms`, `dmh`) for large multi-repo projects. */
+/** Derive smart prefix groups (e.g. `demo-common`, `demo-app`, `jobs`) for large multi-repo projects. */
 function repositoryPrefixGroups(repositories: WorkspaceRepository[]): { key: string; count: number; match: (name: string) => boolean }[] {
   if (repositories.length < GROUP_BAR_THRESHOLD) return [];
   const segmentsOf = (name: string) => name.toLowerCase().split(/[-_./]+/).filter(Boolean);
@@ -47,7 +47,7 @@ function repositoryPrefixGroups(repositories: WorkspaceRepository[]): { key: str
     const segs = segmentsOf(repo.name);
     if (!segs.length) continue;
     const first = segs[0];
-    // If one top-level prefix dominates (e.g. `e6-*` > 45%), refine into 2-segment module prefixes.
+    // If one top-level prefix dominates (e.g. `demo-*` > 45%), refine into 2-segment module prefixes.
     const dominant = (firstCounts.get(first) ?? 0) > repositories.length * 0.45 && segs.length >= 2;
     const key = dominant ? `${first}-${segs[1]}` : first;
     const entry = bucketCounts.get(key);

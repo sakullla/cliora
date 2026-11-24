@@ -9,7 +9,7 @@ export type PromptSecret = {
   updatedAt: number;
   status: PromptSecretStatus;
 };
-export type PromptSecretPage = { items: PromptSecret[]; total: number; matched: number; offset: number; grantCounts: Record<string, number> };
+export type PromptSecretPage = { items: PromptSecret[]; total: number; matched: number; offset: number; grantCounts: Record<string, number>; directReadIds: string[] };
 export type PromptSecretReference = {
   id: string;
   reference: string;
@@ -46,6 +46,7 @@ export type NewSecretExecutor = {
 export type SecretInstallationKind = 'cli' | 'mcp';
 export type SecretInstallation = {
   id: string;
+  directReadOnly: boolean;
   label: string;
   kind: SecretInstallationKind;
   targetId: string | null;
@@ -134,4 +135,5 @@ export type SecretMcpState = {
   cliFallback: boolean;
 };
 
-export type ScriptAccessOptions = { cli: SecretCliContext; installations: SecretInstallation[]; executors: SecretExecutor[]; grants: SecretGrant[]; availablePrograms: string[] };
+export type SecretDirectRead = { secretId: string; installationId: string; alias: string };
+export type ScriptAccessOptions = { cli: SecretCliContext; installations: SecretInstallation[]; executors: SecretExecutor[]; grants: SecretGrant[]; directReads: SecretDirectRead[]; availablePrograms: string[] };

@@ -10,7 +10,7 @@ async function mockPluginSkills(page: Page) {
   await page.addInitScript(({ doc }) => {
     const root = '/tmp/.claude/skills';
     const entry = (name: string, source: string, pluginName: string | null) => ({ name, path: `${root}/${name}`, digest: null, state: 'external', detail: name, packageId: null, source, pluginName, pluginEnabled: pluginName ? true : null, issues: [] });
-    const entries = [entry('requirement-split-estimator', 'plugin', 'sdlc@sdlc-marketplace'), entry('retrieving-knowledge', 'plugin', 'sdlc@sdlc-marketplace'), entry('team8-deliver', 'plugin', 'team8-dev@team8-workflow'), entry('local-notes', 'writable', null)];
+    const entries = [entry('requirement-split-estimator', 'plugin', 'sdlc@sdlc-marketplace'), entry('retrieving-knowledge', 'plugin', 'sdlc@sdlc-marketplace'), entry('fixture-deliver', 'plugin', 'fixture-dev@fixture-workflow'), entry('local-notes', 'writable', null)];
     Object.assign(window, {
       isTauri: true,
       __TAURI_INTERNALS__: { transformCallback: () => 1, invoke: async (command: string, args: Record<string, any> = {}) => {
@@ -44,10 +44,10 @@ test('Skill search also matches the plugin a skill comes from', async ({ page })
   await search.fill('sdlc');
   await expect(list.getByRole('button', { name: /requirement-split-estimator/ })).toBeVisible();
   await expect(list.getByRole('button', { name: /retrieving-knowledge/ })).toBeVisible();
-  await expect(list.getByRole('button', { name: /team8-deliver/ })).toHaveCount(0);
+  await expect(list.getByRole('button', { name: /fixture-deliver/ })).toHaveCount(0);
   await expect(list.getByRole('button', { name: /local-notes/ })).toHaveCount(0);
-  await search.fill('team8-workflow');
-  await expect(list.getByRole('button', { name: /team8-deliver/ })).toBeVisible();
+  await search.fill('fixture-workflow');
+  await expect(list.getByRole('button', { name: /fixture-deliver/ })).toBeVisible();
   await expect(list.getByRole('button', { name: /requirement-split-estimator/ })).toHaveCount(0);
   // Names still match as before.
   await search.fill('local');

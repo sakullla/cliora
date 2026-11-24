@@ -64,40 +64,103 @@ export function promptSecretTokens(body: string): string[] {
   return [...tokens];
 }
 
+const promptCopy = {
+  zh: {
+    use: '转述时保留占位符。有秘密 MCP 时用 list_secrets 查找授权，向 use_secret 传入匹配的 secretId 和 executorId；否则运行匹配的本机命令。只返回操作结果。',
+    missing: '传递测试只验证脚本收到凭据。若需自己登录或调用服务，请用户为所需密码点击「让 AI 使用」，或提供脱敏结果。',
+    direct: '任务需要以下凭据时，用本机 read 命令只申请所需项。获准后自行登录或调用指定服务，只回复结果，勿回显或记录密码。拒绝或无法确认即停止。',
+    unbound: '以下引用尚无本机 CLI 操作授权',
+    sameAction: '同一操作可用于以下密码，仅替换上条命令的 --secret',
+    read: '以下脚本授权的引用：仅当用户明确要求查看原值，才用 read_secret（secretIds）或下方的 CLI read。仅保留被点名的 --secret；拒绝或无法确认即停止。',
+  },
+  en: {
+    use: 'Keep placeholders when quoting. If the secret MCP is available, use list_secrets and pass the matching secretId and executorId to use_secret. Otherwise run the matching local command. Return the action result.',
+    missing: 'A delivery test only checks that a script receives the credential. To sign in or call a service directly, ask the user to choose “Let AI use” for the credential, or request sanitized results.',
+    direct: 'Request only the credentials this task needs with the local read command. After approval, sign in or call the intended service yourself. Return the result without echoing or logging credentials. Stop if approval is denied or unavailable.',
+    unbound: 'No local CLI action granted for',
+    sameAction: 'Same action for these secrets. Replace only --secret in the command above',
+    read: 'For the script-bound references below, use read_secret (secretIds) or CLI read only if the user explicitly asks to see the values. Keep only the requested --secret arguments. Stop if approval is denied or unavailable.',
+  },
+} as const;
+
+function compactId(id: string) {
+  return id.replace(/^urn:uuid:/, '').replaceAll('-', '').toLowerCase();
+}
+
 /** Only the outgoing local message receives commands. No credential is fetched here. */
 export async function prepareLocalSecretPrompt(
-  body: string, load: () => Promise<Pick<ScriptAccessOptions, 'cli' | 'installations' | 'grants'>>,
+  body: string, load: () => Promise<Pick<ScriptAccessOptions, 'cli' | 'installations' | 'grants' | 'directReads'>>,
   english: boolean,
 ): Promise<string> {
   const tokens = promptSecretTokens(body);
   if (!tokens.length) return body;
-  const { cli, installations, grants } = await load();
-  const live = installations.filter(item => item.kind === 'cli' && !item.targetId && !item.revoked);
-  const lines: string[] = [];
-  const seen = new Set<string>();
-  const listCommands = new Set<string>();
-  const readOptions = new Map<string, Set<string>>();
+  const { cli, installations, grants, directReads = [] } = await load();
+  const copy = promptCopy[english ? 'en' : 'zh'];
+  const live = new Set(installations.filter(item => item.kind === 'cli' && !item.targetId && !item.revoked).map(item => item.id));
+  // Index just the requested references, retaining their order in the prompt.
+  const requested = new Map<string, { spelling: string; grants: typeof grants }>();
   for (const token of tokens) {
-    const compact = token.slice('{{cliora-secret:'.length, -2).replace(/^urn:uuid:/, '').replaceAll('-', '').toLowerCase();
-    if (seen.has(compact)) continue;
-    seen.add(compact);
-    const matching = grants.filter(grant => grant.secretId.replaceAll('-', '').toLowerCase() === compact
-      && live.some(item => item.id === grant.installationId));
-    if (!matching.length) {
-      lines.push(english ? token + ' has no authorized local CLI action. If list_secrets is available, check its granted actions. Otherwise ask the user to set up this reference on this device and authorize the requested action in Secret references.' : token + ' 尚无本机 CLI 操作授权。若当前提供 list_secrets，可查询已授权的 MCP 操作；否则请用户在「秘密引用」中为此引用配置本机值，并授权所需操作。');
-      continue;
+    const spelling = token.slice('{{cliora-secret:'.length, -2);
+    const id = compactId(spelling);
+    if (!requested.has(id)) requested.set(id, { spelling, grants: [] });
+  }
+  for (const grant of grants) {
+    if (live.has(grant.installationId)) requested.get(compactId(grant.secretId))?.grants.push(grant);
+  }
+
+  const lines = [body, ''];
+  const directInstallations = new Set(installations.filter(item => item.directReadOnly && !item.revoked).map(item => item.id));
+  const byInstallation = new Map<string, typeof directReads>();
+  const directIds = new Set<string>();
+  for (const item of directReads) {
+    const id = compactId(item.secretId);
+    const reference = requested.get(id);
+    if (!directInstallations.has(item.installationId) || !reference) continue;
+    directIds.add(id);
+    if (!reference.grants.length) requested.delete(id);
+    const group = byInstallation.get(item.installationId);
+    if (group) group.push(item);
+    else byInstallation.set(item.installationId, [item]);
+  }
+  if (byInstallation.size) {
+    lines.push(copy.direct);
+    for (const [installationId, items] of byInstallation) {
+      lines.push(items.map(item => items.length === 1 ? item.alias : item.alias + ' · ' + item.secretId).join('\n'));
+      lines.push(command({ ...cli, installationId }, ['read', ...items.flatMap(item => ['--secret', item.secretId])]));
     }
-    lines.push(matching[0].alias + ' ' + token);
-    for (const grant of matching) {
-      const context = { ...cli, installationId: grant.installationId };
-      listCommands.add(command(context, ['list']));
-      const ids = readOptions.get(grant.installationId) ?? new Set<string>();
-      ids.add(grant.secretId);
-      readOptions.set(grant.installationId, ids);
-      const use = grantedScriptCommand(context, grant);
-      if (!body.includes(use) && !body.includes(use.replace(/^& /, ''))) lines.push(grant.executorLabel, use);
+    if (!requested.size) return lines.join('\n');
+  }
+  lines.push(copy.use);
+  if ([...requested.keys()].some(id => !directIds.has(id))) lines.push(copy.missing);
+  const unbound: string[] = [];
+  const actions = new Map<string, typeof grants>();
+  const readOptions = new Map<string, Set<string>>();
+  for (const reference of requested.values()) {
+    if (!reference.grants.length) unbound.push(reference.spelling);
+    for (const grant of reference.grants) {
+      if (!directIds.has(compactId(grant.secretId))) {
+        const ids = readOptions.get(grant.installationId) ?? new Set<string>();
+        ids.add(grant.secretId);
+        readOptions.set(grant.installationId, ids);
+      }
+      const key = grant.installationId + '/' + grant.executorId;
+      const group = actions.get(key);
+      if (group) group.push(grant);
+      else actions.set(key, [grant]);
     }
   }
+  for (const group of actions.values()) {
+    const [first, ...others] = group;
+    const use = grantedScriptCommand({ ...cli, installationId: first.installationId }, first);
+    // Shared actions need one exact invocation. Each alternative below is a
+    // verified pair for that same installation and executor.
+    if (others.length || (!body.includes(use) && !body.includes(use.replace(/^& /, '')))) {
+      lines.push(first.alias + ' · ' + first.executorLabel, use);
+    }
+    if (others.length) lines.push(copy.sameAction, ...others.map(grant => grant.alias + ' · ' + grant.secretId));
+  }
+  if (unbound.length) lines.push(copy.unbound + ' · ' + unbound.join(', '));
+  if (readOptions.size) lines.push(copy.read);
   // Prefer the installation covering the most references, so an overlapping
   // grant does not split a request that one installation can handle together.
   const assigned = new Set<string>();
@@ -106,21 +169,9 @@ export async function prepareLocalSecretPrompt(
     if (!group.length) continue;
     for (const id of group) assigned.add(id);
     const read = command({ ...cli, installationId }, ['read', ...group.flatMap(id => ['--secret', id])]);
-    if (!body.includes(read)) lines.push(english ? 'Read requested values (omit references you do not need)' : '查看所需原值（请删去未请求的引用）', read);
+    if (!body.includes(read)) lines.push(read);
   }
-  if (listCommands.size) {
-    lines.push(english ? 'Find a reference by alias. Use its reference field directly.' : '按名称查找引用时，直接使用返回的 reference 字段。', ...listCommands);
-  }
-  const guidance = english
-    ? 'Keep literal references when quoting or passing them on. If the Cliora secret MCP tools are available, call list_secrets and use_secret with the matching granted secretId and executorId. Otherwise use the matching authorized CLI command below. Return the action result. If no action matches, ask the user to grant one. Only read the values the user explicitly asks to see. Group those references in one CLI read or in the secretIds array of MCP read_secret when available. Stop if approval is declined or unavailable.'
-    : '转述或传递引用时，原样保留占位符。当前会话提供栖点秘密 MCP 工具时，调用 list_secrets 查找授权，再把对应的 secretId 和 executorId 传给 use_secret。否则使用下方匹配的已授权 CLI 命令。只返回操作结果。缺少合适的操作时，请用户授权。只读取用户明确要求查看的原值，多个引用可合并到一次 CLI read，或在提供 MCP read_secret 时一起传入 secretIds。被拒绝或无法确认时停止读取。';
-  return [body, '', guidance, ...lines].join('\n');
-}
-
-/** The executors granted for one secret, in registry order. */
-export function grantedExecutors(input: SecretUsageInput, secretId: string): SecretUsageExecutor[] {
-  const allowed = new Set(input.grants.filter(grant => grant.secretId === secretId).map(grant => grant.executorId));
-  return input.executors.filter(executor => allowed.has(executor.id));
+  return lines.join('\n');
 }
 
 /** One live installation as the native registry lists it. No value is involved. */
@@ -180,84 +231,59 @@ export function buildSecretUsageFromMetadata(metadata: SecretUsageMetadata): str
   });
 }
 
-const text = {
+const fallbackCopy = {
   zh: {
     title: '## 栖点秘密代理（本机 CLI）',
+    list: '查找可用操作。按名称找到秘密后，可直接转发 reference。',
+    use: '仅执行符合任务的操作。以下是一个已授权示例；其他操作使用 list 返回的秘密 id 和对应的 executors[].id。',
     installation: '安装标识',
-    executable: '可执行文件',
-    intro: '所有命令都通过本机秘密代理执行；原值只在本机凭据库，参数里只有秘密标识。',
-    listTitle: '### 1. 列出可用秘密',
-    listNote: '按别名找到秘密后，可直接复用 reference 字段。执行任务时用对应的已授权入口，只有用户明确要求查看原值时才执行 read。',
-    useTitle: '### 2. 受控使用（原值只进入执行入口，输出里的原值会被遮蔽）',
-    alias: '别名',
-    executor: '执行入口',
-    noGrant: '当前安装标识还没有任何已授权的秘密与执行入口，请先在资料库的“秘密引用”里授权。',
-    readTitle: '### 3. 读取原值',
-    readNote: '读取多个原值时，为每个所需引用添加一个 --secret，一起在栖点确认。工作台 CLI 和 MCP 可选择「允许本次会话」，外部终端每次请求都要确认。原值可能进入模型上下文与 CLI 会话记录。',
-    readSwap: '把 {{id}} 换成第 1 步里用户要求查看的秘密标识。MCP read_secret 可用 secretIds 一次请求多个引用。',
-    exitNote: '命令失败时退出码非零，结果里只有遮蔽后的文本；不会改成别的秘密，也不会重试成别的执行入口。',
+    noGrant: '此连接尚无已授权操作。可在提示词的「秘密引用」中点「让 AI 使用」，再从本机工作台发送引用。',
+    read: '仅当用户明确要求查看原值，用下方示例中的 --secret 指定所需引用；多条一起提交。',
+    risk: '调用方可能将原值写入模型上下文或 CLI 记录。工作台 CLI 和 MCP 可选「允许本次会话」，外部终端每次请求都要确认。拒绝或无法确认即停止。',
   },
   en: {
     title: '## Cliora secret broker (local CLI)',
+    list: 'Find granted actions by alias. Use the reference field to share a placeholder.',
+    use: 'Run an action only if it matches the task. The example uses a granted pair. For other actions use the secret id and its executors[].id from list.',
     installation: 'Installation',
-    executable: 'Executable',
-    intro: 'Every command runs through the local secret broker. The value stays in the local credential store; the arguments carry identifiers only.',
-    listTitle: '### 1. List the secrets you may use',
-    listNote: 'Find the alias and reuse its reference field directly. Use a granted executor for tasks. Only call read if the user explicitly asks to see the value.',
-    useTitle: '### 2. Controlled use (the value only reaches the executor, and it is masked in the output)',
-    alias: 'Alias',
-    executor: 'Executor',
-    noGrant: 'This installation has no granted secret and executor yet. Grant one in the library under secret references first.',
-    readTitle: '### 3. Read raw values',
-    readNote: 'Repeat --secret for each requested reference to approve them together in Cliora. The workbench CLI and MCP offer “Allow for this session”. An external terminal asks for confirmation in Cliora on each request. Values may enter the model context and the CLI session history.',
-    readSwap: 'Replace {{id}} with the identifier from step 1 that the user asked to read. MCP read_secret accepts multiple references in secretIds.',
-    exitNote: 'A failed command exits non-zero and its output is masked. It never falls back to another secret or executor, and never retries.',
+    noGrant: 'This connection has no granted action. Choose “Let AI use” for the credential in Secret references and send the reference from the local workbench.',
+    read: 'Only when the user explicitly asks to see values, set --secret to each requested reference in the example below. Submit them together.',
+    risk: 'Values may enter the model context and the CLI session history. Workbench CLI and MCP offer “Allow for this session”. External terminals ask each time. Stop if approval is denied or unavailable.',
   },
 } as const;
 
 export function buildSecretUsageInstructions(input: SecretUsageInput): string {
-  const copy = text[input.locale === 'en' ? 'en' : 'zh'];
-  const lines: string[] = [
+  const locale = input.locale === 'en' ? 'en' : 'zh';
+  const copy = fallbackCopy[locale];
+  const lines = [
     copy.title,
+    `${copy.installation}: ${input.installationLabel}`,
     '',
-    `${copy.installation}: ${input.installationLabel} (${input.installationId})`,
-    `${copy.executable}: ${input.executable}`,
-    '',
-    copy.intro,
-    '',
-    copy.listTitle,
+    copy.list,
     '```',
     command(input, ['list']),
     '```',
-    copy.listNote,
   ];
-
-  const usable = input.secrets.filter(secret => grantedExecutors(input, secret.id).length > 0);
-  if (!usable.length) {
-    lines.push('', copy.noGrant);
-    return lines.join('\n');
-  }
-
-  lines.push('', copy.useTitle);
-  usable.forEach(secret => {
-    grantedExecutors(input, secret.id).forEach(executor => {
-      lines.push(`${copy.alias} ${secret.alias} · ${copy.executor} ${executor.label}:`);
-      lines.push('```');
-      lines.push(grantedScriptCommand(input, { secretId: secret.id, executorId: executor.id }));
-      lines.push('```');
-    });
-  });
-
+  // A general-purpose guide stays compact even when this installation has
+  // hundreds of grants. The list command remains the source of all valid pairs.
+  const secrets = new Map(input.secrets.map(secret => [secret.id, secret]));
+  const executors = new Map(input.executors.map(executor => [executor.id, executor]));
+  const example = input.grants.find(grant => secrets.has(grant.secretId) && executors.has(grant.executorId));
+  if (!example) return [...lines, '', copy.noGrant].join('\n');
   lines.push(
     '',
-    copy.readTitle,
-    copy.readNote,
+    copy.use,
+    `${secrets.get(example.secretId)!.alias} · ${executors.get(example.executorId)!.label}`,
     '```',
-    command(input, ['read', '--secret', usable[0].id]),
+    grantedScriptCommand(input, example),
     '```',
-    copy.readSwap.replace('{{id}}', usable[0].id),
+    promptCopy[locale].missing,
     '',
-    copy.exitNote,
+    copy.read,
+    '```',
+    command(input, ['read', '--secret', example.secretId]),
+    '```',
+    copy.risk,
   );
   return lines.join('\n');
 }

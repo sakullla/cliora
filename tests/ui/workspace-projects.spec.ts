@@ -876,9 +876,9 @@ test('large business projects default to multi-column card grid with smart prefi
   await page.setViewportSize({ width: 1360, height: 900 });
   await install(page, 48);
   const names = [
-    ...Array.from({ length: 8 }, (_, i) => `e6-common-mod-${i}`),
-    ...Array.from({ length: 8 }, (_, i) => `e6-ms-service-${i}`),
-    ...Array.from({ length: 4 }, (_, i) => `dmh-worker-${i}`),
+    ...Array.from({ length: 8 }, (_, i) => `demo-common-mod-${i}`),
+    ...Array.from({ length: 8 }, (_, i) => `demo-app-service-${i}`),
+    ...Array.from({ length: 4 }, (_, i) => `jobs-worker-${i}`),
   ];
   await page.evaluate((repoNames) => {
     const app = window as any;
@@ -887,7 +887,7 @@ test('large business projects default to multi-column card grid with smart prefi
       id: 'ws-large',
       name: '端到端',
       revision: 1,
-      manifestPath: '/Users/dev/e6.dev-workspace.json',
+      manifestPath: '/Users/dev/demo.dev-workspace.json',
       manifestRevision: 1,
       error: null,
       repositories: repoNames.map((name: string, index: number) => ({
@@ -897,13 +897,13 @@ test('large business projects default to multi-column card grid with smart prefi
         locations: [{
           id: `loc-${index}`,
           hostId: 'local',
-          path: `/Users/dev/project/e6yun3.0/${name}`,
+          path: `/Users/dev/project/sample-workspaces/${name}`,
           projectId: `p-${index}`,
           targetId: null,
           available: true,
           kind: 'repository',
           reason: null,
-          worktrees: [{ path: `/Users/dev/project/e6yun3.0/${name}`, name, branch: 'main', current: true }],
+          worktrees: [{ path: `/Users/dev/project/sample-workspaces/${name}`, name, branch: 'main', current: true }],
         }],
       })),
     }];
@@ -924,12 +924,12 @@ test('large business projects default to multi-column card grid with smart prefi
   expect(Math.abs(first.y - second.y)).toBeLessThanOrEqual(2);
   expect(second.x).toBeGreaterThan(first.x + first.width - 1);
 
-  // Smart prefix groups expand dominant `e6-*` into `e6-common` / `e6-ms` alongside `dmh`.
+  // Smart prefix groups expand dominant `demo-*` into `demo-common` / `demo-app` alongside `jobs`.
   const groups = project.getByRole('group', { name: '按前缀分组' });
-  await expect(groups.getByRole('button', { name: /e6-common/ })).toBeVisible();
-  await expect(groups.getByRole('button', { name: /e6-ms/ })).toBeVisible();
-  await expect(groups.getByRole('button', { name: /dmh/ })).toBeVisible();
-  await groups.getByRole('button', { name: /dmh/ }).click();
+  await expect(groups.getByRole('button', { name: /demo-common/ })).toBeVisible();
+  await expect(groups.getByRole('button', { name: /demo-app/ })).toBeVisible();
+  await expect(groups.getByRole('button', { name: /jobs/ })).toBeVisible();
+  await groups.getByRole('button', { name: /jobs/ }).click();
   await expect(project.locator('[data-repository-id]')).toHaveCount(4);
   await groups.getByRole('button', { name: /全部/ }).click();
   await expect(project.locator('[data-repository-id]')).toHaveCount(20);

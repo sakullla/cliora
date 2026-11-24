@@ -146,12 +146,20 @@ pub fn exists(db: &Database, id: &str) -> Result<bool, String> {
 /// Local secrets with their reference status. Only aliases and reference ids cross
 /// this boundary; values stay in the credential store.
 pub fn list(db: &Database, store: &dyn CredentialStore) -> Result<Vec<PromptSecret>, String> {
+    list_for_direct_installation(db, store, None)
+}
+
+pub(super) fn list_for_direct_installation(db: &Database, store: &dyn CredentialStore, installation: Option<&str>) -> Result<Vec<PromptSecret>, String> {
     let rows = db.with_read_connection(|conn| {
         let mut statement = conn
-            .prepare("SELECT id,alias,credential_id,version,created_at,updated_at FROM prompt_secrets ORDER BY alias COLLATE NOCASE, id")
+            .prepare("SELECT id,alias,credential_id,version,created_at,updated_at FROM prompt_secrets
+                      WHERE ?1 IS NULL OR id IN (
+                          SELECT d.secret_id FROM secret_direct_reads d JOIN secret_installations i ON i.id=d.installation_id
+                          WHERE i.id=?1 AND i.revoked=0
+                      ) ORDER BY alias COLLATE NOCASE,id")
             .map_err(sql)?;
         let rows = statement
-            .query_map([], |row| Ok(row_from(row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)))
+            .query_map([installation], |row| Ok(row_from(row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)))
             .map_err(sql)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(sql)
     })?;
@@ -166,6 +174,7 @@ pub struct SecretPage {
     matched: u32,
     offset: u32,
     grant_counts: std::collections::BTreeMap<String, u32>,
+    direct_read_ids: Vec<String>,
 }
 
 pub fn page(db: &Database, store: &dyn CredentialStore, search: &str, offset: u32, references: &str) -> Result<SecretPage, String> {
@@ -184,21 +193,25 @@ pub fn page(db: &Database, store: &dyn CredentialStore, search: &str, offset: u3
                        id IN (SELECT value FROM json_each(?2)) AS referenced
                 FROM prompt_secrets WHERE instr(lower(alias),lower(?1)) OR instr(id,lower(?1))
                 ORDER BY referenced DESC,alias COLLATE NOCASE,id LIMIT ?3 OFFSET ?4)
-             SELECT p.id,p.alias,p.credential_id,p.version,p.created_at,p.updated_at,COUNT(g.executor_id)
+             SELECT p.id,p.alias,p.credential_id,p.version,p.created_at,p.updated_at,COUNT(g.executor_id),
+                    EXISTS(SELECT 1 FROM secret_direct_reads d JOIN secret_installations i ON i.id=d.installation_id
+                           WHERE d.secret_id=p.id AND i.revoked=0)
              FROM page p LEFT JOIN secret_grants g ON g.secret_id=p.id GROUP BY p.id
              ORDER BY p.referenced DESC,p.alias COLLATE NOCASE,p.id"
         ).map_err(sql)?;
         let rows = statement.query_map(params![search, ids, SIZE, offset], |r| {
-            Ok((row_from(r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?),r.get::<_,u32>(6)?))
+            Ok((row_from(r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?),r.get::<_,u32>(6)?,r.get::<_,bool>(7)?))
         }).map_err(sql)?.collect::<Result<Vec<_>, _>>().map_err(sql)?;
         Ok((total, matched, offset, rows))
     })?;
     let mut grant_counts = std::collections::BTreeMap::new();
-    let items = rows.into_iter().map(|(row, count)| {
+    let mut direct_read_ids = Vec::new();
+    let items = rows.into_iter().map(|(row, count, direct)| {
+        if direct { direct_read_ids.push(row.id.clone()); }
         if count > 0 { grant_counts.insert(row.id.clone(), count); }
         describe(row, store)
     }).collect();
-    Ok(SecretPage { items, total, matched, offset, grant_counts })
+    Ok(SecretPage { items, total, matched, offset, grant_counts, direct_read_ids })
 }
 
 pub fn create(db: &Database, store: &dyn CredentialStore, alias: &str, value: &str) -> Result<PromptSecret, String> {

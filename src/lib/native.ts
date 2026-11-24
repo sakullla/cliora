@@ -279,6 +279,7 @@ export const native = {
     command<void>('answer_prompt_secret_approval', { approvalId, accepted, ...(rememberSession && { rememberSession: true }) }),
   listSecretAudit: (limit: number) => command<SecretAuditEntry[]>('list_secret_audit', { limit }),
   secretAccessOptions: (secretId?: string) => command<ScriptAccessOptions>('secret_access_options', { secretId }),
+  setSecretDirectRead: (secretId: string, enabled: boolean) => command<void>('set_secret_direct_read', { secretId, enabled }),
   secretCliContext: () => command<SecretCliContext>('secret_cli_context'),
   // The secret MCP entry is per target and goes through the shared MCP preview,
   // commit and compare-and-swap flow. Status keeps placement, protocol health and

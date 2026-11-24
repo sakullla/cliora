@@ -19,8 +19,8 @@ test('a trailing folder name is dropped only when it repeats the session folder'
 });
 
 test('a hyphenated folder name is dropped whole, and a hyphen inside a word is not a separator', () => {
-  const place = '/Users/me/project/qsyn/e6-ms-tms-base-new-mes-fetch';
-  assert.equal(stripPlaceSuffix('创建 support worktree 并编写接口 | e6-ms-tms-base-new-mes-fetch', [place]), '创建 support worktree 并编写接口');
+  const place = '/Users/me/project/demo-group/demo-app-core-sample-api-fetch';
+  assert.equal(stripPlaceSuffix('创建工作树并更新示例接口 | demo-app-core-sample-api-fetch', [place]), '创建工作树并更新示例接口');
   assert.equal(stripPlaceSuffix('Fix login · acme-svc-orders', ['C:\\Projects\\acme-svc-orders']), 'Fix login');
   assert.equal(stripPlaceSuffix('Fix login — acme-svc-orders', ['acme-svc-orders']), 'Fix login');
   // The repository name of a linked worktree counts as well as its own folder.

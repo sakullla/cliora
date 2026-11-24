@@ -4531,7 +4531,9 @@ test('quick input prepares a reference using only local authorization metadata',
       if (command.includes('secret')) app.__secretCalls.push(command);
       if (command === 'secret_access_options') return Promise.resolve({
         cli: { executable: '/fixture/cliora', entry: '--cliora-internal-secret-cli-v1' },
-        installations: [{ id: 'local-fixture', kind: 'cli', revoked: false, targetId: null }],
+        installations: [{ id: 'local-fixture', kind: 'cli', revoked: false, targetId: null },
+          { id: 'direct-fixture', kind: 'cli', revoked: false, directReadOnly: true, targetId: 'cliora-direct' }],
+        directReads: [{ installationId: 'direct-fixture', secretId: '1f1f1f1f-aaaa-4bbb-8ccc-dddddddddddd', alias: '部署口令' }],
         grants: [{ installationId: 'local-fixture', secretId: '1f1f1f1f-aaaa-4bbb-8ccc-dddddddddddd', executorId: 'fixture-action', executorLabel: '部署', alias: '部署口令' }],
       });
       return invoke(command, args);
@@ -4546,7 +4548,10 @@ test('quick input prepares a reference using only local authorization metadata',
   await expect.poll(() => page.evaluate(() => (window as unknown as { __writeLog: Array<{ sessionId: string; text: string }> }).__writeLog)).toEqual([
     { sessionId: 's1', text: expect.stringContaining(`部署前读取 ${reference}\n其余步骤照旧。`) },
   ]);
-  expect(await page.evaluate(() => (window as unknown as { __writeLog: Array<{ text: string }> }).__writeLog[0].text)).toContain('use --secret 1f1f1f1f-aaaa-4bbb-8ccc-dddddddddddd --executor fixture-action');
+  const outgoing = await page.evaluate(() => (window as unknown as { __writeLog: Array<{ text: string }> }).__writeLog[0].text);
+  expect(outgoing).toContain('use --secret 1f1f1f1f-aaaa-4bbb-8ccc-dddddddddddd --executor fixture-action');
+  expect(outgoing).toContain('--installation direct-fixture read --secret 1f1f1f1f-aaaa-4bbb-8ccc-dddddddddddd');
+  expect(outgoing).not.toContain('--installation local-fixture read');
   expect(await page.evaluate(() => (window as unknown as { __secretCalls: string[] }).__secretCalls)).toEqual(['secret_access_options']);
   await expect(composer.getByRole('textbox')).toHaveValue('');
 });

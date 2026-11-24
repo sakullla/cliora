@@ -60,10 +60,10 @@ test('wrapped rows in full-width brackets and Chinese prose hand the native laye
   // at the wrap point with no extra character, matching the logical-line assembly that
   // SessionTerminal feeds to findTerminalLinks; the value below is what openWorkbenchPath
   // would pass to the native command.
-  const expected = '/Users/yanggeng/project/e6yun3.0/e6-ms-tms-prealarm/docs/inoutarea-kafka.md';
+  const expected = '/Users/fixture-user/project/sample-workspaces/demo-app-notifications/docs/sample-report.md';
   const rows = [
-    '预报警 Kafka 收发区域分析完成（/Users/yanggeng/project/e6yun3.0/e6-ms-tms-prealarm/docs/',
-    'inoutarea-kafka.md），详见上述文档。',
+    '示例分析完成（/Users/fixture-user/project/sample-workspaces/demo-app-notifications/docs/',
+    'sample-report.md），详见上述文档。',
   ];
   const joined = rows.join('');
   const matches = findTerminalLinks(joined);

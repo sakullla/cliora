@@ -19,7 +19,7 @@ pub struct Database {
     read_path: Option<std::path::PathBuf>,
 }
 
-pub(crate) const LATEST_VERSION: u32 = 38;
+pub(crate) const LATEST_VERSION: u32 = 39;
 
 impl Database {
     /// Independent consumers can read a configured desktop without creating or migrating its DB.
@@ -836,6 +836,17 @@ impl Database {
             )?;
             tx.commit()?;
         }
+        if version < 39 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS secret_direct_reads (
+                   secret_id TEXT PRIMARY KEY REFERENCES prompt_secrets(id) ON DELETE CASCADE,
+                   installation_id TEXT NOT NULL REFERENCES secret_installations(id) ON DELETE CASCADE
+                 );
+                 PRAGMA user_version = 39;",
+            )?;
+            tx.commit()?;
+        }
         crate::secrets::audit::prune(&connection, crate::prompts::timestamp())?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -920,6 +931,9 @@ impl Database {
 /// strict CREATE TABLE checks and never repair a contradictory user_version.
 #[cfg(test)]
 pub(crate) fn remove_later_fixture_tables(conn: &Connection, target_version: u32) -> rusqlite::Result<()> {
+    if target_version < 39 {
+        conn.execute_batch("DROP TABLE IF EXISTS secret_direct_reads;")?;
+    }
     if target_version < 36 {
         conn.execute_batch("DROP TABLE IF EXISTS remote_host_links;")?;
     }
@@ -1247,7 +1261,7 @@ mod tests {
             );
             assert_eq!(alias, "kept alias");
             assert_eq!(grants, 0);
-            for table in ["secret_executors", "secret_installations", "secret_audit"] {
+            for table in ["secret_executors", "secret_installations", "secret_audit", "secret_direct_reads"] {
                 let count: i64 = conn
                     .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
                     .map_err(|error| error.to_string())?;

@@ -48,7 +48,7 @@ test('the fallback for an MCP installation runs the CLI helper with that install
   const text = buildSecretUsageFromMetadata({ context, installations: [mcpInstallation], secrets, executors, grants, preferredId: mcpInstallation.id });
   assert.ok(text);
   assert.match(text, /--cliora-internal-secret-cli-v1 --installation 4c2f8c9e-6b1a-4c44-9d5b-6f0a2b7c1234 list/);
-  assert.match(text, /安装标识: 秘密 MCP · pi \(4c2f8c9e-6b1a-4c44-9d5b-6f0a2b7c1234\)/);
+  assert.match(text, /安装标识: 秘密 MCP · pi/);
   assert.match(text, /use --secret 11111111-2222-4333-8444-555555555555 --executor aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/);
   // The read section documents the confirmation and the model-context warning.
   assert.match(text, /read --secret 11111111-2222-4333-8444-555555555555/);
@@ -79,7 +79,7 @@ test('an installation with no grant gets instructions instead of a guessed comma
   assert.match(text, /list/);
   assert.doesNotMatch(text, /use --secret/);
   assert.doesNotMatch(text, /read --secret/);
-  assert.match(text, /还没有任何已授权的秘密与执行入口/);
+  assert.match(text, /此连接尚无已授权操作/);
 });
 
 test('no live installation leaves no text at all', () => {

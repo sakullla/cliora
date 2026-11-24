@@ -23,6 +23,8 @@ async function install(page: Page, options: { running?: boolean; idleInstallatio
     const state = {
       running: settings.running,
       failGrant: false,
+      failRevoke: false,
+      failPage: false,
       installations: [...idle, { id: '4c2f8c9e-6b1a-4c44-9d5b-6f0a2b7c1234', label: 'codex-cli', kind: 'cli', targetId: null, revoked: false, createdAt: 1, revokedAt: null }],
       executors: [{ id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', label: '部署脚本', description: '', executable: '/usr/bin/env', args: [], cwd: null, channel: 'env', envName: 'DEPLOY_TOKEN', digest: 'a'.repeat(64), createdAt: 1, updatedAt: 1 }],
       grants: [{ installationId: '4c2f8c9e-6b1a-4c44-9d5b-6f0a2b7c1234', secretId: '11111111-2222-4333-8444-555555555555', alias: '生产口令', executorId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', executorLabel: '部署脚本', createdAt: 1 }],
@@ -60,6 +62,7 @@ async function install(page: Page, options: { running?: boolean; idleInstallatio
           }
           if (command === 'list_prompt_secrets') return inventory;
           if (command === 'list_prompt_secret_page') {
+            if (state.failPage) throw new Error('fixture page failed');
             const rows = inventory.filter(item => item.alias.includes(args.search) || item.id.includes(args.search))
               .sort((a, b) => Number(args.references.includes(b.reference)) - Number(args.references.includes(a.reference)) || a.alias.localeCompare(b.alias));
             const offset = Math.min(args.offset, Math.floor(Math.max(rows.length - 1, 0) / 30) * 30);
@@ -110,10 +113,12 @@ async function install(page: Page, options: { running?: boolean; idleInstallatio
             return null;
           }
           if (command === 'revoke_secret_usage') {
+            if (state.failRevoke) throw new Error('fixture revoke failed');
             state.grants = state.grants.filter(item => item.installationId !== args.installationId || item.secretId !== args.secretId || item.executorId !== args.executorId);
             return null;
           }
-          if (command === 'resolve_prompt_secret_references') return [];
+          if (command === 'resolve_prompt_secret_references') return inventory.filter(item => args.body.includes(item.reference))
+            .map(({ id, alias, reference, status }) => ({ id, alias, reference, status }));
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light', remote_ssh_enabled: false }, tools: [{ id: 'codex', name: 'Codex' }] };
           if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', launchForm: 'terminal', interfaceFormats: [], nativeConfig: { state: 'supported', reason: '' }, launch: { state: 'supported', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
           if (command === 'get_launch_settings' || command === 'set_preferred_terminal') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], worktreeLaunch: 'direct' };
@@ -169,6 +174,7 @@ test('the broker panel lists local metadata and inserts portable instructions', 
   await library(page);
   const dialog = await newPrompt(page, '受控使用');
   const broker = await openBroker(dialog);
+  await expect(broker.locator('[data-secret-broker-instructions]')).toBeDisabled();
 
   await expect(broker).toHaveAttribute('data-secret-broker-running', 'true');
   await expect(broker.locator(`[data-secret-installation="${INSTALLATION_ID}"]`)).toContainText('codex-cli');
@@ -181,12 +187,14 @@ test('the broker panel lists local metadata and inserts portable instructions', 
   await expect(broker.locator('[data-secret-audit-code="declined"]')).toContainText('生产口令');
   await expect(broker.locator('[data-secret-audit-code="declined"]')).toContainText('已拒绝');
   await openSecrets(dialog);
+  await dialog.locator('[data-secret-insert]').click();
   await expect(dialog.locator('[data-secret-id]')).toContainText('1 项授权');
   await dialog.locator('[data-secret-grant]').click();
   await expect(dialog.locator('[data-secret-grant-row]')).toBeVisible();
 
   await openBroker(dialog);
   await broker.locator('[data-secret-broker-instructions]').click();
+  await expect(broker.locator('[data-secret-broker-instructions]')).toBeDisabled();
   const body = await bodyOf(dialog).inputValue();
   expect(body).not.toContain('--cliora-internal-secret-cli-v1');
   expect(body).not.toContain(INSTALLATION_ID);
@@ -207,6 +215,7 @@ test('inserted instructions pick the installation that carries a grant', async (
   await install(page, { idleInstallation: true });
   await library(page);
   const dialog = await newPrompt(page, '多个安装标识');
+  await dialog.locator('[data-secret-insert]').click();
   const broker = await openBroker(dialog);
   await expect(broker.locator('[data-secret-installation]')).toHaveCount(2);
   // The newer installation has no grant, so it cannot describe a usable command.
@@ -229,6 +238,7 @@ test('a read approval shows only the alias and the source and answers by id', as
   await expect(dialog).toContainText('生产口令');
   await expect(dialog).toContainText('CLI · codex-cli');
   await expect(dialog.locator('[data-secret-approval-session]')).toHaveCount(0);
+  await expect(dialog.locator('#secret-approval-scope')).toContainText('每次读取都需确认');
   await expect(dialog.locator('[data-secret-approval-risk]')).toContainText('模型上下文');
   await expect(dialog.locator('[data-secret-approval-timeout]')).toContainText('120');
   // The window never receives a value, not even as an empty field.
@@ -313,6 +323,7 @@ test('an offline broker is reported before any secret is used', async ({ page })
   await install(page, { running: false });
   await library(page);
   const dialog = await newPrompt(page, '代理离线');
+  await dialog.locator('[data-secret-insert]').click();
   const broker = await openBroker(dialog);
   await expect(broker).toHaveAttribute('data-secret-broker-running', 'false');
   await expect(broker).toContainText('代理未运行');
@@ -322,15 +333,23 @@ test('an offline broker is reported before any secret is used', async ({ page })
   expect(await bodyOf(dialog).inputValue()).toContain(`{{cliora-secret:${SECRET_ID}}}`);
 });
 
-test('the first script permission needs only a preset and explicit approval', async ({ page }) => {
+test('the first script permission needs only a preset and explicit approval', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1360, height: 900 });
   await install(page, { empty: true });
   await library(page);
   const dialog = await newPrompt(page, '预设授权');
+  await dialog.locator('[data-secret-id] button[aria-haspopup=menu]').click();
   await dialog.locator('[data-secret-grant]').click();
   const form = dialog.locator('[data-secret-grant-form]');
-  await expect(form).toContainText('只在本机检查');
+  await expect(form.locator('[data-secret-preset][aria-pressed="true"]')).toHaveCount(0);
+  await expect(form.locator('[data-secret-grant-save]')).toBeDisabled();
   await form.locator('[data-secret-preset="github"]').click();
   await expect(form).toContainText('github.com');
+  await expect(form).toContainText('直到你撤销授权');
+  await dialog.locator('.guide-dialog-body').evaluate(element => { element.scrollTop = element.scrollHeight; });
+  const grantCapture = testInfo.outputPath('action-permission.png');
+  await form.screenshot({ path: grantCapture });
+  await testInfo.attach('操作授权范围', { path: grantCapture, contentType: 'image/png' });
   await expect(form.locator('input')).toHaveCount(0);
   await expect(form.locator('[data-secret-grant-installation]')).toHaveCount(0);
   const calls = () => page.evaluate(() => (window as unknown as { __secretBroker: { calls: Call[] } }).__secretBroker.calls.filter(call => ['save_secret_executor', 'grant_secret_usage', 'create_secret_installation'].includes(call.command)));
@@ -381,6 +400,7 @@ test('a failed grant retries the saved custom script without creating another co
   await install(page, { empty: true });
   await library(page);
   const dialog = await newPrompt(page, '自定义脚本');
+  await dialog.locator('[data-secret-id] button[aria-haspopup=menu]').click();
   await dialog.locator('[data-secret-grant]').click();
   const form = dialog.locator('[data-secret-grant-form]');
   await form.locator('[data-secret-preset="custom"]').click();
@@ -389,6 +409,7 @@ test('a failed grant retries the saved custom script without creating another co
   await page.evaluate(() => { (window as any).__secretBroker.state.failGrant = true; });
   await form.locator('[data-secret-grant-save]').click();
   await expect(dialog.locator('[data-secret-error]')).toContainText('fixture grant failed');
+  await expect(dialog.locator('[data-secret-error]')).toContainText('再次点击「长期允许此操作」');
   await expect(form.locator('[data-secret-grant-row]')).toHaveCount(0);
   await page.evaluate(() => { (window as any).__secretBroker.state.failGrant = false; });
   await form.locator('[data-secret-grant-save]').click();
@@ -400,11 +421,45 @@ test('a failed grant retries the saved custom script without creating another co
   expect(saved[0].args.executor).toMatchObject({ channel: 'stdin', envName: null, executable: '/fixture/my script', args: [] });
 });
 
+test('retrying a page read preserves a failed revocation until the user revokes the grant again', async ({ page }) => {
+  await install(page);
+  await library(page);
+  const dialog = await newPrompt(page, '撤销后的授权状态');
+  await dialog.locator('[data-secret-grant]').click();
+  const revoke = dialog.locator('[data-secret-grant-revoke]');
+  await page.evaluate(() => { (window as any).__secretBroker.state.failRevoke = true; });
+  await revoke.click();
+  const mutationError = dialog.locator('[data-secret-error]');
+  await expect(mutationError).toContainText('fixture revoke failed');
+  await expect(mutationError).toContainText('请按仍然有效处理');
+  await expect(mutationError.getByRole('button')).toHaveCount(0);
+  await expect(dialog.locator('[data-secret-grant-row]')).toContainText('部署脚本');
+
+  await page.evaluate(() => { (window as any).__secretBroker.state.failPage = true; });
+  await bodyOf(dialog).fill(`{{cliora-secret:${SECRET_ID}}}`);
+  const pageError = dialog.locator('[data-secret-page-error]');
+  await expect(pageError).toContainText('fixture page failed');
+  await page.evaluate(() => { (window as any).__secretBroker.state.failPage = false; });
+  await pageError.getByRole('button', { name: '重试' }).click();
+  await expect(pageError).toHaveCount(0);
+  await expect(mutationError).toContainText('fixture revoke failed');
+  expect(await page.evaluate(() => (window as any).__secretBroker.state.grants.length)).toBe(1);
+
+  await page.evaluate(() => { (window as any).__secretBroker.state.failRevoke = false; });
+  await revoke.click();
+  await expect(dialog.locator('[data-secret-grant-row]')).toHaveCount(0);
+  await expect(mutationError).toHaveCount(0);
+  const calls: Call[] = await page.evaluate(() => (window as any).__secretBroker.calls.filter((call: Call) => call.command === 'revoke_secret_usage'));
+  expect(calls.map(call => call.args)).toEqual(Array(2).fill({ installationId: INSTALLATION_ID, secretId: SECRET_ID, executorId: EXECUTOR_ID }));
+});
+
 test('the local check preset receives a synthetic value and returns only OK', async ({ page }) => {
   await install(page, { empty: true });
   await library(page);
   const dialog = await newPrompt(page, '本地检查');
+  await dialog.locator('[data-secret-id] button[aria-haspopup=menu]').click();
   await dialog.locator('[data-secret-grant]').click();
+  await dialog.locator('[data-secret-preset="localCheck"]').click();
   await dialog.locator('[data-secret-grant-save]').click();
   await expect(dialog.locator('[data-secret-grant-row]')).toContainText('测试秘密传递');
   const executor = await page.evaluate(() => (window as any).__secretBroker.state.executors[0]);
@@ -416,17 +471,37 @@ test('the local check preset receives a synthetic value and returns only OK', as
   expect(result.stderr).toBe('');
 });
 
-test('a large vault searches across pages without loading the broker', async ({ page }) => {
-  await install(page, { count: 75, empty: true });
+test('a large vault searches across pages without loading the broker', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await install(page, { count: 420, empty: true });
   await library(page);
   const dialog = await newPrompt(page, '大资料库');
   const rows = dialog.locator('[data-secret-id]');
   await expect(rows).toHaveCount(30);
   await dialog.locator('[data-secret-pagination]').getByRole('button', { name: '下一页' }).click();
   await expect(dialog.locator('[data-secret-pagination]')).toContainText('31–60');
-  await dialog.locator('[data-secret-search]').fill('fixture-0074');
+  await dialog.locator('[data-secret-search]').fill('fixture-0419');
   await expect(rows).toHaveCount(1);
-  await expect(rows).toContainText('fixture-0074');
+  await expect(rows).toContainText('fixture-0419');
+  const lateId = await rows.getAttribute('data-secret-id');
+  await rows.locator('[data-secret-insert]').click();
+  const chip = dialog.locator('[data-secret-reference]').filter({ hasText: 'fixture-0419' });
+  await expect(chip).toBeVisible();
+  await dialog.locator('[data-secret-search]').fill('');
+  await expect(rows).toHaveCount(30);
+  await dialog.locator('.guide-dialog-body').evaluate(element => { element.scrollTop = element.scrollHeight; });
+  const vaultCapture = testInfo.outputPath('large-vault.png');
+  await dialog.locator('[data-prompt-secrets]').screenshot({ path: vaultCapture });
+  await testInfo.attach('420 条本机密码与正文引用', { path: vaultCapture, contentType: 'image/png' });
+  await dialog.locator('[data-secret-pagination]').getByRole('button', { name: '下一页' }).click();
+  await expect(dialog.locator('[data-secret-pagination]')).toContainText('31–60');
+  await chip.getByRole('button', { name: 'fixture-0419', exact: true }).click();
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toHaveAttribute('data-secret-id', lateId!);
+  await expect(rows).toBeFocused();
+  await chip.locator('[data-secret-reference-remove]').click();
+  await expect(bodyOf(dialog)).toHaveValue('');
+  await expect(rows.locator('[data-secret-insert]')).toBeEnabled();
   await dialog.locator('[data-secret-search]').fill('不存在');
   await expect(rows).toHaveCount(0);
   const calls: Call[] = await page.evaluate(() => (window as any).__secretBroker.calls);
@@ -437,6 +512,7 @@ test('a missing preset program leaves custom scripts available', async ({page}) 
   await install(page, { empty: true, programs: ['node'] });
   await library(page);
   const dialog = await newPrompt(page, '缺少预设程序');
+  await dialog.locator('[data-secret-id] button[aria-haspopup=menu]').click();
   await dialog.locator('[data-secret-grant]').click();
   await dialog.locator('[data-secret-preset="github"]').click();
   await expect(dialog.locator('[data-secret-grant-form]')).toContainText('找不到 gh');
