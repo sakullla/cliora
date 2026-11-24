@@ -396,6 +396,35 @@ test('a revoked local CLI can be restored and permanently deleted', async ({ pag
   await expect(dialog.locator('[data-secret-id]')).toBeVisible();
 });
 
+test('a revoked Local AI connection can be deleted after confirmation', async ({ page }, testInfo) => {
+  await install(page);
+  await page.evaluate(id => {
+    (window as any).__secretBroker.state.installations.push({
+      id, label: 'Local AI', kind: 'cli', targetId: 'cliora-direct', directReadOnly: true,
+      revoked: true, createdAt: 1, revokedAt: 2,
+    });
+  }, IDLE_INSTALLATION_ID);
+  await library(page);
+  const dialog = await newPrompt(page, 'Local AI');
+  const broker = await openBroker(dialog);
+  const row = broker.locator(`[data-secret-installation="${IDLE_INSTALLATION_ID}"]`);
+  const remove = row.getByRole('button', { name: '删除连接' });
+  await expect(row.getByRole('button', { name: '恢复连接' })).toHaveCount(0);
+  await expect(remove).toBeVisible();
+  const screenshot = testInfo.outputPath('revoked-local-ai.png');
+  await row.screenshot({ path: screenshot });
+  await testInfo.attach('已撤销的 Local AI 连接', { path: screenshot, contentType: 'image/png' });
+  await remove.click();
+  const confirmation = page.getByRole('dialog', { name: '删除连接', exact: true });
+  await expect(confirmation).toContainText('Local AI');
+  await confirmation.getByRole('button', { name: '取消' }).click();
+  await expect(remove).toBeVisible();
+  await remove.click();
+  await confirmation.getByRole('button', { name: '删除连接' }).click();
+  await expect(row).toHaveCount(0);
+  await expect(broker.locator(`[data-secret-installation="${INSTALLATION_ID}"]`)).toBeVisible();
+});
+
 test('a failed grant retries the saved custom script without creating another connection', async ({ page }) => {
   await install(page, { empty: true });
   await library(page);

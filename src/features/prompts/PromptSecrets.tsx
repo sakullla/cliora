@@ -653,10 +653,10 @@ export function PromptSecrets({ local, body, disabled, onInsert, onRemoveReferen
             </span>
             <span className={styles.rowActions}>
               {!item.revoked && <Button size="sm" variant="ghost" data-secret-installation-revoke disabled={busy} onClick={() => void changeInstallation(item, 'revoke')}>{t('library.secrets.broker.revokeInstallation')}</Button>}
-              {item.revoked && item.kind === 'cli' && !item.targetId && <>
-                <Button size="sm" data-secret-installation-restore disabled={busy} onClick={() => void changeInstallation(item, 'restore')}>{t('library.secrets.broker.restoreInstallation')}</Button>
-                <Button size="sm" variant="ghost" data-secret-installation-delete disabled={busy} onClick={() => void changeInstallation(item, 'delete')}>{t('library.secrets.broker.deleteInstallation')}</Button>
-              </>}
+              {item.revoked && item.kind === 'cli' && !item.targetId &&
+                <Button size="sm" data-secret-installation-restore disabled={busy} onClick={() => void changeInstallation(item, 'restore')}>{t('library.secrets.broker.restoreInstallation')}</Button>}
+              {item.revoked && item.kind === 'cli' && (!item.targetId || item.directReadOnly) &&
+                <Button size="sm" variant="ghost" data-secret-installation-delete disabled={busy} onClick={() => void changeInstallation(item, 'delete')}>{t('library.secrets.broker.deleteInstallation')}</Button>}
             </span>
           </li>)}
           {addingIdentity && <li className={styles.quickAdd}>

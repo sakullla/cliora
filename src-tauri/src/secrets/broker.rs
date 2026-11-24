@@ -254,8 +254,9 @@ pub fn restore_cli_installation(db: &Database, id: &str) -> Result<(), String> {
 pub fn delete_cli_installation(db: &Database, id: &str) -> Result<(), String> {
     db.with_connection(|conn| {
         let changed = conn.execute(
-            "DELETE FROM secret_installations WHERE id=?1 AND kind='cli' AND target_id IS NULL AND revoked=1",
-            [id],
+            "DELETE FROM secret_installations WHERE id=?1 AND kind='cli' AND revoked=1
+             AND (target_id IS NULL OR target_id=?2)",
+            params![id, DIRECT_TARGET],
         ).map_err(sql)?;
         if changed == 0 {
             return Err("只能删除已撤销的本地 CLI 身份".into());

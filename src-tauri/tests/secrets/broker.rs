@@ -1009,6 +1009,29 @@ fn a_local_cli_can_be_restored_without_grants_or_deleted_with_its_audit_intact()
 }
 
 #[test]
+fn deleting_a_revoked_direct_read_installation_preserves_audit_and_new_access() {
+    let database = db();
+    let credentials = MemoryCredentials::default();
+    let secret = create_secret(&database, &credentials, "fixture", CANARY);
+    set_direct_read(&database, &secret.id, true).unwrap();
+    let old = list_installations(&database).unwrap().pop().unwrap();
+    assert!(old.direct_read_only);
+    assert!(delete_cli_installation(&database, &old.id).is_err());
+    assert!(list(&database, &credentials, &old.id).ok);
+    revoke_installation(&database, &old.id).unwrap();
+    assert_eq!(list(&database, &credentials, &old.id).code, audit::code::INSTALLATION_REVOKED);
+    set_direct_read(&database, &secret.id, true).unwrap();
+    delete_cli_installation(&database, &old.id).unwrap();
+
+    let remaining = list_installations(&database).unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_ne!(remaining[0].id, old.id);
+    assert!(body(&list(&database, &credentials, &remaining[0].id)).contains("fixture"));
+    assert!(audit::list(&database, 20).unwrap().iter().any(|row| row.installation_id.as_ref() == Some(&old.id)));
+    assert_eq!(list(&database, &credentials, &old.id).code, audit::code::INSTALLATION_UNKNOWN);
+}
+
+#[test]
 fn local_cli_recovery_and_deletion_leave_managed_connections_alone() {
     let database = db();
     for (kind, target) in [(Kind::Mcp, None), (Kind::Mcp, Some("fixture")), (Kind::Cli, Some("fixture"))] {
