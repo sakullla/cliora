@@ -83,6 +83,9 @@ function ValueInput({ shown, onToggle, ...input }: InputHTMLAttributes<HTMLInput
 }
 
 const pageSize = 30;
+// A handful of secrets reads at a glance; search only appears once the list needs it.
+const searchThreshold = 6;
+const statusRank: Record<PromptSecretStatus, number> = { unknown: 0, missing: 1, unreadable: 2, available: 3 };
 const emptyBroker: SecretBrokerStatus = { running: false, transport: '', error: null };
 type Tab = 'secrets' | 'access';
 type Form = { kind: 'create'; referenceId?: string } | { kind: 'rename'; id: string } | { kind: 'value'; id: string } | null;
@@ -286,21 +289,24 @@ export function PromptSecrets({ local, body, disabled, onInsert, onRemoveReferen
   function openValue(secret: Pick<PromptSecret, 'id'>) { setError(''); setValue(''); setValueShown(false); setForm({ kind: 'value', id: secret.id }); }
 
   async function create() {
-    if (busy || !alias.trim() || !value) return;
+    if (busy || !alias.trim() || !value || aliasTaken) return;
     setBusy(true); setError('');
+    const binding = form?.kind === 'create' && !!form.referenceId;
     try {
       const created = await native.createPromptSecret(alias, value, form?.kind === 'create' ? form.referenceId : undefined);
       if (!mounted.current) return;
       closeForm();
       setSearch(''); setOffset(0);
-      announce(t('library.secrets.created', { name: created.alias }));
+      announce(t(binding ? 'library.secrets.bound' : 'library.secrets.created', { name: created.alias }));
+      // Point at the new row once the list reloads so the result is visible.
+      pendingLocate.current = created.id;
       setRevision(value => value + 1);
-      if (form?.kind !== 'create' || !form.referenceId) onInsert(created.reference);
+      if (!binding) onInsert(created.reference);
     } catch (failure) { if (mounted.current) setError(formatFailure(failure, t('library.secrets.createFailed'), t('library.secrets.retry'))); }
     finally { if (mounted.current) setBusy(false); }
   }
   async function rename(secret: PromptSecret) {
-    if (busy || !alias.trim()) return;
+    if (busy || !alias.trim() || aliasTaken) return;
     setBusy(true); setError('');
     try {
       const saved = await native.renamePromptSecret(secret.id, secret.version, alias);
@@ -442,6 +448,15 @@ export function PromptSecrets({ local, body, disabled, onInsert, onRemoveReferen
   const brokerState = !brokerReady || !brokerChecked ? 'unknown' : broker.running ? 'running' : 'offline';
   const locale = i18n.language?.startsWith('en') ? 'en' : 'zh-CN';
   const problems = references.filter(item => item.status !== 'available').length;
+  // Broken references come first: they are the ones that need a decision.
+  const orderedReferences = useMemo(() => references.map((item, index) => ({ item, index }))
+    .sort((a, b) => statusRank[a.item.status] - statusRank[b.item.status] || a.index - b.index).map(entry => entry.item), [references]);
+  // Aliases are unique on this device. The loaded page catches the common case early;
+  // the store still rejects a clash outside it.
+  const trimmedAlias = alias.trim();
+  const aliasTaken = !!trimmedAlias && (form?.kind === 'create' || form?.kind === 'rename')
+    && secrets.some(item => item.alias === trimmedAlias && !(form.kind === 'rename' && form.id === item.id));
+  const creating = form?.kind === 'create';
   const formKeys = (submit: () => void, ready: boolean) => (event: ReactKeyboardEvent) => {
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeForm(); }
     if (event.key === 'Enter' && ready) { event.preventDefault(); submit(); }
@@ -478,7 +493,11 @@ export function PromptSecrets({ local, body, disabled, onInsert, onRemoveReferen
             {t('library.secrets.tabs.access')}<span className={styles.tabDot} data-state={brokerState} aria-hidden="true" />
           </button>
         </div>
-        <Button size="sm" variant="primary" data-secret-create disabled={disabled || busy} icon={<Icon name="plus" size={12} />} onClick={() => openCreate()}>{t('library.secrets.create')}</Button>
+        <Button size="sm" variant="primary" data-secret-create aria-expanded={creating} disabled={disabled || busy} icon={<Icon name="plus" size={12} />} onClick={() => {
+          // While the form is open this only brings it back into focus; typed text is kept.
+          if (creating) sectionRef.current?.querySelector<HTMLInputElement>('[data-secret-alias]')?.focus();
+          else openCreate();
+        }}>{t('library.secrets.create')}</Button>
       </div>
     </header>
 
@@ -489,13 +508,13 @@ export function PromptSecrets({ local, body, disabled, onInsert, onRemoveReferen
       {pageError && <div className={styles.alert} role="alert" data-secret-page-error><Icon name="alert" size={14} /><span>{pageError}</span><Button size="sm" variant="ghost" disabled={loading} onClick={() => void reload()}>{t('library.secrets.retry')}</Button></div>}
       {references.length > 0 && <div className={styles.refs} data-secret-references data-problem={problems > 0 || undefined}>
         <span className={styles.refsLabel}>{problems > 0 && <Icon name="alert" size={12} />}{problems > 0 ? t('library.secrets.referencesProblem', { count: problems }) : t('library.secrets.references')}</span>
-        {references.map(item => {
+        {orderedReferences.map(item => {
           return <span className={styles.ref} key={item.id} title={item.reference} data-secret-reference={item.reference} data-secret-reference-status={item.status}>
             <span className={styles.dot} data-tone={statusTone[item.status]} aria-hidden="true" />
-            {item.alias ? <button type="button" disabled={busy} className={styles.refName} title={t('library.secrets.locate', { name: item.alias })} onClick={() => locate(item.id)}>{item.alias}</button> : <span>{item.id.slice(0, 8)}</span>}
+            {item.alias ? <button type="button" disabled={busy} className={styles.refName} title={t('library.secrets.locate', { name: item.alias })} onClick={() => locate(item.id)}>{item.alias}</button> : <code className={styles.refId}>{item.id.slice(0, 8)}</code>}
             {item.status !== 'available' && <span className={styles.refState}>{t(`library.secrets.referenceStatus.${item.status}`)}</span>}
-            {item.status === 'unknown' && <Button size="sm" variant="ghost" disabled={disabled || busy} data-secret-bind={item.id} onClick={() => openCreate(item.id)}>{t('library.secrets.bindHere')}</Button>}
-            {item.status === 'missing' && <Button size="sm" variant="ghost" disabled={disabled || busy} data-secret-refill={item.id} onClick={() => { locate(item.id); openValue(item); }}>{t('library.secrets.refillValue')}</Button>}
+            {item.status === 'unknown' && <button type="button" className={styles.refAction} disabled={disabled || busy} data-secret-bind={item.id} onClick={() => openCreate(item.id)}>{t('library.secrets.bindHere')}</button>}
+            {item.status === 'missing' && <button type="button" className={styles.refAction} disabled={disabled || busy} data-secret-refill={item.id} onClick={() => { locate(item.id); openValue(item); }}>{t('library.secrets.refillValue')}</button>}
             {onRemoveReference && <IconButton size="sm" className={styles.refRemove} disabled={disabled || busy} data-secret-reference-remove={item.id} aria-label={t('library.secrets.removeReference', { name: item.alias ?? item.id.slice(0, 8) })} title={t('library.secrets.removeReference', { name: item.alias ?? item.id.slice(0, 8) })} icon={<Icon name="close" size={11} />} onClick={() => { onRemoveReference(item.id); announce(t('library.secrets.referenceRemoved')); }} />}
           </span>;
         })}
@@ -504,19 +523,27 @@ export function PromptSecrets({ local, body, disabled, onInsert, onRemoveReferen
       {form?.kind === 'create' && <div ref={reveal} className={styles.create} onKeyDown={formKeys(() => void create(), !!alias.trim() && !!value)}>
         <div className={styles.createHead}><Icon name="lock" size={14} />{form.referenceId ? t('library.secrets.bindHere') : t('library.secrets.createTitle')}</div>
         <div className={styles.fields}>
-          <label className={styles.field}>{t('library.secrets.alias')}<input autoFocus data-secret-alias maxLength={80} value={alias} disabled={busy} placeholder={t('library.secrets.aliasPlaceholder')} onChange={event => setAlias(event.target.value)} /></label>
+          <label className={styles.field}>{t('library.secrets.alias')}<input autoFocus data-secret-alias maxLength={80} value={alias} disabled={busy} aria-invalid={aliasTaken || undefined} placeholder={t('library.secrets.aliasPlaceholder')} onChange={event => setAlias(event.target.value)}
+            onKeyDown={event => {
+              // Enter on the name moves on to the value instead of doing nothing.
+              if (event.key !== 'Enter' || !alias.trim() || value) return;
+              event.preventDefault();
+              event.currentTarget.closest(`.${styles.create}`)?.querySelector<HTMLInputElement>('[data-secret-value]')?.focus();
+            }} />
+            {aliasTaken && <span className={styles.fieldError} role="alert" data-secret-alias-taken>{t('library.secrets.aliasTaken')}</span>}
+          </label>
           <label className={styles.field}>{t('library.secrets.value')}<ValueInput data-secret-value shown={valueShown} onToggle={() => setValueShown(shown => !shown)} value={value} disabled={busy} placeholder={t('library.secrets.valuePlaceholder')} onChange={event => setValue(event.target.value)} /></label>
         </div>
         <div className={styles.footer}>
           <span className={styles.footerNote}><Icon name="shield" size={12} />{t('library.secrets.valueNote')}</span>
           <div className={styles.footerActions}>
             <Button size="sm" variant="ghost" disabled={busy} onClick={closeForm}>{t('library.secrets.cancel')}</Button>
-            <Button size="sm" variant="primary" data-secret-submit loading={busy} disabled={!alias.trim() || !value} icon={<Icon name="check" size={12} />} onClick={() => void create()}>{t('library.secrets.save')}</Button>
+            <Button size="sm" variant="primary" data-secret-submit loading={busy} disabled={!alias.trim() || !value || aliasTaken} icon={<Icon name="check" size={12} />} onClick={() => void create()}>{t(form.referenceId ? 'library.secrets.bindSave' : 'library.secrets.save')}</Button>
           </div>
         </div>
       </div>}
 
-      {(pageInfo.total > 0 || search) && <span className={`search-field ${styles.search}`}>
+      {(pageInfo.total >= searchThreshold || search) && <span className={`search-field ${styles.search}`}>
         <input type="search" disabled={busy} data-secret-search aria-label={t('library.secrets.search')} placeholder={t('library.secrets.search')} value={search}
           onKeyDown={event => { if (event.key === 'Escape' && search) { event.preventDefault(); event.stopPropagation(); changeSearch(''); } }}
           onChange={event => changeSearch(event.target.value)} />
@@ -526,7 +553,7 @@ export function PromptSecrets({ local, body, disabled, onInsert, onRemoveReferen
       {loading && !secrets.length && <div className={styles.list} role="status" aria-label={t('library.secrets.loading')}><div className={styles.skeleton} /><div className={styles.skeleton} /></div>}
 
       {!pageError && !loading && !search && !pageInfo.total && !form && <div className={styles.empty} data-secret-empty>
-        <span className={styles.emptyMark} aria-hidden="true"><Icon name="lock" size={20} /></span>
+        <span className={styles.emptyMark} aria-hidden="true"><Icon name="lock" size={16} /></span>
         <div className={styles.emptyText}><strong>{t('library.secrets.empty.title')}</strong><span>{t('library.secrets.empty.detail')}</span></div>
       </div>}
 
@@ -539,19 +566,21 @@ export function PromptSecrets({ local, body, disabled, onInsert, onRemoveReferen
           return <li className={styles.item} key={secret.id} tabIndex={-1} data-open={open || undefined} data-flash={flashId === secret.id || undefined} data-secret-id={secret.id} data-secret-status={secret.status}>
             <div className={styles.itemMain}>
               <div className={styles.itemText}>
-                <span className={styles.itemTitle}>
-                  <span className={styles.alias} title={secret.alias + '\n' + secret.reference}>{secret.alias}</span>
+                <span className={styles.alias} title={secret.alias + '\n' + secret.reference}>{secret.alias}</span>
+                <span className={styles.tags}>
                   {secret.status !== 'available' && <Badge tone={statusTone[secret.status]}>{t(`library.secrets.status.${secret.status}`)}</Badge>}
+                  {referenced && <span className={styles.tag} data-tone="accent" data-secret-in-body><Icon name="check" size={11} />{t('library.secrets.inBody')}</span>}
+                  {direct && <span className={styles.tag} data-tone="success" data-secret-direct-active title={t('library.secrets.directHint')}><Icon name="sparkle" size={11} />{t('library.secrets.directActive')}</span>}
+                  {grantCount > 0 && <button type="button" className={styles.tag} data-tone="action" data-granted data-secret-grant aria-expanded={open} disabled={disabled || busy} onClick={() => setGrantSecretId(open ? '' : secret.id)}><Icon name="shield" size={11} />{t('library.secrets.grantCount', { count: grantCount })}<Icon name="chevronDown" size={11} /></button>}
                 </span>
               </div>
               <div className={styles.itemActions}>
-                {direct && referenced
-                  ? <span className={styles.inBody} title={t('library.secrets.directHint')}><Icon name="check" size={12} />{t('library.secrets.directActive')}</span>
-                  : <Button size="sm" data-secret-direct title={t('library.secrets.directHint')} disabled={disabled || busy || secret.status !== 'available'} onClick={() => void setDirectUse(secret, true)}>{t('library.secrets.directUse')}</Button>}
-                {referenced
-                  ? !direct && <span className={styles.inBody}><Icon name="check" size={12} />{t('library.secrets.inBody')}</span>
-                  : <Button size="sm" variant="ghost" data-secret-insert title={t('library.secrets.insertTitle', { name: secret.alias })} disabled={disabled || busy || secret.status !== 'available'} onClick={() => { setError(''); onInsert(secret.reference); announce(t('library.secrets.inserted', { name: secret.alias })); }}>{t('library.secrets.insert')}</Button>}
-                {grantCount > 0 && <Button size="sm" variant="ghost" className={styles.grantPill} data-granted data-secret-grant aria-expanded={open} disabled={disabled || busy} icon={<Icon name="shield" size={12} />} onClick={() => setGrantSecretId(open ? '' : secret.id)}>{t('library.secrets.grantCount', { count: grantCount })}</Button>}
+                {secret.status === 'missing'
+                  ? <Button size="sm" data-secret-refill-row={secret.id} disabled={disabled || busy} icon={<Icon name="lock" size={12} />} onClick={() => openValue(secret)}>{t('library.secrets.refillValue')}</Button>
+                  : <>
+                    {!referenced && <Button size="sm" variant="ghost" data-secret-insert title={t('library.secrets.insertTitle', { name: secret.alias })} disabled={disabled || busy || secret.status !== 'available'} onClick={() => { setError(''); onInsert(secret.reference); announce(t('library.secrets.inserted', { name: secret.alias })); }}>{t('library.secrets.insert')}</Button>}
+                    {!(direct && referenced) && <Button size="sm" data-secret-direct title={t('library.secrets.directHint')} disabled={disabled || busy || secret.status !== 'available'} onClick={() => void setDirectUse(secret, true)}>{t('library.secrets.directUse')}</Button>}
+                  </>}
                 <RowMenu label={t('library.secrets.manage', { name: secret.alias })}>
                   {!grantCount && <button role="menuitem" data-secret-grant disabled={disabled || busy} onClick={() => setGrantSecretId(secret.id)}>{t('library.secrets.broker.grant')}</button>}
                   {direct && <button role="menuitem" data-secret-direct-revoke disabled={disabled || busy} onClick={() => void setDirectUse(secret, false)}>{t('library.secrets.revokeDirect')}</button>}
@@ -562,10 +591,11 @@ export function PromptSecrets({ local, body, disabled, onInsert, onRemoveReferen
                 </RowMenu>
               </div>
             </div>
-            {form?.kind === 'rename' && form.id === secret.id && <div ref={reveal} className={styles.inline} onKeyDown={formKeys(() => void rename(secret), !!alias.trim())}>
-              <input autoFocus aria-label={t('library.secrets.alias')} data-secret-rename-value maxLength={80} value={alias} disabled={busy} onChange={event => setAlias(event.target.value)} />
+            {form?.kind === 'rename' && form.id === secret.id && <div ref={reveal} className={styles.inline} onKeyDown={formKeys(() => void rename(secret), !!alias.trim() && !aliasTaken && alias.trim() !== secret.alias)}>
+              <input autoFocus aria-label={t('library.secrets.alias')} aria-invalid={aliasTaken || undefined} data-secret-rename-value maxLength={80} value={alias} disabled={busy} onFocus={event => event.currentTarget.select()} onChange={event => setAlias(event.target.value)} />
               <Button size="sm" variant="ghost" disabled={busy} onClick={closeForm}>{t('library.secrets.cancel')}</Button>
-              <Button size="sm" variant="primary" data-secret-rename-save loading={busy} disabled={!alias.trim()} onClick={() => void rename(secret)}>{t('library.secrets.renameSave')}</Button>
+              <Button size="sm" variant="primary" data-secret-rename-save loading={busy} disabled={!alias.trim() || aliasTaken || alias.trim() === secret.alias} onClick={() => void rename(secret)}>{t('library.secrets.renameSave')}</Button>
+              {aliasTaken && <span className={styles.fieldError} role="alert">{t('library.secrets.aliasTaken')}</span>}
             </div>}
             {form?.kind === 'value' && form.id === secret.id && <div ref={reveal} className={styles.inline} onKeyDown={formKeys(() => void updateValue(secret), !!value)}>
               <ValueInput autoFocus aria-label={t('library.secrets.value')} data-secret-update-value shown={valueShown} onToggle={() => setValueShown(shown => !shown)} value={value} disabled={busy} placeholder={t('library.secrets.valuePlaceholder')} onChange={event => setValue(event.target.value)} />

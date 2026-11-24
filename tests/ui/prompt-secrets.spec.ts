@@ -450,3 +450,63 @@ test('the value field can show what is being typed without reading anything back
   await expect(panel.locator('[data-secret-value]')).toHaveValue('');
   await expect(panel.locator('[data-secret-value]')).toHaveAttribute('type', 'password');
 });
+
+test('the create form moves from name to value on Enter and blocks a name already in use', async ({ page }) => {
+  await install(page);
+  await library(page);
+  const dialog = await newPrompt(page);
+  const panel = secretPanel(dialog);
+  await createSecret(dialog, '生产口令', CANARY);
+  await panel.locator('[data-secret-create]').click();
+  await panel.locator('[data-secret-alias]').fill('生产口令');
+  // Pressing the header action again returns to the open form and keeps what was typed.
+  await panel.locator('[data-secret-value]').focus();
+  await panel.locator('[data-secret-create]').click();
+  await expect(panel.locator('[data-secret-alias]')).toBeFocused();
+  await expect(panel.locator('[data-secret-alias]')).toHaveValue('生产口令');
+  await expect(panel.locator('[data-secret-create]')).toHaveAttribute('aria-expanded', 'true');
+  await expect(panel.locator('[data-secret-alias-taken]')).toBeVisible();
+  await panel.locator('[data-secret-alias]').press('Enter');
+  await expect(panel.locator('[data-secret-value]')).toBeFocused();
+  await panel.locator('[data-secret-value]').fill('another-value');
+  await expect(panel.locator('[data-secret-submit]')).toBeDisabled();
+  await panel.locator('[data-secret-alias]').fill('预发口令');
+  await expect(panel.locator('[data-secret-alias-taken]')).toHaveCount(0);
+  await panel.locator('[data-secret-value]').press('Enter');
+  await expect(panel.locator('[data-secret-id]')).toHaveCount(2);
+  await expect(panel.locator('[data-secret-create]')).toHaveAttribute('aria-expanded', 'false');
+});
+
+test('a row shows its body and AI state as tags and keeps actions at the right edge', async ({ page }) => {
+  await install(page);
+  await library(page);
+  const dialog = await newPrompt(page);
+  const row = await createSecret(dialog, '部署令牌', CANARY);
+  await expect(row.locator('[data-secret-in-body]')).toBeVisible();
+  await expect(row.locator('[data-secret-insert]')).toHaveCount(0);
+  await row.locator('[data-secret-direct]').click();
+  await expect(row.locator('[data-secret-direct-active]')).toBeVisible();
+  await expect(row.locator('[data-secret-direct]')).toHaveCount(0);
+  // Taking the reference out of the body brings the insert action back without losing AI use.
+  await bodyOf(dialog).fill('');
+  await expect(row.locator('[data-secret-in-body]')).toHaveCount(0);
+  await expect(row.locator('[data-secret-insert]')).toBeVisible();
+  await expect(row.locator('[data-secret-direct-active]')).toBeVisible();
+});
+
+test('binding a synchronized reference says it saves locally and leaves the body alone', async ({ page }) => {
+  await install(page);
+  await library(page);
+  const dialog = await newPrompt(page);
+  const id = '11111111-2222-4333-8444-555555555555';
+  const body = '同步来的 ' + referenceOf(id);
+  await bodyOf(dialog).fill(body);
+  const panel = secretPanel(dialog);
+  await panel.locator('[data-secret-bind]').click();
+  await expect(panel.locator('[data-secret-submit]')).toHaveText(/保存到本机/);
+  await panel.locator('[data-secret-alias]').fill('同步凭据');
+  await panel.locator('[data-secret-value]').fill(CANARY);
+  await panel.locator('[data-secret-submit]').click();
+  await expect(panel.locator('[data-secret-notice]')).toContainText('已在本机配置');
+  await expect(bodyOf(dialog)).toHaveValue(body);
+});
