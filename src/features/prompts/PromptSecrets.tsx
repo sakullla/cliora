@@ -50,6 +50,43 @@ export function insertReference(body: string, reference: string): string {
   return `${trimmed}${trimmed.endsWith('\n') ? '' : ' '}${reference}`;
 }
 
+export type BodySelection = { start: number; end: number };
+
+/**
+ * Insert one reference at the caret, padding it with a space only where it would
+ * otherwise touch a word. Without a caret, or for multi-line text, it appends like
+ * `insertReference`. An existing reference is not duplicated; its range is returned instead.
+ */
+export function insertReferenceAt(body: string, reference: string, selection?: BodySelection | null): { body: string } & BodySelection {
+  const existing = body.indexOf(reference);
+  if (existing >= 0) return { body, start: existing, end: existing + reference.length };
+  if (!selection || reference.includes('\n')) {
+    const next = insertReference(body, reference);
+    const start = next.lastIndexOf(reference);
+    return { body: next, start, end: start + reference.length };
+  }
+  // Text that happened to be selected stays; the reference goes after it.
+  const from = Math.max(0, Math.min(Math.max(selection.start, selection.end), body.length));
+  const to = from;
+  const before = body.slice(0, from);
+  const after = body.slice(to);
+  const left = before && !/\s$/.test(before) ? ' ' : '';
+  const right = after && !/^\s/.test(after) ? ' ' : '';
+  const start = before.length + left.length;
+  return { body: before + left + reference + right + after, start, end: start + reference.length };
+}
+
+/** The range of the first spelling of one reference in the body, or null. */
+export function findReference(body: string, id: string): BodySelection | null {
+  const wanted = compactId(id);
+  for (const match of body.matchAll(/\{\{cliora-secret:(?:urn:uuid:)?([0-9a-fA-F-]{32,36})\}\}/g)) {
+    if (compactId(match[1]) !== wanted) continue;
+    const start = match.index ?? 0;
+    return { start, end: start + match[0].length };
+  }
+  return null;
+}
+
 /**
  * Remove every spelling of one reference (with or without urn prefix or dashes) together
  * with one separating space, so the surrounding text closes up. Nothing else changes.
@@ -99,7 +136,14 @@ type Form = { kind: 'create'; referenceId?: string } | { kind: 'rename'; id: str
  * placeholder; "AI access" holds the broker metadata (connections, saved scripts and
  * activity) that a controlled use is defined by.
  */
-export function PromptSecrets({ local, body, disabled, onInsert, onRemoveReference }: { local: boolean; body: string; disabled?: boolean; onInsert: (reference: string) => void; onRemoveReference?: (id: string) => void }) {
+export function PromptSecrets({ local, body, disabled, onInsert, onRemoveReference, onLocateReference }: {
+  local: boolean; body: string; disabled?: boolean;
+  /** `atCaret` marks a bare reference, which belongs where the writer was typing. */
+  onInsert: (reference: string, atCaret?: boolean) => void;
+  onRemoveReference?: (id: string) => void;
+  /** Select the reference in the body so a raw placeholder can be matched to its name. */
+  onLocateReference?: (id: string) => void;
+}) {
   const { t, i18n } = useTranslation();
   const [tab, setTab] = useState<Tab>('secrets');
   const [secrets, setSecrets] = useState<PromptSecret[]>([]);
@@ -277,7 +321,7 @@ export function PromptSecrets({ local, body, disabled, onInsert, onRemoveReferen
       await native.setSecretDirectRead(secret.id, enabled);
       if (!mounted.current) return;
       setDirectIds(ids => enabled ? [...new Set([...ids, secret.id])] : ids.filter(id => id !== secret.id));
-      if (enabled && !referencedIds.has(compactId(secret.id))) onInsert(secret.reference);
+      if (enabled && !referencedIds.has(compactId(secret.id))) onInsert(secret.reference, true);
       setRevision(n => n + 1);
       announce(t(enabled ? 'library.secrets.directReady' : 'library.secrets.directRevoked', { name: secret.alias }));
     } catch (failure) {
@@ -301,7 +345,7 @@ export function PromptSecrets({ local, body, disabled, onInsert, onRemoveReferen
       // Point at the new row once the list reloads so the result is visible.
       pendingLocate.current = created.id;
       setRevision(value => value + 1);
-      if (!binding) onInsert(created.reference);
+      if (!binding) onInsert(created.reference, true);
     } catch (failure) { if (mounted.current) setError(formatFailure(failure, t('library.secrets.createFailed'), t('library.secrets.retry'))); }
     finally { if (mounted.current) setBusy(false); }
   }
@@ -511,7 +555,9 @@ export function PromptSecrets({ local, body, disabled, onInsert, onRemoveReferen
         {orderedReferences.map(item => {
           return <span className={styles.ref} key={item.id} title={item.reference} data-secret-reference={item.reference} data-secret-reference-status={item.status}>
             <span className={styles.dot} data-tone={statusTone[item.status]} aria-hidden="true" />
-            {item.alias ? <button type="button" disabled={busy} className={styles.refName} title={t('library.secrets.locate', { name: item.alias })} onClick={() => locate(item.id)}>{item.alias}</button> : <code className={styles.refId}>{item.id.slice(0, 8)}</code>}
+            {item.alias ? <button type="button" disabled={busy} className={styles.refName} title={t('library.secrets.locate', { name: item.alias })} onClick={() => locate(item.id)}>{item.alias}</button> : onLocateReference
+              ? <button type="button" className={`${styles.refName} ${styles.refId}`} data-secret-reference-locate={item.id} title={t('library.secrets.showInBody', { name: item.id.slice(0, 8) })} onClick={() => onLocateReference(item.id)}>{item.id.slice(0, 8)}</button>
+              : <code className={styles.refId}>{item.id.slice(0, 8)}</code>}
             {item.status !== 'available' && <span className={styles.refState}>{t(`library.secrets.referenceStatus.${item.status}`)}</span>}
             {item.status === 'unknown' && <button type="button" className={styles.refAction} disabled={disabled || busy} data-secret-bind={item.id} onClick={() => openCreate(item.id)}>{t('library.secrets.bindHere')}</button>}
             {item.status === 'missing' && <button type="button" className={styles.refAction} disabled={disabled || busy} data-secret-refill={item.id} onClick={() => { locate(item.id); openValue(item); }}>{t('library.secrets.refillValue')}</button>}
@@ -569,7 +615,9 @@ export function PromptSecrets({ local, body, disabled, onInsert, onRemoveReferen
                 <span className={styles.alias} title={secret.alias + '\n' + secret.reference}>{secret.alias}</span>
                 <span className={styles.tags}>
                   {secret.status !== 'available' && <Badge tone={statusTone[secret.status]}>{t(`library.secrets.status.${secret.status}`)}</Badge>}
-                  {referenced && <span className={styles.tag} data-tone="accent" data-secret-in-body><Icon name="check" size={11} />{t('library.secrets.inBody')}</span>}
+                  {referenced && (onLocateReference
+                    ? <button type="button" className={styles.tag} data-tone="accent" data-secret-in-body title={t('library.secrets.showInBody', { name: secret.alias })} onClick={() => onLocateReference(secret.id)}><Icon name="check" size={11} />{t('library.secrets.inBody')}</button>
+                    : <span className={styles.tag} data-tone="accent" data-secret-in-body><Icon name="check" size={11} />{t('library.secrets.inBody')}</span>)}
                   {direct && <span className={styles.tag} data-tone="success" data-secret-direct-active title={t('library.secrets.directHint')}><Icon name="sparkle" size={11} />{t('library.secrets.directActive')}</span>}
                   {grantCount > 0 && <button type="button" className={styles.tag} data-tone="action" data-granted data-secret-grant aria-expanded={open} disabled={disabled || busy} onClick={() => setGrantSecretId(open ? '' : secret.id)}><Icon name="shield" size={11} />{t('library.secrets.grantCount', { count: grantCount })}<Icon name="chevronDown" size={11} /></button>}
                 </span>
@@ -578,7 +626,7 @@ export function PromptSecrets({ local, body, disabled, onInsert, onRemoveReferen
                 {secret.status === 'missing'
                   ? <Button size="sm" data-secret-refill-row={secret.id} disabled={disabled || busy} icon={<Icon name="lock" size={12} />} onClick={() => openValue(secret)}>{t('library.secrets.refillValue')}</Button>
                   : <>
-                    {!referenced && <Button size="sm" variant="ghost" data-secret-insert title={t('library.secrets.insertTitle', { name: secret.alias })} disabled={disabled || busy || secret.status !== 'available'} onClick={() => { setError(''); onInsert(secret.reference); announce(t('library.secrets.inserted', { name: secret.alias })); }}>{t('library.secrets.insert')}</Button>}
+                    {!referenced && <Button size="sm" variant="ghost" data-secret-insert title={t('library.secrets.insertTitle', { name: secret.alias })} disabled={disabled || busy || secret.status !== 'available'} onClick={() => { setError(''); onInsert(secret.reference, true); announce(t('library.secrets.inserted', { name: secret.alias })); }}>{t('library.secrets.insert')}</Button>}
                     {!(direct && referenced) && <Button size="sm" data-secret-direct title={t('library.secrets.directHint')} disabled={disabled || busy || secret.status !== 'available'} onClick={() => void setDirectUse(secret, true)}>{t('library.secrets.directUse')}</Button>}
                   </>}
                 <RowMenu label={t('library.secrets.manage', { name: secret.alias })}>

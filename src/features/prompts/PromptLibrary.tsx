@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { native } from '../../lib/native';
 import { FOCUS_REFRESH_INTERVAL, WORKSPACES_CHANGED } from '../../lib/workspaceEvents';
@@ -19,7 +19,9 @@ import type { BusinessWorkspace } from '../../types/workspaces';
 import type { LibraryItem } from '../../types/library';
 import type { PromptBatch, PromptBatchResultItem, PromptContext, PromptDocument, PromptDraft, PromptSummary, PromptPage } from '../../types/prompts';
 import { PromptImportDialog } from './PromptImportDialog';
-import { PromptSecrets, insertReference, removeReference } from './PromptSecrets';
+import { PromptSecrets, findReference, insertReferenceAt, removeReference } from './PromptSecrets';
+import type { BodySelection } from './PromptSecrets';
+import { reveal } from '../../lib/reveal';
 import { parseScope, scopeLabel, scopeOptions, scopeTone, scopeValue } from './promptScope';
 import { notifyPromptsChanged, promptContextKey, usePromptQuery } from './usePromptQuery';
 import styles from './Prompts.module.css';
@@ -37,6 +39,9 @@ export function PromptLibrary({ context, active, createSignal, discardSignal, sp
   const [scopeError, setScopeError] = useState('');
   const [selected, setSelected] = useState<Record<string, PromptSummary>>({});
   const [draft, setDraft] = useState<PromptDraft | null>(null);
+  // The body caret survives a click into the secret panel so a reference lands where the writer stopped.
+  const bodyRef = useRef<HTMLTextAreaElement | null>(null);
+  const bodyCaret = useRef<BodySelection | null>(null);
   const [tagText, setTagText] = useState('');
   const [savedText, setSavedText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -114,6 +119,40 @@ export function PromptLibrary({ context, active, createSignal, discardSignal, sp
   }
   const showError = (value: unknown) => setError(formatFailure(value, t('prompts.readFailed'), t('prompts.retry')));
   async function canDiscard() { return !dirty || await confirmAction(t('prompts.discard'), () => mounted.current); }
+  // Stable so React only calls it when the field mounts or unmounts.
+  const bindBody = useCallback((node: HTMLTextAreaElement | null) => {
+    // A new editor starts without a caret; references append until the writer clicks into it.
+    if (node !== bodyRef.current) bodyCaret.current = null;
+    bodyRef.current = node;
+  }, []);
+  function rememberCaret(event: { currentTarget: HTMLTextAreaElement }) {
+    const { selectionStart, selectionEnd } = event.currentTarget;
+    bodyCaret.current = { start: selectionStart, end: selectionEnd };
+  }
+  function insertIntoBody(reference: string, atCaret?: boolean) {
+    setDraft(current => {
+      if (!current) return current;
+      const next = insertReferenceAt(current.body, reference, atCaret ? bodyCaret.current : null);
+      // The next insert continues after this one instead of jumping back.
+      if (atCaret && bodyCaret.current) bodyCaret.current = { start: next.end, end: next.end };
+      return next.body === current.body ? current : { ...current, body: next.body };
+    });
+  }
+  /** Select one reference in the body and scroll it to the middle of the field. */
+  function locateInBody(id: string) {
+    const node = bodyRef.current;
+    const range = node && findReference(node.value, id);
+    if (!node || !range) return;
+    const full = node.value;
+    node.value = full.slice(0, range.end);
+    const offset = node.scrollHeight;
+    node.value = full;
+    node.scrollTop = Math.max(0, offset - node.clientHeight / 2);
+    node.focus({ preventScroll: true });
+    node.setSelectionRange(range.start, range.end);
+    bodyCaret.current = { ...range };
+    reveal(node);
+  }
   async function create() {
     if (busy || !await canDiscard()) return;
     const next: PromptDraft = { id: null, title: '', body: '', scope: scopeFilter !== '*' && !scopeFilter.startsWith('unresolved:') ? parseScope(scopeFilter) : { kind: 'global' }, tags: [], expectedVersion: null };
@@ -289,9 +328,9 @@ export function PromptLibrary({ context, active, createSignal, discardSignal, sp
           <label>{t('prompts.tags')}<input aria-label={t('library.page.addTagAria')} value={tagText} placeholder={t('prompts.tagHint')} onChange={event => setTagText(event.target.value)} /></label>
         </div>
         {draft.scope.kind === 'unresolved' && <p className={styles.warning}>{t('prompts.oldScope')}</p>}
-        <label><span className={styles.labelRow}>{t('prompts.body')}<span className={styles.hint}>{t('prompts.chars', { count: draft.body.length })}</span></span><textarea aria-label={t('library.page.bodyEditorLabel')} rows={14} value={draft.body} onChange={event => setDraft({ ...draft, body: event.target.value })} /></label>
+        <label><span className={styles.labelRow}>{t('prompts.body')}<span className={styles.hint}>{t('prompts.chars', { count: draft.body.length })}</span></span><textarea ref={bindBody} aria-label={t('library.page.bodyEditorLabel')} rows={14} value={draft.body} onSelect={rememberCaret} onChange={event => { rememberCaret(event); setDraft({ ...draft, body: event.target.value }); }} /></label>
         {/* Secret values never enter the draft: only the canonical reference text does. */}
-        <PromptSecrets local={!context.targetId || context.targetId === 'local'} body={draft.body} disabled={busy} onInsert={reference => setDraft(current => current ? { ...current, body: insertReference(current.body, reference) } : current)} onRemoveReference={id => setDraft(current => current ? { ...current, body: removeReference(current.body, id) } : current)} />
+        <PromptSecrets local={!context.targetId || context.targetId === 'local'} body={draft.body} disabled={busy} onInsert={insertIntoBody} onRemoveReference={id => { bodyCaret.current = null; setDraft(current => current ? { ...current, body: removeReference(current.body, id) } : current); }} onLocateReference={locateInBody} />
         <div className="dialog-footer">
           <Badge tone={dirty ? 'warning' : 'neutral'} dot={dirty}>{dirty ? t('prompts.unsaved') : t('prompts.saved')}</Badge>
           <span className="dialog-footer-gap" />

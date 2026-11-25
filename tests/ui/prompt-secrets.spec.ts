@@ -537,3 +537,42 @@ test('binding a synchronized reference says it saves locally and leaves the body
   await expect(panel.locator('[data-secret-notice]')).toContainText('已在本机配置');
   await expect(bodyOf(dialog)).toHaveValue(body);
 });
+
+test('a reference lands at the body caret and the in-body tag selects it again', async ({ page }) => {
+  await install(page);
+  await library(page);
+  const dialog = await newPrompt(page);
+  const panel = secretPanel(dialog);
+  const body = bodyOf(dialog);
+  await body.fill('login with  then deploy');
+  // The caret sits between the two spaces; clicking into the panel keeps it.
+  await body.press('Home');
+  for (let i = 0; i < 11; i++) await body.press('ArrowRight');
+  const row = await createSecret(dialog, 'deploy-token', CANARY);
+  const reference = referenceOf((await row.getAttribute('data-secret-id'))!);
+  await expect(body).toHaveValue(`login with ${reference} then deploy`);
+  // A second reference continues after the first instead of jumping to the end.
+  const second = await createSecret(dialog, 'deploy-user', CANARY);
+  const secondReference = referenceOf((await second.getAttribute('data-secret-id'))!);
+  await expect(body).toHaveValue(`login with ${reference} ${secondReference} then deploy`);
+  await expect(panel.locator('[data-secret-notice]')).toBeVisible();
+
+  await row.locator('[data-secret-in-body]').click();
+  await expect(body).toBeFocused();
+  const selected = await body.evaluate((node: HTMLTextAreaElement) => node.value.slice(node.selectionStart, node.selectionEnd));
+  expect(selected).toBe(reference);
+});
+
+test('a reference without a caret still appends and an unknown one can be found in the body', async ({ page }) => {
+  await install(page);
+  await library(page);
+  const dialog = await newPrompt(page);
+  const panel = secretPanel(dialog);
+  const stale = '11111111-2222-4333-8444-555555555555';
+  await bodyOf(dialog).fill(`${'line\n'.repeat(40)}use ${referenceOf(stale)} here`);
+  await bodyOf(dialog).evaluate((node: HTMLTextAreaElement) => { node.scrollTop = 0; });
+  await panel.locator(`[data-secret-reference-locate="${stale}"]`).click();
+  const state = await bodyOf(dialog).evaluate((node: HTMLTextAreaElement) => ({ text: node.value.slice(node.selectionStart, node.selectionEnd), top: node.scrollTop }));
+  expect(state.text).toBe(referenceOf(stale));
+  expect(state.top).toBeGreaterThan(0);
+});

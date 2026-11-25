@@ -487,6 +487,7 @@ export default {
     removeReference: '从正文移除「{{name}}」的引用',
     referenceRemoved: '已从正文移除这条引用。',
     locate: '定位到「{{name}}」',
+    showInBody: '在正文中选中「{{name}}」的引用',
     copyReference: '复制引用',
     referenceCopied: '已复制「{{name}}」的引用文本，原值不会被复制。',
     copyFailed: '复制失败，请从正文中手动选择引用文本。',

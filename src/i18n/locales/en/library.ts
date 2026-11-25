@@ -487,6 +487,7 @@ export default {
     removeReference: 'Remove the reference to “{{name}}” from the body',
     referenceRemoved: 'The reference was removed from the body.',
     locate: 'Show “{{name}}”',
+    showInBody: 'Select the reference to “{{name}}” in the body',
     copyReference: 'Copy reference',
     referenceCopied: 'Copied the reference to “{{name}}”. The value is never copied.',
     copyFailed: 'Copy failed. Select the reference text in the body instead.',
