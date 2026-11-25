@@ -40,6 +40,7 @@ async function install(page: Page, remote = false) {
           allCalls.push({ command, text: JSON.stringify(args, (_key, value) => typeof value === 'function' ? undefined : value) });
           if (command.includes('secret')) secretCalls.push(command);
           if (command === 'secret_access_options') return {
+            referenceAliases: Object.fromEntries(secrets.filter(s => references(args.references ?? '').includes(s.id)).map(s => [s.id, s.alias])),
             cli: { executable: 'C:\\Cliora\\cliora.exe', entry: '--cliora-internal-secret-cli-v1' },
             installations: [{ id: 'local-fixture', kind: 'cli', targetId: null, revoked: false },
               { id: 'ai-fixture', kind: 'cli', directReadOnly: true, targetId: 'cliora-direct', revoked: false }],
@@ -318,6 +319,30 @@ test('a new session keeps the reference text and creates no secret', async ({ pa
   await picker.getByRole('button', { name: '插入草稿', exact: true }).click();
   await expect(session.getByRole('textbox', { name: '初始提示词（可选）' })).toHaveValue(reference);
   expect(await page.evaluate(() => (window as unknown as { __secretCalls: string[] }).__secretCalls.length)).toBe(before);
+});
+
+test('launching an inserted-only credential names it without enabling a read', async ({ page }) => {
+  await install(page);
+  const list = await library(page);
+  const editor = await newPrompt(page);
+  await titleOf(editor).fill('仅引用的任务');
+  const row = await createSecret(editor, 'LOCAL_ONLY_KEY', CANARY);
+  const ref = referenceOf((await row.getAttribute('data-secret-id'))!);
+  await bodyOf(editor).fill('使用 ' + ref);
+  await editor.getByRole('button', { name: '保存', exact: true }).click();
+  await list.getByRole('textbox', { name: '搜索资料' }).fill('仅引用的任务');
+  await list.locator('article').filter({ hasText: '仅引用的任务' }).getByRole('button', { name: '启动会话' }).click();
+  const launch = page.getByRole('dialog', { name: '用这条提示词启动' });
+  await expect(launch.getByLabel('启动提示词')).toHaveValue('使用 ' + ref);
+  await launch.locator('[data-dialog-save]').click();
+  const sent = () => page.evaluate(() => {
+    const calls = (window as unknown as { __allCalls: Array<{command: string; text: string}> }).__allCalls;
+    const launch = calls.find(call => call.command === 'launch_cli');
+    return launch ? JSON.parse(launch.text).request.initialPrompt : '';
+  });
+  await expect.poll(sent).toContain('使用 LOCAL_ONLY_KEY');
+  expect(await sent()).toContain('尚无本机 CLI 操作授权');
+  expect(await sent()).not.toMatch(/cliora-secret:|--installation|canary-ui/);
 });
 
 test('a local AI can request a selected password for the task without configuring a script', async ({ page }) => {

@@ -72,7 +72,8 @@ const promptCopy = {
     missing: '传递测试只验证脚本收到凭据。若需自己登录或调用服务，请用户为所需密码点击「让 AI 使用」，或提供脱敏结果。',
     direct: '登录时只保留所需的 --secret，在同一次服务调用脚本中捕获下方命令的输出。成功后解析 credentialsJson（JSON 对象，键为凭据名），在内存中取值登录，只回复业务结果。勿打印或写入文件；读取失败即停止。',
     inOrder: '各 --secret 按凭据在正文中首次出现的顺序排列。',
-    unbound: '正文里仍为占位符的引用尚无本机 CLI 操作授权。需要时请用户在凭据列表中选择「让 AI 使用」。',
+    unbound: '尚无本机 CLI 操作授权',
+    unknown: '未识别的引用尚未在本机配置。需要它时，请用户先在本机配置。',
     sameAction: '同一操作可用于以下密码，仅替换上条命令的 --secret',
     read: '以下脚本授权的引用：仅当用户明确要求查看原值，才用 read_secret（secretIds）或下方的 CLI read。仅保留被点名的 --secret；拒绝或无法确认即停止。',
   },
@@ -81,7 +82,8 @@ const promptCopy = {
     missing: 'A delivery test only checks that a script receives the credential. To sign in or call a service directly, ask the user to choose “Let AI use” for the credential, or request sanitized results.',
     direct: 'Keep only the --secret arguments needed to sign in. Capture the command output in the same script that calls the service. On success parse credentialsJson as a JSON object keyed by credential name and sign in using the values in memory. Return only the service result. Never print or save credentials to a file. Stop on failure.',
     inOrder: 'The --secret arguments follow the order of first appearance in the task.',
-    unbound: 'No local CLI action granted for unchanged placeholders. If needed, ask the user to select “Let AI use” for those credentials.',
+    unbound: 'No local CLI action granted for',
+    unknown: 'Unrecognized credential references are not configured on this device. Ask the user to configure them locally if needed.',
     sameAction: 'Same action for these secrets. Replace only --secret in the command above',
     read: 'For the script-bound references below, use read_secret (secretIds) or CLI read only if the user explicitly asks to see the values. Keep only the requested --secret arguments. Stop if approval is denied or unavailable.',
   },
@@ -91,14 +93,39 @@ function compactId(id: string) {
   return id.replace(/^urn:uuid:/, '').replaceAll('-', '').toLowerCase();
 }
 
+// Inline code, fenced examples and existing CLI arguments may contain valid
+// literal references. Never turn those arguments into free-form display names.
+const inlineCodeOrReference = new RegExp("(`+)[^\\r\\n]*?\\1|(?:--secret[ \\t]+['\"]?)?" + secretTokenPattern.source, 'g');
+
+function displayPromptReferences(body: string, aliases: Map<string, string>): string {
+  let fence = '';
+  let continuation = false;
+  return body.split('\n').map(line => {
+    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence) {
+      if (marker && marker[1].startsWith(fence) && !marker[2].trim()) fence = '';
+      return line;
+    }
+    if (marker) { fence = marker[1]; return line; }
+    const continued = continuation;
+    continuation = /\\[ \t]*\r?$/.test(line) || (continued || line.includes('--')) && /`[ \t]*\r?$/.test(line);
+    if (continued || /^(?: {4}|\t)/.test(line)) return line;
+    return line.replace(inlineCodeOrReference, match => {
+      if (!match.startsWith('{{cliora-secret:')) return match;
+      const id = compactId(match.slice('{{cliora-secret:'.length, -2));
+      return aliases.get(id) ?? match;
+    });
+  }).join('\n');
+}
+
 /** Only the outgoing local message receives commands. No credential is fetched here. */
 export async function prepareLocalSecretPrompt(
-  body: string, load: () => Promise<Pick<ScriptAccessOptions, 'cli' | 'installations' | 'grants' | 'directReads'>>,
+  body: string, load: (references: string) => Promise<Pick<ScriptAccessOptions, 'referenceAliases' | 'cli' | 'installations' | 'grants' | 'directReads'>>,
   english: boolean,
 ): Promise<string> {
   const tokens = promptSecretTokens(body);
   if (!tokens.length) return body;
-  const { cli, installations, grants, directReads = [] } = await load();
+  const { cli, installations, grants, directReads = [], referenceAliases = {} } = await load(tokens.join(' '));
   const copy = promptCopy[english ? 'en' : 'zh'];
   const live = new Set(installations.filter(item => item.kind === 'cli' && !item.targetId && !item.revoked).map(item => item.id));
   // Index just the requested references, retaining their order in the prompt.
@@ -114,7 +141,7 @@ export async function prepareLocalSecretPrompt(
   const directInstallations = new Set(installations.filter(item => item.kind === 'cli' && item.directReadOnly && !item.revoked).map(item => item.id));
   const available = new Map(directReads.filter(item => directInstallations.has(item.installationId)).map(item => [compactId(item.secretId), item]));
   const byInstallation = new Map<string, typeof directReads>();
-  const aliases = new Map<string, string>();
+  const aliases = new Map(Object.entries(referenceAliases).map(([id, alias]) => [compactId(id), alias]));
   for (const [id, scriptGrants] of requested) {
     const item = available.get(id);
     if (!item) {
@@ -127,11 +154,7 @@ export async function prepareLocalSecretPrompt(
     else byInstallation.set(item.installationId, [item]);
     if (!scriptGrants.length) requested.delete(id);
   }
-  const outgoingBody = body.replace(secretTokenPattern, token => {
-    const id = compactId(token.slice('{{cliora-secret:'.length, -2));
-    return aliases.get(id) ?? token;
-  });
-  const lines = [outgoingBody, ''];
+  const lines = [displayPromptReferences(body, aliases), ''];
   if (byInstallation.size) {
     lines.push(copy.direct);
     for (const [installationId, items] of byInstallation) {
@@ -144,11 +167,16 @@ export async function prepareLocalSecretPrompt(
     }
     if (!requested.size) return lines.join('\n');
   }
-  let hasUnbound = false;
+  const unbound: string[] = [];
+  let unknown = false;
   const actions = new Map<string, typeof grants>();
   const readOptions = new Map<string, Set<string>>();
   for (const [id, scriptGrants] of requested) {
-    if (!scriptGrants.length) hasUnbound = true;
+    if (!scriptGrants.length) {
+      const alias = aliases.get(id);
+      if (alias) unbound.push(alias);
+      else unknown = true;
+    }
     for (const grant of scriptGrants) {
       if (!available.has(id)) {
         const ids = readOptions.get(grant.installationId) ?? new Set<string>();
@@ -173,7 +201,8 @@ export async function prepareLocalSecretPrompt(
     }
     if (others.length) lines.push(copy.sameAction, ...others.map(grant => grant.alias + ' · ' + grant.secretId));
   }
-  if (hasUnbound) lines.push(copy.unbound);
+  if (unbound.length) lines.push(copy.unbound + ' · ' + unbound.map(name => JSON.stringify(name)).join(', '));
+  if (unknown) lines.push(copy.unknown);
   if (readOptions.size) lines.push(copy.read);
   // Prefer the installation covering the most references, so an overlapping
   // grant does not split a request that one installation can handle together.

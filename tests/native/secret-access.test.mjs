@@ -47,6 +47,7 @@ test('a diagnostic-only grant keeps recovery and explicit read consent distinct 
   const body = [token(349), token(21), token(24), token(349)].join(' ');
   const metadata = {
     cli: { executable: '/opt/cliora', entry: '--cliora-internal-secret-cli-v1' },
+    referenceAliases: { [ids[21]]: 'inserted only' },
     installations: [{ id: 'local', kind: 'cli', revoked: false }],
     grants: ids.filter(id => id !== ids[21] && id !== ids[24]).map(id => ({
       installationId: 'local', secretId: id, alias: id === ids[349] ? 'DEMO_SERVICE_TOKEN' : 'unrelated',
@@ -61,6 +62,9 @@ test('a diagnostic-only grant keeps recovery and explicit read consent distinct 
     assert.match(appended, /DEMO_SERVICE_TOKEN · Test secret delivery/);
     const unbound = appended.split('\n').filter(line => line.includes(english ? 'No local CLI action' : '尚无本机 CLI 操作授权'));
     assert.equal(unbound.length, 1);
+    assert.ok(unbound[0].includes('inserted only'));
+    assert.ok(outgoing.startsWith('DEMO_SERVICE_TOKEN inserted only ' + token(24)));
+    assert.match(appended, english ? /not configured on this device/ : /尚未在本机配置/);
     assert.ok(!appended.includes(ids[21]) && !appended.includes(ids[24]));
     assert.match(appended, english ? /delivery test only checks/ : /传递测试只验证/);
     assert.match(appended, english ? /sanitized results/ : /脱敏结果/);

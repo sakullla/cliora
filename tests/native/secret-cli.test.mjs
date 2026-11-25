@@ -109,9 +109,40 @@ test('local prompts carry credential names, scoped actions and a distinct approv
   assert.ok(commands.every(line => !line.endsWith(' list | Out-String -Stream')));
   assert.doesNotMatch(outgoing, /revoked|other-target|99999999/);
   const unavailable = await prepareLocalSecretPrompt(body, async () => ({ ...metadata, grants: [] }), true);
-  assert.match(unavailable, /No local CLI action granted/);
+  assert.match(unavailable, /not configured on this device/);
   assert.doesNotMatch(unavailable, /--installation/);
   assert.equal(await prepareLocalSecretPrompt('plain text', () => assert.fail('unexpected metadata lookup'), false), 'plain text');
+});
+
+test('legacy helper arguments and code samples retain references while adjacent prose shows names', { skip: process.platform === 'win32' }, async () => {
+  const id = input.secrets[0].id;
+  const reference = '{{cliora-secret:' + id + '}}';
+  const alias = 'literal $(exit 37)';
+  const command = "fixture_cli read --secret '" + reference + "'";
+  const sample = '~~~sh\nprintf %s ' + reference + '\n~~~';
+  const task = ['Use ' + reference, command, sample, 'Run `' + command + '` for ' + reference].join('\n');
+  const out = await prepareLocalSecretPrompt(task, async selected => {
+    assert.equal(selected, reference);
+    return {
+      cli: { executable: 'fixture_cli', entry: input.entry }, grants: [], installations: [],
+      directReads: [], referenceAliases: { [id]: alias },
+    };
+  }, true);
+  const [prose, legacy] = out.split('\n');
+  assert.equal(prose, 'Use ' + alias);
+  assert.equal(legacy, command);
+  assert.ok(out.includes(sample) && out.includes('Run `' + command + '` for ' + alias));
+  assert.doesNotMatch(out, /--installation|--format values|use_secret/);
+  const stub = 'fixture_cli() { test "$1" = read && test "$2" = --secret && test "$3" = ' + quoteArgument(reference) + '; }';
+  assert.equal(spawnSync('sh', ['-c', stub + '\n' + legacy]).status, 0);
+  const granted = await prepareLocalSecretPrompt(task, async () => ({
+    cli: { executable: 'fixture_cli', entry: input.entry }, grants: [],
+    installations: [{ id: 'local', kind: 'cli', directReadOnly: true }],
+    directReads: [{ installationId: 'local', secretId: id, alias }],
+  }), true);
+  assert.equal(granted.split('\n')[1], command);
+  assert.match(granted, /--format values/);
+  assert.doesNotMatch(granted, /use_secret|--executor/);
 });
 
 test('the local read example can feed a service in memory without printing a credential', { skip: process.platform === 'win32' }, async () => {
