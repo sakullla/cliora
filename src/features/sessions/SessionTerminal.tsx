@@ -465,12 +465,6 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       ownsInput: () => !disposed && activeRef.current && runningRef.current && !!term.textarea && document.activeElement === term.textarea,
       host: node,
     });
-    // Returning to the window or tab can leave the candidate window where the OS last
-    // put it; re-place the anchor once the page is visible and focused again.
-    const onWindowFocus = () => { if (activeRef.current) ime.refresh(); };
-    const onVisibility = () => { if (document.visibilityState === 'visible' && activeRef.current) ime.refresh(); };
-    window.addEventListener('focus', onWindowFocus);
-    document.addEventListener('visibilitychange', onVisibility);
     imeRef.current = ime;
     const cursorSub = term.onCursorMove(() => ime.schedule());
     let acceptLive = false;
@@ -779,7 +773,7 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
     const isAwayFromBottom = () => {
       const buffer = term.buffer.active;
       return buffer.type === 'normal'
-        && buffer.baseY - buffer.viewportY > 1;
+        && buffer.viewportY < buffer.baseY;
     };
     const trackWheelIntent = (event: WheelEvent) => {
       if (!event.deltaY || term.buffer.active.type !== 'normal') return;
@@ -1090,14 +1084,34 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       reportScroll();
       scheduleGrid(term.cols, term.rows);
     };
-    fitNowRef.current = fitNow;
+    const refreshVisibleGrid = () => {
+      if (disposed || !replayReady || !activeRef.current || !layoutAvailable()) return;
+      fitNow();
+      // xterm 6 caches its wheel range in CSS pixels. A renderer or display
+      // change can change cell metrics without resizing the character grid.
+      // Rebuild the range and align it to the current buffer row before a wheel
+      // delta is interpreted at the new scale.
+      const viewport = (term as unknown as {
+        _core?: { _viewport?: { _sync: () => void; scrollToLine: (row: number, immediate: boolean) => void } };
+      })._core?._viewport;
+      const row = term.buffer.active.viewportY;
+      viewport?._sync();
+      viewport?.scrollToLine(row, true);
+      term.refresh(0, term.rows - 1);
+      ime.refresh();
+    };
+    fitNowRef.current = refreshVisibleGrid;
     let resizeFrame = 0;
-    const observer = new ResizeObserver(() => {
-      cancelAnimationFrame(resizeFrame);
-      // A same-grid size change (or a return from zero height) still moves or clamps the anchor.
-      resizeFrame = requestAnimationFrame(() => { fitNow(); ime.schedule(); });
-    });
+    const scheduleRefresh = () => {
+      if (!activeRef.current || document.visibilityState === 'hidden' || resizeFrame) return;
+      resizeFrame = requestAnimationFrame(() => { resizeFrame = 0; refreshVisibleGrid(); });
+    };
+    const observer = new ResizeObserver(scheduleRefresh);
     observer.observe(node);
+    const screen = term.element?.querySelector('.xterm-screen');
+    if (screen) observer.observe(screen);
+    window.addEventListener('focus', scheduleRefresh);
+    document.addEventListener('visibilitychange', scheduleRefresh);
     void native.replayWorkbenchSession(sessionId).then(async (payload: ReplayPayload) => {
       // The canvas has a minimum height even while the containing workbench
       // has no allocated space. Wait for that layout before interpreting legacy
@@ -1212,8 +1226,8 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       osc52.dispose();
       osc7.dispose();
       osc1337.dispose();
-      window.removeEventListener('focus', onWindowFocus);
-      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', scheduleRefresh);
+      document.removeEventListener('visibilitychange', scheduleRefresh);
       observer.disconnect();
       links.dispose();
       linksRef.current = null;
@@ -1311,8 +1325,6 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       // Use the same stable-grid guard as ResizeObserver. Resetting its lock
       // on every reveal reintroduced one-row oscillation and duplicate TUI lines.
       fitNowRef.current?.();
-      // A terminal that was hidden kept its IME anchor from before; place it on the input cell now.
-      imeRef.current?.refresh();
       // Keyboard navigation in the session rail deliberately keeps focus on
       // the selected tab while React swaps the active terminal. Do not steal
       // it during that render; direct terminal activation still focuses here.

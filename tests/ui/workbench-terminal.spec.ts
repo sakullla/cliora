@@ -1285,6 +1285,36 @@ test('the mouse wheel scrolls the native viewport when the CLI does not track th
   expect(await writes(page)).toEqual([]);
 });
 
+test('after a session switch a one-row wheel step survives the next TUI redraw', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await openWorkbench(page);
+  const pane = page.locator('[data-pane-session="s1"]');
+  const viewport = pane.locator('.xterm-scrollable-element');
+  const output = (text: string) => page.evaluate(value => {
+    (window as unknown as { __output: (s: string) => void }).__output(value);
+  }, text);
+  await output('history\r\n'.repeat(160));
+  await expect.poll(async () => (await readScroll(viewport)).max).toBeGreaterThan(80);
+  await page.locator('[role="tab"][data-session-id="s2"]').click();
+  await page.locator('[role="tab"][data-session-id="s1"]').click();
+  await expect(viewport).toBeVisible();
+  const scroll = pane.getByRole('scrollbar');
+  // A small trackpad gesture in scrollback mode moves exactly one row.
+  const screen = pane.locator('.xterm-screen');
+  const top = await scroll.getAttribute('aria-valuenow');
+  await screen.evaluate(node => {
+    const rows = node.querySelectorAll('.xterm-rows > div').length;
+    node.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, shiftKey: true,
+      deltaY: -Math.ceil(node.clientHeight / rows / 2) }));
+  });
+  await expect.poll(async () => (await readScroll(viewport)).remaining).toBe(1);
+  await output('\rstatus update\x1b[5n');
+  await expect.poll(async () => (await writes(page)).join('')).toContain('\x1b[0n');
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await expect.poll(async () => (await readScroll(viewport)).remaining).toBe(1);
+  expect(await scroll.getAttribute('aria-valuenow')).not.toBe(top);
+});
+
 test('tmux-style SGR wheel reports stay with the hovered alternate-screen session', async ({ page }) => {
   await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
   await openWorkbench(page);
@@ -2307,6 +2337,39 @@ test.describe('session switching with the production renderer', () => {
     expect(after.rows).toBeLessThan(before.rows);
     await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '首页', exact: true }).click();
     await expect(page.locator('.xterm-screen canvas:not(.xterm-link-layer)')).toHaveCount(0);
+  });
+
+  test('moving between display scales keeps the wheel anchored to the same history row', async ({ page }) => {
+    await page.addInitScript(() => Object.defineProperty(navigator, 'webdriver', { get: () => false }));
+    await installWorkbenchMock(page);
+    await page.goto('/');
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+    const pane = page.locator('[data-pane-session="s1"]');
+    const viewport = pane.locator('.xterm-scrollable-element');
+    await expect(pane.locator('.xterm-screen canvas:not(.xterm-link-layer)')).toBeVisible();
+    await page.evaluate(() => (window as unknown as { __output: (s: string) => void }).__output('scrollback\r\n'.repeat(1600) + '\x1b[?1000h'));
+    await expect.poll(async () => (await readScroll(viewport)).max).toBeGreaterThan(1500);
+    const scrollbar = pane.getByRole('scrollbar');
+    const box = (await scrollbar.boundingBox())!;
+    const clickY = Math.floor(box.y + box.height / 2);
+    const start = Math.round((clickY - box.y) / box.height * (await readScroll(viewport)).max);
+    await page.mouse.click(box.x + box.width / 2, clickY);
+    await expect.poll(async () => (await readScroll(viewport)).top).toBe(start);
+    const size = page.viewportSize()!;
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Emulation.setDeviceMetricsOverride', { ...size, deviceScaleFactor: 1.5, mobile: false });
+    await page.evaluate(() => window.dispatchEvent(new Event('resize')));
+    await expect.poll(() => page.evaluate(() => window.devicePixelRatio)).toBe(1.5);
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    // Shift+wheel reads local history even when the TUI owns ordinary wheel reports.
+    await viewport.evaluate(node => {
+      const grids = (window as unknown as { __resizes: { sessionId: string; rows: number }[] }).__resizes;
+      const rows = grids.filter(grid => grid.sessionId === 's1').at(-1)!.rows;
+      node.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, shiftKey: true,
+        deltaY: -Math.ceil(node.clientHeight / rows / 2) }));
+    });
+    await expect.poll(async () => (await readScroll(viewport)).top).toBe(start - 1);
+    await cdp.detach();
   });
 
   test('hiding the document releases WebGL and resumes the same terminal without losing replies', async ({ page }) => {
