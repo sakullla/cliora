@@ -4766,6 +4766,8 @@ test('the task menu opens from the keyboard without the running terminal taking 
     await expect(taskMenu()).toBeVisible();
   };
   await row.locator('[data-session-id="s1"]').click();
+  // 选中会话后终端在激活帧里取得焦点；等它真正落定再把焦点移到按钮上，否则按键会被终端吃掉。
+  await expect(stage.locator('.xterm-helper-textarea')).toBeFocused();
 
   // Enter 和 Space 都是按钮的标准激活键。终端在选中会话后的激活帧里恢复焦点，那个帧
   // 可能迟到最后一次渲染之后才跑，所以焦点必须等到它过去仍在菜单项上。
