@@ -789,7 +789,7 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
     // blank gap and the CLI never receives the scroll. Shift+wheel still reads the
     // normal-buffer scrollback. An alternate screen without wheel reporting must not
     // turn the wheel into arrow keys.
-    term.attachCustomWheelEventHandler((event) => {
+    const handleWheel = (event: WheelEvent, inMargin = false) => {
       if (event.deltaY === 0) return true;
       const alternate = term.buffer.active.type === 'alternate';
       const mode = term.modes.mouseTrackingMode;
@@ -810,11 +810,26 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       }
       if (!alternate) {
         userScrollRef.current = true;
-        return true;
+        if (!inMargin) return true;
+        wheelScrollViewport(event);
+        return false;
       }
       event.preventDefault();
       return false;
-    });
+    };
+    term.attachCustomWheelEventHandler(handleWheel);
+    // A split or a display change can move the painted grid away from a
+    // stationary pointer. The surrounding padding and our scrollbar still
+    // belong to this pane, while overlaid controls keep their own scrolling.
+    const paneBody = node.parentElement;
+    const onMarginWheel = (event: WheelEvent) => {
+      const target = event.target;
+      if (!activeRef.current || suspendInputRef.current || !(target instanceof Element)) return;
+      if (target === paneBody || target === node || target.closest('[role="scrollbar"]')?.parentElement === paneBody) {
+        handleWheel(event, true);
+      }
+    };
+    paneBody?.addEventListener('wheel', onMarginWheel, { passive: false });
     let scrollSnapshot = '';
     const reportScroll = () => {
       if (disposed) return;
@@ -1214,6 +1229,7 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       node.removeEventListener('paste', onPaste, true);
       node.removeEventListener('pointerleave', cancelAppWheel);
       node.removeEventListener('wheel', trackWheelIntent, true);
+      paneBody?.removeEventListener('wheel', onMarginWheel);
       document.removeEventListener('scroll', resetAncestorScroll, true);
       bellSub.dispose();
       titleSub.dispose();

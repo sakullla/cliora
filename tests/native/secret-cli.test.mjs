@@ -86,7 +86,7 @@ test('the English text keeps the same commands and identifiers', () => {
   assert.doesNotMatch(text, /别名/);
 });
 
-test('local prompts carry literal references, scoped actions and a distinct approval-only read command', async () => {
+test('local prompts carry credential names, scoped actions and a distinct approval-only read command', async () => {
   const { id, alias } = input.secrets[0];
   const token = '{{cliora-secret:' + id + '}}';
   const body = '传递 ' + token + '\n需要时运行已授权的操作 ' + token;
@@ -98,9 +98,9 @@ test('local prompts carry literal references, scoped actions and a distinct appr
     grants: [grant, { ...grant, installationId: 'other-target' }, { ...grant, installationId: 'revoked' }, { ...grant, secretId: input.secrets[1].id }],
   };
   const outgoing = await prepareLocalSecretPrompt(body, async () => metadata, false);
-  assert.ok(outgoing.startsWith(body + '\n'));
+  assert.ok(outgoing.startsWith(body.replaceAll(token, alias) + '\n'));
   assert.ok(outgoing.includes(alias + ' · ' + grant.executorLabel));
-  assert.ok(!outgoing.slice(body.length).includes(token));
+  assert.ok(!outgoing.includes(token));
   const commands = outgoing.split('\n').filter(line => line.includes('--installation'));
   assert.equal(commands.length, 2);
   assert.ok(commands.every(line => line.startsWith("& 'C:\\Program Files\\O''Brien\\cliora.exe' ")));
@@ -112,6 +112,29 @@ test('local prompts carry literal references, scoped actions and a distinct appr
   assert.match(unavailable, /No local CLI action granted/);
   assert.doesNotMatch(unavailable, /--installation/);
   assert.equal(await prepareLocalSecretPrompt('plain text', () => assert.fail('unexpected metadata lookup'), false), 'plain text');
+});
+
+test('the local read example can feed a service in memory without printing a credential', { skip: process.platform === 'win32' }, async () => {
+  const secret = input.secrets[0];
+  const alias = "LOGIN's key";
+  const canary = 'fixture-quote"\nfixture-next-line';
+  const text = await prepareLocalSecretPrompt('Sign in {{cliora-secret:' + secret.id + '}}', async () => ({
+    cli: { executable: 'fixture_read', entry: input.entry }, grants: [],
+    installations: [{ id: 'local', kind: 'cli', directReadOnly: true }],
+    directReads: [{ secretId: secret.id, installationId: 'local', alias }],
+  }), true);
+  const assignment = text.split('\n').at(-1);
+  const check = 'const values = JSON.parse(require("fs").readFileSync(0)); if (values[' + JSON.stringify(alias) + '] !== '
+    + JSON.stringify(canary) + ') process.exit(2); process.stdout.write("service-ok")';
+  const consume = 'printf %s "$credentialsJson" | ' + quoteArgument(process.execPath) + ' -e ' + quoteArgument(check);
+  const approved = 'fixture_read() { printf %s ' + quoteArgument(JSON.stringify({ [alias]: canary })) + '; }';
+  for (const [helper, status, output] of [[approved, 0, 'service-ok'], ['fixture_read() { return 1; }', 1, '']]) {
+    const script = [helper, assignment + ' || exit $?', consume].join('\n');
+    const result = spawnSync('sh', ['-c', script], { encoding: 'utf8' });
+    assert.equal(result.status, status);
+    assert.equal(result.stdout, output);
+    assert.equal(result.stderr, '');
+  }
 });
 
 test('Windows PowerShell waits for a delayed GUI helper response and preserves its exit code', { skip: process.platform !== 'win32' }, () => {
@@ -160,7 +183,7 @@ test('one synced prompt generates only destination commands on Windows, macOS an
       installations: [{ id: installationId, kind: 'cli', targetId: null, revoked: false }],
       grants: [{ secretId: secret.id, alias: secret.alias, installationId, executorId: platform, executorLabel: '部署' }],
     }), false);
-    assert.ok(out.startsWith(body));
+    assert.ok(out.startsWith('部署 ' + secret.alias));
     assert.ok(out.includes(executable));
     assert.ok(out.includes('--installation ' + installationId));
     assert.ok(out.includes('--executor ' + platform));

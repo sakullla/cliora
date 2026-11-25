@@ -1344,6 +1344,25 @@ test('tmux-style SGR wheel reports stay with the hovered alternate-screen sessio
   }
 });
 
+test('the terminal margin continues to deliver the wheel after a pane change', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await openWorkbench(page);
+  await page.getByRole('button', { name: '分屏', exact: true }).click();
+  const pane = page.locator('[data-pane-session="s2"]');
+  await expect(pane).toContainText('claude-ready');
+  await page.evaluate(() => (window as unknown as { __output: (data: string, id: string) => void })
+    .__output('\x1b[?1049h\x1b[?1000h\x1b[?1006hmargin-ready', 's2'));
+  await expect(pane).toContainText('margin-ready');
+  const viewport = pane.locator('.xterm-screen');
+  await viewport.hover();
+  const box = (await viewport.boundingBox())!;
+  await page.mouse.move(box.x - 3, box.y + 30);
+  await resetWrites(page);
+  await page.mouse.wheel(0, -120);
+  await expect.poll(async () => (await writeLog(page)).some(item =>
+    item.sessionId === 's2' && /^\x1b\[<64;1;\d+M$/.test(item.text))).toBe(true);
+});
+
 test('mouse-tracking terminal clicks are forwarded to the CLI', async ({ page }) => {
   await openWorkbench(page);
   await page.evaluate(() => (window as unknown as { __output: (text: string) => void }).__output('\u001b[?1000hclick-target'));
@@ -4609,7 +4628,7 @@ test('quick input prepares a reference using only local authorization metadata',
   await page.evaluate(() => { (window as unknown as { __writeLog: unknown[] }).__writeLog.length = 0; });
   await composer.getByRole('button', { name: '发送', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __writeLog: Array<{ sessionId: string; text: string }> }).__writeLog)).toEqual([
-    { sessionId: 's1', text: expect.stringContaining(`部署前读取 ${reference}\n其余步骤照旧。`) },
+    { sessionId: 's1', text: expect.stringContaining('部署前读取 部署口令\n其余步骤照旧。') },
   ]);
   const outgoing = await page.evaluate(() => (window as unknown as { __writeLog: Array<{ text: string }> }).__writeLog[0].text);
   expect(outgoing).toContain('use --secret 1f1f1f1f-aaaa-4bbb-8ccc-dddddddddddd --executor fixture-action');

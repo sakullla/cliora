@@ -5,7 +5,9 @@
 //! opens the database or the credential store, so a helper without a running
 //! Cliora fails closed instead of reading a value on its own.
 use crate::secrets::ipc::{self, Operation, Response};
+use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 
 pub const CLI_ARGUMENT: &str = "--cliora-internal-secret-cli-v1";
 /// Usage mistakes are separate from broker refusals so a caller can tell them
@@ -20,6 +22,7 @@ const USAGE: &str = "\
   use --secret <uuid或引用> --executor <uuid> 通过已登记的执行入口受控使用秘密
   read --secret <uuid或引用> [--secret ...]    一次确认读取多个原值。工作台 CLI 可允许本次会话
 
+read 可加 --format values：成功时 stdout 为按凭据名索引的 JSON 对象，失败时返回非零状态。
 read 会把原值写入本次 stdout，原值可能进入模型上下文与 CLI 会话记录。";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,6 +31,7 @@ pub struct Invocation {
     pub operation: Operation,
     pub secret_ids: Vec<String>,
     pub executor_id: Option<String>,
+    pub values_only: bool,
 }
 
 /// Validate every requested reference before opening an IPC connection.
@@ -39,12 +43,19 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
     let mut secret_ids = Vec::new();
     let mut executor_id: Option<String> = None;
     let mut operation: Option<String> = None;
+    let mut values_only = false;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "--installation" => installation = Some(take(&mut rest, "--installation")?),
             "--secret" => secret_ids.push(super::reference::argument_id(&take(&mut rest, "--secret")?)?),
             "--executor" => executor_id = Some(take(&mut rest, "--executor")?),
+            "--format" => {
+                if take(&mut rest, "--format")? != "values" {
+                    return Err("--format 仅支持 values".into());
+                }
+                values_only = true;
+            }
             "list" | "use" | "read" if operation.is_none() => operation = Some(arg.clone()),
             other if other.starts_with('-') => return Err(format!("未知参数：{other}")),
             other => return Err(format!("未知命令：{other}")),
@@ -63,6 +74,9 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
     if executor_id.as_deref().is_some_and(|id| uuid::Uuid::parse_str(id).is_err()) {
         return Err("--executor 需要执行入口标识".into());
     }
+    if values_only && operation != Operation::Read {
+        return Err("只有 read 支持 --format values".into());
+    }
     match operation {
         Operation::List if !secret_ids.is_empty() || executor_id.is_some() => {
             return Err("list 不接受 --secret 或 --executor".into())
@@ -74,7 +88,7 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
         Operation::Read if executor_id.is_some() => return Err("read 不接受 --executor".into()),
         _ => {}
     }
-    Ok(Invocation { installation, operation, secret_ids, executor_id })
+    Ok(Invocation { installation, operation, secret_ids, executor_id, values_only })
 }
 
 fn take<'a>(rest: &mut std::slice::Iter<'a, String>, flag: &str) -> Result<String, String> {
@@ -90,10 +104,43 @@ pub fn document(operation: Operation, response: &Response) -> Value {
     }
 }
 
+/// The compact CLI format requests the broker's ID-bearing batch reply, even for
+/// one credential. Validate the full set before publishing the alias-keyed map.
+fn read_values(response: Response, requested: &[String]) -> Result<Value, String> {
+    #[derive(Deserialize)]
+    struct Item { id: String, alias: String, value: String }
+    #[derive(Deserialize)]
+    struct Batch { secrets: Vec<Item> }
+
+    if !response.ok {
+        return Err(format!("{}: {}", response.code, response.message));
+    }
+    let invalid = "代理未返回完整的凭据结果";
+    let batch: Batch = serde_json::from_value(response.data.ok_or(invalid)?).map_err(|_| invalid)?;
+    let mut remaining: HashSet<_> = requested.iter().map(String::as_str).collect();
+    let mut values = serde_json::Map::new();
+    for item in batch.secrets {
+        if !remaining.remove(item.id.as_str()) || item.alias.is_empty() || item.value.is_empty()
+            || values.insert(item.alias, Value::String(item.value)).is_some() {
+            return Err(invalid.into());
+        }
+    }
+    if !remaining.is_empty() || values.is_empty() {
+        return Err(invalid.into());
+    }
+    Ok(Value::Object(values))
+}
+
 fn execute(invocation: &Invocation) -> i32 {
     let session = std::env::var(super::session::ENV).ok();
     let response = dispatch(invocation, session.as_deref())
         .unwrap_or_else(|message| Response::failure(ipc::CODE_OFFLINE, message));
+    if invocation.values_only {
+        return match read_values(response, &invocation.secret_ids) {
+            Ok(values) => { println!("{values}"); 0 }
+            Err(message) => { eprintln!("{message}"); 1 }
+        };
+    }
     let ok = response.ok;
     let document = document(invocation.operation, &response);
     println!("{}", serde_json::to_string(&document).unwrap_or_else(|_| "{\"ok\":false}".into()));
@@ -102,7 +149,7 @@ fn execute(invocation: &Invocation) -> i32 {
 
 fn dispatch(invocation: &Invocation, session: Option<&str>) -> Result<Response, String> {
     if invocation.operation == Operation::Read {
-        return ipc::read(&invocation.installation, &invocation.secret_ids, invocation.secret_ids.len() > 1, session);
+        return ipc::read(&invocation.installation, &invocation.secret_ids, invocation.values_only || invocation.secret_ids.len() > 1, session);
     }
     ipc::call(
         &invocation.installation,

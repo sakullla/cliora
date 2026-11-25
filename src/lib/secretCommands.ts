@@ -55,9 +55,11 @@ function command(input: CliCommandContext, rest: string[]): string {
   return argv.map(quoteArgument).join(' ');
 }
 
+const secretTokenPattern = /\{\{cliora-secret:(?:urn:uuid:)?(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\}\}/g;
+
 export function promptSecretTokens(body: string): string[] {
   const tokens = new Set<string>();
-  for (const match of body.matchAll(/\{\{cliora-secret:(?:urn:uuid:)?(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\}\}/g)) {
+  for (const match of body.matchAll(secretTokenPattern)) {
     tokens.add(match[0]);
     if (tokens.size === 256) break;
   }
@@ -66,18 +68,20 @@ export function promptSecretTokens(body: string): string[] {
 
 const promptCopy = {
   zh: {
-    use: '转述时保留占位符。有秘密 MCP 时用 list_secrets 查找授权，向 use_secret 传入匹配的 secretId 和 executorId；否则运行匹配的本机命令。只返回操作结果。',
+    use: '运行已授权脚本时，有秘密 MCP 就用 list_secrets 查找授权，向 use_secret 传入匹配的 secretId 和 executorId；否则运行匹配的本机命令。只返回操作结果。',
     missing: '传递测试只验证脚本收到凭据。若需自己登录或调用服务，请用户为所需密码点击「让 AI 使用」，或提供脱敏结果。',
-    direct: '任务需要以下凭据时，用本机 read 命令只申请所需项。获准后自行登录或调用指定服务，只回复结果，勿回显或记录密码。拒绝或无法确认即停止。',
-    unbound: '以下引用尚无本机 CLI 操作授权',
+    direct: '登录时只保留所需的 --secret，在同一次服务调用脚本中捕获下方命令的输出。成功后解析 credentialsJson（JSON 对象，键为凭据名），在内存中取值登录，只回复业务结果。勿打印或写入文件；读取失败即停止。',
+    inOrder: '各 --secret 按凭据在正文中首次出现的顺序排列。',
+    unbound: '正文里仍为占位符的引用尚无本机 CLI 操作授权。需要时请用户在凭据列表中选择「让 AI 使用」。',
     sameAction: '同一操作可用于以下密码，仅替换上条命令的 --secret',
     read: '以下脚本授权的引用：仅当用户明确要求查看原值，才用 read_secret（secretIds）或下方的 CLI read。仅保留被点名的 --secret；拒绝或无法确认即停止。',
   },
   en: {
-    use: 'Keep placeholders when quoting. If the secret MCP is available, use list_secrets and pass the matching secretId and executorId to use_secret. Otherwise run the matching local command. Return the action result.',
+    use: 'For a granted script, if the secret MCP is available, use list_secrets and pass the matching secretId and executorId to use_secret. Otherwise run the matching local command. Return the action result.',
     missing: 'A delivery test only checks that a script receives the credential. To sign in or call a service directly, ask the user to choose “Let AI use” for the credential, or request sanitized results.',
-    direct: 'Request only the credentials this task needs with the local read command. After approval, sign in or call the intended service yourself. Return the result without echoing or logging credentials. Stop if approval is denied or unavailable.',
-    unbound: 'No local CLI action granted for',
+    direct: 'Keep only the --secret arguments needed to sign in. Capture the command output in the same script that calls the service. On success parse credentialsJson as a JSON object keyed by credential name and sign in using the values in memory. Return only the service result. Never print or save credentials to a file. Stop on failure.',
+    inOrder: 'The --secret arguments follow the order of first appearance in the task.',
+    unbound: 'No local CLI action granted for unchanged placeholders. If needed, ask the user to select “Let AI use” for those credentials.',
     sameAction: 'Same action for these secrets. Replace only --secret in the command above',
     read: 'For the script-bound references below, use read_secret (secretIds) or CLI read only if the user explicitly asks to see the values. Keep only the requested --secret arguments. Stop if approval is denied or unavailable.',
   },
@@ -98,47 +102,55 @@ export async function prepareLocalSecretPrompt(
   const copy = promptCopy[english ? 'en' : 'zh'];
   const live = new Set(installations.filter(item => item.kind === 'cli' && !item.targetId && !item.revoked).map(item => item.id));
   // Index just the requested references, retaining their order in the prompt.
-  const requested = new Map<string, { spelling: string; grants: typeof grants }>();
+  const requested = new Map<string, typeof grants>();
   for (const token of tokens) {
-    const spelling = token.slice('{{cliora-secret:'.length, -2);
-    const id = compactId(spelling);
-    if (!requested.has(id)) requested.set(id, { spelling, grants: [] });
+    const id = compactId(token.slice('{{cliora-secret:'.length, -2));
+    if (!requested.has(id)) requested.set(id, []);
   }
   for (const grant of grants) {
-    if (live.has(grant.installationId)) requested.get(compactId(grant.secretId))?.grants.push(grant);
+    if (live.has(grant.installationId)) requested.get(compactId(grant.secretId))?.push(grant);
   }
 
-  const lines = [body, ''];
-  const directInstallations = new Set(installations.filter(item => item.directReadOnly && !item.revoked).map(item => item.id));
+  const directInstallations = new Set(installations.filter(item => item.kind === 'cli' && item.directReadOnly && !item.revoked).map(item => item.id));
+  const available = new Map(directReads.filter(item => directInstallations.has(item.installationId)).map(item => [compactId(item.secretId), item]));
   const byInstallation = new Map<string, typeof directReads>();
-  const directIds = new Set<string>();
-  for (const item of directReads) {
-    const id = compactId(item.secretId);
-    const reference = requested.get(id);
-    if (!directInstallations.has(item.installationId) || !reference) continue;
-    directIds.add(id);
-    if (!reference.grants.length) requested.delete(id);
+  const aliases = new Map<string, string>();
+  for (const [id, scriptGrants] of requested) {
+    const item = available.get(id);
+    if (!item) {
+      if (scriptGrants.length) aliases.set(id, scriptGrants[0].alias);
+      continue;
+    }
+    aliases.set(id, item.alias);
     const group = byInstallation.get(item.installationId);
     if (group) group.push(item);
     else byInstallation.set(item.installationId, [item]);
+    if (!scriptGrants.length) requested.delete(id);
   }
+  const outgoingBody = body.replace(secretTokenPattern, token => {
+    const id = compactId(token.slice('{{cliora-secret:'.length, -2));
+    return aliases.get(id) ?? token;
+  });
+  const lines = [outgoingBody, ''];
   if (byInstallation.size) {
     lines.push(copy.direct);
     for (const [installationId, items] of byInstallation) {
-      lines.push(items.map(item => items.length === 1 ? item.alias : item.alias + ' · ' + item.secretId).join('\n'));
-      lines.push(command({ ...cli, installationId }, ['read', ...items.flatMap(item => ['--secret', item.secretId])]));
+      if (byInstallation.size > 1 || requested.size) {
+        const order = english ? 'Arguments in order' : '参数顺序';
+        lines.push(order + ' · ' + items.map(item => JSON.stringify(item.alias)).join(', '));
+      } else if (items.length > 1) lines.push(copy.inOrder);
+      const read = command({ ...cli, installationId }, ['read', ...items.flatMap(item => ['--secret', item.secretId]), '--format', 'values']);
+      lines.push(read.startsWith('& ') ? '$credentialsJson = ' + read : 'credentialsJson=$(' + read + ')');
     }
     if (!requested.size) return lines.join('\n');
   }
-  lines.push(copy.use);
-  if ([...requested.keys()].some(id => !directIds.has(id))) lines.push(copy.missing);
-  const unbound: string[] = [];
+  let hasUnbound = false;
   const actions = new Map<string, typeof grants>();
   const readOptions = new Map<string, Set<string>>();
-  for (const reference of requested.values()) {
-    if (!reference.grants.length) unbound.push(reference.spelling);
-    for (const grant of reference.grants) {
-      if (!directIds.has(compactId(grant.secretId))) {
+  for (const [id, scriptGrants] of requested) {
+    if (!scriptGrants.length) hasUnbound = true;
+    for (const grant of scriptGrants) {
+      if (!available.has(id)) {
         const ids = readOptions.get(grant.installationId) ?? new Set<string>();
         ids.add(grant.secretId);
         readOptions.set(grant.installationId, ids);
@@ -149,6 +161,8 @@ export async function prepareLocalSecretPrompt(
       else actions.set(key, [grant]);
     }
   }
+  if (actions.size) lines.push(copy.use);
+  if (readOptions.size) lines.push(copy.missing);
   for (const group of actions.values()) {
     const [first, ...others] = group;
     const use = grantedScriptCommand({ ...cli, installationId: first.installationId }, first);
@@ -159,7 +173,7 @@ export async function prepareLocalSecretPrompt(
     }
     if (others.length) lines.push(copy.sameAction, ...others.map(grant => grant.alias + ' · ' + grant.secretId));
   }
-  if (unbound.length) lines.push(copy.unbound + ' · ' + unbound.join(', '));
+  if (hasUnbound) lines.push(copy.unbound);
   if (readOptions.size) lines.push(copy.read);
   // Prefer the installation covering the most references, so an overlapping
   // grant does not split a request that one installation can handle together.

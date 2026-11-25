@@ -29,7 +29,7 @@ test('outgoing prompts group only the requested references by a live installatio
     installations: ['single', 'shared', 'other'].map(install),
     grants: [grant('single', ids[0]), grant('shared', ids[0]), grant('shared', ids[1]), grant('other', ids[2])],
   }), true);
-  assert.ok(outgoing.startsWith(body + '\n'));
+  assert.equal(outgoing.split('\n\n')[0], [...ids, ids[0]].join('\n'));
   const uses = outgoing.split('\n').filter(line => line.includes(' use --secret '));
   assert.equal(uses.length, 3);
   assert.ok(uses.some(line => line.endsWith('--installation shared use --secret ' + ids[0] + ' --executor script')));
@@ -55,13 +55,13 @@ test('a diagnostic-only grant keeps recovery and explicit read consent distinct 
   };
   for (const english of [false, true]) {
     const outgoing = await prepareLocalSecretPrompt(body, async () => metadata, english);
-    const appended = outgoing.slice(body.length);
+    const appended = outgoing.split('\n\n').slice(1).join('\n\n');
     assert.doesNotMatch(appended, /unrelated|\{\{cliora-secret:/);
     assert.equal(appended.match(/ use --secret /g)?.length, 1);
     assert.match(appended, /DEMO_SERVICE_TOKEN · Test secret delivery/);
     const unbound = appended.split('\n').filter(line => line.includes(english ? 'No local CLI action' : '尚无本机 CLI 操作授权'));
     assert.equal(unbound.length, 1);
-    assert.ok(unbound[0].includes(ids[21]) && unbound[0].includes(ids[24]));
+    assert.ok(!appended.includes(ids[21]) && !appended.includes(ids[24]));
     assert.match(appended, english ? /delivery test only checks/ : /传递测试只验证/);
     assert.match(appended, english ? /sanitized results/ : /脱敏结果/);
     const readGate = appended.indexOf(english ? 'explicitly asks to see' : '明确要求查看原值');
@@ -81,14 +81,36 @@ test('direct credentials are requested only for named references on the opted-in
   };
   for (const english of [true, false]) {
     const text = await prepareLocalSecretPrompt(body, async () => data, english);
-    assert.ok(text.startsWith(body));
+    assert.ok(text.startsWith('Sign in and check logs DEMO_SERVICE_TOKEN\n'));
     assert.ok(text.includes('DEMO_SERVICE_TOKEN'));
     assert.ok(text.includes('--installation direct read --secret ' + ids[0]));
-    assert.match(text, english ? /After approval, sign in/ : /获准后自行登录/);
+    assert.match(text, english ? /in memory/ : /在内存中/);
+    assert.equal(text.split(ids[0]).length - 1, 1);
+    assert.match(text, /credentialsJson=\$\(.*--format values\)/);
     assert.ok(!text.includes(ids[1]) && !text.includes('unrelated') && !text.includes('--executor'));
   }
   data.installations[0].revoked = true;
   assert.doesNotMatch(await prepareLocalSecretPrompt(body, async () => data, true), /--installation direct/);
+});
+
+test('a named batch can be narrowed in order without embedding aliases in the command', async () => {
+  const ids = ['11111111-2222-4333-8444-555555555551', '11111111-2222-4333-8444-555555555552'];
+  const alias = ["QUEUE'S KEY", 'LOGS $TOKEN'];
+  const body = 'Check {{cliora-secret:' + ids[0] + '}} with {{cliora-secret:' + ids[1] + '}}';
+  for (const executable of ["/opt/Cliora team's/cliora", "C:\\Cliora team's\\cliora.exe"]) {
+    const out = await prepareLocalSecretPrompt(body, async () => ({
+      cli: { executable, entry: '--cliora-internal-secret-cli-v1' }, installations: [{ id: 'local', kind: 'cli', directReadOnly: true }],
+      grants: [], directReads: ids.map((id, i) => ({ installationId: 'local', alias: alias[i], secretId: id })).reverse(),
+    }), true);
+    assert.ok(out.startsWith('Check ' + alias[0] + ' with ' + alias[1] + '\n'));
+    assert.match(out, /order of first appearance/);
+    for (const name of alias) assert.equal(out.split(name).length - 1, 1);
+    const read = out.split('\n').at(-1);
+    for (const id of ids) assert.equal(out.split(id).length - 1, 1);
+    assert.ok(read.includes('read --secret ' + ids[0] + ' --secret ' + ids[1] + ' --format values'));
+    assert.ok(alias.every(name => !read.includes(name)));
+    assert.ok(executable.startsWith('/') ? read.startsWith('credentialsJson=$(') : read.startsWith('$credentialsJson = & '));
+  }
 });
 
 const plan = {

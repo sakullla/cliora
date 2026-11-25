@@ -115,6 +115,39 @@ fn a_document_keeps_the_value_in_data_only() {
     assert!(printed.get("data").is_none());
 }
 
+#[test]
+fn values_format_is_an_opt_in_for_reads_only() {
+    let id = installation();
+    let request = |op, extra: &[&str]| {
+        let mut argv = args(&["--installation", &id, op]);
+        argv.extend(args(extra));
+        parse(&argv)
+    };
+    assert!(!request("read", &["--secret", &id]).unwrap().values_only);
+    assert!(request("read", &["--secret", &id, "--format", "values"]).unwrap().values_only);
+    assert!(request("read", &["--secret", &id, "--format", "raw"]).is_err());
+    assert!(request("list", &["--format", "values"]).is_err());
+    assert!(request("use", &["--secret", &id, "--executor", &id, "--format", "values"]).is_err());
+}
+
+#[test]
+fn compact_reads_return_a_complete_alias_map_or_no_values() {
+    let first = installation();
+    let second = installation();
+    let one = json!({"id": first, "alias": "DEMO ' key", "value": "synthetic\n\"quoted\""});
+    let two = json!({"id": second, "alias": "DEMO_TOKEN", "value": "synthetic-2"});
+    let values = |rows: Vec<Value>, ids: &[String]| {
+        read_values(Response::success("ok", json!({"secrets": rows})), ids)
+    };
+    assert_eq!(values(vec![one.clone()], std::slice::from_ref(&first)).unwrap(), json!({"DEMO ' key": "synthetic\n\"quoted\""}));
+    let ids = vec![first, second];
+    assert_eq!(values(vec![two.clone(), one.clone()], &ids).unwrap(), json!({"DEMO ' key": one["value"], "DEMO_TOKEN": "synthetic-2"}));
+    for bad in [vec![one.clone()], vec![one.clone(), one.clone()], vec![one.clone(), json!({"id": ids[1], "alias": "DEMO ' key", "value": "synthetic-2"})]] {
+        assert!(!values(bad, &ids).unwrap_err().contains("synthetic"));
+    }
+    assert!(read_values(Response::failure("declined", "request declined"), &ids).is_err());
+}
+
 fn isolated() -> (tempfile::TempDir, std::sync::MutexGuard<'static, ()>) {
     let guard = ipc::test_lock();
     let directory = tempfile::tempdir().unwrap();

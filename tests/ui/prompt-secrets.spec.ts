@@ -345,7 +345,9 @@ test('a local AI can request a selected password for the task without configurin
     return call ? JSON.parse(call.text).request.initialPrompt : '';
   });
   await expect.poll(sent).toContain('--installation ai-fixture read --secret ' + id);
-  expect(await sent()).not.toMatch(/--executor|测试秘密传递|canary-ui/);
+  expect(await sent()).toContain('查这次请求的日志 DEMO_SERVICE_TOKEN');
+  expect(await sent()).toContain('--format values');
+  expect(await sent()).not.toMatch(/cliora-secret:|--executor|测试秘密传递|canary-ui/);
   expect(await page.evaluate(() => (window as unknown as { __secretCalls: string[] }).__secretCalls)).not.toContain('save_secret_executor');
 });
 
@@ -378,7 +380,7 @@ test('launching a saved bare reference supplies the existing action without read
   });
   await expect.poll(sent).toContain('use --secret ' + id + ' --executor fixture-action');
   const outgoing = await sent();
-  expect(outgoing).toContain(body);
+  expect(outgoing).toContain('用这个令牌完成已授权的操作 测试口令');
   expect(outgoing).toContain('read --secret ' + id);
   expect(outgoing).not.toContain(CANARY);
 });
