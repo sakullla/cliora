@@ -16,9 +16,7 @@ export function ConfirmationHost() {
   const { t } = useTranslation();
   const request = useSyncExternalStore(subscribeConfirmation, confirmationSnapshot);
   const approval = useSyncExternalStore(subscribeSecretApproval, secretApprovalSnapshot);
-  const [countdown, setCountdown] = useState<{ id: string; seconds: number } | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
-  const approvalDialog = useRef<HTMLDialogElement>(null);
 
   useEffect(() => () => {
     const pending = confirmationSnapshot();
@@ -38,15 +36,6 @@ export function ConfirmationHost() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!approval) { setCountdown(null); return; }
-    const tick = () => setCountdown({ id: approval.approvalId, seconds: Math.max(0, Math.ceil((approval.expiresAt - Date.now()) / 1000)) });
-    tick();
-    const timer = setInterval(tick, 1000);
-    const expiry = setTimeout(() => dismissSecretApproval(approval.approvalId), Math.max(0, approval.expiresAt - Date.now()));
-    return () => { clearInterval(timer); clearTimeout(expiry); };
-  }, [approval]);
-
   useLayoutEffect(() => {
     if (!request || !dialog.current) return;
     const element = dialog.current;
@@ -58,17 +47,6 @@ export function ConfirmationHost() {
       if (opener?.isConnected) opener.focus({ preventScroll: true });
     };
   }, [request]);
-
-  useLayoutEffect(() => {
-    if (!approval || !approvalDialog.current) return;
-    const element = approvalDialog.current;
-    try { element.showModal(); }
-    catch { void answerSecretApproval(approval.approvalId, false); }
-    return () => { element.close(); };
-  }, [approval]);
-
-  const secondsLeft = approval ? (countdown?.id === approval.approvalId ? countdown.seconds : approval.expiresInSeconds) : 0;
-  const aliases = approval?.aliases?.length ? approval.aliases : approval ? [approval.alias] : [];
 
   return <>
     {request && <dialog ref={dialog} className="confirmation-dialog" aria-labelledby="confirmation-title" aria-describedby="confirmation-message"
@@ -90,30 +68,62 @@ export function ConfirmationHost() {
         <Button variant={request.destructive ? 'danger' : 'primary'} onClick={() => answerConfirmation(request.id, true)}>{request.confirmLabel ?? t('common.dialog.confirm')}</Button>
       </div>
     </dialog>}
-    {approval && <dialog key={approval.approvalId} ref={approvalDialog} className="confirmation-dialog secret-approval-dialog" aria-labelledby="secret-approval-title" aria-describedby="secret-approval-message secret-approval-risk secret-approval-scope"
-      data-secret-approval={approval.approvalId}
-      onCancel={event => { event.preventDefault(); void answerSecretApproval(approval.approvalId, false); }}>
-      <div className="confirmation-head">
-        <span className="confirmation-icon" data-destructive="true" aria-hidden="true"><Icon name="lock" size={18} /></span>
-        <div className="secret-approval-body">
-          <h2 id="secret-approval-title">{t('common.secretApproval.title')}</h2>
-          <dl className="secret-approval-facts" id="secret-approval-message">
-            <div><dt>{t('common.secretApproval.sourceLabel')}</dt><dd>{approval.source}</dd></div>
-            <div><dt>{t('common.secretApproval.secretLabel')}{aliases.length > 1 && <span className="secret-approval-count">{aliases.length}</span>}</dt><dd><ul className="secret-approval-aliases">
-              {aliases.map((alias, index) => <li key={index}>{alias}</li>)}
-            </ul></dd></div>
-          </dl>
-          <p className="secret-approval-risk" id="secret-approval-risk" data-secret-approval-risk><Icon name="eye" size={14} />{t('common.secretApproval.risk')}</p>
-          <p className="secret-approval-scope" id="secret-approval-scope">{t(approval.sessionAvailable ? 'common.secretApproval.sessionHint' : 'common.secretApproval.onceHint')}</p>
-        </div>
-      </div>
-      <div className="confirmation-actions">
-        <span className="secret-approval-timeout" data-secret-approval-timeout data-urgent={secondsLeft <= 15 || undefined} role="timer" aria-live="off">{secondsLeft === 0 ? t('common.secretApproval.expired') : t('common.secretApproval.timeout', { seconds: secondsLeft })}</span>
-        <Button autoFocus data-secret-approval-decline onClick={() => void answerSecretApproval(approval.approvalId, false)}>{t('common.secretApproval.decline')}</Button>
-        {/* The wider grant sits between refusing and the single read, which stays the emphasised choice. */}
-        {approval.sessionAvailable && <Button data-secret-approval-session onClick={() => void answerSecretApproval(approval.approvalId, true, true)}>{t('common.secretApproval.session')}</Button>}
-        <Button variant="danger" data-secret-approval-accept onClick={() => void answerSecretApproval(approval.approvalId, true)}>{t('common.secretApproval.accept')}</Button>
-      </div>
-    </dialog>}
+    {approval && <SecretApprovalDialog key={approval.approvalId} approval={approval} />}
   </>;
+}
+
+function SecretApprovalDialog({ approval }: { approval: PromptSecretApprovalRequest & { expiresAt: number } }) {
+  const { t } = useTranslation();
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [rememberSession, setRememberSession] = useState(false);
+  const remainingSeconds = () => Math.max(0, Math.ceil((approval.expiresAt - Date.now()) / 1000));
+  const [secondsLeft, setSecondsLeft] = useState(remainingSeconds);
+  const aliases = approval.aliases?.length ? approval.aliases : [approval.alias];
+
+  useLayoutEffect(() => {
+    const element = dialog.current;
+    if (!element) return;
+    try {
+      element.showModal();
+      element.querySelector<HTMLButtonElement>('[data-secret-approval-decline]')?.focus({ preventScroll: true });
+    } catch { void answerSecretApproval(approval.approvalId, false); }
+    return () => { element.close(); };
+  }, [approval.approvalId]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setSecondsLeft(remainingSeconds()), 1000);
+    const expiry = window.setTimeout(() => dismissSecretApproval(approval.approvalId), Math.max(0, approval.expiresAt - Date.now()));
+    return () => { window.clearInterval(timer); window.clearTimeout(expiry); };
+  }, [approval]);
+
+  return <dialog ref={dialog} className="confirmation-dialog secret-approval-dialog" aria-labelledby="secret-approval-title"
+    aria-describedby="secret-approval-source secret-approval-aliases secret-approval-risk secret-approval-scope"
+    data-secret-approval={approval.approvalId}
+    onCancel={event => { event.preventDefault(); void answerSecretApproval(approval.approvalId, false); }}>
+    <div className="secret-approval-body">
+      <h2 id="secret-approval-title">{t('common.secretApproval.title')}</h2>
+      <p className="secret-approval-source" id="secret-approval-source">
+        {t('common.secretApproval.sourceLabel')} <strong>{approval.source}</strong>
+      </p>
+      <ul className="secret-approval-aliases" id="secret-approval-aliases" aria-label={t('common.secretApproval.secretLabel')}>
+        {aliases.map((alias, index) => <li key={index}><Icon name="lock" size={16} /><bdi>{alias}</bdi></li>)}
+      </ul>
+      <p className="secret-approval-risk" id="secret-approval-risk" data-secret-approval-risk>{t('common.secretApproval.risk')}</p>
+      {approval.sessionAvailable ? <div className="secret-approval-choice">
+        <input type="checkbox" id="secret-approval-remember" data-secret-approval-session
+          checked={rememberSession} onChange={event => setRememberSession(event.currentTarget.checked)} aria-describedby="secret-approval-scope" />
+        <label htmlFor="secret-approval-remember">{t('common.secretApproval.remember')}</label>
+        <p id="secret-approval-scope">{t('common.secretApproval.sessionHint')}</p>
+      </div> : <p className="secret-approval-once" id="secret-approval-scope">{t('common.secretApproval.onceHint')}</p>}
+    </div>
+    <div className="confirmation-actions">
+      <span className="secret-approval-timeout" data-secret-approval-timeout data-urgent={secondsLeft <= 15 || undefined} role="timer" aria-live="off">
+        {secondsLeft === 0 ? t('common.secretApproval.expired') : t('common.secretApproval.timeout', { seconds: secondsLeft })}
+      </span>
+      <Button data-secret-approval-decline onClick={() => void answerSecretApproval(approval.approvalId, false)}>{t('common.secretApproval.decline')}</Button>
+      <Button variant="primary" data-secret-approval-accept onClick={() => void answerSecretApproval(approval.approvalId, true, rememberSession)}>
+        {t(rememberSession ? 'common.secretApproval.session' : 'common.secretApproval.accept')}
+      </Button>
+    </div>
+  </dialog>;
 }

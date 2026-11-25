@@ -164,20 +164,23 @@ dialog[open] ~ .confirmation-dialog::backdrop { background: color-mix(in srgb, v
 .confirmation-dialog p { margin-top: var(--space-1_5); font-size: var(--fs-body); line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); }
 .confirmation-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-5); }
 .confirmation-actions > button { min-width: 76px; }
-.secret-approval-dialog { width: min(500px, calc(100vw - 40px)); }
-.secret-approval-body { flex: 1; min-width: 0; display: grid; gap: var(--space-2_5); }
-.secret-approval-facts { display: grid; gap: var(--space-1_5); margin: 0; padding: var(--space-2_5) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
-.secret-approval-facts > div { display: grid; grid-template-columns: 7em minmax(0, 1fr); gap: var(--space-2); align-items: baseline; }
-.secret-approval-facts dt { display: inline-flex; align-items: center; color: var(--text-3); font-size: var(--fs-caption); white-space: nowrap; }
-.secret-approval-facts dd { margin: 0; color: var(--text); font-size: var(--fs-control); overflow-wrap: anywhere; }
-.secret-approval-aliases { display: grid; gap: var(--space-1); max-height: 24vh; overflow-y: auto; margin: 0; padding: 0; list-style: none; font-weight: 600; }
-.secret-approval-dialog .secret-approval-risk { display: flex; align-items: baseline; gap: var(--space-2); margin: 0; padding: var(--space-2) var(--space-2_5); border-inline-start: 3px solid var(--warning); border-radius: var(--radius-sm); background: var(--warning-soft); color: var(--text); font-size: var(--fs-caption); line-height: 1.55; }
-.secret-approval-risk > svg { flex: none; align-self: center; }
-.secret-approval-dialog .secret-approval-scope { margin: 0; font-size: var(--fs-caption); }
-.secret-approval-dialog .confirmation-actions { align-items: center; }
+.secret-approval-dialog { width: min(448px, calc(100vw - 32px)); padding: 0; }
+.secret-approval-body { padding: var(--space-6); }
+.secret-approval-dialog h2 { padding: 0; font-size: 21px; letter-spacing: -.02em; }
+.secret-approval-dialog .secret-approval-source { margin: var(--space-1) 0 var(--space-4); color: var(--text-3); }
+.secret-approval-source strong { margin-inline-start: var(--space-1); color: var(--text-2); font-weight: var(--fw-medium); }
+.secret-approval-aliases { max-height: 25dvh; margin: 0; padding: 0; overflow: auto; list-style: none; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.secret-approval-aliases li { display: flex; align-items: baseline; gap: var(--space-2_5); padding: var(--space-2_5) var(--space-3); font: var(--fw-semibold) var(--fs-control)/1.6 var(--font-mono); overflow-wrap: anywhere; }
+.secret-approval-aliases li + li { border-top: 1px solid var(--line); }
+.secret-approval-aliases svg { align-self: center; flex: none; color: var(--accent); }
+.secret-approval-dialog .secret-approval-risk { margin: var(--space-2) 0 var(--space-4); color: var(--text-2); font-size: var(--fs-caption); }
+.secret-approval-choice { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 0 var(--space-2); }
+.secret-approval-choice label { padding-block: var(--space-1); color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-medium); cursor: pointer; }
+.secret-approval-choice p, .secret-approval-dialog .secret-approval-once { margin: 0; color: var(--text-2); font-size: var(--fs-caption); }
+.secret-approval-choice p { grid-column: 2; }
+.secret-approval-dialog .confirmation-actions { align-items: center; margin: 0; padding: var(--space-3) var(--space-6); border-top: 1px solid var(--line); }
 .secret-approval-timeout { margin-inline-end: auto; color: var(--text-3); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
 .secret-approval-timeout[data-urgent] { color: var(--warning); }
-.secret-approval-count { display: inline-grid; place-items: center; min-width: 18px; height: 18px; margin-left: var(--space-1); padding: 0 var(--space-1_25); border-radius: var(--radius-pill); background: var(--surface-3); color: var(--text-2); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; }
 @media (max-width: 1264px) { .skeleton-row { grid-template-columns: 1fr; } }
 @media (max-width: 640px) {
   .guide-dialog-head { padding-inline: var(--space-4); }

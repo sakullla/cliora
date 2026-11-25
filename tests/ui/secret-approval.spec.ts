@@ -12,8 +12,8 @@ const IDLE_INSTALLATION_ID = '5d3f9d0f-7c2b-4d55-8e6c-7a1b3c4d5678';
 
 type Call = { command: string; args: Record<string, any> };
 
-async function install(page: Page, options: { running?: boolean; idleInstallation?: boolean; empty?: boolean; count?: number; programs?: string[] } = {}) {
-  await page.addInitScript((settings: { running: boolean; idle: boolean; empty: boolean; count: number; programs: string[] }) => {
+async function install(page: Page, options: { running?: boolean; idleInstallation?: boolean; empty?: boolean; count?: number; theme?: string; programs?: string[] } = {}) {
+  await page.addInitScript((settings: { running: boolean; idle: boolean; empty: boolean; count: number; theme: string; programs: string[] }) => {
     const callbacks: Array<(value: unknown) => void> = [];
     const handlers: Record<string, number> = {};
     const calls: Call[] = [];
@@ -119,7 +119,7 @@ async function install(page: Page, options: { running?: boolean; idleInstallatio
           }
           if (command === 'resolve_prompt_secret_references') return inventory.filter(item => args.body.includes(item.reference))
             .map(({ id, alias, reference, status }) => ({ id, alias, reference, status }));
-          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light', remote_ssh_enabled: false }, tools: [{ id: 'codex', name: 'Codex' }] };
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: settings.theme, remote_ssh_enabled: false }, tools: [{ id: 'codex', name: 'Codex' }] };
           if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', launchForm: 'terminal', interfaceFormats: [], nativeConfig: { state: 'supported', reason: '' }, launch: { state: 'supported', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
           if (command === 'get_launch_settings' || command === 'set_preferred_terminal') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], worktreeLaunch: 'direct' };
           if (command === 'get_tray_status') return { available: false, error: null };
@@ -130,7 +130,7 @@ async function install(page: Page, options: { running?: boolean; idleInstallatio
         },
       },
     });
-  }, { running: options.running ?? true, idle: options.idleInstallation ?? false, empty: options.empty ?? false, count: options.count ?? 1, programs: options.programs ?? ['node', 'gh'] });
+  }, { running: options.running ?? true, idle: options.idleInstallation ?? false, empty: options.empty ?? false, count: options.count ?? 1, theme: options.theme ?? 'light', programs: options.programs ?? ['node', 'gh'] });
   await page.addInitScript(installPromptFixtureBridge);
   await page.addInitScript(installRichPromptFixtures);
   await page.goto('/');
@@ -229,8 +229,9 @@ test('inserted instructions pick the installation that carries a grant', async (
   expect(body).not.toContain(CANARY);
 });
 
-test('a read approval shows only the alias and the source and answers by id', async ({ page }) => {
-  await install(page);
+test('a read approval shows only the alias and the source and answers by id', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 720, height: 680 });
+  await install(page, { theme: 'dark' });
   await emitApproval(page);
   const dialog = approvalDialog(page);
   await expect(dialog).toBeVisible();
@@ -240,7 +241,12 @@ test('a read approval shows only the alias and the source and answers by id', as
   await expect(dialog.locator('[data-secret-approval-session]')).toHaveCount(0);
   await expect(dialog.locator('#secret-approval-scope')).toContainText('每次读取都需确认');
   await expect(dialog.locator('[data-secret-approval-risk]')).toContainText('模型上下文');
-  await expect(dialog.locator('[data-secret-approval-timeout]')).toContainText('120');
+  await expect(dialog.locator('[data-secret-approval-timeout]')).toContainText(/\d+ 秒后过期/);
+  await expect(dialog.getByRole('button', { name: '拒绝', exact: true })).toBeFocused();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  const capture = testInfo.outputPath('external-approval-dark.png');
+  await dialog.screenshot({ path: capture });
+  await testInfo.attach('外部请求 · 深色', { path: capture, contentType: 'image/png' });
   // The window never receives a value, not even as an empty field.
   expect(await page.content()).not.toContain(CANARY);
 
@@ -253,19 +259,20 @@ test('a read approval shows only the alias and the source and answers by id', as
 
 test('a batch identifies its pending aliases and remembers only an explicit session decision', async ({ page }, testInfo) => {
   await install(page);
-  const aliases = ['部署用户名', '部署口令'];
+  const aliases = ['DEPLOY_USER', 'DEPLOY_PASSWORD'];
   const dialog = approvalDialog(page);
   for (const choice of ['once', 'session'] as const) {
     await emitApproval(page, 'approval-1', aliases[0], 'MCP · codex-cli', { aliases, sessionAvailable: true });
     await expect(dialog.getByRole('listitem')).toHaveText(aliases);
     await expect(dialog).toContainText('MCP · codex-cli');
-    await expect(dialog.getByRole('button', { name: '允许本次会话' })).toBeVisible();
-    if (choice === 'session') {
-      const path = testInfo.outputPath('batch-session-approval.png');
-      await dialog.screenshot({ path });
-      await testInfo.attach('批量与会话授权', { path, contentType: 'image/png' });
-    }
-    await dialog.getByRole('button', { name: choice === 'session' ? '允许本次会话' : '仅允许这次' }).click();
+    const scope = dialog.getByRole('checkbox', { name: '本次会话内免重复确认' });
+    await expect(scope).not.toBeChecked();
+    await expect(dialog.getByRole('button', { name: '允许一次' })).toBeVisible();
+    if (choice === 'session') await scope.check();
+    const path = testInfo.outputPath(`approval-${choice}.png`);
+    await dialog.screenshot({ path });
+    await testInfo.attach(`读取审批-${choice}`, { path, contentType: 'image/png' });
+    await dialog.getByRole('button', { name: choice === 'session' ? '允许本次会话' : '允许一次' }).click();
     await expect(dialog).toHaveCount(0);
   }
   const answers = await page.evaluate(() => (window as any).__secretBroker.calls.filter((call: Call) => call.command === 'answer_prompt_secret_approval').map((call: Call) => call.args));
@@ -280,7 +287,7 @@ test('an external CLI can approve multiple references for this read only', async
   const dialog = approvalDialog(page);
   await expect(dialog.getByRole('listitem')).toHaveText(aliases);
   await expect(dialog.locator('[data-secret-approval-session]')).toHaveCount(0);
-  await dialog.getByRole('button', { name: '仅允许这次' }).click();
+  await dialog.getByRole('button', { name: '允许一次' }).click();
   await expect(dialog).toHaveCount(0);
 });
 
@@ -289,15 +296,19 @@ test('parallel callers keep separate decisions and an expired request releases t
   await page.clock.install();
   await emitApproval(page, 'first', '短请求', 'MCP · A', { sessionAvailable: true, expiresInSeconds: 5 });
   await emitApproval(page, 'expired-in-queue', '已过期', 'MCP · B', { expiresInSeconds: 2 });
-  await emitApproval(page, 'next', '后续请求', 'CLI · C', { expiresInSeconds: 10 });
+  await emitApproval(page, 'next', '后续请求', 'CLI · C', { sessionAvailable: true, expiresInSeconds: 10 });
   const dialog = approvalDialog(page);
   await expect(dialog).toHaveAttribute('data-secret-approval', 'first');
+  await dialog.getByRole('checkbox').check();
+  await expect(dialog.getByRole('button', { name: '允许本次会话' })).toBeVisible();
   await page.clock.fastForward(5_000);
   await expect(dialog).toHaveAttribute('data-secret-approval', 'next');
   await expect(dialog).toContainText('CLI · C');
   await expect(dialog).not.toContainText('短请求');
-  await expect(dialog.locator('[data-secret-approval-session]')).toHaveCount(0);
-  await dialog.getByRole('button', { name: '拒绝', exact: true }).click();
+  await expect(dialog.getByRole('checkbox')).not.toBeChecked();
+  await expect(dialog.getByRole('button', { name: '允许一次' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '拒绝', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
   const answers = await page.evaluate(() => (window as any).__secretBroker.calls.filter((call: Call) => call.command === 'answer_prompt_secret_approval').map((call: Call) => call.args));
   expect(answers).toEqual([{ approvalId: 'next', accepted: false }]);
 });
