@@ -1042,3 +1042,97 @@ fn local_cli_recovery_and_deletion_leave_managed_connections_alone() {
         assert!(load_installation(&database, &item.id).unwrap().unwrap().revoked);
     }
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_environmentless_helper_recovers_only_its_live_workbench_scope() {
+    use crate::{adapters::LaunchMode, launch::{LaunchPlan, TerminalId}, session_host};
+
+    // Run this test binary as the actual Unix socket peer, one process for each
+    // read, beneath a shell in place of a workbench CLI. The fixture variables
+    // only identify the isolated socket and synthetic database records.
+    if let Some(root) = std::env::var_os("CLIORA_TEST_MACOS_BROKER_DIR") {
+        assert!(std::env::var_os(session::ENV).is_none());
+        ipc::set_test_root(Some(root.into()));
+        let id = std::env::var("CLIORA_TEST_MACOS_INSTALLATION").unwrap();
+        let reference = std::env::var("CLIORA_TEST_MACOS_REFERENCE").unwrap();
+        let response = ipc::read(&id, &[reference], false, None).unwrap();
+        assert!(response.ok, "{}", response.code);
+        assert_eq!(response.data.unwrap()["value"], CANARY);
+        return;
+    }
+
+    struct Forward(Database, MemoryCredentials, FakeHost);
+    impl ipc::Handler for Forward {
+        fn handle(&self, request: ipc::Request, cancel: &AtomicBool) -> ipc::Response {
+            read_request(&self.0, &self.1, &self.2, &request, cancel)
+        }
+    }
+
+    let _guard = ipc::test_lock();
+    let directory = tempfile::tempdir().unwrap();
+    ipc::set_test_root(Some(directory.path().to_path_buf()));
+    let forward = Arc::new(Forward(db(), MemoryCredentials::default(), FakeHost::new(Answer::Remember)));
+    let secret = create_secret(&forward.0, &forward.1, "local synthetic", CANARY);
+    set_direct_read(&forward.0, &secret.id, true).unwrap();
+    let installation = list_installations(&forward.0).unwrap().remove(0).id;
+    let broker = ipc::serve(forward.clone()).unwrap();
+
+    let _workbench_guard = session_host::lock_for_tests();
+    struct Workbench(String);
+    impl Drop for Workbench {
+        fn drop(&mut self) { let _ = session_host::close(&self.0); }
+    }
+    let spawn_workbench = || {
+        let script = r#"read -r ready || exit 1
+            for n in 1 2; do
+                /usr/bin/env -i "CLIORA_TEST_MACOS_BROKER_DIR=$3" "CLIORA_TEST_MACOS_INSTALLATION=$4" \
+                    "CLIORA_TEST_MACOS_REFERENCE=$5" "$1" --exact "$2" || exit 1
+            done
+            echo BOTH_READS_COMPLETED"#;
+        let plan = LaunchPlan {
+            resume_native_id: None, account_version: None, account_context: None,
+            tool_id: "fixture".into(), project_id: None, mode: LaunchMode::Normal,
+            executable: "/bin/sh".into(), directory: directory.path().into(),
+            cli_args: vec!["-c".into(), script.into(), "fixture-cli".into(),
+                std::env::current_exe().unwrap().to_str().unwrap().into(),
+                std::thread::current().name().unwrap().into(), directory.path().to_str().unwrap().into(),
+                installation.clone(), secret.id.clone()],
+            terminal: TerminalId::Workbench, session_markers: &[], credential: None,
+            remote_session_id: None, remote_end_args: None, environment: vec![],
+        };
+        Workbench(session_host::start(plan, None).unwrap().session_id.unwrap())
+    };
+    let workbenches = [spawn_workbench(), spawn_workbench()];
+    let ids = std::slice::from_ref(&secret.id);
+    // The test harness is an external caller even with two active workbenches.
+    let external = ipc::read(&installation, ids, false, None).unwrap();
+    assert_eq!(external.code, audit::code::DECLINED);
+    for workbench in &workbenches {
+        session_host::write(&workbench.0, "Z28K").unwrap(); // "go\n"
+        session_host::wait_for_replay(&workbench.0, "BOTH_READS_COMPLETED").unwrap();
+    }
+    let prompts = forward.2.asked();
+    assert_eq!(prompts.len(), 3, "two helper processes share one approval per workbench");
+    assert!(!prompts[0].session_available);
+    assert!(prompts[1].session_available && prompts[2].session_available);
+    assert_ne!(prompts[1].source, prompts[2].source);
+    drop(broker);
+    ipc::set_test_root(None);
+}
+
+
+#[cfg(target_os = "macos")]
+#[test]
+fn exiting_workbench_root_invalidates_a_pending_scope_before_guard_cleanup() {
+    let mut child = std::process::Command::new("/bin/cat")
+        .stdin(std::process::Stdio::piped()).spawn().unwrap();
+    let workbench = session::LocalSession::new();
+    workbench.bind_root(child.id());
+    let ids = [uuid::Uuid::new_v4().to_string()];
+    let scope = session::ReadScope::open(Some(workbench.token()), "installation", Kind::Cli, &ids).unwrap();
+    drop(child.stdin.take());
+    assert!(child.wait().unwrap().success());
+    assert!(!scope.finish(true));
+    assert!(session::ReadScope::open(Some(workbench.token()), "installation", Kind::Cli, &ids).is_none());
+}

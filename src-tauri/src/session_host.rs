@@ -573,6 +573,10 @@ pub(crate) fn start_with_baseline(plan: LaunchPlan, credential: Option<&(String,
             return Err(format!("无法在工作台启动 CLI：{error}"));
         }
     };
+    #[cfg(target_os = "macos")]
+    if let (Some(session), Some(pid)) = (&secret_session, child.process_id()) {
+        session.bind_root(pid);
+    }
     if let Some(context) = &context { context.dispatched(); }
     // A persistent PTY is not a short remote read; only admission/spawn uses
     // the ordinary scheduler slot, never its long-lived connection.

@@ -201,6 +201,16 @@ fn handle_connection(handler: Arc<dyn Handler>, mut stream: platform::Stream, re
         let _ = write_frame(&mut stream, &Response::failure(CODE_PROTOCOL, "该操作不接受批量或会话参数"));
         return;
     }
+    #[cfg(target_os = "macos")]
+    let request = {
+        let mut request = request;
+        // A CLI can strip environment variables from its tool subprocesses. Only
+        // supplement an absent session; an expired/invalid token must stay invalid.
+        if request.operation == Operation::Read && request.session.is_none() {
+            request.session = stream.workbench_session();
+        }
+        request
+    };
     let cancel = Arc::new(AtomicBool::new(false));
     let stopped = Arc::new(AtomicBool::new(false));
     // The caller stays connected while it waits; an early close cancels the run.
@@ -466,6 +476,11 @@ mod platform {
     pub struct Stream(UnixStream);
 
     impl Stream {
+        #[cfg(target_os = "macos")]
+        pub fn workbench_session(&self) -> Option<String> {
+            crate::secrets::session::for_socket(&self.0)
+        }
+
         pub fn connect(path: &PathBuf) -> Result<Self, String> {
             UnixStream::connect(path).map(Self).map_err(|_| "未找到正在运行的栖点秘密代理".to_string())
         }

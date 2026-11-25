@@ -695,6 +695,7 @@ dependencies = [
  "indexmap 2.14.2",
  "jsonc-parser",
  "keyring",
+ "libc",
  "memchr",
  "minisign-verify",
  "percent-encoding",

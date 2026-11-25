@@ -5,6 +5,10 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use super::{broker::Kind, ipc::McpPeer};
 
+#[cfg(target_os = "macos")]
+#[path = "session_macos.rs"]
+mod macos;
+
 pub const ENV: &str = "CLIORA_SECRET_SESSION";
 
 type Binding = (String, String);
@@ -13,7 +17,28 @@ struct Entry {
     installation: Option<String>,
     display: String,
     peer: Option<McpPeer>,
+    #[cfg(target_os = "macos")]
+    root: Option<macos::Process>,
     permissions: HashMap<Binding, Arc<AtomicBool>>,
+}
+
+impl Entry {
+    fn live(&mut self) -> bool {
+        #[cfg(target_os = "macos")]
+        if self.root.is_some_and(|root| !root.live()) {
+            return false;
+        }
+        self.peer.as_mut().is_none_or(McpPeer::live)
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn for_socket(stream: &std::os::unix::net::UnixStream) -> Option<String> {
+    let roots: HashMap<_, _> = sessions().iter()
+        .filter_map(|(token, entry)| Some((entry.root?, token.clone())))
+        .collect();
+    if roots.is_empty() { return None; }
+    macos::workbench_peer(stream, &roots)
 }
 
 fn sessions() -> MutexGuard<'static, HashMap<String, Entry>> {
@@ -49,10 +74,19 @@ impl LocalSession {
                 installation,
                 display,
                 peer,
+                #[cfg(target_os = "macos")]
+                root: None,
                 permissions: HashMap::new(),
             },
         );
         Self { token }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn bind_root(&self, pid: u32) {
+        if let Some(entry) = sessions().get_mut(&self.token) {
+            entry.root = macos::Process::from_pid(pid);
+        }
     }
 
     pub fn token(&self) -> &str {
@@ -88,7 +122,7 @@ impl ReadScope {
         let key = token.or_else(|| single.as_ref().map(LocalSession::token))?;
         let mut sessions = sessions();
         let entry = sessions.get_mut(key)?;
-        if entry.peer.as_mut().is_some_and(|peer| !peer.live()) {
+        if !entry.live() {
             return None;
         }
         if let Some(owner) = &entry.installation {
@@ -127,7 +161,7 @@ impl ReadScope {
         let Some(entry) = sessions.get_mut(&self.token) else {
             return false;
         };
-        if entry.peer.as_mut().is_some_and(|peer| !peer.live()) {
+        if !entry.live() {
             return false;
         }
         if !self.entries.iter().all(|(pair, observed)| {
