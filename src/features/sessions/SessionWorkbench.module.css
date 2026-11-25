@@ -906,7 +906,7 @@
   border: 0;
   background: transparent;
 }
-.actionGroup + .actionGroup { margin-left: var(--space-1_5); padding-left: var(--space-1_5); }
+.actionGroup + .actionGroup { --group-space: var(--space-1_5); margin-left: var(--group-space); padding-left: var(--group-space); }
 .actionGroup + .actionGroup::before,
 .stageTail .endBtn[data-variant]::before {
   content: '';
@@ -929,7 +929,8 @@
 .runningActions:not([data-running]) + .actionGroup::before { visibility: hidden; }
 /* The hidden group keeps its width so the tools never jump, but the well only frames what is visible. */
 .terminalActions:has(> .runningActions:not([data-running])) { background: transparent; box-shadow: none; }
-.terminalActions:has(> .runningActions:not([data-running])) > .actionGroup:last-child { margin-block: calc(var(--space-0_75) * -1); margin-right: calc(var(--space-0_75) * -1); padding: var(--space-0_75); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--term-raise) 78%, var(--term-chrome)); box-shadow: inset 0 0 0 1px var(--term-line), 0 1px 2px color-mix(in srgb, var(--term-shadow) 45%, transparent); }
+/* The well's own padding replaces the divider spacing; the margin takes the difference so the toolbar keeps its width and the title does not move when a session ends. */
+.terminalActions:has(> .runningActions:not([data-running])) > .actionGroup:last-child { margin-block: calc(var(--space-0_75) * -1); margin-left: calc(var(--group-space, var(--space-1_5)) * 2 - var(--space-0_75)); margin-right: calc(var(--space-0_75) * -1); padding: var(--space-0_75); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--term-raise) 78%, var(--term-chrome)); box-shadow: inset 0 0 0 1px var(--term-line), 0 1px 2px color-mix(in srgb, var(--term-shadow) 45%, transparent); }
 /* Quick input is the everyday action: crisp accent-tinted pill integrated cleanly inside the tray. */
 .terminalActions .composerTrigger[data-variant] { gap: var(--space-1_5); padding: 0 var(--space-2_5); background: color-mix(in srgb, var(--term-accent) 11%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--term-accent) 22%, transparent); color: var(--term-accent); }
 .terminalActions .composerTrigger[data-variant]:hover:not(:disabled) { background: color-mix(in srgb, var(--term-accent) 17%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--term-accent) 32%, transparent); color: var(--term-accent); }
@@ -1992,7 +1993,7 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .root[data-tight] .identityTitleRow { min-width: min(110px, 100%); }
 .root[data-tight] .identitySub { padding-left: var(--space-2); }
 .root[data-tight] .stageTail { gap: var(--space-1_5); }
-.root[data-tight] .actionGroup + .actionGroup { margin-left: var(--space-1); padding-left: var(--space-1); }
+.root[data-tight] .actionGroup + .actionGroup { --group-space: var(--space-1); }
 .root[data-tight] .stageTail .endBtn[data-variant] { margin-left: var(--space-1); padding-inline: var(--space-2); }
 .root[data-tight] .composerTrigger[data-size] { width: 28px; padding: 0; }
 .root[data-tight] .composerTrigger .toolLabel { display: none; }
@@ -2029,7 +2030,7 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .root[data-compact] .stageTail { gap: var(--space-1); }
 .root[data-compact] .terminalActions { padding: 0; }
 .root[data-compact] .actionGroup { gap: 0; }
-.root[data-compact] .actionGroup + .actionGroup { margin-left: var(--space-1); padding-left: var(--space-1); }
+.root[data-compact] .actionGroup + .actionGroup { --group-space: var(--space-1); }
 .root[data-compact] .stageTail .endBtn[data-variant] { margin-left: var(--space-1_5); }
 .root[data-compact] .terminalActions .toolButton[data-size] { width: 26px; }
 .root[data-compact] .composerTrigger[data-size] { width: 26px; padding: 0; }
