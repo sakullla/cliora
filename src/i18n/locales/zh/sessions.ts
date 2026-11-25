@@ -1,5 +1,6 @@
 export default {
   promptsStale: '提示词刷新失败，当前显示上次成功读取的内容。',
+  promptsStaleShort: '未能刷新',
   promptsFailed: '暂时无法读取此位置的提示词。',
   retryPrompts: '重试提示词',
   restoreFailed: '上次会话未能恢复',
@@ -493,6 +494,11 @@ export default {
   workspaceUnavailable: '上次选择的位置已不可用：{{path}}',
   workspaceUnavailableFix: '它可能属于其他主机，或已被移除。请选择一个新位置，不会自动改用其他目录。',
   workspaceUseHome: '使用默认主目录',
+  remoteFolderGone: '主机上已不存在',
+  remoteGoneSummary: '{{host}} 上有 {{count}} 个已保存目录不存在，可能来自其他主机或已删除。',
+  remoteGonePrune: '从列表移除',
+  remoteGonePruning: '正在移除…',
+  remoteGonePruneFailed: '部分目录没有从列表移除',
   workspaceUseHostHome: '使用 {{host}} 主目录',
   feedbackTitle: 'Twiglane 审阅意见',
   feedbackSource: '来自审查 {{review}} · 第 {{revision}} 次结果 · {{count}} 条',
