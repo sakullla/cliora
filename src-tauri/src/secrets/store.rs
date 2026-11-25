@@ -390,6 +390,21 @@ pub fn delete(
     })
 }
 
+/// Sending a prompt only needs display names. Read the named SQLite rows even
+/// if they have no grants; probing CredentialStore here would fetch raw values.
+pub fn reference_aliases(db: &Database, references: &str) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let ids = reference::references(references);
+    if ids.is_empty() { return Ok(Default::default()); }
+    let ids = serde_json::to_string(&ids).map_err(|error| error.to_string())?;
+    db.with_read_connection(|conn| {
+        let mut statement = conn.prepare(
+            "SELECT id, alias FROM prompt_secrets WHERE id IN (SELECT value FROM json_each(?1))"
+        ).map_err(sql)?;
+        let names = statement.query_map([ids], |row| Ok((row.get(0)?, row.get(1)?))).map_err(sql)?;
+        names.collect::<Result<_, _>>().map_err(sql)
+    })
+}
+
 /// Resolve the canonical references in a prompt body. Unknown, missing and
 /// unreadable secrets are reported separately; none of them falls back to another
 /// secret or to plain text expansion.

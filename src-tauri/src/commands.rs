@@ -8248,6 +8248,7 @@ pub async fn secret_cli_context() -> Result<SecretCliContext, ApiError> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScriptAccessOptions {
+    reference_aliases: std::collections::BTreeMap<String, String>,
     direct_reads: Vec<crate::secrets::broker::DirectRead>,
     cli: SecretCliContext,
     installations: Vec<crate::secrets::broker::Installation>,
@@ -8257,11 +8258,12 @@ pub struct ScriptAccessOptions {
 }
 
 #[tauri::command]
-pub async fn secret_access_options(app: AppHandle, secret_id: Option<String>) -> Result<ScriptAccessOptions, ApiError> {
+pub async fn secret_access_options(app: AppHandle, secret_id: Option<String>, references: Option<String>) -> Result<ScriptAccessOptions, ApiError> {
     let cli = secret_cli_context().await?;
     blocking(move || {
         let db = app.state::<AppState>().database(&app)?;
         Ok(ScriptAccessOptions {
+            reference_aliases: crate::secrets::store::reference_aliases(&db, references.as_deref().unwrap_or_default()).map_err(native_error)?,
             direct_reads: crate::secrets::broker::direct_reads(&db, secret_id.as_deref()).map_err(native_error)?,
             cli,
             installations: crate::secrets::broker::list_installations(&db).map_err(native_error)?,

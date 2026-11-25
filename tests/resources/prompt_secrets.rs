@@ -350,3 +350,19 @@ fn imported_prompt_reference_can_be_bound_on_the_receiving_device_without_changi
         |r| r.get::<_, i64>(0)).map_err(|e| e.to_string())).unwrap();
     assert_eq!(grants, 0);
 }
+
+#[test]
+fn sending_references_resolves_only_requested_names_without_fetching_credentials() {
+    let database = db();
+    let store = MemoryCredentials::default();
+    let named = secret(&database, &store, "LOCAL_NAME", CANARY);
+    let unrelated = secret(&database, &store, "UNRELATED", "fixture-unused");
+    let unknown = reference::format(&uuid::Uuid::new_v4().to_string());
+    *store.fail_read.lock().unwrap() = true;
+    let before = store.reads.load(std::sync::atomic::Ordering::Relaxed);
+    let aliases = reference_aliases(&database, &format!("{} {unknown} {}", named.reference, named.reference)).unwrap();
+    assert_eq!(aliases.len(), 1);
+    assert_eq!(aliases.get(&named.id), Some(&named.alias));
+    assert!(!aliases.contains_key(&unrelated.id));
+    assert_eq!(store.reads.load(std::sync::atomic::Ordering::Relaxed), before);
+}

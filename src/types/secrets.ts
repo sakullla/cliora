@@ -136,4 +136,4 @@ export type SecretMcpState = {
 };
 
 export type SecretDirectRead = { secretId: string; installationId: string; alias: string };
-export type ScriptAccessOptions = { cli: SecretCliContext; installations: SecretInstallation[]; executors: SecretExecutor[]; grants: SecretGrant[]; directReads: SecretDirectRead[]; availablePrograms: string[] };
+export type ScriptAccessOptions = { referenceAliases: Record<string, string>; cli: SecretCliContext; installations: SecretInstallation[]; executors: SecretExecutor[]; grants: SecretGrant[]; directReads: SecretDirectRead[]; availablePrograms: string[] };

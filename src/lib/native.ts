@@ -24,7 +24,7 @@ import i18n, { bindLanguagePersist } from '../i18n';
 import { prepareLocalSecretPrompt } from './secretCommands';
 
 export function localSessionPrompt(body: string) {
-  return prepareLocalSecretPrompt(body, () => command<ScriptAccessOptions>('secret_access_options'), i18n.language.startsWith('en'));
+  return prepareLocalSecretPrompt(body, references => command<ScriptAccessOptions>('secret_access_options', { references }), i18n.language.startsWith('en'));
 }
 
 export const nativeAvailable = isTauri();
