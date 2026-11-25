@@ -1814,6 +1814,12 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
 .workspaceMissingCopy > strong { overflow-wrap: anywhere; font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
 .workspaceMissingCopy > small { color: var(--text-2); font-size: var(--fs-caption); line-height: 1.45; }
 .workspaceMissingActions { display: flex; flex-wrap: wrap; gap: var(--space-1_5); margin-left: auto; }
+.goneNotice { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-1_5); margin: 0; color: var(--text-2); font-size: var(--fs-caption); line-height: 1.45; }
+.goneNotice > svg { flex: none; color: var(--warning); }
+.goneNotice > span { flex: 1 1 200px; min-width: 0; }
+.goneAction, .goneAction:hover:not(:disabled) { min-height: 0; padding: 0; border: 0; background: none; box-shadow: none; color: var(--accent); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+.goneAction:hover:not(:disabled) { text-decoration: underline; }
+.goneAction:focus-visible { outline: var(--focus-ring); outline-offset: 2px; border-radius: var(--radius-xs); }
 .fieldLabel { color: var(--text); font-size: var(--fs-control); font-weight: var(--fw-semibold); line-height: 1.4; }
 .modeCards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2_5); }
 .modeCard { display: flex; align-items: flex-start; gap: var(--space-2_5); min-width: 0; min-height: 0; padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); text-align: left; white-space: normal; box-shadow: none; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease); }

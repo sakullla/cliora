@@ -1,5 +1,6 @@
 export default {
   promptsStale: 'Prompt refresh failed. Showing the last successful prompts.',
+  promptsStaleShort: 'Not refreshed',
   promptsFailed: 'Could not read prompts from this location.',
   retryPrompts: 'Retry prompts',
   restoreFailed: 'Could not restore previous sessions',
@@ -493,6 +494,11 @@ export default {
   workspaceUnavailable: 'The last chosen place is no longer available: {{path}}',
   workspaceUnavailableFix: 'It may belong to another host or has been removed. Choose a new place; nothing is switched on your behalf.',
   workspaceUseHome: 'Use the home directory',
+  remoteFolderGone: 'Not on this host',
+  remoteGoneSummary: '{{count}} saved folders do not exist on {{host}}. They may belong to another host or were deleted.',
+  remoteGonePrune: 'Remove from list',
+  remoteGonePruning: 'Removing…',
+  remoteGonePruneFailed: 'Some folders were not removed from the list',
   workspaceUseHostHome: 'Use the home on {{host}}',
   feedbackTitle: 'Twiglane review comments',
   feedbackSource: 'From review {{review}} · result {{revision}} · {{count}} comments',

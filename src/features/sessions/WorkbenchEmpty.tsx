@@ -8,30 +8,38 @@ import { displayPath, shortPath } from '../../lib/paths';
 import { altLabel } from '../../lib/shortcut';
 import type { Project } from '../../types/launch';
 import type { AdapterDescriptor } from '../../types/native';
-import type { RemoteTarget } from '../../types/remote';
+import type { RemoteProject, RemoteTarget } from '../../types/remote';
 import styles from './SessionWorkbench.module.css';
 
 const QUICK_TOOL_LIMIT = 8;
 
-export function WorkbenchEmpty({ tools, projects, remoteTargets = [], remoteEnabled = false, activeTargetId = 'local', onTargetChange, onManageHosts, onNewSession, onOpenHome }: {
+export function WorkbenchEmpty({ tools, projects, remoteProjects = [], remoteTargets = [], remoteEnabled = false, activeTargetId = 'local', onTargetChange, onManageHosts, onNewSession, onOpenHome }: {
   tools: AdapterDescriptor[];
   projects: Project[];
+  /** Saved folders on SSH hosts; only the selected host's are offered. */
+  remoteProjects?: RemoteProject[];
   remoteTargets?: RemoteTarget[];
   remoteEnabled?: boolean;
   activeTargetId?: string;
   onTargetChange?: (targetId: string) => void;
   onManageHosts?: () => void;
-  onNewSession: (prefill?: { toolId?: string; projectId?: string }) => void;
+  onNewSession: (prefill?: { toolId?: string; projectId?: string; remoteProjectId?: string }) => void;
   onOpenHome: () => void;
 }) {
   const { t } = useTranslation();
   const quickTools = tools.slice(0, QUICK_TOOL_LIMIT);
-  const recent = useMemo(() => {
+  // Recent places belong to the host sessions will run on: a local folder never appears under an SSH host.
+  const onRemote = remoteEnabled && activeTargetId !== 'local';
+  const recent = useMemo<{ key: string; name: string; path: string; preferredTool?: string | null; prefill: { projectId?: string; remoteProjectId?: string } }[]>(() => {
+    if (onRemote) return remoteProjects.filter((item) => item.targetId === activeTargetId && item.path)
+      .sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 4)
+      .map((item) => ({ key: `remote:${item.id}`, name: item.name, path: item.path, preferredTool: item.preferredTool, prefill: { remoteProjectId: item.id } }));
     // Prefer standalone projects, then display the four chosen cards by recency.
     const byRecency = (a: Project, b: Project) => (b.lastOpened ?? 0) - (a.lastOpened ?? 0);
     return [...projects].sort((a, b) => Number(!!a.workspaceBacked) - Number(!!b.workspaceBacked) || byRecency(a, b))
-      .slice(0, 4).sort(byRecency);
-  }, [projects]);
+      .slice(0, 4).sort(byRecency)
+      .map((item) => ({ key: item.id, name: item.name, path: item.path ? shortPath(displayPath(item.path)) : '', preferredTool: item.preferredTool, prefill: { projectId: item.id } }));
+  }, [onRemote, activeTargetId, projects, remoteProjects]);
   return <div className={styles.empty}>
     <div className={styles.emptyShell}>
       <header className={styles.emptyHero}>
@@ -70,9 +78,9 @@ export function WorkbenchEmpty({ tools, projects, remoteTargets = [], remoteEnab
         <div className={styles.recentsGrid}>{recent.map((project) => {
           const toolId = project.preferredTool && tools.some((item) => item.id === project.preferredTool) ? project.preferredTool : tools[0]?.id;
           const toolName = tools.find((item) => item.id === toolId)?.name;
-          return <button key={project.id} type="button" className={styles.recentCard} onClick={() => onNewSession({ projectId: project.id, toolId: project.preferredTool ?? undefined })}>
+          return <button key={project.key} type="button" className={styles.recentCard} title={project.path || undefined} onClick={() => onNewSession({ ...project.prefill, toolId: project.preferredTool ?? undefined })}>
             <span className={styles.recentIcon}><Icon name="folder" size={16} /></span>
-            <span className={styles.recentCopy}><strong>{project.name}</strong><small>{project.path ? shortPath(displayPath(project.path)) : t('sessions.placeUnknown')}</small></span>
+            <span className={styles.recentCopy}><strong>{project.name}</strong><small>{project.path || t('sessions.placeUnknown')}</small></span>
             {toolId && <span className={styles.recentTool} title={toolName}><ToolIcon toolId={toolId} size={16} /></span>}
             <span className={styles.recentAction} aria-hidden="true"><Icon name="arrowRight" size={14} /></span>
           </button>;

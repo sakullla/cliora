@@ -19,8 +19,8 @@ const host = {
 };
 
 /** Hold list_remote_targets until the test releases it, so the workbench mounts against an empty host list. */
-async function installHostDesktop(page: Page, options: { savedHost?: boolean; holdTargets?: boolean } = {}) {
-  await page.addInitScript(({ host, savedHost, holdTargets }) => {
+async function installHostDesktop(page: Page, options: { savedHost?: boolean; holdTargets?: boolean; savedFolders?: boolean } = {}) {
+  await page.addInitScript(({ host, savedHost, holdTargets, savedFolders }) => {
     if (savedHost) localStorage.setItem('cliora:remote-target', host.id);
     else localStorage.removeItem('cliora:remote-target');
     let releaseTargets = () => {};
@@ -45,7 +45,16 @@ async function installHostDesktop(page: Page, options: { savedHost?: boolean; ho
             if (holdTargets) await targetsReady;
             return [host];
           }
-          if (command === 'list_remote_directories') return { parent: args.parent, items: [], truncated: false };
+          // The host has /srv/project/kept; /srv/project/elsewhere was saved but does not exist there.
+          const folders = savedFolders ? [
+            { id: 'kept', targetId: host.id, name: 'kept', path: '/srv/project/kept', preferredTool: null, updatedAt: 2 },
+            { id: 'elsewhere', targetId: host.id, name: 'elsewhere', path: '/srv/project/elsewhere', preferredTool: null, updatedAt: 3 },
+          ] : [];
+          const deleted = ((window as unknown as { __deletedRemote?: string[] }).__deletedRemote ??= []);
+          if (command === 'list_remote_directories') return { parent: args.parent, items: args.parent === '/srv/project' ? ['/srv/project/kept'] : [], truncated: false };
+          if (command === 'list_remote_projects') return folders.filter((item) => !deleted.includes(item.id));
+          if (command === 'delete_remote_project') { deleted.push(String(args.id)); return null; }
+          if (command === 'list_projects') return savedFolders ? [{ id: 'local-app', name: 'local-app', path: 'C:/work/local-app', available: true, preferredTool: null, lastOpened: 5, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} }] : [];
           if (command === 'plugin:dialog|open') {
             const result = (window as unknown as { __dialogResult?: string | null }).__dialogResult;
             if (result === 'fail') throw new Error('系统文件夹对话框不可用');
@@ -60,7 +69,7 @@ async function installHostDesktop(page: Page, options: { savedHost?: boolean; ho
         },
       },
     });
-  }, { host, savedHost: options.savedHost ?? false, holdTargets: options.holdTargets ?? false });
+  }, { host, savedHost: options.savedHost ?? false, holdTargets: options.holdTargets ?? false, savedFolders: options.savedFolders ?? false });
 }
 
 test('a failed local folder dialog is reported in the new-session dialog and keeps the choices; cancelling stays silent', async ({ page }) => {
@@ -198,6 +207,59 @@ test('choosing a remote host in the sidebar makes the next new session remote', 
   await expect(page.getByRole('dialog', { name: '选择远程文件夹' })).toHaveCount(0);
 });
 
+test('the new-session dialog lists only the current host folders and flags the ones that host does not have', async ({ page }) => {
+  await installHostDesktop(page, { savedFolders: true });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await stage.getByRole('button', { name: '新建会话' }).click();
+  const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
+  const workspace = dialog.getByRole('button', { name: '工作目录 / 项目' });
+
+  await workspace.click();
+  await expect(page.getByRole('option', { name: /local-app/ })).toBeVisible();
+  await expect(page.getByRole('option', { name: /kept/ })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await dialog.getByRole('button', { name: '关闭' }).click();
+
+  // The dialog follows the workbench host; there is no separate switch inside it.
+  await page.locator('.sidebar-host').getByRole('button', { name: '运行位置：本机' }).click();
+  await page.getByRole('menuitemradio', { name: /测试远程主机/ }).click();
+  await stage.getByRole('button', { name: '新建会话' }).click();
+  await expect(dialog.getByRole('button', { name: /^运行主机/ })).toHaveCount(0);
+  await expect(workspace).toHaveAttribute('title', '默认主目录 · 测试远程主机 · /srv/project');
+
+  // A saved folder the host does not have is flagged, cannot be chosen, and can be dropped in one click.
+  const notice = dialog.locator('[data-remote-gone]');
+  await expect(notice).toContainText('测试远程主机 上有 1 个已保存目录不存在');
+  await workspace.click();
+  await expect(page.getByRole('option', { name: /local-app/ })).toHaveCount(0);
+  await expect(page.getByRole('option', { name: /kept/ })).toBeEnabled();
+  await expect(page.getByRole('option', { name: /elsewhere.*主机上已不存在/ })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await notice.getByRole('button', { name: '从列表移除' }).click();
+  await expect(notice).toHaveCount(0);
+  expect(await page.evaluate(() => (window as unknown as { __deletedRemote?: string[] }).__deletedRemote)).toEqual(['elsewhere']);
+  await workspace.click();
+  await expect(page.getByRole('option', { name: /elsewhere/ })).toHaveCount(0);
+  await expect(page.getByRole('option', { name: /kept/ })).toBeVisible();
+});
+
+test('the empty launchpad offers recent places from the selected host only', async ({ page }) => {
+  await installHostDesktop(page, { savedFolders: true });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
+  const recents = page.getByRole('region', { name: '从最近项目开始' });
+  await expect(recents.getByRole('button', { name: /local-app/ })).toBeVisible();
+  await expect(recents.getByRole('button', { name: /kept/ })).toHaveCount(0);
+
+  await page.locator('.sidebar-host').getByRole('button', { name: '运行位置：本机' }).click();
+  await page.getByRole('menuitemradio', { name: /测试远程主机/ }).click();
+  await expect(recents.getByRole('button', { name: /local-app/ })).toHaveCount(0);
+  await recents.getByRole('button', { name: /kept/ }).click();
+  await expect(page.getByRole('dialog', { name: '新建工作台会话' }).getByRole('button', { name: '工作目录 / 项目' })).toHaveAttribute('title', /\/srv\/project\/kept/);
+});
+
 test('switching hosts brings back each host own place instead of reporting a missing folder', async ({ page }) => {
   await installHostDesktop(page);
   await page.goto('/');
@@ -288,24 +350,24 @@ test('a remote session composer lists that host library, not this computer', asy
   const navigation = page.getByRole('navigation', { name: '页面' });
   await navigation.getByRole('button', { name: '首页', exact: true }).click();
   await navigation.getByRole('button', { name: '工作台', exact: true }).click();
-  await expect(composer.getByText('提示词刷新失败，当前显示上次成功读取的内容。')).toBeVisible();
+  await expect(composer.getByTitle('提示词刷新失败，当前显示上次成功读取的内容。')).toBeVisible();
   await expect(composer.getByRole('button', { name: '远端提示' })).toBeVisible();
   await expect(input).toHaveValue('keep-composer-draft');
   expect(await page.evaluate(() => (window as any).__promptState.failures)).toBeGreaterThan(0);
   await page.evaluate(() => { (window as any).__promptState.fail = false; });
   await composer.getByRole('button', { name: '重试提示词' }).click();
-  await expect(composer.getByText('提示词刷新失败，当前显示上次成功读取的内容。')).toHaveCount(0);
+  await expect(composer.getByTitle('提示词刷新失败，当前显示上次成功读取的内容。')).toHaveCount(0);
   await expect(input).toHaveValue('keep-composer-draft');
   await expect(stage).toContainText('/srv/project');
   await page.evaluate(() => { (window as any).__promptState.fail = true; (window as any).__expirePromptCache(); });
   await page.getByRole('button', { name: '新建会话', exact: true }).first().click();
   const dialog = page.getByRole('dialog', { name: '新建工作台会话' });
-  await expect(dialog.getByText('提示词刷新失败，当前显示上次成功读取的内容。')).toBeVisible();
+  await expect(dialog.getByTitle('提示词刷新失败，当前显示上次成功读取的内容。')).toBeVisible();
   const initial = dialog.getByRole('textbox', { name: '初始提示词（可选）' });
   await initial.fill('keep-new-session-draft');
   await page.evaluate(() => { (window as any).__promptState.fail = false; });
   await dialog.getByRole('button', { name: '重试提示词' }).click();
-  await expect(dialog.getByText('提示词刷新失败，当前显示上次成功读取的内容。')).toHaveCount(0);
+  await expect(dialog.getByTitle('提示词刷新失败，当前显示上次成功读取的内容。')).toHaveCount(0);
   await expect(dialog.getByRole('button', { name: '远端提示' })).toBeVisible();
   await expect(initial).toHaveValue('keep-new-session-draft');
   await dialog.getByRole('button', { name: '关闭', exact: true }).click();

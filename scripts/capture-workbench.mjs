@@ -517,7 +517,7 @@ for (const width of widths) {
         area = page.getByRole('dialog', { name: copy('新建工作台会话', 'New workbench session') });
         await area.getByRole('textbox', { name: copy('初始提示词（可选）', 'Initial prompt (optional)') }).fill('保留新会话的初始提示词草稿');
       }
-      await area.getByText(failure === 'stale' ? copy('提示词刷新失败，当前显示上次成功读取的内容。', 'Prompt refresh failed. Showing the last successful prompts.') : copy('暂时无法读取此位置的提示词。', 'Could not read prompts from this location.'), { exact: true }).waitFor();
+      await (failure === 'stale' ? area.getByTitle(copy('提示词刷新失败，当前显示上次成功读取的内容。', 'Prompt refresh failed. Showing the last successful prompts.'), { exact: true }) : area.getByText(copy('暂时无法读取此位置的提示词。', 'Could not read prompts from this location.'), { exact: true })).waitFor();
       await area.getByRole('button', { name: copy('重试提示词', 'Retry prompts'), exact: true }).waitFor();
       return page.evaluate(() => ({ ...window.__promptFixture }));
     }, false, 'connected', failure);

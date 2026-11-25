@@ -24,6 +24,10 @@
 .pageNav { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-top: var(--space-3); color: var(--text-3); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
 
 /* ---- Quick bar (composer / new session) ---- */
+.pickerAlert { display: inline-flex; align-items: center; gap: var(--space-1); min-width: 0; color: var(--danger); }
+.pickerAlert[data-stale] { color: var(--text-3); }
+.pickerAlert > svg { flex: none; }
+.pickerAlert[data-stale] > svg { color: var(--warning); }
 .pickerBar { display: flex; align-items: center; gap: var(--space-1_5); flex-wrap: wrap; min-width: 0; font-size: var(--fs-caption); }
 .pill { max-width: 180px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pillStar { color: var(--warning); fill: currentColor; }

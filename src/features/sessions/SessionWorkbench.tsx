@@ -47,7 +47,7 @@ import { PromptPicker } from './PromptPicker';
 import { TerminalAppearance } from './TerminalAppearance';
 import { WorkbenchEmpty } from './WorkbenchEmpty';
 import { WorkbenchShortcuts } from './WorkbenchShortcuts';
-import { ensureRemoteProject, lastRemoteDir, rememberRemoteDir, rememberedRemoteDir, remoteBaseName, remoteStartPath, useRemoteFolderPicker } from '../remote/remoteLaunch';
+import { ensureRemoteProject, lastRemoteDir, missingRemoteProjects, rememberRemoteDir, rememberedRemoteDir, remoteBaseName, remoteStartPath, useRemoteFolderPicker } from '../remote/remoteLaunch';
 import { requestWriteRecovery, useWriteRecoveryNeeded } from '../remote/writeReceipts';
 import { RemoteSshSettings } from '../settings/GeneralSettings';
 import styles from './SessionWorkbench.module.css';
@@ -688,6 +688,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const newLaunchPending = useRef(false);
   const [dialogError, setDialogError] = useState('');
   const [customRemotePath, setCustomRemotePath] = useState('');
+  // Saved folders the selected host reported as gone, keyed by host so a switch never borrows another host's answer.
+  const [goneRemote, setGoneRemote] = useState<{ targetId: string; ids: Set<string> } | null>(null);
+  const [pruningRemote, setPruningRemote] = useState(false);
   const remotePicker = useRemoteFolderPicker();
 
   const scopedSessions = useMemo(() => {
@@ -2150,7 +2153,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     return value;
   }
 
-  function openNewSessionDialog(prefill?: { toolId?: string; projectId?: string; directory?: string; place?: 'worktree' }, targetOverride?: string) {
+  function openNewSessionDialog(prefill?: { toolId?: string; projectId?: string; remoteProjectId?: string; directory?: string; place?: 'worktree' }, targetOverride?: string) {
     setDialogError('');
     const dialogTarget = targetOverride || activeTargetId;
     const inheritedValue = adoptWorkspaceTarget(dialogTarget);
@@ -2193,6 +2196,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         setWorkspaceValue('project:' + prefill.projectId);
       }
       if (project?.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)) nextToolId = project.preferredTool;
+    } else if (prefill?.remoteProjectId) {
+      const project = remoteProjects.find((item) => item.id === prefill.remoteProjectId);
+      setWorkspaceValue('remote:' + prefill.remoteProjectId);
+      if (project?.preferredTool && terminalTools.some((item) => item.id === project.preferredTool)) nextToolId = project.preferredTool;
     } else if (prefill?.directory) {
       setCustomFolderPath(prefill.directory);
       setWorkspaceValue('custom:' + prefill.directory);
@@ -2201,9 +2208,25 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     if (prefill) setLaunchToolId(nextToolId);
     // Each opening starts from the saved default mode, not the previous dialog's choice.
     launchModeTouched.current = false;
-    applyPreferredMode(launchSettings, prefill ? (prefill.projectId ? 'project' : 'cli') : dialogModeTarget(inheritedValue), nextToolId);
+    applyPreferredMode(launchSettings, prefill ? (prefill.projectId || prefill.remoteProjectId ? 'project' : 'cli') : dialogModeTarget(inheritedValue), nextToolId);
     setAdvancedOpen(false);
     setNewDialogOpen(true);
+  }
+
+  /** Forget saved folders the host says are gone; folders an open session still names are kept. */
+  async function pruneGoneRemoteFolders(ids: string[]) {
+    const used = new Set(allSessionsRef.current.map((session) => session.projectId));
+    const removable = ids.filter((id) => !used.has(`remote:${id}`));
+    if (!removable.length || pruningRemote) return;
+    setPruningRemote(true);
+    setDialogError('');
+    const results = await Promise.allSettled(removable.map((id) => native.deleteRemoteProject(id)));
+    const removed = new Set(removable.filter((_, index) => results[index].status === 'fulfilled'));
+    setRemoteProjects((current) => current.filter((item) => !removed.has(item.id)));
+    if (removed.has(workspaceValue.slice('remote:'.length)) && workspaceValue.startsWith('remote:')) setWorkspaceValue('__home');
+    const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failed) setDialogError(formatFailure(failed.reason, t('sessions.remoteGonePruneFailed'), t('sessions.failureHint')));
+    setPruningRemote(false);
   }
 
   async function launchRemoteProject(project: RemoteProject, toolOverride?: string) {
@@ -3320,6 +3343,18 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const availableRemoteProjects = useMemo(() => !newDialogOpen || activeTargetId === 'local' ? [] : remoteProjects.filter((item) => item.path && item.targetId === activeTargetId).sort((a, b) => b.updatedAt - a.updatedAt), [newDialogOpen, activeTargetId, remoteProjects]);
   const activeRemoteTarget = remoteSshEnabled && activeTargetId !== 'local' ? remoteTargets.find((target) => target.id === activeTargetId) ?? null : null;
   const remoteHomePath = activeRemoteTarget ? remoteStartPath(activeRemoteTarget) : '';
+  const goneRemoteIds = activeRemoteTarget && goneRemote?.targetId === activeRemoteTarget.id ? goneRemote.ids : null;
+  // A folder a session still names stays listed; only the rest are offered for removal.
+  const goneRemovable = goneRemoteIds ? [...goneRemoteIds].filter((id) => !sessions.some((session) => session.projectId === `remote:${id}`)) : [];
+  // Saved folders are history, not proof: a host can be re-pointed or a folder deleted. Ask the host once per opening.
+  const savedRemoteKey = availableRemoteProjects.map((item) => `${item.id}=${item.path}`).join('|');
+  useEffect(() => {
+    if (!nativeAvailable || !newDialogOpen || !activeRemoteTarget || !availableRemoteProjects.length) return;
+    let alive = true;
+    const targetId = activeRemoteTarget.id;
+    void missingRemoteProjects(targetId, availableRemoteProjects).then((ids) => { if (alive) setGoneRemote({ targetId, ids }); }).catch(() => {});
+    return () => { alive = false; };
+  }, [newDialogOpen, activeRemoteTarget?.id, savedRemoteKey]);
   // The dialog reads its base from the directory it will really use; the home
   // entry has none, so a worktree cannot be chosen there.
   const dialogDirectory = newDialogOpen ? dialogPrepareDirectory() : null;
@@ -3563,7 +3598,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     if (activeRemoteTarget) {
       const list: FilterSelectOption[] = [
         { value: '__home', label: t('sessions.workspaceHome'), detail: `${activeRemoteTarget.name} · ${remoteHomePath}`, icon: <Icon name="home" size={14} /> },
-        ...availableRemoteProjects.filter((project) => project.path !== remoteHomePath && project.path !== customRemotePath).map((project) => ({ value: `remote:${project.id}`, label: project.name, detail: project.path, icon: <Icon name="folder" size={14} /> })),
+        // Folders this host reported as gone sink to the end and cannot be chosen.
+        ...availableRemoteProjects.filter((project) => project.path !== remoteHomePath && project.path !== customRemotePath)
+          .map((project) => ({ project, gone: !!goneRemoteIds?.has(project.id) }))
+          .sort((a, b) => Number(a.gone) - Number(b.gone))
+          .map(({ project, gone }) => ({ value: `remote:${project.id}`, label: project.name, detail: project.path, note: gone ? t('sessions.remoteFolderGone') : undefined, disabled: gone, icon: <Icon name="folder" size={14} /> })),
       ];
       if (customRemotePath) list.push({ value: `rpath:${customRemotePath}`, label: remoteBaseName(customRemotePath) || customRemotePath, detail: customRemotePath, icon: <Icon name="folder" size={14} /> });
       return list;
@@ -3581,12 +3620,12 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     ];
     if (customFolderPath && !businessRepositoryOptions.some(option => option.value === `custom:${customFolderPath}`)) list.push({ value: `custom:${customFolderPath}`, label: shortPath(displayPath(customFolderPath)), detail: displayPath(customFolderPath), icon: <Icon name="folder" size={14} /> });
     return list;
-  }, [newDialogOpen, activeRemoteTarget, availableProjects, availableRemoteProjects, businessRepositoryOptions, customFolderPath, customRemotePath, remoteHomePath, workspaceValue, t]);
+  }, [newDialogOpen, activeRemoteTarget, availableProjects, availableRemoteProjects, businessRepositoryOptions, customFolderPath, customRemotePath, goneRemoteIds, remoteHomePath, workspaceValue, t]);
   /**
    * A stored workspace that is no longer offered keeps its value and says why: switching hosts
    * or removing a project must not silently launch somewhere else.
    */
-  const workspaceUnavailable = newDialogOpen && !workspaceSelectOptions.some((option) => option.value === workspaceValue);
+  const workspaceUnavailable = newDialogOpen && !workspaceSelectOptions.some((option) => option.value === workspaceValue && !option.disabled);
   useEffect(() => {
     const option = workspaceSelectOptions.find((item) => item.value === workspaceValue);
     if (option) workspaceLabels.current.set(workspaceValue, option.label);
@@ -4135,7 +4174,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         })()}
 
         {((loading && !scopedSessions.length) || (selectedId && !selected)) && <div className={styles.loading} role="status"><span className={styles.loadingMark} aria-hidden="true" /><p>{t('sessions.loading')}</p></div>}
-        {showEmpty && !listError && <WorkbenchEmpty tools={terminalTools} projects={availableProjects} remoteTargets={remoteTargets.filter((target) => target.enabled)} remoteEnabled={remoteSshEnabled} activeTargetId={activeTargetId} onTargetChange={(targetId) => { setActiveTargetId(targetId); onRemoteTargetChange?.(targetId); }} onManageHosts={() => setHostManagerOpen(true)} onNewSession={openNewSessionDialog} onOpenHome={onOpenHome} />}
+        {showEmpty && !listError && <WorkbenchEmpty tools={terminalTools} projects={availableProjects} remoteProjects={remoteProjects} remoteTargets={remoteTargets.filter((target) => target.enabled)} remoteEnabled={remoteSshEnabled} activeTargetId={activeTargetId} onTargetChange={(targetId) => { setActiveTargetId(targetId); onRemoteTargetChange?.(targetId); }} onManageHosts={() => setHostManagerOpen(true)} onNewSession={openNewSessionDialog} onOpenHome={onOpenHome} />}
       </section>
     </div>
 
@@ -4224,7 +4263,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
             {/* One click for the CLIs used most; the list above still reaches every tool. */}
             {terminalTools.length > 1 && <div className={styles.toolPicks} role="radiogroup" aria-label={t('sessions.quickPickTools')}>{terminalTools.slice(0, DIALOG_QUICK_TOOLS).map((tool) => <button key={tool.id} type="button" role="radio" aria-checked={effectiveLaunchToolId === tool.id} aria-label={tool.name} title={tool.name} className={styles.toolPick} onClick={() => pickLaunchTool(tool.id)}><ToolIcon toolId={tool.id} size={16} /></button>)}</div>}
           </div>
-          <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.pickWorkspaceLabel')}</span><FilterSelect label={t('sessions.pickWorkspaceLabel')} value={workspaceValue} options={workspaceUnavailable ? [...workspaceSelectOptions, { value: workspaceValue, label: workspaceValueLabel(workspaceValue), note: t('sessions.workspaceUnavailableFix'), disabled: true }] : workspaceSelectOptions} searchable searchLabel={t('sessions.searchWorkspace')} onPickFolder={() => void pickCustomWorkspaceFolder()} pickFolderLabel={t('sessions.pickFolder')} onChange={(value) => {
+          <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.pickWorkspaceLabel')}</span><FilterSelect label={t('sessions.pickWorkspaceLabel')} value={workspaceValue} options={workspaceUnavailable && !workspaceSelectOptions.some((option) => option.value === workspaceValue) ? [...workspaceSelectOptions, { value: workspaceValue, label: workspaceValueLabel(workspaceValue), note: t('sessions.workspaceUnavailableFix'), disabled: true }] : workspaceSelectOptions} searchable searchLabel={t('sessions.searchWorkspace')} onPickFolder={() => void pickCustomWorkspaceFolder()} pickFolderLabel={t('sessions.pickFolder')} onChange={(value) => {
             setWorkspaceValue(value);
             const repository = activeRemoteTarget ? undefined : businessRepositoryOptions.find(option => option.value === value);
             setBusinessSelection(repository?.selection ?? null);
@@ -4239,6 +4278,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
             }
             if (!launchModeTouched.current) applyPreferredMode(launchSettings, dialogModeTarget(value), nextToolId);
           }} />
+          {goneRemovable.length > 0 && activeRemoteTarget && <p className={styles.goneNotice} role="status" data-remote-gone="">
+            <Icon name="info" size={13} />
+            <span>{t('sessions.remoteGoneSummary', { count: goneRemovable.length, host: activeRemoteTarget.name })}</span>
+            <button type="button" className={styles.goneAction} disabled={pruningRemote} onClick={() => void pruneGoneRemoteFolders(goneRemovable)}>{pruningRemote ? t('sessions.remoteGonePruning') : t('sessions.remoteGonePrune')}</button>
+          </p>}
           </div>
         </div>
         {workspaceUnavailable && <div className={styles.workspaceMissing} role="alert" data-workspace-unavailable="">

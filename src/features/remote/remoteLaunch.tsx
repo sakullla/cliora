@@ -47,6 +47,31 @@ export async function ensureRemoteProject(targetId: string, path: string, toolId
   return native.saveRemoteProject({ id: '', targetId, name: remoteBaseName(clean) || i18n.t('home.remote.defaultName'), path: clean, preferredTool: toolId || null, updatedAt: 0 });
 }
 
+/**
+ * Saved folders on a host that the host says are gone. Each parent is listed once (folders saved
+ * side by side cost one read); a parent that cannot be read proves nothing, so its folders stay.
+ */
+export async function missingRemoteProjects(targetId: string, projects: RemoteProject[]): Promise<Set<string>> {
+  const byParent = new Map<string, RemoteProject[]>();
+  for (const project of projects) {
+    if (project.targetId !== targetId || !project.path || normalizeRemotePath(project.path) === '/') continue;
+    const parent = remoteParent(project.path);
+    byParent.set(parent, [...(byParent.get(parent) ?? []), project]);
+  }
+  const missing = new Set<string>();
+  await Promise.all([...byParent].map(async ([parent, children]) => {
+    try {
+      const listing = await native.listRemoteDirectories(targetId, parent);
+      if (listing.truncated) return;
+      const present = new Set(listing.items.map(normalizeRemotePath));
+      for (const child of children) if (!present.has(normalizeRemotePath(child.path))) missing.add(child.id);
+    } catch (error) {
+      if ((error as { remote?: { reason?: string } })?.remote?.reason === 'directory_missing') children.forEach((child) => missing.add(child.id));
+    }
+  }));
+  return missing;
+}
+
 // Like the local launch directory, the remote one is remembered for this app session per host and CLI.
 const rememberedDirs = new Map<string, string>();
 const lastDirs = new Map<string, string>();

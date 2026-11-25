@@ -83,7 +83,11 @@ export function PromptPicker({ context, sourceKey, active = true, workspaces = [
     <span className={labelClassName}><Icon name="library" size={12} /> {t('prompts.title')}</span>
     {quick.page.items.map(item => <Button key={item.id} className={styles.pill} size="sm" variant="ghost" title={`${item.title} · ${scopeLabel(item.scope, workspaces, t)}`} disabled={reading || quick.loading} icon={item.favorite ? <Icon name="star" size={11} className={styles.pillStar} /> : undefined} onClick={() => void read(item, true)}>{item.title}</Button>)}
     <Button size="sm" variant="ghost" data-select-trigger="true" aria-haspopup="dialog" aria-expanded={open} disabled={!context} title={!context ? t('prompts.unknownHost') : t('prompts.keepDraft')} icon={<Icon name="search" size={13} />} onClick={() => { setRestoreFocus(true); setOpen(true); setError(''); }}>{t('prompts.open')}</Button>
-    {(quick.error || (!open && error)) && <span role="alert"><span>{quick.error ? t(quick.stale ? 'sessions.promptsStale' : 'sessions.promptsFailed') : error}</span> <Button size="sm" variant="ghost" onClick={quick.reload}>{t('sessions.retryPrompts')}</Button></span>}
+    {/* Stale prompts are still usable, so the row says so in a word and keeps the detail in the tooltip. */}
+    {(quick.error || (!open && error)) && (() => {
+      const message = quick.error ? t(quick.stale ? 'sessions.promptsStale' : 'sessions.promptsFailed') : error;
+      return <span role="alert" className={styles.pickerAlert} data-stale={quick.error && quick.stale ? '' : undefined} title={message}><Icon name="alert" size={12} /><span>{quick.error && quick.stale ? t('sessions.promptsStaleShort') : message}</span><Button size="sm" variant="ghost" onClick={quick.reload}>{t('sessions.retryPrompts')}</Button></span>;
+    })()}
     {notice && <span role="status">{notice}</span>}
     <GuideDialog open={open} restoreFocus={restoreFocus} title={t('prompts.open')} hint={t('prompts.keepDraft')} wide onClose={close}>
       <div className={styles.picker} onKeyDown={event => {

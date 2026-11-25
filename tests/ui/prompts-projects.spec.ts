@@ -218,9 +218,9 @@ test('failed prompt reads reuse a same-scope snapshot across entries but never a
   await place('payment-api', /^payment-api 支付系统/);
   await expect(dialog.getByText('暂时无法读取此位置的提示词。', { exact: true })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'API 回归', exact: true })).toHaveCount(0);
-  await expect(dialog.getByText('提示词刷新失败，当前显示上次成功读取的内容。', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByTitle('提示词刷新失败，当前显示上次成功读取的内容。', { exact: true })).toHaveCount(0);
   await place('team-0/api', /^api 电商平台/);
-  await expect(dialog.getByText('提示词刷新失败，当前显示上次成功读取的内容。', { exact: true })).toBeVisible();
+  await expect(dialog.getByTitle('提示词刷新失败，当前显示上次成功读取的内容。', { exact: true })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'API 回归', exact: true })).toBeVisible();
 });
 
