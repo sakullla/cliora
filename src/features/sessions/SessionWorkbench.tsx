@@ -2593,9 +2593,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         ...(promptText ? { initialPrompt: promptText } : {}),
         ...(resume ? { resumeLatest: true } : {}),
         worktreeIntent,
-        // Always explicit: a caller that prepares the prompt has to know whether this
-        // launch becomes a terminal (secret prelude) or a conversation (plain text).
-        interaction: fallback ?? savedInteraction,
+        // Only an ACP conversation or a retry that explicitly fell back to a terminal
+        // needs the field: a plain terminal launch keeps its historical request shape.
+        ...(fallback || savedInteraction === 'acp' ? { interaction: fallback ?? savedInteraction } : {}),
         ...(!remoteLaunch && !resume && useWorkbench && taskLine ? { taskText: taskLine } : {}),
       };
       // An explicit creation runs in the background: the dialog closes at once,

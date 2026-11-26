@@ -26,7 +26,7 @@
 | Cursor | 原生 CLI（native） | `cursor-agent acp` · 未安装 | 未安装 | 未核对（`~/.cursor`） | 未验证 | 未验证 | 未验证 | 未验证 | not-installed（不回退到 `agent`） | documented | unverified |
 | Kimi Code | 原生（native） | `kimi acp` · 2.7.0（仅 2.x） | Windows | `~/.kimi-code` | 握手声明 | 握手声明 | 协议必备 | loadSession + resume 已声明 | 1.x 报 version-unsupported | handshake | unverified |
 | Qoder CN | 原生（native） | `qoderclicn --acp` · 1.1.94 | Windows | `~/.qoder-cn` | 握手声明 | 握手声明 | 协议必备 | loadSession（`sessionCapabilities` 未记录） | 不回退国际版 `qoder` | handshake | unverified |
-| ZCode | 社区桥接（bridge） | `zcode-acp` · 未安装（Python 3.9+） | 未安装 | 未核对（`~/.zcode`、ZCODE_CJS） | 未验证 | 未验证 | 未验证 | 未验证 | dependency-missing（桥接本身或 Python/引擎缺失） | documented | unverified |
+| ZCode | 社区桥接（bridge） | `zcode-acp` · 未安装（Python 3.9+） | 未安装 | 未核对（`~/.zcode`、ZCODE_CJS） | 未验证 | 未验证 | 未验证 | 未验证 | dependency-missing（桥接 zcode-acp 缺失）；桥接在场但缺 Python/ZCode 引擎时启动失败并回传宿主原因 | documented | unverified |
 | DeepSeek Harness | 原生（native） | `dsh acp` · 未安装 | 未安装 | 未核对（`~/.dsh`，沿用 profile 层） | 未验证 | 未验证 | 未验证 | 未验证 | not-installed | documented | unverified |
 | CodeBuddy | 原生（native） | `codebuddy --acp` · 2.187.0 | Windows | `~/.codebuddy` | 握手声明 | 握手声明 | 协议必备 | loadSession（`sessionCapabilities` 未记录） | — | handshake | unverified |
 | MiMo Code | 原生（native） | `mimo acp` · 0.1.15 | Windows | `~/.config`、`~/.local`（`@mimo-ai/cli`） | 握手声明 | 握手声明 | 协议必备 | loadSession + resume 已声明 | — | handshake | unverified |
@@ -202,7 +202,7 @@
 
 ### 原生命令实际排除的用例
 
-交付原生命令（见 `03-execution-plan.md#delivery_verification/native`）用 `--skip` 排除了 12 项库测试和 1 条集成用例。它们都依赖本机不具备的环境前提，且不在本需求的改动路径上：
+交付原生命令（见 `03-execution-plan.md#delivery_verification/native`）用 `--skip` 按模块前缀排除了 27 项（其中 12 项本机失败）和 1 条集成用例。它们都依赖本机不具备的环境前提，且不在本需求的改动路径上：
 
 - `remote::uploads::tests`（7 项，含 `upload_files_moves_through_sftp_temp_and_atomic_claim`、`upload_session_files_records_claimed_paths_for_the_active_session`、`pending_upload_sweep_recovers_only_confirmed_absent_sessions`）：需要可用的 SFTP／远端上传通道。
 - `remote::transactions::tests`（3 项：`failed_restore_can_retry_through_public_inspection_after_the_fault_is_removed`、`interrupted_partial_restore_keeps_a_durable_barrier_between_files_and_can_finish_later`、`restore_rejects_wrong_staging_hash_symlink_hardlink_and_destination_changes_without_overwrite`）：依赖远端事务目录与符号链接／硬链接语义。
