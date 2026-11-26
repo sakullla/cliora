@@ -3797,25 +3797,25 @@ pub async fn set_launch_interaction(app: AppHandle, mode: String) -> Result<laun
 /// started. Every ACP command is session-scoped: nothing here addresses "the
 /// current conversation".
 #[tauri::command]
-pub fn acp_session(session_id: String) -> Result<crate::acp_host::AcpSessionSnapshot, ApiError> {
-    crate::acp_host::snapshot(&session_id).map_err(native_error)
+pub fn acp_session(session_id: String) -> Result<crate::acp::AcpSessionSnapshot, ApiError> {
+    crate::acp::snapshot(&session_id).map_err(native_error)
 }
 
 #[tauri::command]
-pub fn list_acp_sessions() -> Vec<crate::acp_host::AcpSessionSnapshot> {
-    crate::acp_host::list()
+pub fn list_acp_sessions() -> Vec<crate::acp::AcpSessionSnapshot> {
+    crate::acp::list()
 }
 
 #[tauri::command]
 pub fn acp_prompt(session_id: String, text: String) -> Result<(), ApiError> {
-    crate::acp_host::prompt(&session_id, &text).map_err(native_error)
+    crate::acp::prompt(&session_id, &text).map_err(native_error)
 }
 
 /// Stop the current turn only. The turn stays open until the agent reports its
 /// own result, so the panel keeps showing it as stopping.
 #[tauri::command]
 pub fn acp_cancel(session_id: String) -> Result<(), ApiError> {
-    crate::acp_host::cancel(&session_id).map_err(native_error)
+    crate::acp::cancel(&session_id).map_err(native_error)
 }
 
 /// Answer a pending authorization request once. A missing option withdraws it.
@@ -3825,13 +3825,28 @@ pub fn acp_respond_permission(
     request_id: String,
     option_id: Option<String>,
 ) -> Result<(), ApiError> {
-    crate::acp_host::respond_permission(&session_id, &request_id, option_id.as_deref())
+    crate::acp::respond_permission(&session_id, &request_id, option_id.as_deref())
         .map_err(native_error)
+}
+
+/// Switch the conversation's mode to one the agent declared. The request waits
+/// for the agent's answer off the main thread; a refusal keeps the previous
+/// mode and republishes it.
+#[tauri::command]
+pub async fn acp_set_mode(session_id: String, mode_id: String) -> Result<(), ApiError> {
+    blocking(move || crate::acp::set_mode(&session_id, &mode_id).map_err(native_error)).await
+}
+
+/// Set one declared configuration option: a select takes a string value, a
+/// boolean takes true or false. A refusal keeps and republishes the old value.
+#[tauri::command]
+pub async fn acp_set_config(session_id: String, config_id: String, value: serde_json::Value) -> Result<(), ApiError> {
+    blocking(move || crate::acp::set_config(&session_id, &config_id, &value).map_err(native_error)).await
 }
 
 #[tauri::command]
 pub fn acp_close(session_id: String) -> Result<(), ApiError> {
-    crate::acp_host::close(&session_id).map_err(native_error)
+    crate::acp::close(&session_id).map_err(native_error)
 }
 
 #[tauri::command]

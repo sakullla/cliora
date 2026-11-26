@@ -652,6 +652,13 @@ export const acp = {
   cancel: (sessionId: string) => command<void>('acp_cancel', { sessionId }),
   respondPermission: (sessionId: string, requestId: string, optionId: string | null = null) =>
     command<void>('acp_respond_permission', { sessionId, requestId, optionId }),
+  /** Switch to a mode the agent declared. A refusal rejects and the host republishes
+   *  the unchanged snapshot, so the view returns to the previous mode. */
+  setMode: (sessionId: string, modeId: string) => command<void>('acp_set_mode', { sessionId, modeId }),
+  /** Set one declared option: a string for a select, a boolean for a toggle.
+   *  `ACP_LEGACY_MODEL_CONFIG` addresses the legacy model list. */
+  setConfig: (sessionId: string, configId: string, value: string | boolean) =>
+    command<void>('acp_set_config', { sessionId, configId, value }),
   close: (sessionId: string) => command<void>('acp_close', { sessionId }),
 };
 

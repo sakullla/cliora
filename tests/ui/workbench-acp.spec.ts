@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { installAcpMock, openWorkbench, snapshot } from './acpMock';
+import { agentMessage, installAcpMock, openWorkbench, snapshot, toolCall } from './acpMock';
 
 test('the settings row picks ACP independently of the terminal and keeps the stored value on failure', async ({ page }) => {
   await installAcpMock(page, { interaction: 'terminal' });
@@ -71,32 +71,38 @@ test('a launch opens a conversation, streams one reply, merges its tool call and
   await expect(panel.locator('[data-role="agent"]')).toHaveCount(1);
 
   // Tool updates merge by their call id: one card that ends completed.
-  await page.evaluate(() => (window as any).__acpEvent({ sessionId: 'a1', seq: 4, kind: 'tool', call: { callId: 'c1', title: 'read_file', status: 'in_progress', detail: 'src/a.ts' } }));
-  await page.evaluate(() => (window as any).__acpEvent({ sessionId: 'a1', seq: 5, kind: 'tool', call: { callId: 'c1', title: 'read_file', status: 'completed', detail: 'src/a.ts' } }));
+  const send = (event: Record<string, unknown>) => page.evaluate((value) => (window as any).__acpEvent(value), event);
+  await send({ sessionId: 'a1', seq: 4, kind: 'tool', call: toolCall('c1', { title: 'read_file', toolKind: 'read', status: 'in_progress', locations: [{ path: 'src/a.ts', line: null }] }) });
+  await send({ sessionId: 'a1', seq: 5, kind: 'tool', call: toolCall('c1', { title: 'read_file', toolKind: 'read', status: 'completed', locations: [{ path: 'src/a.ts', line: null }] }) });
   const tool = panel.locator('[data-status]').filter({ hasText: 'read_file' });
   await expect(tool).toHaveCount(1);
   await expect(tool).toHaveAttribute('data-status', 'completed');
   await expect(tool).toContainText('已完成');
+  await expect(tool).toContainText('src/a.ts');
 
-  // An authorization card answers exactly its own request, once.
-  await page.evaluate(() => (window as any).__acpEvent({
-    sessionId: 'a1', seq: 6, kind: 'permission',
-    card: { requestId: 'r1', turnId: 'turn-1', title: '写入 src/a.ts', detail: '1 个文件', options: [{ optionId: 'allow', name: '允许一次', kind: 'allow_once' }, { optionId: 'reject', name: '拒绝', kind: 'reject_once' }] },
-  }));
+  // An authorization card sits on the tool call that asked and answers exactly its
+  // own request, once.
+  const permission = { requestId: 'r1', turnId: 'turn-1', options: [{ optionId: 'allow', name: '允许一次', kind: 'allow_once' }, { optionId: 'reject', name: '拒绝', kind: 'reject_once' }] };
+  await send({ sessionId: 'a1', seq: 6, kind: 'tool', call: toolCall('c2', { title: '写入 src/a.ts', toolKind: 'edit', permission }) });
+  await send({ sessionId: 'a1', seq: 7, kind: 'pending', pending: ['r1'] });
   const card = panel.getByRole('group', { name: '写入 src/a.ts' });
   await expect(card).toBeVisible();
+  await expect(panel.locator('[data-item-id="tool:c2"]').getByRole('group', { name: '写入 src/a.ts' })).toBeVisible();
   await card.getByRole('button', { name: '允许一次', exact: true }).click();
   expect(await page.evaluate(() => (window as any).__acpTest.answers)).toEqual([['a1', 'r1', 'allow']]);
-  await page.evaluate(() => (window as any).__acpEvent({ sessionId: 'a1', seq: 7, kind: 'permissionClosed', requestId: 'r1', decision: 'allow' }));
+  await send({ sessionId: 'a1', seq: 8, kind: 'tool', call: toolCall('c2', { title: '写入 src/a.ts', toolKind: 'edit' }) });
+  await send({ sessionId: 'a1', seq: 9, kind: 'pending', pending: [] });
   await expect(panel.getByRole('group', { name: '写入 src/a.ts' })).toHaveCount(0);
 
   // Stopping reports its own state until the turn answers.
-  await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'running', seq: 8 }));
+  await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'running', seq: 10 }));
   await panel.getByRole('button', { name: '停止', exact: true }).click();
   expect(await page.evaluate(() => (window as any).__acpTest.cancels)).toEqual(['a1']);
-  await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'stopping', seq: 9 }));
+  await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'stopping', seq: 11 }));
   await expect(panel.getByRole('button', { name: '正在停止…', exact: true })).toBeDisabled();
-  await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'ready', lastTurnReason: 'cancelled', seq: 10 }));
+  await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'ready', lastTurnReason: 'cancelled', seq: 12 }));
+  // The end of the turn is a timeline entry, in its place after the turn's output.
+  await send({ sessionId: 'a1', seq: 13, kind: 'item', item: { kind: 'turn', id: 'turn-1-end', turnId: 'turn-1', reason: 'cancelled' } });
   await expect(panel.getByText('本轮已停止。')).toBeVisible();
   await expect(panel.getByRole('textbox')).toBeEnabled();
 
@@ -198,8 +204,8 @@ test('two conversations keep their own messages when the workbench switches betw
   await installAcpMock(page, {
     interaction: 'acp',
     conversations: [
-      snapshot({ id: 'a1', directory: 'C:/alpha', messages: [{ id: 'a1m', role: 'agent', text: 'alpha 的回答', truncated: false }] }),
-      snapshot({ id: 'a2', directory: 'C:/beta', messages: [{ id: 'a2m', role: 'agent', text: 'beta 的回答', truncated: false }] }),
+      snapshot({ id: 'a1', directory: 'C:/alpha', timeline: [agentMessage('a1m', 'alpha 的回答')] }),
+      snapshot({ id: 'a2', directory: 'C:/beta', timeline: [agentMessage('a2m', 'beta 的回答')] }),
     ],
   });
   await openWorkbench(page);
@@ -226,7 +232,7 @@ test('a narrow window keeps the conversation composer usable without horizontal 
   await page.setViewportSize({ width: 760, height: 700 });
   await installAcpMock(page, {
     interaction: 'acp',
-    conversations: [snapshot({ id: 'a1', directory: 'C:/work/a-long-directory-name', messages: [{ id: 'm1', role: 'agent', text: '窄窗口里的回答', truncated: false }] })],
+    conversations: [snapshot({ id: 'a1', directory: 'C:/work/a-long-directory-name', timeline: [agentMessage('m1', '窄窗口里的回答')] })],
   });
   await openWorkbench(page);
   const panel = page.locator('[data-acp="true"][data-pane-session="a1"]');
@@ -235,4 +241,26 @@ test('a narrow window keeps the conversation composer usable without horizontal 
   await expect(panel.getByRole('button', { name: '发送', exact: true })).toBeVisible();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(1);
+});
+test('replies and tool calls read in arrival order and a tool update stays in its place', async ({ page }) => {
+  await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', state: 'running' })] });
+  await openWorkbench(page);
+  const panel = page.locator('[data-acp="true"][data-pane-session="a1"]');
+  await expect(panel).toBeVisible();
+  const send = (event: Record<string, unknown>) => page.evaluate((value) => (window as any).__acpEvent(value), event);
+  await send({ sessionId: 'a1', seq: 2, kind: 'chunk', messageId: 'r1', role: 'agent', text: '先读 a.ts。', truncated: false, turnId: 'turn-1', subagent: null });
+  await send({ sessionId: 'a1', seq: 3, kind: 'tool', call: toolCall('A', { title: '读取 a.ts', toolKind: 'read', status: 'in_progress' }) });
+  await send({ sessionId: 'a1', seq: 4, kind: 'chunk', messageId: 'r2', role: 'agent', text: '读完了，接着改。', truncated: false, turnId: 'turn-1', subagent: null });
+  await send({ sessionId: 'a1', seq: 5, kind: 'tool', call: toolCall('A', { title: '读取 a.ts', toolKind: 'read', status: 'completed' }) });
+  await send({ sessionId: 'a1', seq: 6, kind: 'tool', call: toolCall('B', { title: '编辑 a.ts', toolKind: 'edit', content: [{ type: 'diff', path: 'src/a.ts', oldText: 'a', newText: 'b', truncated: false }] }) });
+  // A late chunk for the first reply merges where that reply stands.
+  await send({ sessionId: 'a1', seq: 7, kind: 'chunk', messageId: 'r1', role: 'agent', text: '（补充）', truncated: false, turnId: 'turn-1', subagent: null });
+
+  const order = panel.locator('[role="log"] > [data-item-id]');
+  await expect(order).toHaveCount(4);
+  expect(await order.evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-item-id')))).toEqual(['r1', 'tool:A', 'r2', 'tool:B']);
+  await expect(order.nth(0)).toContainText('先读 a.ts。（补充）');
+  await expect(order.nth(1)).toHaveAttribute('data-status', 'completed');
+  await expect(order.nth(3)).toContainText('修改 src/a.ts');
+  await expect(panel.locator('[data-item-id="tool:A"]')).toHaveCount(1);
 });

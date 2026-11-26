@@ -201,7 +201,7 @@ pub struct RestoreEvent {
     /// The live conversation, published once an ACP record is restored. A
     /// conversation is not a PTY session, so it carries its own snapshot
     /// instead of being reported as a missing terminal.
-    pub acp_session: Option<crate::acp_host::AcpSessionSnapshot>,
+    pub acp_session: Option<crate::acp::AcpSessionSnapshot>,
 }
 
 /// An event sink. Every worker reports through the same sink, so it must be
@@ -235,7 +235,7 @@ fn progress(scope: &RestoreScope<'_>, session: &SavedSession, stage: RestoreStag
         detail,
         candidates,
         session: id.and_then(snapshot),
-        acp_session: id.and_then(|id| crate::acp_host::snapshot(id).ok()),
+        acp_session: id.and_then(|id| crate::acp::snapshot(id).ok()),
     });
 }
 
@@ -573,31 +573,31 @@ fn restore_conversation_items(
             // Starting the agent is not the restore. Only the load the agent
             // itself negotiated continues the old conversation; a fresh session
             // must not take over the old record and report success.
-            let resume = match crate::acp_host::snapshot(&id) {
+            let resume = match crate::acp::snapshot(&id) {
                 Ok(snapshot) => (snapshot.resume, snapshot.native_session_id),
                 Err(error) => {
-                    let _ = crate::acp_host::close(&id);
+                    let _ = crate::acp::close(&id);
                     let _ = forget(db, &id);
                     return Err(format!("无法读取新会话的状态：{error}"));
                 }
             };
             if let Some(detail) = conversation_resume_failure(resume.0, resume.1.as_deref()) {
-                let _ = crate::acp_host::close(&id);
+                let _ = crate::acp::close(&id);
                 let _ = forget(db, &id);
                 return Err(detail);
             }
             if let Err(error) = crate::workspaces::restore_session_context(db, &session.id, &id) {
-                let _ = crate::acp_host::close(&id);
+                let _ = crate::acp::close(&id);
                 let _ = forget(db, &id);
                 return Err(error);
             }
             let cleanup = if live.contains_key(&session.id) {
-                crate::acp_host::close(&session.id)
+                crate::acp::close(&session.id)
             } else {
                 Ok(())
             };
             if let Err(error) = cleanup.and_then(|()| forget(db, &session.id)) {
-                let _ = crate::acp_host::close(&id);
+                let _ = crate::acp::close(&id);
                 let _ = forget(db, &id);
                 return Err(error);
             }

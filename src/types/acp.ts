@@ -1,19 +1,35 @@
-/** One retained conversation message. A chunk event carries only the text just
- *  appended; the snapshot holds the accumulated message. */
+// ACP conversation contract. Every type here mirrors a serialized Rust type in
+// src-tauri/src/acp (same name, camelCase fields); tests/native/acp-contract.test.mjs
+// fails when the two drift apart.
+
+/** Who a message comes from. 'session' is a message another session sent, as a
+ *  subagent's transcript reports it. */
+export type AcpRole = 'user' | 'agent' | 'thought' | 'session';
+
+/** One retained message. A chunk event carries only the text just appended; the
+ *  snapshot holds the accumulated message. */
 export type AcpMessage = {
   id: string;
-  role: 'user' | 'agent' | 'thought';
+  role: AcpRole;
   text: string;
   /** Output past the retained budget was dropped, not silently shortened. */
   truncated: boolean;
+  turnId: string;
+  /** The child session this message belongs to; null for the conversation's own. */
+  subagent: string | null;
 };
 
-/** One tool call, merged by its call id. */
-export type AcpToolCall = {
-  callId: string;
-  title: string;
-  status: 'pending' | 'in_progress' | 'completed' | 'failed';
-  detail: string;
+/** One piece of tool output, as the protocol typed it. An image keeps only its type. */
+export type AcpToolContent =
+  | { type: 'text'; text: string; truncated: boolean }
+  | { type: 'diff'; path: string; oldText: string | null; newText: string; truncated: boolean }
+  | { type: 'terminal'; terminalId: string }
+  | { type: 'image'; mimeType: string }
+  | { type: 'session'; sessionId: string };
+
+export type AcpToolLocation = {
+  path: string;
+  line: number | null;
 };
 
 export type AcpPermissionOption = {
@@ -23,15 +39,189 @@ export type AcpPermissionOption = {
   kind: string;
 };
 
-/** A pending authorization card. It is valid only while its request, its
- *  session and the connection that asked for it are alive. */
-export type AcpPermissionCard = {
+/** An open authorization request on the tool call it asks about. It is valid only
+ *  while its request id is in the snapshot's pending list. */
+export type AcpPermissionRequest = {
   requestId: string;
   turnId: string;
-  title: string;
-  detail: string;
   options: AcpPermissionOption[];
 };
+
+export type AcpToolKind = 'read' | 'edit' | 'delete' | 'move' | 'search' | 'execute' | 'think' | 'fetch' | 'switch_mode' | 'other';
+
+/** One tool call, merged in place by its call id within its session. */
+export type AcpToolCall = {
+  id: string;
+  callId: string;
+  title: string;
+  /** Named apart from the timeline item's own `kind` tag. */
+  toolKind: AcpToolKind;
+  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  content: AcpToolContent[];
+  locations: AcpToolLocation[];
+  /** A bounded JSON summary of the tool input. */
+  rawInput: string | null;
+  turnId: string;
+  subagent: string | null;
+  permission: AcpPermissionRequest | null;
+};
+
+/** A host notice. `code` is stable ('trimmed' marks dropped history); empty for free text. */
+export type AcpNotice = {
+  id: string;
+  level: 'info' | 'warning' | 'error';
+  code: string;
+  text: string;
+  turnId: string;
+};
+
+export type AcpTurnReason = 'end_turn' | 'limit' | 'refusal' | 'cancelled' | 'disconnected' | 'failed' | 'unknown';
+
+/** The end of one turn and why it ended. */
+export type AcpTurnEnd = {
+  id: string;
+  turnId: string;
+  reason: AcpTurnReason;
+};
+
+/** A child session the agent announced. */
+export type AcpSubagent = {
+  id: string;
+  sessionId: string;
+  parent: string | null;
+  title: string | null;
+  description: string | null;
+  state: string | null;
+  stopReason: string | null;
+  summary: string;
+  turnId: string;
+};
+
+/** One ordered timeline entry. Its place is fixed when it first appears. */
+export type AcpTimelineItem =
+  | ({ kind: 'message' } & AcpMessage)
+  | ({ kind: 'tool' } & AcpToolCall)
+  | ({ kind: 'notice' } & AcpNotice)
+  | ({ kind: 'turn' } & AcpTurnEnd)
+  | ({ kind: 'subagent' } & AcpSubagent);
+
+export type AcpPlanEntry = {
+  content: string;
+  priority: 'high' | 'medium' | 'low';
+  status: 'pending' | 'in_progress' | 'completed';
+};
+
+export type AcpAvailableCommand = {
+  name: string;
+  description: string;
+  hint: string | null;
+};
+
+export type AcpMode = {
+  id: string;
+  name: string;
+  description: string | null;
+};
+
+export type AcpModes = {
+  currentModeId: string;
+  availableModes: AcpMode[];
+};
+
+export type AcpConfigChoice = {
+  value: string;
+  name: string;
+  description: string | null;
+  group: string | null;
+};
+
+/** One configuration selector: a select holds a string, a boolean holds true or false. */
+export type AcpConfigOption = {
+  id: string;
+  name: string;
+  description: string | null;
+  category: string | null;
+  type: 'select' | 'boolean';
+  currentValue: string | boolean;
+  options: AcpConfigChoice[];
+};
+
+export type AcpModel = {
+  modelId: string;
+  name: string;
+  description: string | null;
+};
+
+export type AcpModels = {
+  currentModelId: string;
+  availableModels: AcpModel[];
+};
+
+/** Session settings as the agent declared them. */
+export type AcpSessionConfig = {
+  modes: AcpModes | null;
+  options: AcpConfigOption[];
+  models: AcpModels | null;
+};
+
+/** The configuration id that addresses the legacy model selector. */
+export const ACP_LEGACY_MODEL_CONFIG = '_model';
+
+export type AcpCost = {
+  amount: number;
+  currency: string;
+};
+
+export type AcpUsage = {
+  used: number;
+  size: number;
+  cost: AcpCost | null;
+};
+
+export type AcpSessionInfo = {
+  title: string | null;
+  updatedAt: string | null;
+  /** Null until the agent actually reports usage. */
+  usage: AcpUsage | null;
+};
+
+export type AcpImplementation = {
+  name: string;
+  title: string | null;
+  version: string | null;
+};
+
+export type AcpPromptCapabilities = {
+  image: boolean;
+  audio: boolean;
+  embeddedContext: boolean;
+};
+
+export type AcpSessionCapabilities = {
+  list: boolean;
+  resume: boolean;
+  delete: boolean;
+  close: boolean;
+};
+
+export type AcpAuthMethod = {
+  id: string;
+  name: string;
+  description: string | null;
+  type: string;
+};
+
+/** What the agent declared during initialize. */
+export type AcpAgentDescriptor = {
+  protocolVersion: number | null;
+  agentInfo: AcpImplementation | null;
+  promptCapabilities: AcpPromptCapabilities;
+  sessionCapabilities: AcpSessionCapabilities;
+  loadSession: boolean;
+  authMethods: AcpAuthMethod[];
+};
+
+export type AcpSessionState = 'starting' | 'ready' | 'running' | 'stopping' | 'waiting_permission' | 'closed' | 'failed';
 
 /** Full state of one conversation, for a view that mounts later. */
 export type AcpSessionSnapshot = {
@@ -42,33 +232,36 @@ export type AcpSessionSnapshot = {
   mode: 'normal' | 'yolo';
   interaction: 'acp';
   /** 'stopping' is a turn the user stopped that has not reported its own result yet. */
-  state: 'starting' | 'ready' | 'running' | 'stopping' | 'waiting_permission' | 'closed' | 'failed';
+  state: AcpSessionState;
   nativeSessionId: string | null;
   resume: 'none' | 'unsupported' | 'loaded' | 'failed';
-  messages: AcpMessage[];
-  tools: AcpToolCall[];
-  permissions: AcpPermissionCard[];
+  /** Everything the conversation produced, in arrival order. */
+  timeline: AcpTimelineItem[];
+  /** Request ids still waiting for the user's answer. */
+  pending: string[];
+  plan: AcpPlanEntry[];
+  commands: AcpAvailableCommand[];
+  config: AcpSessionConfig;
+  info: AcpSessionInfo;
+  agent: AcpAgentDescriptor;
   /** Bounded, redacted standard-error lines; never a protocol body. */
   diagnostics: string[];
   /** The reason the last turn ended. Empty means no turn has ended yet; 'unknown'
    *  means the agent ended the turn without a reason this host recognizes. */
-  lastTurnReason: '' | 'end_turn' | 'limit' | 'refusal' | 'cancelled' | 'disconnected' | 'failed' | 'unknown';
+  lastTurnReason: '' | AcpTurnReason;
   seq: number;
 };
 
 /** One ordered event. The session id scopes it, so two panels never mix. */
-export type AcpEvent = {
-  sessionId: string;
-  seq: number;
-  kind: 'snapshot' | 'chunk' | 'tool' | 'permission' | 'permissionClosed' | 'notice';
-  snapshot?: AcpSessionSnapshot;
-  messageId?: string;
-  role?: 'user' | 'agent' | 'thought';
-  text?: string;
-  truncated?: boolean;
-  call?: AcpToolCall;
-  card?: AcpPermissionCard;
-  requestId?: string;
-  decision?: string;
-  level?: 'info' | 'warning' | 'error';
-};
+export type AcpUpdate =
+  | { kind: 'snapshot'; snapshot: AcpSessionSnapshot }
+  | { kind: 'chunk'; messageId: string; role: AcpRole; text: string; truncated: boolean; turnId: string; subagent: string | null }
+  | { kind: 'tool'; call: AcpToolCall }
+  | { kind: 'item'; item: AcpTimelineItem }
+  | { kind: 'plan'; entries: AcpPlanEntry[] }
+  | { kind: 'commands'; commands: AcpAvailableCommand[] }
+  | { kind: 'config'; config: AcpSessionConfig }
+  | { kind: 'info'; info: AcpSessionInfo }
+  | { kind: 'pending'; pending: string[] };
+
+export type AcpEvent = { sessionId: string; seq: number } & AcpUpdate;

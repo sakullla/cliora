@@ -44,7 +44,7 @@ import { placeParts, railPlace, railTaskTitle } from './railTitle';
 import { uploadDisplayName, useSessionUploads, type SessionUploadTask } from './sessionUploads';
 import uploadStyles from './sessionUploads.module.css';
 import { AcpConversation } from './AcpConversation';
-import { applyAcpEvent, acpIsLive, acpRow, type AcpConversation as AcpConversationState } from './acpSession';
+import { applyAcpEvent, acpIsLive, acpPendingCount, acpRow, type AcpConversation as AcpConversationState } from './acpSession';
 import type { AcpEvent, AcpSessionSnapshot } from '../../types/acp';
 import { WorkbenchComposer } from './WorkbenchComposer';
 import { PromptPicker } from './PromptPicker';
@@ -506,7 +506,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       const existing = current.get(snapshot.id);
       if (existing && existing.snapshot.seq > snapshot.seq) return current;
       const next = new Map(current);
-      next.set(snapshot.id, { snapshot, notices: existing?.notices ?? [] });
+      next.set(snapshot.id, { snapshot });
       return next;
     });
   }
@@ -2070,15 +2070,15 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
    * publishes the screen evidence; this function only assembles facts it did not invent.
    */
   function taskEvidenceOf(session: WorkbenchSession): TaskEvidence {
-    // A conversation's evidence is its own protocol state: a pending authorization is
-    // the only thing that asks for a person, and only a running turn is work.
+    // A conversation's evidence is its own protocol state: a pending request is the
+    // only thing that asks for a person, and only a running turn is work.
     const conversation = conversationOf(session.id);
     if (conversation) {
       return {
         running: acpIsLive(conversation),
         exitCode: null,
         remoteUnconfirmed: false,
-        attention: conversation.permissions.length > 0 ? 'approval' : null,
+        attention: acpPendingCount(conversation) > 0 ? 'approval' : null,
         bell: false,
         outputActive: conversation.state === 'running',
         resting: conversation.state === 'ready',

@@ -1,15 +1,10 @@
-import type { AcpEvent, AcpMessage, AcpPermissionCard, AcpSessionSnapshot, AcpToolCall } from '../../types/acp';
+import type { AcpEvent, AcpSessionSnapshot, AcpTimelineItem, AcpUpdate } from '../../types/acp';
 import type { WorkbenchSession } from '../../types/launch';
 
-/** A bounded, redacted protocol notice for one conversation. A notice is not a
- *  message: it never enters the snapshot the native host keeps. */
-export type AcpNotice = { seq: number; level: 'info' | 'warning' | 'error'; text: string };
-
-/** One conversation as the workbench renders it: the native snapshot plus the
- *  notices this window received. Two sessions never share one of these. */
-export type AcpConversation = { snapshot: AcpSessionSnapshot; notices: AcpNotice[] };
-
-export const ACP_NOTICE_LIMIT = 20;
+/** One conversation as the workbench renders it: the native snapshot, folded
+ *  forward by the ordered events this window received. Two sessions never share
+ *  one of these. Notices live in the snapshot's own timeline. */
+export type AcpConversation = { snapshot: AcpSessionSnapshot };
 
 /** A conversation the host still owns: it can accept a prompt or report a turn. */
 export function acpIsLive(snapshot: AcpSessionSnapshot): boolean {
@@ -35,45 +30,53 @@ export function acpRow(snapshot: AcpSessionSnapshot): WorkbenchSession {
   };
 }
 
-function upsertMessage(messages: AcpMessage[], id: string, role: AcpMessage['role'], text: string, truncated: boolean): AcpMessage[] {
-  const index = messages.findIndex((message) => message.id === id);
-  if (index < 0) return [...messages, { id, role, text, truncated }];
-  const next = [...messages];
-  const current = next[index];
-  next[index] = { ...current, text: current.text + text, truncated: current.truncated || truncated };
+/** Insert an item at the end, or replace the item with the same id where it stands:
+ *  an item's place in the timeline is fixed when it first appears. */
+function upsertItem(timeline: AcpTimelineItem[], item: AcpTimelineItem): AcpTimelineItem[] {
+  const index = timeline.findIndex((entry) => entry.id === item.id);
+  if (index < 0) return [...timeline, item];
+  const next = [...timeline];
+  next[index] = item;
   return next;
 }
 
-function upsertTool(tools: AcpToolCall[], call: AcpToolCall): AcpToolCall[] {
-  const index = tools.findIndex((item) => item.callId === call.callId);
-  if (index < 0) return [...tools, call];
-  const next = [...tools];
-  next[index] = { ...next[index], ...call };
+type ChunkUpdate = Extract<AcpUpdate, { kind: 'chunk' }>;
+
+/** Append a chunk to exactly one message. A message id the view does not hold yet
+ *  starts a new message at the end, exactly where the host placed it. */
+function appendChunk(timeline: AcpTimelineItem[], chunk: ChunkUpdate): AcpTimelineItem[] {
+  const index = timeline.findIndex((entry) => entry.id === chunk.messageId);
+  if (index < 0) {
+    return [...timeline, {
+      kind: 'message', id: chunk.messageId, role: chunk.role, text: chunk.text, truncated: !!chunk.truncated,
+      turnId: typeof chunk.turnId === 'string' ? chunk.turnId : '', subagent: chunk.subagent ?? null,
+    }];
+  }
+  const current = timeline[index];
+  if (current.kind !== 'message') return timeline;
+  const next = [...timeline];
+  next[index] = { ...current, text: current.text + chunk.text, truncated: current.truncated || !!chunk.truncated };
   return next;
 }
 
-function upsertCard(cards: AcpPermissionCard[], card: AcpPermissionCard): AcpPermissionCard[] {
-  const index = cards.findIndex((item) => item.requestId === card.requestId);
-  if (index < 0) return [...cards, card];
-  const next = [...cards];
-  next[index] = card;
-  return next;
+function validItem(item: unknown): item is AcpTimelineItem {
+  return !!item && typeof (item as { id?: unknown }).id === 'string' && typeof (item as { kind?: unknown }).kind === 'string';
 }
 
 /**
  * Fold one ordered event into a conversation. A snapshot replaces the whole state
  * (it is what a view that mounts late reads); a chunk appends to exactly one message
- * id; a tool update merges by its call id. An event the view already applied, or an
- * older one that arrived after a newer snapshot, is ignored instead of replayed, so a
- * remount or a switching pane never duplicates a reply.
+ * id; a tool or item update replaces that one timeline entry in place; plan, commands,
+ * config, info and pending replace their own field. An event the view already
+ * applied, or an older one that arrived after a newer snapshot, is ignored instead of
+ * replayed, so a remount or a switching pane never duplicates a reply.
  */
 export function applyAcpEvent(current: AcpConversation | undefined, event: AcpEvent): AcpConversation | null {
   if (!event || typeof event.sessionId !== 'string' || typeof event.seq !== 'number') return null;
   if (event.kind === 'snapshot') {
     const snapshot = event.snapshot;
     if (!snapshot || snapshot.id !== event.sessionId) return null;
-    const notices = current ? current.notices : [];
-    return { snapshot, notices };
+    return { snapshot };
   }
   if (!current) return null;
   const snapshot = current.snapshot;
@@ -83,28 +86,37 @@ export function applyAcpEvent(current: AcpConversation | undefined, event: AcpEv
     case 'chunk': {
       if (typeof event.messageId !== 'string' || typeof event.text !== 'string') return current;
       const role = event.role ?? 'agent';
-      return { snapshot: { ...base, messages: upsertMessage(snapshot.messages, event.messageId, role, event.text, !!event.truncated) }, notices: current.notices };
+      return { snapshot: { ...base, timeline: appendChunk(snapshot.timeline, { ...event, role }) } };
     }
     case 'tool': {
-      if (!event.call || typeof event.call.callId !== 'string') return current;
-      return { snapshot: { ...base, tools: upsertTool(snapshot.tools, event.call) }, notices: current.notices };
+      if (!event.call || typeof event.call.id !== 'string') return current;
+      return { snapshot: { ...base, timeline: upsertItem(snapshot.timeline, { kind: 'tool', ...event.call }) } };
     }
-    case 'permission': {
-      if (!event.card || typeof event.card.requestId !== 'string') return current;
-      return { snapshot: { ...base, permissions: upsertCard(snapshot.permissions, event.card) }, notices: current.notices };
+    case 'item': {
+      if (!validItem(event.item)) return current;
+      return { snapshot: { ...base, timeline: upsertItem(snapshot.timeline, event.item) } };
     }
-    case 'permissionClosed': {
-      if (typeof event.requestId !== 'string') return current;
+    case 'plan': {
+      if (!Array.isArray(event.entries)) return current;
+      return { snapshot: { ...base, plan: event.entries } };
+    }
+    case 'commands': {
+      if (!Array.isArray(event.commands)) return current;
+      return { snapshot: { ...base, commands: event.commands } };
+    }
+    case 'config': {
+      if (!event.config || !Array.isArray(event.config.options)) return current;
+      return { snapshot: { ...base, config: event.config } };
+    }
+    case 'info': {
+      if (!event.info) return current;
+      return { snapshot: { ...base, info: event.info } };
+    }
+    case 'pending': {
+      if (!Array.isArray(event.pending)) return current;
       // A withdrawn request is no longer answerable; the turn state stays whatever
       // the host last reported, so a stop still reads as stopping until it answers.
-      const permissions = snapshot.permissions.filter((card) => card.requestId !== event.requestId);
-      return { snapshot: { ...base, permissions }, notices: current.notices };
-    }
-    case 'notice': {
-      if (typeof event.text !== 'string') return current;
-      const level: AcpNotice['level'] = event.level === 'warning' || event.level === 'error' ? event.level : 'info';
-      const notices = [...current.notices, { seq: event.seq, level, text: event.text }].slice(-ACP_NOTICE_LIMIT);
-      return { snapshot: base, notices };
+      return { snapshot: { ...base, pending: event.pending } };
     }
     default:
       return current;
@@ -118,9 +130,14 @@ export function applyAcpEvents(current: AcpConversation | undefined, events: Acp
   return next;
 }
 
+/** Requests still waiting for this person. A closed conversation asks nothing. */
+export function acpPendingCount(snapshot: AcpSessionSnapshot): number {
+  return acpIsLive(snapshot) ? snapshot.pending.length : 0;
+}
+
 /** The card is answered once: while a reply is in flight every option is disabled. */
 export function acpCardAnswerable(snapshot: AcpSessionSnapshot, requestId: string): boolean {
-  return snapshot.permissions.some((card) => card.requestId === requestId) && snapshot.state !== 'closed' && snapshot.state !== 'failed';
+  return snapshot.pending.includes(requestId) && acpIsLive(snapshot);
 }
 
 /** The end of a turn, worded from the closed set the host reports. Empty means no

@@ -2600,13 +2600,13 @@ pub(crate) fn spawn_with_baseline(db: &Database, plan: LaunchPlan, restored: Opt
     // goes through the PTY host.
     if plan.interaction == InteractionMode::Acp {
         let saved = crate::workbench_restore::from_plan(&plan);
-        let spec = crate::acp_host::AcpStart::from_plan(&plan, None)?;
-        let snapshot = crate::acp_host::start(spec, credential)?;
+        let spec = crate::acp::AcpStart::from_plan(&plan, None)?;
+        let snapshot = crate::acp::start(spec, credential)?;
         if let Some(mut saved) = saved {
             saved.id = snapshot.id.clone();
             saved.native_id = snapshot.native_session_id.clone();
             if let Err(error) = crate::workbench_restore::save(db, &saved) {
-                let _ = crate::acp_host::close(&snapshot.id);
+                let _ = crate::acp::close(&snapshot.id);
                 return Err(format!("无法保存会话恢复记录：{error}"));
             }
         }

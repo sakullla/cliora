@@ -166,31 +166,52 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
     let restoreFixture = null;
     try { restoreFixture = JSON.parse(localStorage.getItem('capture:restore') ?? 'null'); } catch { /* optional */ }
     // One ACP conversation fixture. It is a snapshot plus ordered increments, exactly the
-    // shape the shared host publishes; nothing here spawns an agent.
+    // shape the shared host publishes (an ordered timeline); nothing here spawns an agent.
+    const acpMessage = (id, role, text) => ({ kind: 'message', id, role, text, truncated: false, turnId: 'turn-1', subagent: null });
+    const acpTool = (callId, title, toolKind, status, extra = {}) => ({
+      kind: 'tool', id: 'tool:' + callId, callId, title, toolKind, status, content: [], locations: [], rawInput: null,
+      turnId: 'turn-1', subagent: null, permission: null, ...extra,
+    });
+    const acpStyles = 'C:\\Projects\\cliora\\src\\features\\sessions\\SessionWorkbench.module.css';
     const acpFixture = acpMode ? [{
       id: 'acp1', toolId: 'codex', projectId: 'cliora', directory: 'C:\\Projects\\cliora', mode: 'normal', interaction: 'acp',
       state: acpMode === 'stopping' ? 'stopping' : acpMode === 'permission' ? 'waiting_permission' : 'ready',
       nativeSessionId: 'native-acp-1', resume: 'none',
-      messages: [
-        { id: 'm1', role: 'user', text: '把终端工具栏的间距改成令牌相加，并跑一次样式检查。', truncated: false },
-        { id: 'm2', role: 'thought', text: '先确认工具栏当前的间距来源，再改令牌，避免再写死像素值。', truncated: false },
-        { id: 'm3', role: 'agent', text: '我先读工具栏样式和令牌定义，确认间距现在来自哪里。', truncated: false },
-        { id: 'm4', role: 'agent', text: '间距来自两处固定像素值：工具栏内边距和按钮之间的 gap。改成 --space-1 与 --space-2 相加后，深浅主题与 760px 窄窗口都不再溢出。', truncated: false },
+      timeline: [
+        acpMessage('m1', 'user', '把终端工具栏的间距改成令牌相加，并跑一次样式检查。'),
+        acpMessage('m2', 'thought', '先确认工具栏当前的间距来源，再改令牌，避免再写死像素值。'),
+        acpMessage('m3', 'agent', '我先读工具栏样式和令牌定义，确认间距现在来自哪里。'),
+        acpTool('c1', 'read_file', 'read', 'completed', { locations: [{ path: acpStyles, line: 86 }] }),
+        acpTool('c2', 'edit_file', 'edit', 'completed', { content: [{ type: 'diff', path: acpStyles, oldText: 'gap: 6px;', newText: 'gap: var(--space-1_5);', truncated: false }] }),
+        acpMessage('m4', 'agent', '间距来自两处固定像素值：工具栏内边距和按钮之间的 gap。改成 --space-1 与 --space-2 相加后，深浅主题与 760px 窄窗口都不再溢出。'),
+        acpTool('c3', 'run_command', 'execute', acpMode === 'stopping' ? 'in_progress' : 'completed', { rawInput: '{"command":"node --test tests/native/style-tokens.test.mjs"}' }),
+        ...(acpMode === 'permission' ? [acpTool('c4', '运行 npm run verify', 'execute', 'pending', {
+          rawInput: '{"command":"npm run verify","cwd":"C:\\\\Projects\\\\cliora"}',
+          permission: {
+            requestId: 'r1', turnId: 'turn-1',
+            options: [
+              { optionId: 'allow-once', name: '允许一次', kind: 'allow_once' },
+              { optionId: 'allow-always', name: '总是允许', kind: 'allow_always' },
+              { optionId: 'reject', name: '拒绝', kind: 'reject_once' },
+            ],
+          },
+        })] : []),
+        ...(acpMode === 'stopping' ? [] : [{ kind: 'turn', id: 'turn-1-end', turnId: 'turn-1', reason: 'end_turn' }]),
       ],
-      tools: [
-        { callId: 'c1', title: 'read_file', status: 'completed', detail: 'src/features/sessions/SessionWorkbench.module.css' },
-        { callId: 'c2', title: 'edit_file', status: 'completed', detail: 'src/features/sessions/SessionWorkbench.module.css' },
-        { callId: 'c3', title: 'run_command', status: acpMode === 'stopping' ? 'in_progress' : 'completed', detail: 'node --test tests/native/style-tokens.test.mjs' },
+      pending: acpMode === 'permission' ? ['r1'] : [],
+      plan: [
+        { content: '读取工具栏样式与令牌', priority: 'high', status: 'completed' },
+        { content: '把固定像素换成令牌相加', priority: 'high', status: 'completed' },
+        { content: '运行样式检查', priority: 'medium', status: acpMode === 'stopping' ? 'in_progress' : 'completed' },
       ],
-      permissions: acpMode === 'permission' ? [{
-        requestId: 'r1', turnId: 'turn-2', title: '运行 npm run verify',
-        detail: '在 C:\\Projects\\cliora 执行 Node 测试与 Playwright 用例',
-        options: [
-          { optionId: 'allow-once', name: '允许一次', kind: 'allow_once' },
-          { optionId: 'allow-always', name: '总是允许', kind: 'allow_always' },
-          { optionId: 'reject', name: '拒绝', kind: 'reject_once' },
-        ],
-      }] : [],
+      commands: [],
+      config: { modes: null, options: [], models: null },
+      info: { title: '工具栏间距改用令牌', updatedAt: null, usage: null },
+      agent: {
+        protocolVersion: 1, agentInfo: { name: 'codex-acp', title: 'Codex', version: '0.1.0' },
+        promptCapabilities: { image: false, audio: false, embeddedContext: false },
+        sessionCapabilities: { list: false, resume: false, delete: false, close: false }, loadSession: false, authMethods: [],
+      },
       diagnostics: acpMode === 'stopping' ? ['agent 标准错误：正在结束本轮（已脱敏）'] : [],
       lastTurnReason: acpMode === 'stopping' ? '' : 'end_turn',
       seq: 24,
@@ -246,7 +267,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
           // ACP conversations come from the shared host, not from the PTY list.
           if (command === 'list_acp_sessions') return acpFixture ? acpFixture.map((item) => ({ ...item })) : [];
           if (command === 'acp_session') return acpFixture?.find((item) => item.id === args.sessionId) ?? null;
-          if (command === 'acp_prompt' || command === 'acp_cancel' || command === 'acp_respond_permission' || command === 'acp_close') return null;
+          if (command === 'acp_prompt' || command === 'acp_cancel' || command === 'acp_respond_permission' || command === 'acp_set_mode' || command === 'acp_set_config' || command === 'acp_close') return null;
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
           // Saved records for the per-record restore scenes; absent means "nothing to restore".

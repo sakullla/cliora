@@ -8,12 +8,50 @@ use super::*;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
+/// Every event the host emitted while the tests ran. Sessions have unique ids,
+/// so a test reads only its own.
+static EVENTS: LazyLock<Mutex<Vec<AcpEvent>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+
+pub(super) fn record(event: &AcpEvent) {
+    guard(&EVENTS).push(event.clone());
+}
+
+/// The events one session emitted, in emission order.
+pub(super) fn events_of(id: &str) -> Vec<AcpEvent> {
+    guard(&EVENTS).iter().filter(|event| event.session_id == id).cloned().collect()
+}
+
+/// The messages of a snapshot, in timeline order.
+pub(super) fn messages(snapshot: &AcpSessionSnapshot) -> Vec<AcpMessage> {
+    snapshot
+        .timeline
+        .iter()
+        .filter_map(|item| match item {
+            AcpTimelineItem::Message(message) => Some(message.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The tool calls of a snapshot, in timeline order.
+pub(super) fn tools(snapshot: &AcpSessionSnapshot) -> Vec<AcpToolCall> {
+    snapshot
+        .timeline
+        .iter()
+        .filter_map(|item| match item {
+            AcpTimelineItem::Tool(call) => Some(call.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// A reader fed by a channel: the scripted agent writes into it.
-struct ChannelReader {
-    receiver: Receiver<Vec<u8>>,
-    pending: Vec<u8>,
+pub(super) struct ChannelReader {
+    pub(super) receiver: Receiver<Vec<u8>>,
+    pub(super) pending: Vec<u8>,
 }
 
 impl Read for ChannelReader {
@@ -48,14 +86,14 @@ impl Write for ChannelWriter {
 
 /// The scripted agent. It reads the host's frames from its inbox and answers
 /// through its outbox.
-struct Agent {
-    inbox: Receiver<Vec<u8>>,
-    outbox: Sender<Vec<u8>>,
-    buffer: Vec<u8>,
+pub(super) struct Agent {
+    pub(super) inbox: Receiver<Vec<u8>>,
+    pub(super) outbox: Sender<Vec<u8>>,
+    pub(super) buffer: Vec<u8>,
 }
 
 impl Agent {
-    fn next_line(&mut self) -> Value {
+    pub(super) fn next_line(&mut self) -> Value {
         loop {
             if let Some(position) = self.buffer.iter().position(|byte| *byte == b'\n') {
                 let line: Vec<u8> = self.buffer.drain(..=position).collect();
@@ -69,18 +107,18 @@ impl Agent {
         }
     }
 
-    fn send(&self, value: Value) {
+    pub(super) fn send(&self, value: Value) {
         let mut text = serde_json::to_vec(&value).unwrap();
         text.push(b'\n');
         let _ = self.outbox.send(text);
     }
 
-    fn send_raw(&self, bytes: &[u8]) {
+    pub(super) fn send_raw(&self, bytes: &[u8]) {
         let _ = self.outbox.send(bytes.to_vec());
     }
 
     /// Answer the initialize request and the session/new request.
-    fn handshake(&mut self, load_session: bool) -> Value {
+    pub(super) fn handshake(&mut self, load_session: bool) -> Value {
         let initialize = self.next_line();
         assert_eq!(initialize["method"], "initialize");
         let id = initialize["id"].clone();
@@ -108,11 +146,11 @@ impl Agent {
     /// Stay connected until the host closes the session. A real agent keeps
     /// running after a turn; the scripted one must too, or the session would
     /// report a disconnect the test never asked for.
-    fn stay_connected(&mut self) {
+    pub(super) fn stay_connected(&mut self) {
         while self.inbox.recv().is_ok() {}
     }
 
-    fn chunk(&self, session: &str, message: &str, text: &str) {
+    pub(super) fn chunk(&self, session: &str, message: &str, text: &str) {
         self.send(json!({
             "jsonrpc": "2.0",
             "method": "session/update",
@@ -128,7 +166,7 @@ impl Agent {
     }
 }
 
-fn pair() -> (AcpIo, Agent) {
+pub(super) fn pair() -> (AcpIo, Agent) {
     let (host_writer, agent_inbox) = channel();
     let (agent_outbox, host_reader) = channel();
     let io = AcpIo {
@@ -140,7 +178,7 @@ fn pair() -> (AcpIo, Agent) {
     (io, Agent { inbox: agent_inbox, outbox: agent_outbox, buffer: Vec::new() })
 }
 
-fn spec(directory: &Path) -> AcpStart {
+pub(super) fn spec(directory: &Path) -> AcpStart {
     AcpStart {
         tool_id: "fixture-agent".into(),
         project_id: None,
@@ -163,15 +201,15 @@ fn spec(directory: &Path) -> AcpStart {
     }
 }
 
-fn temp_dir() -> tempfile::TempDir {
+pub(super) fn temp_dir() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
 }
 
-fn snapshot_of(id: &str) -> AcpSessionSnapshot {
+pub(super) fn snapshot_of(id: &str) -> AcpSessionSnapshot {
     snapshot(id).unwrap()
 }
 
-fn wait_for<T>(mut probe: impl FnMut() -> Option<T>, what: &str) -> T {
+pub(super) fn wait_for<T>(mut probe: impl FnMut() -> Option<T>, what: &str) -> T {
     let deadline = Instant::now() + Duration::from_secs(8);
     loop {
         if let Some(value) = probe() {
@@ -238,15 +276,14 @@ fn frames_split_across_writes_are_reassembled_and_coalesced() {
     let merged = wait_for(
         || {
             let current = snapshot_of(&snapshot.id);
-            current
-                .messages
+            messages(&current)
                 .iter()
                 .any(|message| message.text == "你好")
                 .then_some(current)
         },
         "合并写入后的消息",
     );
-    assert_eq!(merged.messages[0].role, "agent");
+    assert_eq!(messages(&merged)[0].role, "agent");
     close(&snapshot.id).unwrap();
     worker.join().unwrap();
 }
@@ -294,16 +331,19 @@ fn interleaved_updates_merge_by_call_and_message_id() {
     prompt(&snapshot.id, "请读取文件").unwrap();
     wait_until_idle(&snapshot.id, Duration::from_secs(8)).unwrap();
     let current = snapshot_of(&snapshot.id);
-    let merged = current.messages.iter().find(|message| message.id == "a").unwrap();
+    let listed = messages(&current);
+    let merged = listed.iter().find(|message| message.id == "a").unwrap();
     assert_eq!(merged.text, "第一段接续", "同一消息的增量必须按编号合并");
-    assert_eq!(
-        current.messages.iter().find(|message| message.id == "b").unwrap().text,
-        "另一段"
-    );
-    let calls: Vec<_> = current.tools.iter().filter(|call| call.call_id == "call-1").collect();
+    assert_eq!(listed.iter().find(|message| message.id == "b").unwrap().text, "另一段");
+    let listed_tools = tools(&current);
+    let calls: Vec<_> = listed_tools.iter().filter(|call| call.call_id == "call-1").collect();
     assert_eq!(calls.len(), 1, "工具更新必须按调用编号归并，而不是追加两次");
     assert_eq!(calls[0].status, "completed");
-    assert!(calls[0].detail.contains("文件内容"));
+    assert_eq!(calls[0].tool_kind, "read", "未在更新中出现的字段保持原值");
+    assert_eq!(
+        calls[0].content,
+        vec![AcpToolContent::Text { text: "文件内容".into(), truncated: false }]
+    );
     assert_eq!(current.last_turn_reason, "end_turn");
     assert_eq!(current.state, "ready");
     close(&snapshot.id).unwrap();
@@ -344,15 +384,18 @@ fn permission_is_bound_to_the_turn_and_answered_at_most_once() {
 
     let snapshot = open(spec(directory.path()), io).unwrap();
     prompt(&snapshot.id, "请写文件").unwrap();
-    let card = wait_for(
-        || snapshot_of(&snapshot.id).permissions.into_iter().next(),
-        "授权卡",
-    );
-    assert_eq!(card.request_id, "900");
+    let card = wait_for(|| snapshot_of(&snapshot.id).pending.into_iter().next(), "授权卡");
+    assert_eq!(card, "900");
+    // The card sits on the tool call it asks about, not in a separate list.
+    let asked = tools(&snapshot_of(&snapshot.id));
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].call_id, "call-1");
+    assert_eq!(asked[0].title, "写入文件");
+    assert_eq!(asked[0].permission.as_ref().map(|request| request.request_id.as_str()), Some("900"));
     assert_eq!(snapshot_of(&snapshot.id).state, "waiting_permission");
     // An option outside the card is not an answer and keeps the card alive.
     assert!(respond_permission(&snapshot.id, "900", Some("unknown")).is_err());
-    assert_eq!(snapshot_of(&snapshot.id).permissions.len(), 1);
+    assert_eq!(snapshot_of(&snapshot.id).pending.len(), 1);
     respond_permission(&snapshot.id, "900", Some("allow")).unwrap();
     let answer = answer_rx.recv_timeout(Duration::from_secs(8)).unwrap();
     assert_eq!(answer["id"], 900);
@@ -360,7 +403,8 @@ fn permission_is_bound_to_the_turn_and_answered_at_most_once() {
     assert_eq!(answer["result"]["outcome"]["optionId"], "allow");
     // A second answer is refused instead of replying twice on the wire.
     assert!(respond_permission(&snapshot.id, "900", Some("allow")).is_err());
-    assert!(snapshot_of(&snapshot.id).permissions.is_empty());
+    assert!(snapshot_of(&snapshot.id).pending.is_empty());
+    assert!(tools(&snapshot_of(&snapshot.id))[0].permission.is_none(), "回答后工具项上的授权卡必须撤下");
     close(&snapshot.id).unwrap();
     worker.join().unwrap();
 }
@@ -431,14 +475,15 @@ fn a_disconnect_keeps_content_and_drops_the_authorization_card() {
 
     let snapshot = open(spec(directory.path()), io).unwrap();
     prompt(&snapshot.id, "请执行").unwrap();
-    wait_for(|| (snapshot_of(&snapshot.id).permissions.len() == 1).then_some(()), "授权卡");
+    wait_for(|| (snapshot_of(&snapshot.id).pending.len() == 1).then_some(()), "授权卡");
     let dead = wait_for(
         || (snapshot_of(&snapshot.id).state == "closed").then_some(snapshot_of(&snapshot.id)),
         "断线后的终态",
     );
     assert_eq!(dead.last_turn_reason, "disconnected");
-    assert!(dead.permissions.is_empty(), "断线后授权卡必须失效");
-    assert!(dead.messages.iter().any(|message| message.text == "已经收到的内容"));
+    assert!(dead.pending.is_empty(), "断线后授权卡必须失效");
+    assert!(tools(&dead).iter().all(|call| call.permission.is_none()), "断线后工具项上不得留下授权卡");
+    assert!(messages(&dead).iter().any(|message| message.text == "已经收到的内容"));
     // The session refuses new input instead of writing into a closed pipe.
     assert!(prompt(&snapshot.id, "还能继续吗").is_err());
     worker.join().unwrap();
@@ -537,7 +582,7 @@ fn the_first_prompt_is_sent_exactly_once() {
     wait_until_idle(&snapshot.id, Duration::from_secs(8)).unwrap();
     let current = snapshot_of(&snapshot.id);
     assert_eq!(
-        current.messages.iter().filter(|message| message.role == "user").count(),
+        messages(&current).iter().filter(|message| message.role == "user").count(),
         1
     );
     close(&snapshot.id).unwrap();
@@ -567,7 +612,7 @@ fn a_secret_reference_is_forwarded_verbatim_and_never_resolved_here() {
     prompt(&snapshot.id, &reference).unwrap();
     wait_until_idle(&snapshot.id, Duration::from_secs(8)).unwrap();
     let current = snapshot_of(&snapshot.id);
-    assert!(current.messages.iter().any(|message| message.text == reference));
+    assert!(messages(&current).iter().any(|message| message.text == reference));
     assert!(
         current.diagnostics.iter().all(|line| !line.contains("11111111-2222-4333-8444-555555555555")),
         "{:?}",
@@ -655,7 +700,7 @@ fn an_unknown_client_method_is_answered_with_method_not_found() {
     let (io, mut agent) = pair();
     let worker = std::thread::spawn(move || {
         agent.handshake(false);
-        // The host advertises no file-system and no terminal capability, so a
+        // This host does not advertise the file-system capability yet, so a
         // request for one has to be refused explicitly instead of hanging.
         agent.send(json!({
             "jsonrpc": "2.0",
@@ -815,10 +860,11 @@ fn stopping_withdraws_the_card_and_refuses_a_late_answer() {
     });
     let snapshot = open(spec(directory.path()), io).unwrap();
     prompt(&snapshot.id, "请删除").unwrap();
-    wait_for(|| (snapshot_of(&snapshot.id).permissions.len() == 1).then_some(()), "授权卡");
+    wait_for(|| (snapshot_of(&snapshot.id).pending.len() == 1).then_some(()), "授权卡");
     cancel(&snapshot.id).unwrap();
     let stopping = snapshot_of(&snapshot.id);
-    assert!(stopping.permissions.is_empty(), "停止后授权卡必须立即撤下");
+    assert!(stopping.pending.is_empty(), "停止后授权卡必须立即撤下");
+    assert!(tools(&stopping).iter().all(|call| call.permission.is_none()));
     assert_eq!(stopping.state, "stopping", "取消后到终态前都显示停止中");
     // The retired card can no longer be answered.
     let refused = respond_permission(&snapshot.id, "902", Some("allow")).unwrap_err();

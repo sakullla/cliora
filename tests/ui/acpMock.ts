@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test';
+import type { AcpSessionSnapshot } from '../../src/types/acp';
 
 /**
  * Synthetic native IPC for the ACP conversation surface. Nothing here spawns a CLI,
@@ -25,23 +26,8 @@ type Config = {
   sessions?: Array<Record<string, unknown>>;
 };
 
-type Snapshot = {
-  id: string;
-  toolId: string;
-  projectId: string | null;
-  directory: string;
-  mode: 'normal' | 'yolo';
-  interaction: 'acp';
-  state: string;
-  nativeSessionId: string | null;
-  resume: string;
-  messages: Array<{ id: string; role: string; text: string; truncated: boolean }>;
-  tools: Array<{ callId: string; title: string; status: string; detail: string }>;
-  permissions: Array<{ requestId: string; turnId: string; title: string; detail: string; options: Array<{ optionId: string; name: string; kind: string }> }>;
-  diagnostics: string[];
-  lastTurnReason: string;
-  seq: number;
-};
+/** The host's own snapshot shape: the mock never invents a field the host lacks. */
+type Snapshot = AcpSessionSnapshot;
 
 export async function installAcpMock(page: Page, config: Config = {}) {
   await page.addInitScript((config: Config) => {
@@ -56,6 +42,9 @@ export async function installAcpMock(page: Page, config: Config = {}) {
       interactionSaves: [] as string[],
       launches: [] as Array<Record<string, unknown>>,
       prompts: [] as Array<[string, string]>,
+      modes: [] as Array<[string, string]>,
+      configs: [] as Array<[string, string, unknown]>,
+      failSetting: null as string | null,
       cancels: [] as string[],
       answers: [] as Array<[string, string, string | null]>,
       closes: [] as string[],
@@ -133,6 +122,16 @@ export async function installAcpMock(page: Page, config: Config = {}) {
           if (command === 'acp_prompt') { state.prompts.push([args.sessionId, args.text]); return null; }
           if (command === 'acp_cancel') { state.cancels.push(args.sessionId); return null; }
           if (command === 'acp_respond_permission') { state.answers.push([args.sessionId, args.requestId, args.optionId ?? null]); return null; }
+          if (command === 'acp_set_mode') {
+            state.modes.push([args.sessionId, args.modeId]);
+            if (state.failSetting) throw { message: state.failSetting };
+            return null;
+          }
+          if (command === 'acp_set_config') {
+            state.configs.push([args.sessionId, args.configId, args.value]);
+            if (state.failSetting) throw { message: state.failSetting };
+            return null;
+          }
           if (command === 'acp_close') {
             state.closes.push(args.sessionId);
             const index = conversations.findIndex((item) => item.id === args.sessionId);
@@ -149,13 +148,16 @@ export async function installAcpMock(page: Page, config: Config = {}) {
               return { toolId: request.toolId, projectId: request.projectId ?? null, mode: request.mode ?? 'normal', terminal: 'workbench', interaction: 'terminal', status: 'session_started', sessionId: id };
             }
             const id = 'a1';
-            const snapshot = {
+            const snapshot: Snapshot = {
               id, toolId: String(request.toolId), projectId: (request.projectId as string | null) ?? null, directory: 'C:/work',
-              mode: 'normal', interaction: 'acp' as const, state: 'running', nativeSessionId: 'native-1', resume: 'none',
-              messages: [{ id: 'm0', role: 'user', text: 'first prompt', truncated: false }],
-              tools: [], permissions: [], diagnostics: [], lastTurnReason: '', seq: 1,
+              mode: 'normal', interaction: 'acp', state: 'running', nativeSessionId: 'native-1', resume: 'none',
+              timeline: [{ kind: 'message', id: 'turn-0-user', role: 'user', text: 'first prompt', truncated: false, turnId: 'turn-0', subagent: null }],
+              pending: [], plan: [], commands: [], config: { modes: null, options: [], models: null },
+              info: { title: null, updatedAt: null, usage: null },
+              agent: { protocolVersion: 1, agentInfo: null, promptCapabilities: { image: false, audio: false, embeddedContext: false }, sessionCapabilities: { list: false, resume: false, delete: false, close: false }, loadSession: false, authMethods: [] },
+              diagnostics: [], lastTurnReason: '', seq: 1,
             };
-            if (!find(id)) conversations.push(snapshot as Snapshot);
+            if (!find(id)) conversations.push(snapshot);
             return { toolId: request.toolId, projectId: request.projectId ?? null, mode: 'normal', terminal: 'workbench', interaction: 'acp', status: 'acp_started', sessionId: id };
           }
           if (command === 'plugin:event|listen') { bridge.listens[args.event] = args.handler; return args.handler; }
@@ -170,9 +172,22 @@ export async function installAcpMock(page: Page, config: Config = {}) {
 export function snapshot(overrides: Partial<Snapshot> & { id: string }): Snapshot {
   return {
     toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', interaction: 'acp', state: 'ready',
-    nativeSessionId: 'native-1', resume: 'none', messages: [], tools: [], permissions: [], diagnostics: [], lastTurnReason: '', seq: 1,
+    nativeSessionId: 'native-1', resume: 'none', timeline: [], pending: [], plan: [], commands: [],
+    config: { modes: null, options: [], models: null }, info: { title: null, updatedAt: null, usage: null },
+    agent: { protocolVersion: 1, agentInfo: null, promptCapabilities: { image: false, audio: false, embeddedContext: false }, sessionCapabilities: { list: false, resume: false, delete: false, close: false }, loadSession: false, authMethods: [] },
+    diagnostics: [], lastTurnReason: '', seq: 1,
     ...overrides,
-  } as Snapshot;
+  };
+}
+
+/** One agent reply as a timeline message. */
+export function agentMessage(id: string, text: string, extra: Record<string, unknown> = {}) {
+  return { kind: 'message' as const, id, role: 'agent' as const, text, truncated: false, turnId: 'turn-1', subagent: null, ...extra };
+}
+
+/** One tool call as the host publishes it, merged in place by its id. */
+export function toolCall(callId: string, extra: Record<string, unknown> = {}) {
+  return { id: `tool:${callId}`, callId, title: callId, toolKind: 'other', status: 'pending', content: [], locations: [], rawInput: null, turnId: 'turn-1', subagent: null, permission: null, ...extra };
 }
 
 export async function openWorkbench(page: Page) {

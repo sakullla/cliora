@@ -2,25 +2,33 @@
 //!
 //! A local ACP agent is an ordinary child process that speaks JSON-RPC over
 //! its standard input and output. This module owns everything that is the same
-//! for every CLI: frame boundaries, request correlation, turn lifecycle, tool
-//! updates, permission requests, cancellation, exit cleanup and the retained
-//! snapshot a re-mounted view reads. Adapters only declare the program, its
-//! arguments and the environment policy; nothing here knows a product id.
+//! for every CLI: frame boundaries, request correlation, turn lifecycle, the
+//! ordered timeline (messages, tool calls, notices, turn ends, subagents),
+//! session settings, permission requests, cancellation, exit cleanup and the
+//! retained snapshot a re-mounted view reads. Adapters only declare the
+//! program, its arguments and the environment policy; nothing here knows a
+//! product id.
 //!
 //! Boundaries this module keeps:
 //!
 //! - Standard output carries the protocol; standard error only produces a
 //!   bounded, redacted diagnostic. Neither is forwarded to a terminal.
-//! - Client capabilities are published only when the client can honour them.
-//!   The host serves no file-system and no terminal request, so it advertises
-//!   neither and answers such a request with "method not found" instead of
-//!   pretending to serve it.
-//! - A permission request is bound to the live connection, the session and the
-//!   turn that asked for it, and is answered at most once.
+//! - Client capabilities are published only when the client can honour them
+//!   (see `capabilities::client_capabilities`). A request for a capability the
+//!   host did not advertise is answered with "method not found".
+//! - A permission request is bound to the live connection, the session (or a
+//!   registered child session) and the turn that asked for it, and is answered
+//!   at most once.
+//! - A prompt turn has no fixed deadline: it ends with the agent's own answer,
+//!   the agent's exit or the user's stop. Every other request keeps the
+//!   configured timeout.
 //! - A prompt body may hold a cliora-secret reference. The host never resolves
 //!   it: the agent reaches the secret broker through the local session token,
 //!   exactly like the terminal launch. No protocol body is logged here, and
 //!   only the agent's own redacted standard error is retained.
+
+pub mod capabilities;
+pub mod timeline;
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -39,21 +47,26 @@ use tauri::{AppHandle, Emitter};
 use crate::adapters::{AcpCommand, LaunchMode};
 use crate::launch::LaunchPlan;
 
+pub use capabilities::{
+    AcpAgentDescriptor, AcpAuthMethod, AcpAvailableCommand, AcpConfigChoice, AcpConfigOption, AcpCost,
+    AcpImplementation, AcpMode, AcpModel, AcpModels, AcpModes, AcpPlanEntry, AcpPromptCapabilities,
+    AcpSessionCapabilities, AcpSessionConfig, AcpSessionInfo, AcpUsage, LEGACY_MODEL_CONFIG_ID,
+};
+pub use timeline::{
+    AcpMessage, AcpNotice, AcpPermissionOption, AcpPermissionRequest, AcpSubagent, AcpTimelineItem,
+    AcpToolCall, AcpToolContent, AcpToolLocation, AcpTurnEnd,
+};
+use timeline::Timeline;
+
 /// One conversation event, scoped to its session so two panels never mix.
 pub const EVENT: &str = "cliora:acp-event";
-/// JSON-RPC protocol revision this host speaks.
-const PROTOCOL_VERSION: u64 = 1;
 /// A single protocol line longer than this is a broken session, not something
 /// to buffer without bound.
 const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
-/// Retained text per message. Longer output is truncated once and reported.
-const MAX_MESSAGE_CHARS: usize = 200_000;
 /// Retained standard-error lines.
 const MAX_DIAGNOSTICS: usize = 40;
 /// Retained text per diagnostic line.
 const MAX_DIAGNOSTIC_CHARS: usize = 500;
-/// Cap for one tool detail summary.
-const MAX_TOOL_DETAIL_CHARS: usize = 4_000;
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
 static SESSIONS: LazyLock<Mutex<HashMap<String, Arc<Session>>>> =
@@ -81,7 +94,8 @@ pub struct AcpStart {
     /// agent negotiates loadSession; otherwise a new session is created and the
     /// snapshot reports why.
     pub resume_native_id: Option<String>,
-    /// How long one protocol request may wait for its response.
+    /// How long one protocol request may wait for its response. A prompt turn
+    /// is not a request with a deadline and never uses this.
     pub timeout: Duration,
 }
 
@@ -130,50 +144,6 @@ impl AcpStart {
     }
 }
 
-/// One retained conversation message.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AcpMessage {
-    pub id: String,
-    /// One of user, agent or thought.
-    pub role: &'static str,
-    pub text: String,
-    /// Output past the retained budget was dropped, not silently shortened.
-    pub truncated: bool,
-}
-
-/// One tool call, merged by its call id.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AcpToolCall {
-    pub call_id: String,
-    pub title: String,
-    /// One of pending, in_progress, completed or failed.
-    pub status: &'static str,
-    pub detail: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AcpPermissionOption {
-    pub option_id: String,
-    pub name: String,
-    /// The protocol's option kind, kept as the agent sent it.
-    pub kind: String,
-}
-
-/// A pending authorization card. It is valid only while the request, its
-/// session and the connection that asked for it are alive.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AcpPermissionCard {
-    pub request_id: String,
-    pub turn_id: String,
-    pub title: String,
-    pub detail: String,
-    pub options: Vec<AcpPermissionOption>,
-}
-
 /// Full state of one conversation, for a view that mounts later.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -192,9 +162,20 @@ pub struct AcpSessionSnapshot {
     pub native_session_id: Option<String>,
     /// One of none, unsupported, loaded or failed.
     pub resume: &'static str,
-    pub messages: Vec<AcpMessage>,
-    pub tools: Vec<AcpToolCall>,
-    pub permissions: Vec<AcpPermissionCard>,
+    /// Everything the conversation produced, in arrival order.
+    pub timeline: Vec<AcpTimelineItem>,
+    /// Request ids still waiting for the user's answer.
+    pub pending: Vec<String>,
+    /// The agent's current plan; empty when it has none.
+    pub plan: Vec<AcpPlanEntry>,
+    /// The slash commands the agent currently offers.
+    pub commands: Vec<AcpAvailableCommand>,
+    /// Modes, configuration options and the legacy model list.
+    pub config: AcpSessionConfig,
+    /// Title and usage, as far as the agent reported them.
+    pub info: AcpSessionInfo,
+    /// What the agent declared during initialize.
+    pub agent: AcpAgentDescriptor,
     pub diagnostics: Vec<String>,
     /// The reason the last turn ended: one of end_turn, limit, refusal,
     /// cancelled, disconnected, failed or unknown. An empty string means no turn
@@ -216,14 +197,28 @@ pub struct AcpEvent {
 }
 
 #[derive(Clone, Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum AcpUpdate {
-    Snapshot { snapshot: AcpSessionSnapshot },
-    Chunk { message_id: String, role: &'static str, text: String, truncated: bool },
+    /// The whole conversation; it replaces whatever the view held.
+    Snapshot { snapshot: Box<AcpSessionSnapshot> },
+    /// Text appended to one message. A message id the view does not hold yet
+    /// starts a new message at the end of the timeline.
+    Chunk { message_id: String, role: &'static str, text: String, truncated: bool, turn_id: String, subagent: Option<String> },
+    /// The whole current state of one tool call, merged in place.
     Tool { call: AcpToolCall },
-    Permission { card: AcpPermissionCard },
-    PermissionClosed { request_id: String, decision: &'static str },
-    Notice { level: &'static str, text: String },
+    /// Any other timeline item (notice, turn end, subagent, session message),
+    /// inserted or replaced in place.
+    Item { item: AcpTimelineItem },
+    /// The whole plan; an empty list clears it.
+    Plan { entries: Vec<AcpPlanEntry> },
+    /// The whole command list.
+    Commands { commands: Vec<AcpAvailableCommand> },
+    /// The whole session configuration.
+    Config { config: AcpSessionConfig },
+    /// Title and usage.
+    Info { info: AcpSessionInfo },
+    /// The request ids still waiting for an answer.
+    Pending { pending: Vec<String> },
 }
 
 /// The streams a session talks to. A subprocess supplies its pipes; a test
@@ -292,26 +287,29 @@ pub fn redact(line: &str) -> String {
     masked
 }
 
-/// Trim retained text to the message budget, reporting whether it was cut.
-fn cap_text(text: &str) -> (String, bool) {
-    let mut count = 0usize;
-    for (index, _) in text.char_indices() {
-        count += 1;
-        if count > MAX_MESSAGE_CHARS {
-            return (format!("{}…（输出已截断）", &text[..index]), true);
-        }
-    }
-    (text.to_owned(), false)
-}
-
+/// An open authorization request: the protocol id to answer and the tool call
+/// whose card shows it.
 struct PendingPermission {
     id: Value,
-    card: AcpPermissionCard,
+    request_id: String,
+    item_id: String,
+    turn_id: String,
+    options: Vec<AcpPermissionOption>,
 }
 
 struct Turn {
     id: String,
     cancel_requested: bool,
+}
+
+/// Which session an incoming frame speaks for.
+enum Scope {
+    /// The conversation itself.
+    Root,
+    /// A registered child session.
+    Child(String),
+    /// Some other session: not ours to show.
+    Foreign,
 }
 
 pub(crate) struct Session {
@@ -323,16 +321,23 @@ pub(crate) struct Session {
     state: Mutex<&'static str>,
     native_session_id: Mutex<Option<String>>,
     resume: Mutex<&'static str>,
-    messages: Mutex<Vec<AcpMessage>>,
-    tools: Mutex<Vec<AcpToolCall>>,
+    timeline: Mutex<Timeline>,
     permissions: Mutex<Vec<PendingPermission>>,
+    plan: Mutex<Vec<AcpPlanEntry>>,
+    commands: Mutex<Vec<AcpAvailableCommand>>,
+    config: Mutex<AcpSessionConfig>,
+    info: Mutex<AcpSessionInfo>,
+    agent: Mutex<AcpAgentDescriptor>,
+    /// Registered child sessions and the session that owns each (None: the
+    /// conversation itself).
+    children: Mutex<HashMap<String, Option<String>>>,
     diagnostics: Mutex<Vec<String>>,
     last_turn_reason: Mutex<&'static str>,
     seq: AtomicU64,
     writer: Mutex<Option<Box<dyn Write + Send>>>,
     #[allow(clippy::type_complexity)]
     shutdown: Mutex<Option<Box<dyn FnMut() + Send>>>,
-    pending: Mutex<HashMap<u64, Sender<Result<Value, String>>>>,
+    requests: Mutex<HashMap<u64, Sender<Result<Value, String>>>>,
     next_request: AtomicU64,
     turn: Mutex<Option<Turn>>,
     timeout: Duration,
@@ -342,8 +347,45 @@ pub(crate) struct Session {
 }
 
 impl Session {
+    fn new(
+        id: String,
+        spec: &AcpStart,
+        writer: Box<dyn Write + Send>,
+        shutdown: Option<Box<dyn FnMut() + Send>>,
+        secret_session: Option<crate::secrets::session::LocalSession>,
+    ) -> Self {
+        Self {
+            id,
+            tool_id: spec.tool_id.clone(),
+            project_id: spec.project_id.clone(),
+            directory: spec.directory.clone(),
+            mode: spec.mode,
+            state: Mutex::new("starting"),
+            native_session_id: Mutex::new(None),
+            resume: Mutex::new("none"),
+            timeline: Mutex::new(Timeline::default()),
+            permissions: Mutex::new(Vec::new()),
+            plan: Mutex::new(Vec::new()),
+            commands: Mutex::new(Vec::new()),
+            config: Mutex::new(AcpSessionConfig::default()),
+            info: Mutex::new(AcpSessionInfo::default()),
+            agent: Mutex::new(AcpAgentDescriptor::default()),
+            children: Mutex::new(HashMap::new()),
+            diagnostics: Mutex::new(Vec::new()),
+            last_turn_reason: Mutex::new(""),
+            seq: AtomicU64::new(0),
+            writer: Mutex::new(Some(writer)),
+            shutdown: Mutex::new(shutdown),
+            requests: Mutex::new(HashMap::new()),
+            next_request: AtomicU64::new(0),
+            turn: Mutex::new(None),
+            timeout: spec.timeout,
+            secret_session: Mutex::new(secret_session),
+        }
+    }
+
     fn publish(&self) {
-        self.emit_update(AcpUpdate::Snapshot { snapshot: self.snapshot() });
+        self.emit_update(AcpUpdate::Snapshot { snapshot: Box::new(self.snapshot()) });
     }
 
     fn next_seq(&self) -> u64 {
@@ -352,6 +394,14 @@ impl Session {
 
     fn emit_update(&self, update: AcpUpdate) {
         emit(AcpEvent { session_id: self.id.clone(), seq: self.next_seq(), update });
+    }
+
+    fn pending_ids(&self) -> Vec<String> {
+        guard(&self.permissions).iter().map(|pending| pending.request_id.clone()).collect()
+    }
+
+    fn emit_pending(&self) {
+        self.emit_update(AcpUpdate::Pending { pending: self.pending_ids() });
     }
 
     fn snapshot(&self) -> AcpSessionSnapshot {
@@ -365,13 +415,21 @@ impl Session {
             state: *guard(&self.state),
             native_session_id: guard(&self.native_session_id).clone(),
             resume: *guard(&self.resume),
-            messages: guard(&self.messages).clone(),
-            tools: guard(&self.tools).clone(),
-            permissions: guard(&self.permissions).iter().map(|pending| pending.card.clone()).collect(),
+            timeline: guard(&self.timeline).items().to_vec(),
+            pending: self.pending_ids(),
+            plan: guard(&self.plan).clone(),
+            commands: guard(&self.commands).clone(),
+            config: guard(&self.config).clone(),
+            info: guard(&self.info).clone(),
+            agent: guard(&self.agent).clone(),
             diagnostics: guard(&self.diagnostics).clone(),
             last_turn_reason: *guard(&self.last_turn_reason),
             seq: self.seq.load(Ordering::SeqCst),
         }
+    }
+
+    fn current_turn_id(&self) -> String {
+        guard(&self.turn).as_ref().map(|turn| turn.id.clone()).unwrap_or_default()
     }
 
     /// The state a live session returns to: a pending card keeps it waiting,
@@ -415,8 +473,28 @@ impl Session {
         }
     }
 
-    fn notice(&self, level: &'static str, text: impl Into<String>) {
-        self.emit_update(AcpUpdate::Notice { level, text: text.into() });
+    /// A host notice enters the timeline, so a view that mounts later still
+    /// reads it in its place.
+    fn notice(&self, level: &'static str, code: &'static str, text: impl Into<String>) {
+        let turn_id = self.current_turn_id();
+        let item = {
+            let mut timeline = guard(&self.timeline);
+            let id = timeline.auto_id("notice");
+            let item = AcpTimelineItem::Notice(AcpNotice { id, level, code, text: text.into(), turn_id });
+            timeline.upsert(item.clone());
+            item
+        };
+        self.emit_update(AcpUpdate::Item { item });
+    }
+
+    /// Drop the oldest finished history once the timeline is over budget, and
+    /// republish the whole conversation so every view drops the same items.
+    fn trim_timeline(&self) {
+        let turn = guard(&self.turn).as_ref().map(|turn| turn.id.clone());
+        let trimmed = guard(&self.timeline).trim(turn.as_deref());
+        if trimmed {
+            self.publish();
+        }
     }
 
     fn write_value(&self, value: &Value) -> Result<(), String> {
@@ -442,29 +520,31 @@ impl Session {
     ) -> Result<(u64, std::sync::mpsc::Receiver<Result<Value, String>>), String> {
         let id = self.next_request.fetch_add(1, Ordering::SeqCst) + 1;
         let (sender, receiver) = std::sync::mpsc::channel();
-        guard(&self.pending).insert(id, sender);
+        guard(&self.requests).insert(id, sender);
         let frame = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
         if let Err(error) = self.write_value(&frame) {
-            guard(&self.pending).remove(&id);
+            guard(&self.requests).remove(&id);
             return Err(error);
         }
         Ok((id, receiver))
     }
 
+    /// One request with the configured deadline. A prompt turn does not use
+    /// this: it has no deadline of its own.
     fn request(&self, method: &str, params: Value) -> Result<Value, String> {
         let (id, receiver) = self.send_request(method, params)?;
         match receiver.recv_timeout(self.timeout) {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => Err(error),
             Err(_) => {
-                guard(&self.pending).remove(&id);
+                guard(&self.requests).remove(&id);
                 Err(format!("等待 agent 回应 {method} 超时，请确认该 CLI 支持 ACP"))
             }
         }
     }
 
     fn resolve_response(&self, id: u64, result: Result<Value, String>) {
-        if let Some(sender) = guard(&self.pending).remove(&id) {
+        if let Some(sender) = guard(&self.requests).remove(&id) {
             let _ = sender.send(result);
         }
     }
@@ -509,11 +589,32 @@ impl Session {
         self.handle_notification(&method, value.get("params").cloned().unwrap_or(Value::Null));
     }
 
+    /// The session a frame names: the conversation, a registered child, or a
+    /// session this connection never showed. Before the conversation's own id
+    /// is known every frame is the conversation's.
+    fn scope_of(&self, params: &Value) -> Scope {
+        let Some(sent) = params.get("sessionId").and_then(Value::as_str) else {
+            return Scope::Root;
+        };
+        let native = guard(&self.native_session_id).clone();
+        if native.as_deref() == Some(sent) {
+            return Scope::Root;
+        }
+        if guard(&self.children).contains_key(sent) {
+            return Scope::Child(sent.to_owned());
+        }
+        if native.is_none() {
+            Scope::Root
+        } else {
+            Scope::Foreign
+        }
+    }
+
     fn handle_request(&self, method: &str, id: Value, params: Value) {
         match method {
             "session/request_permission" => self.open_permission(id, params),
-            // The host serves no file-system and no terminal request, and it
-            // never advertised either capability.
+            // Only advertised capabilities are served; anything else is refused
+            // explicitly instead of left hanging.
             _ => {
                 let _ = self.write_value(&json!({
                     "jsonrpc": "2.0",
@@ -525,23 +626,29 @@ impl Session {
         }
     }
 
+    fn answer_permission(&self, id: &Value, outcome: Value) -> Result<(), String> {
+        self.write_value(&json!({ "jsonrpc": "2.0", "id": id, "result": { "outcome": outcome } }))
+    }
+
     fn open_permission(&self, id: Value, params: Value) {
+        let cancelled_outcome = json!({ "outcome": "cancelled" });
+        let subagent = match self.scope_of(&params) {
+            Scope::Root => None,
+            Scope::Child(child) => Some(child),
+            Scope::Foreign => {
+                let _ = self.answer_permission(&id, cancelled_outcome);
+                self.diagnostic("收到其他会话的授权请求，已取消");
+                return;
+            }
+        };
         let request_id = id.to_string();
-        let turn_id = guard(&self.turn).as_ref().map(|turn| turn.id.clone()).unwrap_or_default();
-        // A card asked for by a turn the user already stopped is withdrawn as
-        // soon as it arrives: it must never appear under a stopped turn.
-        let cancelled = guard(&self.turn).as_ref().is_some_and(|turn| turn.cancel_requested);
-        let tool = params.get("toolCall").cloned().unwrap_or(Value::Null);
-        let title = tool
-            .get("title")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| "工具调用需要授权".to_owned());
-        let detail = tool
-            .get("kind")
-            .and_then(Value::as_str)
-            .map(|kind| format!("类型：{kind}"))
-            .unwrap_or_default();
+        let (turn_id, cancelled) = {
+            let turn = guard(&self.turn);
+            (
+                turn.as_ref().map(|turn| turn.id.clone()).unwrap_or_default(),
+                turn.as_ref().is_some_and(|turn| turn.cancel_requested),
+            )
+        };
         let options: Vec<AcpPermissionOption> = params
             .get("options")
             .and_then(Value::as_array)
@@ -558,30 +665,67 @@ impl Session {
                     .collect()
             })
             .unwrap_or_default();
+        // A card asked for by a turn the user already stopped is withdrawn as
+        // soon as it arrives: it must never appear under a stopped turn.
         if cancelled {
-            let _ = self.write_value(&json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": { "outcome": { "outcome": "cancelled" } },
-            }));
-            self.notice("warning", "本轮已停止，新的授权请求已取消");
+            let _ = self.answer_permission(&id, cancelled_outcome);
+            self.notice("warning", "permission_cancelled", "本轮已停止，新的授权请求已取消");
             return;
         }
-        if turn_id.is_empty() || options.is_empty() {
-            // Nothing to attach the card to: answer once so the agent is not
-            // left waiting, and say so instead of showing a dead card.
-            let _ = self.write_value(&json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": { "outcome": { "outcome": "cancelled" } },
-            }));
-            self.notice("warning", "该授权请求不对应进行中的轮次，已取消");
+        // A child keeps working after its parent's turn ended, so its request
+        // stands on its own; the conversation's own request needs a live turn.
+        if options.is_empty() || (turn_id.is_empty() && subagent.is_none()) {
+            let _ = self.answer_permission(&id, cancelled_outcome);
+            self.notice("warning", "permission_orphaned", "该授权请求不对应进行中的轮次，已取消");
             return;
         }
-        let card = AcpPermissionCard { request_id, turn_id, title, detail, options };
-        guard(&self.permissions).push(PendingPermission { id, card: card.clone() });
-        self.emit_update(AcpUpdate::Permission { card });
+        let mut tool = params.get("toolCall").cloned().unwrap_or_else(|| json!({}));
+        if !tool.is_object() {
+            tool = json!({});
+        }
+        if tool.get("toolCallId").and_then(Value::as_str).is_none() {
+            tool["toolCallId"] = Value::String(format!("permission-{request_id}"));
+        }
+        let call = {
+            let mut timeline = guard(&self.timeline);
+            timeline
+                .upsert_tool(subagent.as_deref(), &turn_id, &tool, "工具调用需要授权")
+                .and_then(|call| {
+                    timeline.set_permission(
+                        &call.id,
+                        Some(AcpPermissionRequest {
+                            request_id: request_id.clone(),
+                            turn_id: turn_id.clone(),
+                            options: options.clone(),
+                        }),
+                    )
+                })
+        };
+        let Some(call) = call else {
+            let _ = self.answer_permission(&id, cancelled_outcome);
+            self.diagnostic("授权请求缺少工具调用，已取消");
+            return;
+        };
+        guard(&self.permissions).push(PendingPermission {
+            id,
+            request_id,
+            item_id: call.id.clone(),
+            turn_id,
+            options,
+        });
+        self.emit_update(AcpUpdate::Tool { call });
+        self.emit_pending();
         self.settle_state();
+    }
+
+    /// Answer a request the user no longer can, and take its card off the
+    /// tool call. The caller publishes the new pending set.
+    fn withdraw(&self, pending: PendingPermission) {
+        let _ = self.answer_permission(&pending.id, json!({ "outcome": "cancelled" }));
+        let call = guard(&self.timeline).set_permission(&pending.item_id, None);
+        if let Some(call) = call {
+            self.emit_update(AcpUpdate::Tool { call });
+        }
     }
 
     fn handle_notification(&self, method: &str, params: Value) {
@@ -592,122 +736,224 @@ impl Session {
     }
 
     fn apply_update(&self, params: Value) {
-        let native = guard(&self.native_session_id).clone();
-        if let (Some(sent), Some(ours)) = (
-            params.get("sessionId").and_then(Value::as_str),
-            native.as_deref(),
-        ) {
-            if sent != ours {
+        let subagent = match self.scope_of(&params) {
+            Scope::Root => None,
+            Scope::Child(child) => Some(child),
+            Scope::Foreign => {
                 self.diagnostic("收到其他会话的更新，已忽略");
                 return;
             }
-        }
+        };
         let update = params.get("update").cloned().unwrap_or(Value::Null);
-        match update.get("sessionUpdate").and_then(Value::as_str).unwrap_or_default() {
-            "agent_message_chunk" => self.append_chunk("agent", update.get("messageId"), &update),
-            "agent_thought_chunk" => self.append_chunk("thought", update.get("messageId"), &update),
-            "user_message_chunk" => self.append_chunk("user", update.get("messageId"), &update),
-            "tool_call" => self.upsert_tool(&update, true),
-            "tool_call_update" => self.upsert_tool(&update, false),
-            "plan" | "available_commands_update" | "current_mode_update" => {}
+        let kind = update.get("sessionUpdate").and_then(Value::as_str).unwrap_or_default();
+        let child = subagent.as_deref();
+        match kind {
+            "agent_message_chunk" => self.append_chunk("agent", &update, child),
+            "agent_thought_chunk" => self.append_chunk("thought", &update, child),
+            "user_message_chunk" => self.append_chunk("user", &update, child),
+            "session_message_chunk" => self.append_chunk("session", &update, child),
+            "session_message" => self.session_message(&update, child),
+            "tool_call" | "tool_call_update" => self.upsert_tool(&update, child),
+            "subagent_update" => self.register_subagent(&update, child),
+            // A child's own plan, commands, settings, title and usage describe
+            // the child, not this conversation; its commands must never be
+            // offered as input.
+            "plan" | "available_commands_update" | "current_mode_update" | "config_option_update"
+            | "session_info_update" | "usage_update"
+                if child.is_some() => {}
+            "plan" => {
+                let entries = capabilities::parse_plan(&update);
+                *guard(&self.plan) = entries.clone();
+                self.emit_update(AcpUpdate::Plan { entries });
+            }
+            "available_commands_update" => {
+                let commands = capabilities::parse_commands(&update);
+                *guard(&self.commands) = commands.clone();
+                self.emit_update(AcpUpdate::Commands { commands });
+            }
+            "current_mode_update" => {
+                let Some(current) = update.get("currentModeId").and_then(Value::as_str) else {
+                    self.diagnostic("模式更新缺少模式编号，已忽略");
+                    return;
+                };
+                let config = {
+                    let mut config = guard(&self.config);
+                    match config.modes.as_mut() {
+                        Some(modes) => modes.current_mode_id = current.to_owned(),
+                        None => {
+                            config.modes = Some(AcpModes {
+                                current_mode_id: current.to_owned(),
+                                available_modes: Vec::new(),
+                            })
+                        }
+                    }
+                    config.clone()
+                };
+                self.emit_update(AcpUpdate::Config { config });
+            }
+            "config_option_update" => {
+                let config = {
+                    let mut config = guard(&self.config);
+                    config.options =
+                        capabilities::parse_config_options(update.get("configOptions").unwrap_or(&Value::Null));
+                    config.clone()
+                };
+                self.emit_update(AcpUpdate::Config { config });
+            }
+            "session_info_update" => {
+                let info = {
+                    let mut info = guard(&self.info);
+                    capabilities::apply_session_info(&mut info, &update);
+                    info.clone()
+                };
+                self.emit_update(AcpUpdate::Info { info });
+            }
+            "usage_update" => {
+                let Some(usage) = capabilities::parse_usage(&update) else {
+                    self.diagnostic("用量更新缺少字段，已忽略");
+                    return;
+                };
+                let info = {
+                    let mut info = guard(&self.info);
+                    info.usage = Some(usage);
+                    info.clone()
+                };
+                self.emit_update(AcpUpdate::Info { info });
+            }
             other => self.diagnostic(&format!("未处理的会话更新：{other}")),
         }
     }
 
-    fn append_chunk(&self, role: &'static str, message_id: Option<&Value>, update: &Value) {
-        let text = update
-            .get("content")
-            .and_then(|content| content.get("text"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+    fn append_chunk(&self, role: &'static str, update: &Value, subagent: Option<&str>) {
+        let Some(text) = update.get("content").and_then(timeline::block_text) else { return };
         if text.is_empty() {
             return;
         }
-        let turn_id = guard(&self.turn).as_ref().map(|turn| turn.id.clone()).unwrap_or_default();
-        let id = message_id
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| format!("{role}-{turn_id}"));
-        let truncated;
-        {
-            let mut messages = guard(&self.messages);
-            match messages.iter_mut().find(|message| message.id == id) {
-                Some(message) => {
-                    if !message.truncated {
-                        message.text.push_str(text);
-                        let (capped, cut) = cap_text(&message.text);
-                        message.text = capped;
-                        message.truncated = cut;
-                    }
-                    truncated = message.truncated;
-                }
-                None => {
-                    let (capped, cut) = cap_text(text);
-                    messages.push(AcpMessage { id: id.clone(), role, text: capped, truncated: cut });
-                    truncated = cut;
-                }
-            }
+        let turn_id = self.current_turn_id();
+        let message_id = update.get("messageId").and_then(Value::as_str);
+        let outcome = guard(&self.timeline).append_chunk(role, message_id, subagent, &turn_id, &text);
+        if outcome.text.is_empty() {
+            return;
         }
-        self.emit_update(AcpUpdate::Chunk { message_id: id, role, text: text.to_owned(), truncated });
+        self.emit_update(AcpUpdate::Chunk {
+            message_id: outcome.id,
+            role: outcome.role,
+            text: outcome.text,
+            truncated: outcome.truncated,
+            turn_id: outcome.turn_id,
+            subagent: outcome.subagent,
+        });
+        self.trim_timeline();
     }
 
-    fn upsert_tool(&self, update: &Value, created: bool) {
-        let Some(call_id) = update.get("toolCallId").and_then(Value::as_str) else {
+    /// A message another session sent, as it appears in this transcript. Its
+    /// content replaces whatever the message held.
+    fn session_message(&self, update: &Value, subagent: Option<&str>) {
+        let Some(message_id) = update.get("messageId").and_then(Value::as_str) else {
+            self.diagnostic("会话消息缺少消息编号，已忽略");
+            return;
+        };
+        let Some(content) = update.get("content") else { return };
+        let text = content
+            .as_array()
+            .map(|blocks| blocks.iter().filter_map(timeline::block_text).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default();
+        let turn_id = self.current_turn_id();
+        let item = guard(&self.timeline).set_message("session", message_id, subagent, &turn_id, &text);
+        self.emit_update(AcpUpdate::Item { item });
+        self.trim_timeline();
+    }
+
+    fn upsert_tool(&self, update: &Value, subagent: Option<&str>) {
+        let turn_id = self.current_turn_id();
+        let call = guard(&self.timeline).upsert_tool(subagent, &turn_id, update, "工具调用");
+        let Some(call) = call else {
             self.diagnostic("工具更新缺少调用编号，已忽略");
             return;
         };
-        let fallback = if created { "pending" } else { "in_progress" };
-        let status = match update.get("status").and_then(Value::as_str).unwrap_or(fallback) {
-            "completed" => "completed",
-            "failed" => "failed",
-            "pending" => "pending",
-            _ => "in_progress",
-        };
-        let detail = tool_detail(update);
-        let title = update.get("title").and_then(Value::as_str).map(ToOwned::to_owned);
-        let call = {
-            let mut tools = guard(&self.tools);
-            match tools.iter_mut().find(|tool| tool.call_id == call_id) {
-                Some(tool) => {
-                    tool.status = status;
-                    if let Some(title) = title {
-                        tool.title = title;
-                    }
-                    if !detail.is_empty() {
-                        tool.detail = detail;
-                    }
-                    tool.clone()
-                }
-                None => {
-                    let tool = AcpToolCall {
-                        call_id: call_id.to_owned(),
-                        title: title.unwrap_or_else(|| "工具调用".to_owned()),
-                        status,
-                        detail,
-                    };
-                    tools.push(tool.clone());
-                    tool
-                }
-            }
-        };
         self.emit_update(AcpUpdate::Tool { call });
+        self.trim_timeline();
+    }
+
+    /// Register or patch a child session. The first announcement fixes the
+    /// child's owner; a later update cannot move it, and the conversation can
+    /// never become its own child.
+    fn register_subagent(&self, update: &Value, owner: Option<&str>) {
+        let Some(child) = update.get("sessionId").and_then(Value::as_str) else {
+            self.diagnostic("子会话更新缺少会话编号，已忽略");
+            return;
+        };
+        let native = guard(&self.native_session_id).clone();
+        if native.as_deref() == Some(child) || owner == Some(child) {
+            self.diagnostic("子会话更新指向会话自身，已忽略");
+            return;
+        }
+        let parent = {
+            let mut children = guard(&self.children);
+            children
+                .entry(child.to_owned())
+                .or_insert_with(|| owner.map(ToOwned::to_owned))
+                .clone()
+        };
+        let turn_id = self.current_turn_id();
+        let item = {
+            let mut timeline = guard(&self.timeline);
+            let id = timeline::subagent_item_id(child);
+            let mut entry = match timeline.get(&id) {
+                Some(AcpTimelineItem::Subagent(existing)) => existing.clone(),
+                _ => AcpSubagent {
+                    id,
+                    session_id: child.to_owned(),
+                    parent,
+                    title: None,
+                    description: None,
+                    state: None,
+                    stop_reason: None,
+                    summary: String::new(),
+                    turn_id,
+                },
+            };
+            let text = |value: &Value| value.as_str().map(|text| timeline::cap(text, 1_000).0);
+            if let Some(title) = update.get("title") {
+                entry.title = text(title);
+            }
+            if let Some(description) = update.get("description") {
+                entry.description = text(description);
+            }
+            if let Some(state) = update.get("state") {
+                entry.state = state.get("state").and_then(Value::as_str).map(|value| timeline::cap(value, 100).0);
+                entry.stop_reason =
+                    state.get("stopReason").and_then(Value::as_str).map(|value| timeline::cap(value, 100).0);
+            }
+            entry.summary = timeline.subagent_summary(child);
+            let item = AcpTimelineItem::Subagent(entry);
+            timeline.upsert(item.clone());
+            item
+        };
+        self.emit_update(AcpUpdate::Item { item });
     }
 
     /// Start one turn. Only one turn may run at a time; a failure to send is
-    /// reported to the caller instead of becoming a silent gap.
+    /// reported to the caller instead of becoming a silent gap. The turn has no
+    /// deadline: it ends with the agent's answer, its exit or the user's stop.
     fn begin_turn(self: &Arc<Self>, text: &str) -> Result<(), String> {
         if guard(&self.turn).is_some() {
             return Err("当前轮次尚未结束，请先停止或等待结果".into());
         }
-        let id = format!("turn-{}", self.next_seq());
-        *guard(&self.turn) = Some(Turn { id: id.clone(), cancel_requested: false });
+        let turn_id = format!("turn-{}", self.next_seq());
+        *guard(&self.turn) = Some(Turn { id: turn_id.clone(), cancel_requested: false });
         let prompt_text = text.to_owned();
-        guard(&self.messages).push(AcpMessage {
-            id: format!("{id}-user"),
-            role: "user",
-            text: cap_text(&prompt_text).0,
-            truncated: false,
-        });
+        {
+            let (text, truncated) = timeline::cap(&prompt_text, timeline::MAX_MESSAGE_CHARS);
+            guard(&self.timeline).upsert(AcpTimelineItem::Message(AcpMessage {
+                id: format!("{turn_id}-user"),
+                role: "user",
+                text,
+                truncated,
+                turn_id: turn_id.clone(),
+                subagent: None,
+            }));
+        }
         self.settle_state();
         let native = guard(&self.native_session_id).clone().unwrap_or_default();
         let params = json!({
@@ -716,7 +962,7 @@ impl Session {
         });
         // The prompt must be written before this returns: a stop or a second
         // turn issued right after must never overtake it on the wire.
-        let (id, receiver) = match self.send_request("session/prompt", params) {
+        let (_, receiver) = match self.send_request("session/prompt", params) {
             Ok(pair) => pair,
             Err(error) => {
                 *guard(&self.turn) = None;
@@ -726,50 +972,54 @@ impl Session {
         };
         let session = Arc::clone(self);
         std::thread::spawn(move || {
-            let reason = match receiver.recv_timeout(session.timeout) {
+            // No deadline: a long turn is still a turn. The sender is dropped
+            // or answered with an error when the agent exits.
+            let reason = match receiver.recv() {
                 Ok(Ok(result)) => stop_reason(result.get("stopReason").and_then(Value::as_str)),
                 Ok(Err(error)) => {
-                    session.notice("error", error);
+                    session.notice("error", "", error);
                     "disconnected"
                 }
-                Err(_) => {
-                    guard(&session.pending).remove(&id);
-                    session.notice("error", "等待 agent 回应 session/prompt 超时");
-                    "disconnected"
-                }
+                Err(_) => "disconnected",
             };
-            session.finish_turn(reason);
+            session.finish_turn(&turn_id, reason);
         });
         Ok(())
     }
 
-    fn finish_turn(&self, reason: &'static str) {
+    fn finish_turn(&self, turn_id: &str, reason: &'static str) {
         *guard(&self.last_turn_reason) = reason;
-        let cancelled = guard(&self.turn).as_ref().is_some_and(|turn| turn.cancel_requested);
-        *guard(&self.turn) = None;
-        // A card from a cancelled turn can no longer be answered: the user
-        // withdrew it together with the turn.
-        let dropped: Vec<PendingPermission> = if cancelled {
-            std::mem::take(&mut *guard(&self.permissions))
-        } else {
-            Vec::new()
-        };
-        for pending in dropped {
-            let _ = self.write_value(&json!({
-                "jsonrpc": "2.0",
-                "id": pending.id,
-                "result": { "outcome": { "outcome": "cancelled" } },
-            }));
-            self.emit_update(AcpUpdate::PermissionClosed {
-                request_id: pending.card.request_id,
-                decision: "cancelled",
-            });
+        {
+            let mut turn = guard(&self.turn);
+            if turn.as_ref().is_some_and(|turn| turn.id == turn_id) {
+                *turn = None;
+            }
         }
-        self.settle_state();
-        self.emit_update(AcpUpdate::Notice {
-            level: if reason == "end_turn" { "info" } else { "warning" },
-            text: turn_reason_text(reason).to_owned(),
+        // A card of a finished turn can no longer be answered: the turn it
+        // belonged to is over, so it leaves the panel and the agent is told.
+        let dropped: Vec<PendingPermission> = {
+            let mut permissions = guard(&self.permissions);
+            let (dropped, kept) = std::mem::take(&mut *permissions)
+                .into_iter()
+                .partition(|pending| pending.turn_id == turn_id);
+            *permissions = kept;
+            dropped
+        };
+        let withdrew = !dropped.is_empty();
+        for pending in dropped {
+            self.withdraw(pending);
+        }
+        if withdrew {
+            self.emit_pending();
+        }
+        let item = AcpTimelineItem::Turn(AcpTurnEnd {
+            id: format!("{turn_id}-end"),
+            turn_id: turn_id.to_owned(),
+            reason,
         });
+        guard(&self.timeline).upsert(item.clone());
+        self.emit_update(AcpUpdate::Item { item });
+        self.settle_state();
     }
 
     fn cancel_turn(&self) -> Result<(), String> {
@@ -786,16 +1036,12 @@ impl Session {
         // for the agent's own result. Whoever clicks a retired card is refused,
         // because it is no longer in the pending list.
         let withdrawn: Vec<PendingPermission> = std::mem::take(&mut *guard(&self.permissions));
+        let withdrew = !withdrawn.is_empty();
         for pending in withdrawn {
-            let _ = self.write_value(&json!({
-                "jsonrpc": "2.0",
-                "id": pending.id,
-                "result": { "outcome": { "outcome": "cancelled" } },
-            }));
-            self.emit_update(AcpUpdate::PermissionClosed {
-                request_id: pending.card.request_id,
-                decision: "cancelled",
-            });
+            self.withdraw(pending);
+        }
+        if withdrew {
+            self.emit_pending();
         }
         self.write_value(&json!({
             "jsonrpc": "2.0",
@@ -814,28 +1060,128 @@ impl Session {
             let mut permissions = guard(&self.permissions);
             let index = permissions
                 .iter()
-                .position(|item| item.card.request_id == request_id)
+                .position(|item| item.request_id == request_id)
                 .ok_or("该授权请求已失效或已回答")?;
+            if let Some(option) = option_id {
+                // An option outside the card is not an answer: keep the card.
+                if !permissions[index].options.iter().any(|item| item.option_id == option) {
+                    return Err("该选项不属于此授权请求".into());
+                }
+            }
             permissions.remove(index)
         };
         let outcome = match option_id {
-            Some(option) => {
-                if !pending.card.options.iter().any(|item| item.option_id == option) {
-                    // An option outside the card is not an answer: keep it.
-                    guard(&self.permissions).push(pending);
-                    return Err("该选项不属于此授权请求".into());
-                }
-                json!({ "outcome": { "outcome": "selected", "optionId": option } })
-            }
-            None => json!({ "outcome": { "outcome": "cancelled" } }),
+            Some(option) => json!({ "outcome": "selected", "optionId": option }),
+            None => json!({ "outcome": "cancelled" }),
         };
-        self.write_value(&json!({ "jsonrpc": "2.0", "id": pending.id, "result": outcome }))?;
-        let decision = if option_id.is_some() { "selected" } else { "cancelled" };
-        self.emit_update(AcpUpdate::PermissionClosed {
-            request_id: request_id.to_owned(),
-            decision,
-        });
+        let written = self.answer_permission(&pending.id, outcome);
+        let call = guard(&self.timeline).set_permission(&pending.item_id, None);
+        if let Some(call) = call {
+            self.emit_update(AcpUpdate::Tool { call });
+        }
+        self.emit_pending();
         self.settle_state();
+        written
+    }
+
+    /// Switch the session mode. The mode must be one the agent declared. A
+    /// refused switch keeps the previous mode, and the unchanged snapshot is
+    /// published so a view that already showed the new value returns to it.
+    fn set_mode(&self, mode_id: &str) -> Result<(), String> {
+        let declared = guard(&self.config)
+            .modes
+            .as_ref()
+            .map(|modes| modes.available_modes.iter().any(|mode| mode.id == mode_id));
+        match declared {
+            None => return Err("该 agent 没有声明会话模式".into()),
+            Some(false) => return Err("该模式不在 agent 声明的模式中".into()),
+            Some(true) => {}
+        }
+        let native = guard(&self.native_session_id).clone().unwrap_or_default();
+        if let Err(error) = self.request("session/set_mode", json!({ "sessionId": native, "modeId": mode_id })) {
+            self.publish();
+            return Err(format!("切换模式失败：{error}"));
+        }
+        let config = {
+            let mut config = guard(&self.config);
+            if let Some(modes) = config.modes.as_mut() {
+                modes.current_mode_id = mode_id.to_owned();
+            }
+            config.clone()
+        };
+        self.emit_update(AcpUpdate::Config { config });
+        Ok(())
+    }
+
+    /// Set one configuration option (or the legacy model). The value must fit
+    /// the option the agent declared. A refused change keeps the previous
+    /// value and republishes it.
+    fn set_config(&self, config_id: &str, value: &Value) -> Result<(), String> {
+        let native = guard(&self.native_session_id).clone().unwrap_or_default();
+        let (method, params) = {
+            let config = guard(&self.config);
+            if let Some(option) = config.options.iter().find(|option| option.id == config_id) {
+                match option.kind {
+                    "boolean" => {
+                        let Some(flag) = value.as_bool() else {
+                            return Err("该配置项只接受开或关".into());
+                        };
+                        (
+                            "session/set_config_option",
+                            json!({ "sessionId": native, "configId": config_id, "type": "boolean", "value": flag }),
+                        )
+                    }
+                    _ => {
+                        let Some(choice) = value.as_str() else {
+                            return Err("该配置项需要选择一个取值".into());
+                        };
+                        if !option.options.iter().any(|item| item.value == choice) {
+                            return Err("该取值不在 agent 声明的选项中".into());
+                        }
+                        (
+                            "session/set_config_option",
+                            json!({ "sessionId": native, "configId": config_id, "value": choice }),
+                        )
+                    }
+                }
+            } else if config_id == LEGACY_MODEL_CONFIG_ID && config.models.is_some() {
+                let Some(model) = value.as_str() else {
+                    return Err("模型需要选择一个取值".into());
+                };
+                let known = config
+                    .models
+                    .as_ref()
+                    .is_some_and(|models| models.available_models.iter().any(|item| item.model_id == model));
+                if !known {
+                    return Err("该模型不在 agent 声明的模型中".into());
+                }
+                ("session/set_model", json!({ "sessionId": native, "modelId": model }))
+            } else {
+                return Err("该 agent 没有声明这个配置项".into());
+            }
+        };
+        let result = match self.request(method, params) {
+            Ok(result) => result,
+            Err(error) => {
+                self.publish();
+                return Err(format!("修改配置失败：{error}"));
+            }
+        };
+        let config = {
+            let mut config = guard(&self.config);
+            if method == "session/set_model" {
+                if let (Some(models), Some(model)) = (config.models.as_mut(), value.as_str()) {
+                    models.current_model_id = model.to_owned();
+                }
+            } else if let Some(options) = result.get("configOptions").filter(|value| value.is_array()) {
+                // The answer carries the full set: other options may have moved too.
+                config.options = capabilities::parse_config_options(options);
+            } else if let Some(option) = config.options.iter_mut().find(|option| option.id == config_id) {
+                option.current_value = value.clone();
+            }
+            config.clone()
+        };
+        self.emit_update(AcpUpdate::Config { config });
         Ok(())
     }
 
@@ -848,8 +1194,14 @@ impl Session {
         }
         guard(&self.secret_session).take();
         *guard(&self.turn) = None;
-        guard(&self.permissions).clear();
-        let waiting: Vec<u64> = guard(&self.pending).keys().copied().collect();
+        let dropped: Vec<PendingPermission> = std::mem::take(&mut *guard(&self.permissions));
+        {
+            let mut timeline = guard(&self.timeline);
+            for pending in &dropped {
+                timeline.set_permission(&pending.item_id, None);
+            }
+        }
+        let waiting: Vec<u64> = guard(&self.requests).keys().copied().collect();
         for id in waiting {
             self.resolve_response(id, Err("agent 已退出".into()));
         }
@@ -870,41 +1222,9 @@ impl Session {
         *guard(&self.state) = "failed";
         *guard(&self.last_turn_reason) = "failed";
         self.diagnostic(message);
-        self.notice("error", message.to_owned());
+        self.notice("error", "", message.to_owned());
         self.publish();
     }
-}
-
-fn tool_detail(update: &Value) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    if let Some(items) = update.get("content").and_then(Value::as_array) {
-        for item in items {
-            match item.get("type").and_then(Value::as_str) {
-                Some("content") => {
-                    if let Some(text) = item
-                        .get("content")
-                        .and_then(|content| content.get("text"))
-                        .and_then(Value::as_str)
-                    {
-                        parts.push(text.to_owned());
-                    }
-                }
-                Some("diff") => {
-                    if let Some(path) = item.get("path").and_then(Value::as_str) {
-                        parts.push(format!("文件：{path}"));
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    if let Some(input) = update.get("rawInput") {
-        if !input.is_null() {
-            parts.push(input.to_string());
-        }
-    }
-    let (capped, _) = cap_text(&parts.join("\n"));
-    capped.chars().take(MAX_TOOL_DETAIL_CHARS).collect()
 }
 
 /// The turn outcome, as a closed set. A missing or unrecognized reason is its
@@ -936,6 +1256,8 @@ pub fn turn_reason_text(reason: &str) -> &'static str {
 }
 
 fn emit(event: AcpEvent) {
+    #[cfg(test)]
+    tests::record(&event);
     if let Some(app) = APP.get() {
         let _ = app.emit(EVENT, event);
     }
@@ -975,6 +1297,17 @@ pub fn cancel(id: &str) -> Result<(), String> {
 /// is an error rather than a second protocol reply.
 pub fn respond_permission(id: &str, request_id: &str, option_id: Option<&str>) -> Result<(), String> {
     lookup(id)?.respond(request_id, option_id)
+}
+
+/// Switch the session mode to one the agent declared.
+pub fn set_mode(id: &str, mode_id: &str) -> Result<(), String> {
+    lookup(id)?.set_mode(mode_id)
+}
+
+/// Set one declared configuration option (or the legacy model selector under
+/// `LEGACY_MODEL_CONFIG_ID`). A select takes a string value, a boolean a bool.
+pub fn set_config(id: &str, config_id: &str, value: &Value) -> Result<(), String> {
+    lookup(id)?.set_config(config_id, value)
 }
 
 pub fn close(id: &str) -> Result<(), String> {
@@ -1025,29 +1358,7 @@ fn open_with(
     }
     let id = uuid::Uuid::new_v4().to_string();
     let AcpIo { reader, writer, diagnostics, shutdown } = io;
-    let session = Arc::new(Session {
-        id: id.clone(),
-        tool_id: spec.tool_id.clone(),
-        project_id: spec.project_id.clone(),
-        directory: spec.directory.clone(),
-        mode: spec.mode,
-        state: Mutex::new("starting"),
-        native_session_id: Mutex::new(None),
-        resume: Mutex::new("none"),
-        messages: Mutex::new(Vec::new()),
-        tools: Mutex::new(Vec::new()),
-        permissions: Mutex::new(Vec::new()),
-        diagnostics: Mutex::new(Vec::new()),
-        last_turn_reason: Mutex::new(""),
-        seq: AtomicU64::new(0),
-        writer: Mutex::new(Some(writer)),
-        shutdown: Mutex::new(shutdown),
-        pending: Mutex::new(HashMap::new()),
-        next_request: AtomicU64::new(0),
-        turn: Mutex::new(None),
-        timeout: spec.timeout,
-        secret_session: Mutex::new(secret_session),
-    });
+    let session = Arc::new(Session::new(id.clone(), &spec, writer, shutdown, secret_session));
     sessions().insert(id.clone(), Arc::clone(&session));
 
     let reader_session = Arc::clone(&session);
@@ -1058,31 +1369,22 @@ fn open_with(
     }
 
     let handshake = (|| -> Result<(), String> {
-        // Only capabilities this host can honour are published.
         let result = session.request(
             "initialize",
             json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "clientCapabilities": {
-                    "fs": { "readTextFile": false, "writeTextFile": false },
-                    "terminal": false
-                },
+                "protocolVersion": capabilities::PROTOCOL_VERSION,
+                "clientInfo": capabilities::client_info(),
+                "clientCapabilities": capabilities::client_capabilities(),
             }),
         )?;
-        if let Some(methods) = result.get("authMethods").and_then(Value::as_array) {
-            if !methods.is_empty() {
-                let names: Vec<&str> = methods
-                    .iter()
-                    .filter_map(|method| method.get("id").and_then(Value::as_str))
-                    .collect();
-                session.diagnostic(&format!("该 agent 声明了认证方式：{}", names.join(", ")));
-            }
+        capabilities::check_protocol(&result)?;
+        let agent = capabilities::agent_descriptor(&result);
+        if !agent.auth_methods.is_empty() {
+            let names: Vec<&str> = agent.auth_methods.iter().map(|method| method.id.as_str()).collect();
+            session.diagnostic(&format!("该 agent 声明了认证方式：{}", names.join(", ")));
         }
-        let load_supported = result
-            .get("agentCapabilities")
-            .and_then(|capabilities| capabilities.get("loadSession"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
+        let load_supported = agent.load_session;
+        *guard(&session.agent) = agent;
         let cwd = crate::launch::terminal_path(&spec.directory)?;
         let mut resumed = false;
         if let Some(native) = spec.resume_native_id.as_deref() {
@@ -1091,7 +1393,8 @@ fn open_with(
                     "session/load",
                     json!({ "sessionId": native, "cwd": cwd, "mcpServers": [] }),
                 ) {
-                    Ok(_) => {
+                    Ok(result) => {
+                        capabilities::apply_session_setup(&mut guard(&session.config), &result);
                         *guard(&session.native_session_id) = Some(native.to_owned());
                         *guard(&session.resume) = "loaded";
                         resumed = true;
@@ -1099,12 +1402,16 @@ fn open_with(
                     Err(error) => {
                         *guard(&session.resume) = "failed";
                         session.diagnostic(&format!("恢复原会话失败：{error}"));
-                        session.notice("warning", "无法恢复原会话，已新建一段会话；首条提示不会自动重发");
+                        session.notice(
+                            "warning",
+                            "resume_failed",
+                            "无法恢复原会话，已新建一段会话；首条提示不会自动重发",
+                        );
                     }
                 }
             } else {
                 *guard(&session.resume) = "unsupported";
-                session.notice("info", "该 agent 不支持恢复原会话，已新建一段会话");
+                session.notice("info", "resume_unsupported", "该 agent 不支持恢复原会话，已新建一段会话");
             }
         }
         if !resumed {
@@ -1114,6 +1421,7 @@ fn open_with(
                 .and_then(Value::as_str)
                 .ok_or("agent 未返回会话编号，无法继续对话")?
                 .to_owned();
+            capabilities::apply_session_setup(&mut guard(&session.config), &result);
             *guard(&session.native_session_id) = Some(native);
         }
         Ok(())
@@ -1377,5 +1685,9 @@ pub(crate) fn wait_until_idle(id: &str, timeout: Duration) -> Result<(), String>
 }
 
 #[cfg(test)]
-#[path = "../../tests/launch/acp.rs"]
+#[path = "../../../tests/launch/acp.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../tests/launch/acp_timeline.rs"]
+mod timeline_tests;
