@@ -37,13 +37,34 @@ test('a missing, oversized or malformed exit code is unknown rather than a succe
   for (const payload of ['', 'X', 'P;k=i', '$', 'a', 'E;1']) assert.equal(parseCommandMarker(payload), null, payload);
 });
 
-test('A then B then C then D;1 records a failed command and the next prompt clears it', () => {
+test('A then B then C then D;1 records a failed command the next prompt keeps visible', () => {
   const finished = run(['A', 'B', 'C', 'D;1']);
   assert.equal(finished.phase, 'finished');
   assert.equal(finished.finished, true);
   assert.equal(finished.exitCode, 1);
+  // A real shell prints A (and usually B) right after D, so the result has to survive them: the
+  // failure is the fact the user was promised to read.
   const prompted = run(['A'], finished);
-  assert.deepEqual(prompted, idleCommandState);
+  assert.equal(prompted.phase, 'prompt');
+  assert.equal(prompted.finished, true);
+  assert.equal(prompted.exitCode, 1);
+  const typing = run(['B'], prompted);
+  assert.equal(typing.phase, 'input');
+  assert.equal(typing.finished, true);
+  assert.equal(typing.exitCode, 1);
+  // Only the next command retires it.
+  const next = run(['C'], typing);
+  assert.equal(next.phase, 'running');
+  assert.equal(next.finished, false);
+  assert.equal(next.exitCode, null);
+  assert.notEqual(next, typing);
+});
+
+test('a repeated prompt is no change at all', () => {
+  const finished = run(['A', 'B', 'C', 'D;1']);
+  const prompted = run(['A'], finished);
+  assert.equal(run(['A'], prompted), prompted);
+  assert.equal(run(['A']), idleCommandState);
 });
 
 test('an input line that never executed clears its mark instead of recording a result', () => {
@@ -129,6 +150,13 @@ test('the wording states the command fact and stays quiet on a success or a plai
   assert.equal(commandHint(progress(['4;2;10']))?.key, 'sessions.commandProgressError');
   // Progress outranks a finished result: the program is still reporting its own work.
   assert.equal(commandHint(progress(['4;1;60'], run(['A', 'B', 'C', 'D;1'])))?.key, 'sessions.commandProgress');
+  // The failure stays worded through the shell's next prompt and input line, then gives way to the
+  // command that replaced it.
+  const afterPrompt = run(['A', 'B'], run(['A', 'B', 'C', 'D;1']));
+  assert.deepEqual(commandHint(afterPrompt), { key: 'sessions.commandExit', params: { code: 1 }, tone: 'failed' });
+  assert.equal(commandHint(run(['C'], afterPrompt))?.key, 'sessions.commandRunning');
+  // A clean command keeps quiet after its own prompt too.
+  assert.equal(commandHint(run(['A', 'B'], run(['A', 'B', 'C', 'D;0']))), null);
 });
 
 test('every command wording exists in both languages', () => {

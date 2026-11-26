@@ -81,9 +81,10 @@ split panes never share a phase:
 
 The state machine only moves forward. A late `B` does not turn an executing command back into an
 editable line, and a `D` that no `C` preceded — or a `B` followed by `D` with nothing executed —
-clears the mark instead of recording a result. A new `A` ends the previous cycle, so a failed
-command does not stay on screen after the shell prompted again. Only state `0` clears a progress
-bar: a command exit must not rewrite what the program itself reported.
+clears the mark instead of recording a result. `A` and `B` **keep** the result of the command that
+just ended: a shell prints its prompt immediately after `D`, so clearing there would hide the very
+failure the user was promised. The next `C` retires it and starts a new command. Only state `0`
+clears a progress bar: a command exit must not rewrite what the program itself reported.
 
 `commandHint()` words one fact — progress, a failing exit code, an unknown result, an executing
 command — and that fact takes the session's own status slot; it is not an extra chip beside it. The
@@ -116,8 +117,11 @@ were already consumed once:
 - `terminalReplaySanitizer.stripHistorySideEffects` runs over the replayed snapshot before xterm
   parses it. It removes `OSC 52` clipboard writes and replayed bells, and it keeps the settings of a
   mixed `OSC 4` while dropping its queries — in place, so the rows above and below keep the colour
-  the program gave them. Historical queries therefore never reach the PTY, while a live query is
-  answered exactly once by xterm.
+  the program gave them. A palette sequence it cannot split into pairs — an odd number of items, an
+  unknown slot, an empty value — is dropped whole whenever it still carries a `?`, and the replay
+  guard in `SessionTerminal` swallows any remaining palette payload that asks a question, so a
+  malformed history sequence cannot be answered either. Historical queries therefore never reach the
+  PTY, while a live query is answered exactly once by xterm.
 - Replayed `133` and `9;4` marks are applied: the restored screen shows the recorded command result
   and progress. They are not re-announced.
 - Device queries (DA, DSR, DECRQM, XTVERSION, DECRQSS, window reports) are still cancelled in the
@@ -142,3 +146,9 @@ prove the shared parser, the projection and the PTY bytes the workbench would se
 native platform evidence. No real PTY, ConPTY or SSH/tmux forwarder was sampled for this
 change: a transport that filters the sequences simply leaves the terminal in its base state, and a CLI
 that prints none keeps its existing adapter and screen evidence.
+
+Known limits. A finished command whose exit code was missing, non-numeric or out of range is worded
+as an unknown result and keeps the idle clock tone, so it reads like the idle prompt until the user
+notices the wording; only the wording distinguishes `D` without a usable code from no command at
+all. A prompt that reports its own result and never starts another command keeps that result on
+screen until the session ends, which is what a shell's own scrollback shows as well.

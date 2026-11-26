@@ -271,9 +271,12 @@ const FRESH_SESSION_MS = 10_000;
  * workbench forwards to the PTY; for history those answers arrive as typed text.
  *
  * Palette settings are not queries: `OSC 4;1;?;2;#ff0000` both sets and asks. The replay byte
- * filter (`stripHistorySideEffects`) removes the historical queries before they are parsed, so this
- * guard only cancels a sequence that asks and sets nothing — the settings still reach xterm and the
- * history keeps the colours the program chose.
+ * filter (`stripHistorySideEffects`) removes the historical queries before they are parsed, so a
+ * mixed sequence that reaches this guard has lost its question and keeps its settings.
+ *
+ * The guard does not rely on that ordering: any replayed palette payload that still carries a `?`
+ * anywhere is swallowed, because a sequence the filter could not split into pairs must not be
+ * answered from history either. Live output is untouched — the guard only acts during a replay.
  */
 export function guardReplayReplies(term: Terminal): { replaying: boolean; dispose: () => void } {
   const state = { replaying: false, dispose: () => {} };
@@ -286,7 +289,9 @@ export function guardReplayReplies(term: Terminal): { replaying: boolean; dispos
     const parts = data.split(';');
     const numbered = parts.length > 1 && /^\d{1,3}$/.test((parts[0] ?? '').trim());
     const values = numbered ? parts.slice(1) : parts;
-    return values.length > 0 && values.every((part) => part.trim() === '?');
+    // One question is enough: a mixed sequence the byte filter left alone still asked something, and
+    // answering it would type a colour report into the CLI's prompt.
+    return values.some((part) => part.trim() === '?');
   };
   const reportOps = new Set([11, 13, 14, 15, 16, 18, 19, 20, 21]);
   const parser = term.parser;

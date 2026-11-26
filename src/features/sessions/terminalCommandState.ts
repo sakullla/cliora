@@ -24,7 +24,11 @@ export type TerminalCommandState = {
   phase: CommandPhase;
   /** Exit code of the command that just ended; null while unknown or when nothing ran. */
   exitCode: number | null;
-  /** A D marker ended a command that actually started executing. */
+  /**
+   * A D marker ended a command that actually started executing. It outlives the prompt that follows
+   * and is only retired when the next command starts, so the result stays readable while the shell
+   * waits for input.
+   */
   finished: boolean;
   progress: TerminalProgress | null;
 };
@@ -79,18 +83,24 @@ const CLEARED: Pick<TerminalCommandState, 'phase' | 'finished' | 'exitCode'> = {
  * A marker only ever moves the cycle forward. A late `B` never turns an executing command back into
  * an editable prompt, and a `D` that no `C` preceded clears the mark instead of recording a result:
  * an abandoned input line and an orphan end marker both must not claim a command succeeded.
+ *
+ * The result of the command that just ran belongs to the prompt that follows it, not to the command:
+ * a shell prints `A` (and often `B`) immediately after `D`, so clearing on the prompt would hide the
+ * failure the user is supposed to read. Only `C`, the start of the next command, retires it.
  */
 export function applyCommandMarker(state: TerminalCommandState, marker: CommandMarker): TerminalCommandState {
   switch (marker.kind) {
     case 'prompt':
-      // A new prompt owns the cycle: the previous result is no longer the current one.
-      return state.phase === 'prompt' && !state.finished && state.exitCode === null ? state : { ...state, ...CLEARED };
+      // A already seen is no change; otherwise only the phase moves and the last result stays.
+      return state.phase === 'prompt' ? state : { ...state, phase: 'prompt' };
     case 'input':
       // A late B after C or D must not turn an executing or finished command back into an editable line.
       return state.phase === 'prompt' ? { ...state, phase: 'input' } : state;
     case 'executing':
-      // C alone is enough: a shell without B still starts executing.
-      return state.phase === 'running' ? state : { ...state, phase: 'running' };
+      // C alone is enough: a shell without B still starts executing. The new command owns the slot.
+      return state.phase === 'running' && !state.finished && state.exitCode === null
+        ? state
+        : { ...state, phase: 'running', finished: false, exitCode: null };
     case 'finished':
       if (state.phase === 'running') return { ...state, phase: 'finished', finished: true, exitCode: marker.exitCode };
       // A repeated end marker adds no fact, and an end without C clears the mark.
@@ -156,8 +166,11 @@ export type CommandHint = {
 };
 
 /**
- * What the user needs to be told, if anything. A successful command and a plain prompt stay quiet:
- * only progress, a failure, an unknown result or an executing command earn room.
+ * What the user needs to be told, if anything. A successful command and a prompt with no result stay
+ * quiet: only progress, a failure, an unknown result or an executing command earn room.
+ *
+ * A recorded result outlives its prompt, so it is read from `finished` rather than the phase: the
+ * shell's next `A`/`B` keeps showing "command exited with 1" until the user starts another command.
  */
 export function commandHint(state: TerminalCommandState | null): CommandHint | null {
   if (!state) return null;
@@ -168,7 +181,7 @@ export function commandHint(state: TerminalCommandState | null): CommandHint | n
     if (progress.kind === 'warning') return { key: 'sessions.commandProgressWarning', tone: 'warning' };
     return { key: 'sessions.commandProgressError', tone: 'error' };
   }
-  if (state.phase === 'finished') {
+  if (state.finished) {
     if (state.exitCode === null) return { key: 'sessions.commandResultUnknown', tone: 'unknown' };
     if (state.exitCode !== 0) return { key: 'sessions.commandExit', params: { code: state.exitCode }, tone: 'failed' };
     return null;

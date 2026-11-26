@@ -4996,7 +4996,24 @@ test.describe('terminal command phases, progress and colours', () => {
     // The task state behind the command is unchanged, and its wording stays in the tooltip.
     await expect(badge).toHaveAttribute('data-task', /^(working|unknown)$/);
     await expect(badge).toHaveAttribute('title', /^命令退出码 1 · /);
-    // The next prompt owns the cycle: the status slot returns to the task state.
+    // A real shell prompts again immediately after D, so the failure has to survive it: the result
+    // belongs to the prompt that follows, not to the command that already ended.
+    await sendPtyText(page, '\x1b]133;A\x07$ ');
+    await expect(badge).toHaveAttribute('data-command', 'failed');
+    await expect(badgeLabel).toHaveText('命令退出码 1');
+    await expect(meta).toHaveAttribute('data-command', 'failed');
+    await expect(badge).toHaveAttribute('data-task', /^(working|unknown)$/);
+    // A shell commonly prints B in the same breath; that must not erase the result either.
+    await sendPtyText(page, '\x1b]133;B\x07');
+    await expect(badge).toHaveAttribute('data-command', 'failed');
+    await expect(badgeLabel).toHaveText('命令退出码 1');
+    await expect(meta).toContainText('命令退出码 1');
+    // The next command, not the prompt, retires the old result.
+    await sendPtyText(page, 'make test\r\n\x1b]133;C\x07');
+    await expect(badge).toHaveAttribute('data-command', 'running');
+    await expect(badgeLabel).toHaveText('命令执行中');
+    await expect(meta).toHaveAttribute('data-command', 'running');
+    // A prompt after that has no result to show, so the status slot returns to the task state.
     await sendPtyText(page, '\x1b]133;A\x07$ ');
     await expect(badge).not.toHaveAttribute('data-command', /./);
     await expect(meta).not.toHaveAttribute('data-command', /./);
@@ -5072,8 +5089,12 @@ test.describe('terminal command phases, progress and colours', () => {
     const badge = stage.locator('header [data-state]').first();
     await expect(badge).toHaveAttribute('data-command', 'failed');
     await expect(badge.locator('[class*="statusLabel"] > span:first-child')).toHaveText('命令退出码 2');
-    // Clearing one pane's command state leaves the other untouched.
-    await sendPtyText(page, '\x1b]133;A\x07', 's1');
+    // A prompt of its own keeps the failure; a clean command in that pane is what clears it, and the
+    // neighbour is untouched either way.
+    await sendPtyText(page, '\x1b]133;A\x07\x1b]133;B\x07', 's1');
+    await expect(codexRow.locator('[data-task]')).toContainText('命令退出码 2');
+    await expect(claudeRow.locator('[data-task]')).toContainText('进度 60%');
+    await sendPtyText(page, '\x1b]133;C\x07\x1b]133;D;0\x07\x1b]133;A\x07', 's1');
     await expect(codexRow.locator('[data-task]')).not.toHaveAttribute('data-command', /./);
     await expect(claudeRow.locator('[data-task]')).toContainText('进度 60%');
   });
@@ -5081,9 +5102,11 @@ test.describe('terminal command phases, progress and colours', () => {
   test('restored history rebuilds its command state without repeating clipboard, bell or palette queries', async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     await page.addInitScript(() => {
-      // A copy, a bell, a mixed palette sequence and a finished failing command, all in history.
+      // A copy, a bell, a mixed palette sequence and a finished failing command, all in history. The
+      // restored screen ends on the prompt the shell printed after that command, exactly as a real
+      // capture does, so the result has to come back through the A that follows it.
       const history = 'codex-ready\r\n\x1b]133;A\x07\x1b]133;B\x07$ make\x1b]133;C\x07boom\r\n\x1b]133;D;1\x07'
-        + '\x1b]9;4;2;40\x07\x1b]52;c;cmVwbGF5ZWQ=\x07\x07\x1b]4;1;?;2;#ff0000\x07> ';
+        + '\x1b]9;4;2;40\x07\x1b]52;c;cmVwbGF5ZWQ=\x07\x07\x1b]4;1;?;2;#ff0000\x07> \x1b]133;A\x07';
       const bytes = new TextEncoder().encode(history);
       Object.assign(window, {
         __oldSessions: true,

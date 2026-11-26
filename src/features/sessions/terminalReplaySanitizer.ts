@@ -52,13 +52,17 @@ function rewriteOsc(body: string): string | 'drop' | null {
   }
   if (ident !== '4') return null;
   // `4;<index>;<value>` pairs. A pair whose value is `?` is a query; the rest are palette settings.
-  if ((parts.length - 1) % 2 !== 0) return null;
+  // A sequence this filter cannot split into pairs is dropped whenever it still carries a question:
+  // leaving it for xterm would answer an old query, and only a sequence with no `?` at all is safe
+  // to hand over unchanged.
+  const unparsable = () => (body.includes('?') ? 'drop' : null);
+  if ((parts.length - 1) % 2 !== 0) return unparsable();
   const settings: string[] = [];
   let queried = false;
   for (let index = 1; index + 1 < parts.length; index += 2) {
     const slot = parts[index].trim();
     const value = parts[index + 1].trim();
-    if (!/^\d{1,3}$/.test(slot) || !value) return null;
+    if (!/^\d{1,3}$/.test(slot) || !value) return unparsable();
     if (value === '?') queried = true;
     else settings.push(slot, value);
   }

@@ -33,6 +33,25 @@ test('a mixed OSC 4 keeps its settings in place and loses only the query', () =>
   assert.equal(text(stripHistorySideEffects(bytes('\x1b]4;3;?\x07x'))), 'x');
 });
 
+test('a mixed OSC 4 that cannot be split still loses its question', () => {
+  // An odd pair count, an unknown slot and an empty value all escape the pair walk. Each of these
+  // still asks something, so none may reach xterm and be answered from history.
+  for (const sequence of [
+    'a\x1b]4;1;?;2;\x07b',
+    'a\x1b]4;1;?;2\x07b',
+    'a\x1b]4;x;?\x07b',
+    'a\x1b]4;1;;2;#ff0000\x07b',
+  ]) {
+    const filtered = text(stripHistorySideEffects(bytes(sequence)));
+    assert.equal(filtered.includes('?'), false, JSON.stringify(sequence));
+    assert.equal(filtered.startsWith('a'), true, JSON.stringify(sequence));
+    assert.equal(filtered.endsWith('b'), true, JSON.stringify(sequence));
+  }
+  // A malformed sequence without any question is still handed to xterm untouched.
+  const settings = 'a\x1b]4;1;;2;#ff0000\x07b';
+  assert.equal(text(stripHistorySideEffects(bytes(settings))), settings);
+});
+
 test('palette settings, resets and default colours stay in history', () => {
   for (const sequence of [
     '\x1b]4;4;#123456\x07',
