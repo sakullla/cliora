@@ -39,6 +39,7 @@ import { TERMINAL_FONT_SIZE_DEFAULT, TERMINAL_FONT_SIZE_MAX, TERMINAL_FONT_SIZE_
 import { PlaceLabel, SessionRail, type RailSession, type SessionTone } from './SessionRail';
 import { remoteSessionMayExist, sessionConfirmedEnded } from './sessionState';
 import { reviewEvidenceVerified, taskBucketFor, taskStateFor, taskStateHintKey, taskStateLabelKey, type TaskEvidence, type TaskState } from './sessionTaskState';
+import { commandHint, type TerminalCommandState } from './terminalCommandState';
 import { placeParts, railPlace, railTaskTitle } from './railTitle';
 import { uploadDisplayName, useSessionUploads, type SessionUploadTask } from './sessionUploads';
 import uploadStyles from './sessionUploads.module.css';
@@ -610,6 +611,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [attentionIds, setAttentionIds] = useState<Set<string>>(() => new Set());
   // 每个会话当前屏幕的适配器证据；shared 工作台从不按 CLI ID 解析屏幕。
   const [semanticsById, setSemanticsById] = useState<Map<string, TerminalSemantics | null>>(() => new Map());
+  // 终端自己上报的命令阶段与程序进度（OSC 133 / 9;4）。它们描述命令，不参与 AI 任务状态。
+  const [commandById, setCommandById] = useState<Map<string, TerminalCommandState | null>>(() => new Map());
   const [collapsedOpen, setCollapsedOpen] = useState(false);
   const [activeOutputIds, setActiveOutputIds] = useState<Set<string>>(() => new Set());
   const [scrolledIds, setScrolledIds] = useState<Set<string>>(() => new Set());
@@ -1560,6 +1563,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         return next;
       });
     },
+    command: (id, value) => {
+      setCommandById((current) => {
+        if (current.has(id) && current.get(id) === value) return current;
+        const next = new Map(current);
+        if (value) next.set(id, value); else next.delete(id);
+        return next;
+      });
+    },
     outputActive: (id, isActive) => {
       setActiveOutputIds((current) => toggleInSet(current, id, isActive));
       if (isActive && !visibleIdsRef.current.includes(id)) setUnreadIds((current) => toggleInSet(current, id, true));
@@ -1984,6 +1995,20 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     const evidence = taskEvidenceOf(session);
     const key = taskStateHintKey(taskStateFor(evidence), evidence);
     return key ? t(key) : null;
+  }
+  /**
+   * What the terminal's own program reported, worded for the rail, the stage title and assistive
+   * tech. It stays outside `taskStateFor`: a command exit, a full bar or a progress error never
+   * makes the AI task look delivered, crashed or waiting for approval.
+   */
+  function commandOf(session: WorkbenchSession): { tone: string; label: string } | null {
+    const state = commandById.get(session.id);
+    if (!state) return null;
+    // An ended session keeps its last result but has no live program: no bar survives its process.
+    // A remote transport that may still hold the session reports the connection, not a progress bar.
+    if (!session.running && remoteSessionMayExist(session)) return null;
+    const hint = commandHint(session.running ? state : { ...state, progress: null });
+    return hint ? { tone: hint.tone, label: t(hint.key, hint.params) } : null;
   }
 
   /** 收起只是列表动作：不调用 close、不清恢复记录、不停止本地或远程进程。 */
@@ -3662,6 +3687,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       bucket: taskBucketFor(task, evidence),
       taskLabel: t(taskStateLabelKey(task, evidence)),
       taskHint: taskHintOf(session),
+      command: commandOf(session),
       collapsed: collapsedIds.has(session.id),
       marked: arrangement.reviewMarks.includes(session.id),
       pane: split ? (split.indexOf(session.id) >= 0 ? split.indexOf(session.id) : null) : null,
@@ -3834,6 +3860,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           const title = current ? taskTitle(current) : '';
           const elapsed = current ? elapsedOf(current) : '';
           const currentStateLabel = current ? stateLabel(current, tone) : '';
+          // The command's own facts sit beside the task state, never inside it.
+          const currentCommand = current ? commandOf(current) : null;
           // Only the common states reserve room: a chip that grows for a rare "needs you"
           // is clearer than one that is always as wide as its longest possible wording.
           const stateReserves = [
@@ -3895,6 +3923,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                     <span className={styles.identitySubAnchor} aria-hidden="true" />
                     <button type="button" className={styles.pathChip} title={current.directory ? displayPath(current.directory) + ' · ' + t('sessions.copyPath') : placeOf(current)} onClick={() => void copySessionPath(current)}><Icon name={copiedState === 'path' ? 'check' : 'folder'} size={12} /><span>{copiedState === 'path' ? t('sessions.pathCopied') : <PathLabel text={stagePlace} />}</span></button>
                     {current.mode === 'yolo' && <span className={styles.modeChip} data-mode="yolo" title={t('sessions.modeYoloDesc')}>{modeLabel(current.mode)}</span>}
+                    {currentCommand && <span className={styles.commandChip} data-command={currentCommand.tone} title={currentCommand.label}>{currentCommand.label}</span>}
                     {/* A remote session that may still run reports the SSH transport's code, not the CLI's: the
                         connection banner explains it, so the title bar does not show it as a failure. */}
                     {/* A clean exit is already said by the ended status and the banner below; only a failure earns room here. */}

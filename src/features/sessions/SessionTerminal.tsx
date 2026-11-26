@@ -16,6 +16,8 @@ import { TerminalWebglLifecycle } from './terminalWebgl';
 import type { OutputChunk, PendingTerminalOutput } from './pendingOutput';
 import { createTerminalIme, type TerminalIme } from './terminalIme';
 import { computeAppWheelSteps, computeViewportWheelLines, createWheelAccumulator, resetWheelAccumulator } from './terminalWheel';
+import { applyCommandMarker, applyProgressReport, commandStateKey, idleCommandState, parseCommandMarker, parseProgressReport, type TerminalCommandState } from './terminalCommandState';
+import { stripHistorySideEffects } from './terminalReplaySanitizer';
 import { TERMINAL_SCROLL_MULTIPLIER, type TerminalScrollSpeed } from '../../lib/terminalPreferences';
 import styles from './SessionWorkbench.module.css';
 
@@ -267,11 +269,20 @@ const FRESH_SESSION_MS = 10_000;
  * Swallow the device queries inside replayed history while `replaying` is set. xterm answers
  * DA, DSR, DECRQM, XTVERSION, DECRQSS and OSC colour queries through onData, which the
  * workbench forwards to the PTY; for history those answers arrive as typed text.
+ *
+ * Palette settings are not queries: `OSC 4;1;?;2;#ff0000` both sets and asks. The replay byte
+ * filter (`stripHistorySideEffects`) removes the historical queries before they are parsed, so this
+ * guard only cancels a sequence that asks and sets nothing — the settings still reach xterm and the
+ * history keeps the colours the program chose.
  */
 export function guardReplayReplies(term: Terminal): { replaying: boolean; dispose: () => void } {
   const state = { replaying: false, dispose: () => {} };
   const swallow = () => state.replaying;
-  const query = (data: string) => state.replaying && data.split(';').some((part) => part.trim() === '?');
+  const query = (data: string) => {
+    if (!state.replaying) return false;
+    const values = data.split(';').slice(1);
+    return values.length > 0 && values.every((part) => part.trim() === '?');
+  };
   const reportOps = new Set([11, 13, 14, 15, 16, 18, 19, 20, 21]);
   const parser = term.parser;
   const handlers = [
@@ -324,6 +335,8 @@ export type TerminalBridge = {
   outputActive: (sessionId: string, active: boolean) => void;
   /** The adapter's own read of the current screen, or null when it recognizes nothing. */
   semantics: (sessionId: string, value: TerminalSemantics | null) => void;
+  /** Command phase (OSC 133) and program progress (OSC 9;4) of this terminal, or null when idle. */
+  command: (sessionId: string, value: TerminalCommandState | null) => void;
   outputWritten: (sessionId: string) => void;
   shortcut: (action: ShortcutAction) => void;
   canSwitch: () => boolean;
@@ -452,6 +465,8 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
     termRef.current = term;
     fitRef.current = fit;
     let disposed = false;
+    // One owner for the replay window: bells, clipboard writes and device replies all ask it.
+    const replies = guardReplayReplies(term);
 
     // The IME candidate window follows xterm's hidden textarea. xterm only moves it
     // when the cursor moves, so a terminal that was hidden, replayed, or scrolled
@@ -756,7 +771,8 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
     document.addEventListener('scroll', resetAncestorScroll, true);
 
     const bellSub = term.onBell(() => {
-      if (!disposed) bridge.current.bell(sessionId);
+      // History already rang when it was live; restoring a session must not ring again.
+      if (!disposed && !replies.replaying) bridge.current.bell(sessionId);
     });
     const titleSub = term.onTitleChange((title) => {
       terminalTitle = title;
@@ -1006,7 +1022,8 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
     // Claude Code copies with OSC 52. xterm does not apply that sequence itself.
     const osc52 = term.parser.registerOscHandler(52, (data) => {
       const text = textFromOsc52(data);
-      if (text) void writeClipboard(text).then((ok) => { if (ok && !disposed) bridge.current.copied(); });
+      // Restored history must not touch the clipboard a second time.
+      if (text && !replies.replaying) void writeClipboard(text).then((ok) => { if (ok && !disposed) bridge.current.copied(); });
       return true;
     });
     let reportedDirectory = '';
@@ -1017,9 +1034,34 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       bridge.current.directory(sessionId, directory);
       return true;
     };
-    const replies = guardReplayReplies(term);
     const osc7 = term.parser.registerOscHandler(7, reportDirectory);
     const osc1337 = term.parser.registerOscHandler(1337, reportDirectory);
+    // Command phase (OSC 133) and program progress (OSC 9;4) belong to this terminal alone, so a
+    // split pane reports its own command while the other keeps its state.
+    let command: TerminalCommandState = idleCommandState;
+    let publishedCommand = commandStateKey(command);
+    const publishCommand = (next: TerminalCommandState) => {
+      if (next === command) return;
+      command = next;
+      const key = commandStateKey(next);
+      // An identical repaint of the same marks is not new evidence.
+      if (key === publishedCommand) return;
+      publishedCommand = key;
+      if (!disposed) bridge.current.command(sessionId, next);
+    };
+    const osc133 = term.parser.registerOscHandler(133, (data) => {
+      const marker = parseCommandMarker(data);
+      if (marker) publishCommand(applyCommandMarker(command, marker));
+      return true;
+    });
+    const osc9 = term.parser.registerOscHandler(9, (data) => {
+      const update = parseProgressReport(data);
+      // OSC 9 also carries notifications, and an out-of-range report changes nothing; let xterm
+      // treat those as ordinary OSC output.
+      if (!update) return false;
+      publishCommand(applyProgressReport(command, update));
+      return true;
+    });
     const layoutAvailable = () => {
       const workbench = node.closest<HTMLElement>('[data-term-theme]');
       return node.clientWidth >= 8 && node.clientHeight >= 8 && (!workbench || workbench.clientHeight >= 8);
@@ -1189,11 +1231,14 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
         // session that only just started may still be waiting, so it is answered.
         const started = startedAtRef.current ?? 0;
         replies.replaying = snapshot.length > 0 && !(started > 0 && Date.now() - started < FRESH_SESSION_MS);
+        // Old history keeps its visible colours but none of its side effects: a clipboard write, a
+        // bell or a palette query would act on a session that already consumed them once.
+        const history = replies.replaying ? stripHistorySideEffects(snapshot) : snapshot;
         if (snapshot.length && suffix.length) {
-          term.write(snapshot, () => { replies.replaying = false; });
+          term.write(history, () => { replies.replaying = false; });
           term.write(suffix, finishReplay);
         } else if (snapshot.length || suffix.length) {
-          term.write(snapshot.length ? snapshot : suffix, finishReplay);
+          term.write(history.length ? history : suffix, finishReplay);
         } else finishReplay();
       } catch { finishReplay(); }
     }).catch(() => {
@@ -1213,6 +1258,7 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       lastScreen = '';
       // The screen this evidence described is gone; the workbench must not keep it.
       if (semantics) bridge.current.semantics(sessionId, null);
+      if (publishedCommand !== commandStateKey(idleCommandState)) bridge.current.command(sessionId, null);
       ime.dispose();
       if (imeRef.current === ime) imeRef.current = null;
       replies.dispose();
@@ -1242,6 +1288,8 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       osc52.dispose();
       osc7.dispose();
       osc1337.dispose();
+      osc133.dispose();
+      osc9.dispose();
       window.removeEventListener('focus', scheduleRefresh);
       document.removeEventListener('visibilitychange', scheduleRefresh);
       observer.disconnect();

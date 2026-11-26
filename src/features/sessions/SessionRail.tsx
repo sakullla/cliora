@@ -31,6 +31,8 @@ export type RailSession = {
   bucket: TaskBucket;
   taskLabel: string;
   taskHint: string | null;
+  /** The terminal's own command phase or program progress, worded; null when there is nothing to say. */
+  command: { tone: string; label: string } | null;
   collapsed: boolean;
   /** The user marked this round for review; a display mark only. */
   marked: boolean;
@@ -232,7 +234,7 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
     const failed = sessionConfirmedEnded(session) && session.exitCode != null && session.exitCode !== 0;
     const yolo = session.mode === 'yolo';
     // YOLO stays discoverable in the tooltip and for assistive tech; the row itself spends its room on state.
-    const tooltip = [stableTitle(item.title), item.place, [item.name, yolo ? t('sessions.modeYolo') : ''].filter(Boolean).join(' · '), item.directory, item.taskLabel, item.taskHint].filter(Boolean).join('\n');
+    const tooltip = [stableTitle(item.title), item.place, [item.name, yolo ? t('sessions.modeYolo') : ''].filter(Boolean).join(' · '), item.directory, item.taskLabel, item.taskHint, item.command?.label ?? ''].filter(Boolean).join('\n');
     const pending = !session.running && remoteSessionMayExist(session);
     const state = pending ? t('sessions.sshNeedsCheck') : item.taskLabel;
     // A running session that is only waiting for input already reads that way from its tool icon
@@ -278,8 +280,9 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
             <span className={styles.sessionPlace}>{item.title ? <PlaceLabel text={item.place} parts={places.get(item.place)} /> : <span className={styles.placeTail}>{item.name}</span>}</span>
             {item.pane != null && <span className={styles.paneTag} title={t('sessions.splitView')}><Icon name="columns" size={11} />{item.pane + 1}</span>}
             {failed && <span className={styles.exitTag}>{t('sessions.exitCode', { code: session.exitCode })}</span>}
+            {item.command && <span className={styles.commandTag} data-command={item.command.tone} title={item.command.label}>{item.command.label}</span>}
           </span>
-          <span className={styles.srOnly}>{[item.title ? item.name : '', yolo ? t('sessions.modeYolo') : '', item.taskLabel, item.taskHint].filter(Boolean).join(' · ')}</span>
+          <span className={styles.srOnly}>{[item.title ? item.name : '', yolo ? t('sessions.modeYolo') : '', item.taskLabel, item.taskHint, item.command?.label ?? ''].filter(Boolean).join(' · ')}</span>
         </span>
         {/* What the session is doing now — only when it needs saying — then how long it has run. */}
         <span className={styles.sessionMeta} data-tone={pending ? 'pending' : item.tone} data-task={item.task} data-quiet={quietState || undefined} aria-hidden="true">

@@ -4945,3 +4945,179 @@ test('an inherited workspace that is gone is named instead of replaced', async (
 
 
 
+/** One PTY chunk for a session, exactly as an output event delivers it. */
+async function sendPtyText(page: Page, text: string, sessionId = 's1') {
+  await page.evaluate((payload) => (window as unknown as { __output: (text: string, sessionId: string) => void }).__output(payload.text, payload.sessionId), { text, sessionId });
+}
+
+/** `rgb:ffff/0000/0000`, `rgb:ff/00/00` and `rgb:fff/000/000` all become `#ff0000`. */
+function hexFromReply(reply: string): string | null {
+  const match = reply.match(/rgb:([0-9a-f]{1,4})\/([0-9a-f]{1,4})\/([0-9a-f]{1,4})/i);
+  if (!match) return null;
+  const channel = (value: string) => (value.length >= 2 ? value.slice(0, 2) : value.padStart(2, '0')).toLowerCase();
+  return `#${channel(match[1])}${channel(match[2])}${channel(match[3])}`;
+}
+
+/** Ask the real xterm palette for one slot and read back the single reply the CLI would receive. */
+async function paletteHex(page: Page, sequence: string, marker: string): Promise<string | null> {
+  await resetWrites(page);
+  await sendPtyText(page, sequence);
+  await expect.poll(async () => (await writes(page)).filter((text) => text.includes(marker)).length).toBe(1);
+  const reply = (await writes(page)).find((text) => text.includes(marker)) ?? '';
+  return hexFromReply(reply);
+}
+
+test.describe('terminal command phases, progress and colours', () => {
+  test('OSC 133 shows a failed command without changing the task state and clears it at the next prompt', async ({ page }) => {
+    await openWorkbench(page);
+    const stage = page.getByRole('region', { name: '当前会话' });
+    const row = page.locator('[data-session-id="s1"]').first();
+    // The marks arrive as separate chunks, the way a shell writes them.
+    await sendPtyText(page, '\x1b]133;A\x07$ ');
+    await sendPtyText(page, '\x1b]133;B\x07');
+    await sendPtyText(page, 'make test\r\n\x1b]133;C\x07');
+    await expect(stage.locator('[data-command="running"]')).toHaveText('命令执行中');
+    await sendPtyText(page, 'boom\r\n\x1b]133;D;1\x07');
+    await expect(stage.locator('[data-command="failed"]')).toHaveText('命令退出码 1');
+    await expect(row.locator('[data-command="failed"]')).toHaveText('命令退出码 1');
+    // The next prompt owns the cycle: the result of the previous command is no longer current.
+    await sendPtyText(page, '\x1b]133;A\x07$ ');
+    await expect(stage.locator('[data-command]')).toHaveCount(0);
+    await expect(row.locator('[data-command]')).toHaveCount(0);
+    // An input line that never executed and an orphan end marker record nothing.
+    await sendPtyText(page, '\x1b]133;B\x07typed\x1b]133;D;0\x07');
+    await expect(stage.locator('[data-command]')).toHaveCount(0);
+    await sendPtyText(page, '\x1b]133;D;0\x07');
+    await expect(stage.locator('[data-command]')).toHaveCount(0);
+  });
+
+  test('OSC 9;4 progress reaches the title bar and the list, and unknown reports invent nothing', async ({ page }) => {
+    await openWorkbench(page);
+    const stage = page.getByRole('region', { name: '当前会话' });
+    const row = page.locator('[data-session-id="s1"]').first();
+    const badge = stage.locator('header [data-state]').first();
+    await sendPtyText(page, '\x1b]9;4;1;35\x07');
+    await expect(stage.locator('[data-command="progress"]')).toHaveText('进度 35%');
+    await expect(row.locator('[data-command="progress"]')).toHaveText('进度 35%');
+    await sendPtyText(page, '\x1b]9;4;3\x07');
+    await expect(stage.locator('[data-command="indeterminate"]')).toHaveText('进度进行中');
+    await sendPtyText(page, '\x1b]9;4;4;90\x07');
+    await expect(stage.locator('[data-command="warning"]')).toHaveText('进度警告');
+    await sendPtyText(page, '\x1b]9;4;2;40\x07');
+    await expect(stage.locator('[data-command="error"]')).toHaveText('进度错误');
+    // Unknown states, out-of-range percentages and plain OSC 9 notifications change nothing.
+    for (const bad of ['\x1b]9;4;7\x07', '\x1b]9;4;1;250\x07', '\x1b]9;4;1\x07', '\x1b]9;Build finished\x07', '\x1b]9;4;1;abc\x07']) await sendPtyText(page, bad);
+    await expect(stage.locator('[data-command="error"]')).toHaveText('进度错误');
+    await expect(row.locator('[data-command="error"]')).toHaveText('进度错误');
+    // Progress describes the program: once its output goes quiet the task state is still the
+    // session's own, and the bar is still the program's.
+    await page.waitForTimeout(1700);
+    await expect(badge).toHaveAttribute('title', '等待输入');
+    await expect(stage.locator('[data-command="error"]')).toHaveText('进度错误');
+    await sendPtyText(page, '\x1b]9;4;0\x07');
+    await expect(stage.locator('[data-command]')).toHaveCount(0);
+    await expect(row.locator('[data-command]')).toHaveCount(0);
+  });
+
+  test('two split sessions keep their own command phase and progress', async ({ page }) => {
+    await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+    await openWorkbench(page);
+    const stage = page.getByRole('region', { name: '当前会话' });
+    await page.getByRole('button', { name: '分屏', exact: true }).click();
+    const codexRow = page.locator('[data-session-id="s1"]').first();
+    const claudeRow = page.locator('[data-session-id="s2"]').first();
+    await sendPtyText(page, '\x1b]133;A\x07\x1b]133;B\x07\x1b]133;C\x07\x1b]133;D;2\x07', 's1');
+    await sendPtyText(page, '\x1b]9;4;1;60\x07', 's2');
+    await expect(codexRow.locator('[data-command="failed"]')).toHaveText('命令退出码 2');
+    await expect(claudeRow.locator('[data-command="progress"]')).toHaveText('进度 60%');
+    // The title bar speaks for the session it shows, not for its neighbour.
+    await expect(stage.locator('[data-command="failed"]')).toHaveCount(1);
+    await expect(stage.locator('[data-command="progress"]')).toHaveCount(0);
+    // Clearing one pane's command state leaves the other untouched.
+    await sendPtyText(page, '\x1b]133;A\x07', 's1');
+    await expect(codexRow.locator('[data-command]')).toHaveCount(0);
+    await expect(claudeRow.locator('[data-command="progress"]')).toHaveText('进度 60%');
+  });
+
+  test('restored history rebuilds its command state without repeating clipboard, bell or palette queries', async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await page.addInitScript(() => {
+      // A copy, a bell, a mixed palette sequence and a finished failing command, all in history.
+      const history = 'codex-ready\r\n\x1b]133;A\x07\x1b]133;B\x07$ make\x1b]133;C\x07boom\r\n\x1b]133;D;1\x07'
+        + '\x1b]9;4;2;40\x07\x1b]52;c;cmVwbGF5ZWQ=\x07\x07\x1b]4;1;?;2;#ff0000\x07> ';
+      const bytes = new TextEncoder().encode(history);
+      Object.assign(window, {
+        __oldSessions: true,
+        __replayOverride: { dataBase64: btoa(String.fromCharCode(...bytes)), endOffset: bytes.length, cols: 120, rows: 30 },
+      });
+    });
+    // The clipboard is shared with the host, so the check starts from a value this test owns.
+    await page.goto('/');
+    await page.evaluate(() => navigator.clipboard.writeText('cliora-replay-sentinel'));
+    await openWorkbench(page);
+    const stage = page.getByRole('region', { name: '当前会话' });
+    // Known state is rebuilt: the program had reported an error and the command had failed.
+    await expect(stage.locator('[data-command="error"]')).toHaveText('进度错误');
+    // A replayed copy does not touch the clipboard, and a replayed bell does not ring again.
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('cliora-replay-sentinel');
+    await expect(page.getByRole('tab', { name: /Codex/ }).first().locator('[data-activity-icon="bell"]')).toHaveCount(0);
+    // The historical palette query never reached the PTY.
+    expect((await writes(page)).filter((text) => text.includes(']4;'))).toEqual([]);
+    // A live query is answered once, with the colour the history set.
+    expect(await paletteHex(page, '\x1b]4;2;?\x07', ']4;2;')).toBe('#ff0000');
+    // Clearing the program's bar reveals the command result the history recorded.
+    await sendPtyText(page, '\x1b]9;4;0\x07');
+    await expect(stage.locator('[data-command="failed"]')).toHaveText('命令退出码 1');
+  });
+
+  test('a live OSC 4 with settings and queries applies each item and answers once', async ({ page }) => {
+    await openWorkbench(page);
+    await resetWrites(page);
+    await sendPtyText(page, '\x1b]4;1;#00ff00;2;?\x07');
+    // Only the queried slot is answered; the setting produces no reply of its own.
+    await expect.poll(async () => (await writes(page)).filter((text) => text.includes(']4;2;')).length).toBe(1);
+    expect((await writes(page)).join('')).not.toContain(']4;1;rgb');
+    expect(await paletteHex(page, '\x1b]4;1;?\x07', ']4;1;')).toBe('#00ff00');
+    // A single-slot reset only moves that slot back to the current theme baseline.
+    await sendPtyText(page, '\x1b]104;1\x07');
+    expect(await paletteHex(page, '\x1b]4;1;?\x07', ']4;1;')).not.toBe('#00ff00');
+    // Default foreground and background queries still work.
+    await resetWrites(page);
+    await sendPtyText(page, '\x1b]11;?\x07');
+    await expect.poll(async () => (await writes(page)).filter((text) => text.includes(']11;rgb:')).length).toBe(1);
+    await resetWrites(page);
+    await sendPtyText(page, '\x1b]10;?\x07');
+    await expect.poll(async () => (await writes(page)).filter((text) => text.includes(']10;rgb:')).length).toBe(1);
+  });
+
+  test('switching the terminal theme moves the reset baseline of every instance', async ({ page }) => {
+    await openWorkbench(page);
+    const stage = page.getByRole('region', { name: '当前会话' });
+    const lightDefault = await paletteHex(page, '\x1b]4;3;?\x07', ']4;3;');
+    await sendPtyText(page, '\x1b]4;3;#123456\x07');
+    expect(await paletteHex(page, '\x1b]4;3;?\x07', ']4;3;')).toBe('#123456');
+    // The user picks the dark terminal palette: it becomes the default colour and reset baseline.
+    await stage.getByRole('button', { name: '终端显示', exact: true }).click();
+    await page.locator('[data-theme-choice="dark"]').click();
+    await page.keyboard.press('Escape');
+    const darkDefault = await paletteHex(page, '\x1b]4;3;?\x07', ']4;3;');
+    expect(darkDefault).not.toBe('#123456');
+    expect(darkDefault).not.toBe(lightDefault);
+    // Setting a colour still applies at once, and resetting returns to the new baseline.
+    await sendPtyText(page, '\x1b]4;3;#00ff00\x07');
+    expect(await paletteHex(page, '\x1b]4;3;?\x07', ']4;3;')).toBe('#00ff00');
+    await sendPtyText(page, '\x1b]104;3\x07');
+    expect(await paletteHex(page, '\x1b]4;3;?\x07', ']4;3;')).toBe(darkDefault);
+  });
+
+  test('a BEL terminator does not ring, while a real bell still does', async ({ page }) => {
+    await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+    await openWorkbench(page);
+    const bell = page.getByRole('tab', { name: /Claude Code/ }).locator('[data-activity-icon="bell"]');
+    await sendPtyText(page, '\x1b]0;a title\x07\x1b]133;A\x07\x1b]9;4;1;10\x07\x1b]4;1;?\x07', 's2');
+    await expect(bell).toHaveCount(0);
+    // The same bytes with a real bell still ask for a look, so the check above is meaningful.
+    await sendPtyText(page, '\x07', 's2');
+    await expect(bell).toHaveCount(1);
+  });
+});
