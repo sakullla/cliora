@@ -609,7 +609,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     const directory = !desktop ? (repoOption?.selection.directory ?? (launchPlace.startsWith('custom:') ? launchPlace.slice('custom:'.length) : null)) : null;
     const settings = await native.getLaunchSettings().catch(() => launchSettings);
     const mode: LaunchMode = launchMode === 'yolo' && selectedDescriptor?.yoloAvailable ? 'yolo' : 'normal';
-    const request = { ...(repoOption ? { workspaceId: repoOption.selection.workspaceId, repositoryId: repoOption.selection.repositoryId } : {}), toolId: launchTool, projectId, sessionId: null, mode, directory, initialPrompt: launchText, worktreeIntent: repoOption ? 'given' as const : worktreeIntentForNewWorkbench(settings, { desktop }), agent: selectedDescriptor?.agentLaunchAvailable && launchAgent ? launchAgent : null };
+    const request = { ...(repoOption ? { workspaceId: repoOption.selection.workspaceId, repositoryId: repoOption.selection.repositoryId } : {}), toolId: launchTool, projectId, sessionId: null, mode, directory, initialPrompt: launchText, worktreeIntent: repoOption ? 'given' as const : worktreeIntentForNewWorkbench(settings, { desktop }), agent: selectedDescriptor?.agentLaunchAvailable && launchAgent ? launchAgent : null, interaction: (settings?.interaction ?? launchSettings?.interaction) === 'acp' ? 'acp' as const : null };
     try {
       const result = await native.launchCli(request);
       const opened = workbenchSessionId(result);

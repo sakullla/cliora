@@ -18,15 +18,15 @@
 | Agent | 接入路径 | 入口与版本 | 平台 | 目录/配置 | 对话 | 授权 | 停止 | 恢复 | 未装/不支持时原因 | 证据 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | OpenCode | 原生（native） | `opencode acp` · 2.3.0 | Windows | `~/.config/opencode`、`~/.local/share` | 握手声明 | 握手声明 | 协议必备 | loadSession + resume 已声明 | — | handshake | unverified |
-| Codex | 桥接（bridge） | `codex-acp` · 未安装（本机 `codex-cli 0.172.0` 不提供 ACP） | 未安装 | 未核对（`~/.codex`） | 未验证 | 未验证 | 未验证 | 未验证 | not-installed；未绑定所选安装时 identity-unresolved | documented | unverified |
-| Claude Code | 桥接（bridge） | `claude-agent-acp` · 未安装（本机 `claude 2.1.332`） | 未安装 | 未核对（`~/.claude`） | 未验证 | 未验证 | 未验证 | 未验证 | not-installed；未绑定所选安装时 identity-unresolved | documented | unverified |
+| Codex | 桥接（bridge） | `codex-acp` · 未安装（本机 `codex-cli 0.172.0` 不提供 ACP） | 未安装 | 未核对（`~/.codex`） | 未验证 | 未验证 | 未验证 | 未验证 | dependency-missing（桥接本身缺失）；未绑定所选安装时 identity-unresolved | documented | unverified |
+| Claude Code | 桥接（bridge） | `claude-agent-acp` · 未安装（本机 `claude 2.1.332`） | 未安装 | 未核对（`~/.claude`） | 未验证 | 未验证 | 未验证 | 未验证 | dependency-missing（桥接本身缺失）；未绑定所选安装时 identity-unresolved | documented | unverified |
 | Grok | 原生（native） | `grok agent stdio` · 1.0.77 | Windows | `~/.grok`（bin、sessions） | 握手声明 | 握手声明 | 协议必备 | loadSession + resume 已声明 | — | handshake | unverified |
 | Pi | 桥接（bridge） | `pi-acp` · 未安装（本机 `pi 1.6.1`） | 未安装 | 未核对（`~/.pi`、`pi-acp/session-map.json`） | 未验证 | 未验证 | 未验证 | 未验证 | 缺宿主 pi 时 dependency-missing | documented | unverified |
 | oh-my-pi | 原生（native） | `omp acp` · 19.2.1 | Windows | `~/.omp`（凭据根）、`~/.bun/bin` | 握手声明 | 握手声明 | 协议必备 | loadSession + resume 已声明 | — | handshake | unverified |
 | Cursor | 原生 CLI（native） | `cursor-agent acp` · 未安装 | 未安装 | 未核对（`~/.cursor`） | 未验证 | 未验证 | 未验证 | 未验证 | not-installed（不回退到 `agent`） | documented | unverified |
 | Kimi Code | 原生（native） | `kimi acp` · 2.7.0（仅 2.x） | Windows | `~/.kimi-code` | 握手声明 | 握手声明 | 协议必备 | loadSession + resume 已声明 | 1.x 报 version-unsupported | handshake | unverified |
 | Qoder CN | 原生（native） | `qoderclicn --acp` · 1.1.94 | Windows | `~/.qoder-cn` | 握手声明 | 握手声明 | 协议必备 | loadSession（`sessionCapabilities` 未记录） | 不回退国际版 `qoder` | handshake | unverified |
-| ZCode | 社区桥接（bridge） | `zcode-acp` · 未安装（Python 3.9+） | 未安装 | 未核对（`~/.zcode`、ZCODE_CJS） | 未验证 | 未验证 | 未验证 | 未验证 | not-installed；缺 Python/引擎时 dependency-missing | documented | unverified |
+| ZCode | 社区桥接（bridge） | `zcode-acp` · 未安装（Python 3.9+） | 未安装 | 未核对（`~/.zcode`、ZCODE_CJS） | 未验证 | 未验证 | 未验证 | 未验证 | dependency-missing（桥接本身或 Python/引擎缺失） | documented | unverified |
 | DeepSeek Harness | 原生（native） | `dsh acp` · 未安装 | 未安装 | 未核对（`~/.dsh`，沿用 profile 层） | 未验证 | 未验证 | 未验证 | 未验证 | not-installed | documented | unverified |
 | CodeBuddy | 原生（native） | `codebuddy --acp` · 2.187.0 | Windows | `~/.codebuddy` | 握手声明 | 握手声明 | 协议必备 | loadSession（`sessionCapabilities` 未记录） | — | handshake | unverified |
 | MiMo Code | 原生（native） | `mimo acp` · 0.1.15 | Windows | `~/.config`、`~/.local`（`@mimo-ai/cli`） | 握手声明 | 握手声明 | 协议必备 | loadSession + resume 已声明 | — | handshake | unverified |
@@ -184,15 +184,18 @@
 
 - `CliAdapter::acp()` 返回 `AcpCapability { state, evidence, reason, entry }`；`entry` 携带入口程序、参数、来源、依赖、环境策略、版本线与能力标记。`CliAdapter::acp_for_version()` 用适配器自己的 `version_range` 判断；未解析到版本时版本型入口不可用，不做猜测。
 - `CliAdapter::acp_command(home, installation, version)` 解析出 `AcpCommand { program, args, environment, remove_environment, origin }`：先按适配器安装目录（含 `native_installations` 的父目录与 `extra_binary_candidates`）再按 PATH 搜索；桥接的 `dependency.program` 必须同时在场；`bind_installation` 需要已选定的 `installation`，否则报 `identity-unresolved`；`remove_environment` 是入口自身移除项与账号适配器 `remove_environment()` 的并集，所以 ACP 的账号环境隔离与终端启动一致。
-- 失败原因用闭环 code：`unsupported` / `not-installed` / `dependency-missing` / `version-unsupported` / `system-program` / `identity-unresolved`，都带可读原因与帮助链接；UI 据此显示具体缺口并保留终端回退。
+- 失败原因用闭环 code：`unsupported` / `not-installed` / `dependency-missing` / `version-unsupported` / `system-program` / `identity-unresolved`，每条都带可读原因。帮助链接只出现在依赖项与 identity 类（`AcpFailure::help` 取入口 `dependency.help_url`）；`unsupported` 与 `version-unsupported` 只有原因文本，`help` 为空。UI 据此显示具体缺口并保留终端回退。
 - 注册表描述符新增 `acp` 字段，19 个适配器共用同一形状；共享设置与会话界面按字段渲染，不新增产品 ID 分支。
-- **本轮接线状态（截至记录写入，待 T4 修复确认）**：描述符的 `acp` 字段已经发布、19 个适配器共用同一形状，但前端当时还没有读取它（`src/types/native.ts` 只有类型定义），设置行与新会话对话框因此对任意工具都显示 ACP 启动方式，不看该 adapter 的 `state`／`reason`。这是交付审查的 blocking 项，由 T4 按 `yoloAvailable` 的既有模式接线并补 fixture 驱动的 UI 用例；上面「按字段渲染」以该修复落地并在同一候选复跑 UI 用例为准。
+- **接线状态（T4 已接线）**：前端读取描述符的 `acp` 字段（`src/types/native.ts:129` 的 `AcpCapability`），不再按产品 ID 判断：
+  - 新建会话对话框按 `acp.state` 渲染「启动方式」摘要：`supported` 照常显示「ACP 对话 · <工具>」与工作目录；`unverified` 仍可尝试，但另起一行写明「入口已声明，尚未完成真实会话验证」，并把入口的 `dependency`（如 `acp-bridge`）与实际安装提示一起显示；`unsupported` 或描述符没有 `acp` 时不声称可以对话，显示该适配器自己的 `reason`，禁用主启动按钮与 `Ctrl+Enter` 启动，只保留「改用终端启动」。
+  - 设置行的启动方式是全局偏好，因此不按单个工具禁用；选中「ACP 对话」时读注册表统计并提示「可用性取决于所选工具：N 款工具可用 ACP 入口（其中 M 款入口已声明、尚未完成真实会话验证），K 款不支持，仍可用终端启动」。
+  - 以上由 `tests/ui/workbench-acp.spec.ts` 的三条 fixture 驱动用例覆盖（`tests/ui/acpMock.ts` 的 `acp` 声明可按状态构造，与 T1 的 `acp_fixture` 语义一致，不按产品 ID 分支）：unsupported 显示原因且不宣称 ACP、可改终端；unverified 允许尝试并标注未验证；settings 行提示随注册表变化。
 
 ## 开发验证
 
 | 检查 | 命令 | 结果 |
 | --- | --- | --- |
-| ACP 契约与失败样例 | `cargo test --manifest-path src-tauri/Cargo.toml --lib acp` | 9 passed（本次新增） |
+| ACP 契约与失败样例 | `cargo test --manifest-path src-tauri/Cargo.toml --lib acp` | 29 passed（`acp_host` 20 项 + 适配器 `acp_tests` 9 项，后者为 T1 新增） |
 | 全量 Rust 测试（不排除） | `cargo test --manifest-path src-tauri/Cargo.toml` | 1761 passed / 12 failed / 36 ignored，12 项失败全部落在 `remote::uploads`（7）、`remote::transactions`（3）、`remote::twiglane_trust`（1）与 `external::tests::twiglane_workspace_handoff_url_is_validated`（1），见下一小节 |
 | 交付原生命令（含排除） | 见「原生命令实际排除的用例」 | 库测试 1746 passed / 0 failed / 36 ignored / 27 filtered out，`twiglane_bridge` 集成二进制 0 passed / 1 filtered / 0 failed |
 | Lint | `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets` | 无警告、无错误 |
@@ -207,7 +210,7 @@
 - `external::tests::twiglane_workspace_handoff_url_is_validated`：本机 Windows 绝对路径断言（`项目清单链接需使用本机绝对路径`）。
 - `src-tauri/tests/twiglane_bridge.rs::desktop_exit_mode_resolves_only_current_enabled_targets_and_rejects_untrusted_uploads`：同一类 known_hosts 环境依赖（临时 `known_hosts` 带空格与多个 trust 文件时，本机解析为 `ambiguous_known_hosts_paths`，未排除时实测 FAILED），交付命令对这一条单独 `--skip`。同文件的 `missing_and_cancelled_session_passwords_do_not_connect` 是 `#[cfg(unix)]`，Windows 下不编译，所以该集成二进制在排除后显示 0 passed / 1 filtered。
 
-本机没有 WSL、没有可用的 SFTP 目标，也没有一份干净的 OpenSSH 配置，因此这些用例只能在具备条件的目标上复核；本候选对 `src-tauri/src/remote`、`src-tauri/src/external.rs` 与 `src-tauri/tests/twiglane_bridge.rs` 零改动。两次运行各自的总数可以对上：库测试共 1809 项。不排除时 1761 passed / 12 failed / 36 ignored / 0 filtered out；交付排除后 27 项被 `--skip` 过滤，1782 项进入运行，其中 1746 passed / 0 failed / 36 ignored，集成二进制 0 passed / 1 filtered。排除只改变了跑哪些用例，没有跳过任何本需求改动的模块（`launch`、`acp_host`、`workbench_restore`、`session_host`、`adapters`、`accounts`）。
+本机没有 WSL、没有可用的 SFTP 目标，也没有一份干净的 OpenSSH 配置，因此这些用例只能在具备条件的目标上复核；本候选对 `src-tauri/src/remote`、`src-tauri/src/external.rs` 与 `src-tauri/tests/twiglane_bridge.rs` 零改动。两次运行各自的总数可以对上：库测试共 1809 项。不排除时 1761 passed / 12 failed / 36 ignored / 0 filtered out；交付命令的 `--skip` 按模块前缀过滤 27 项，其中 12 项是本机实测失败的用例、15 项是随同模块前缀一起被排除（整模块排除的范围大于单次失败清单，因此会带走同模块内本机本可通过的用例），1782 项进入运行，其中 1746 passed / 0 failed / 36 ignored，集成二进制 0 passed / 1 filtered。排除只改变了跑哪些用例，没有跳过任何本需求改动的模块（`launch`、`acp_host`、`workbench_restore`、`session_host`、`adapters`、`accounts`）。
 
 新增测试（`tests/adapter/acp-agents.rs`，由 `src-tauri/src/adapters/registry.rs` 以 `#[path]` 引入）：
 
@@ -228,7 +231,8 @@
 - **身份边界**：Codex / Claude 桥接必须绑定所选安装（`CODEX_PATH` / `CLAUDE_CODE_EXECUTABLE`），否则会运行桥接自带的那份引擎；解析器已强制这一点，真实运行下的身份一致性仍待实测。
 - **恢复失败的实际行为（当前代码，未在真实会话实证）**：ACP 恢复先按协议 `session/load` 接回原会话；当 agent 报不支持、加载失败或没有协商出结果时，恢复流程保留**原记录**，关闭并移除**这次尝试新建的会话**（`acp_host::close` + `forget`），再把失败原因写进恢复结果——面板显示恢复失败，用户可稍后重试，或从原目录新开一个对话。原记录不会被关闭，也不会被新会话顶替。
 - **已知限制（P2，T3 范围内本轮未修）**：恢复失败的说明文案仍写「已在原目录新开一段会话（新会话 id）；原记录已保留，可稍后重试」，而同一分支随即关闭并移除了该会话，界面上给出的新会话编号已不存在。实际结果是「原记录保留、这次尝试的会话不存在」。位置：`src-tauri/src/workbench_restore.rs` 的 `conversation_resume_failure` 与 `restore_conversation_items` 失败分支。文案与行为与代码一致化不在 T1 范围。
-- **已知限制（P2，未修）**：ACP 提示词里的 `{{cliora-secret:…}}` 引用处理不统一。首条提示仍走终端的本地准备路径（`src/lib/native.ts` 的 `launchCli` 对 `initialPrompt` 调用 `localSessionPrompt`），工作台的后续提示在对话分支跳过该准备、原样发送（`src/features/sessions/SessionWorkbench.tsx` 的 `submitComposer`，对话时 `local = false`）；ACP 宿主子进程拿到的本地会话不带授权项，引用不会被解析成值。两处都不泄露原值，但同一段文本在首条与后续提示结果不同。
+- **ACP 对话中的秘密引用（T4 已统一，非终端路径）**：对话路径**都不做**终端的秘密准备。`src/lib/native.ts` 的 `launchCli` 只在 `request.interaction !== 'acp'` 时对 `initialPrompt` 调用 `localSessionPrompt`；新建会话对话框与资料库启动都显式带上解析后的 `interaction`，因此 ACP 首条提示不再走终端准备。工作台后续提示在对话分支同样跳过准备、原样发送（`src/features/sessions/SessionWorkbench.tsx` 的 `submitComposer`，对话时 `local = false`）。结果是：ACP 对话内 `{{cliora-secret:…}}` 原样发给 agent，宿主当前不解析它（`acp_host` 的本地会话不带授权项），也不会泄露原值；终端路径完全不受影响。
+- **ACP 宿主无秘密授权（T3 复核，P3）**：`src-tauri/src/acp_host.rs` 的模块注释仍按设计意图描述「agent 通过本地会话令牌像终端一样访问 broker」，实际 `spawn_io` 用 `LocalSession::new()`（空授权表），子进程只得到会话令牌、不带授权。注释与行为的对齐属 T3 范围，本轮未改代码。
 - **已知限制（T3 复核，非阻断）**：工作目录预检发生在 ACP 子进程 spawn 之后，而不是之前，因此一个不可用的目录会先留下一次失败的进程启动再报错；这不会误判成功，但诊断顺序与「预检在前」的期望不同。
 - 本记录不含任何凭据、账号或提示词内容；握手只发送 `initialize`，不加载文件、不执行工具。
 
@@ -242,7 +246,7 @@
 - 工作台会话是原生对话面板而不是终端（`src/features/sessions/AcpConversation.tsx`）：消息流、流式增量、按 `toolCallId` 归并的工具卡片、绑定本次请求的授权卡、停止（`stopping`）与轮次结果（可继续／限额／拒绝／取消／断开／失败／未知）。侧栏、标题、任务状态与「等你处理」入口都由共享列表给出：待授权按 `approval` 计入需要人处理，运行中的轮次算工作，结束的会话没有退出码可显示。
 - 会话状态由 `src/features/sessions/acpSession.ts` 的纯函数折叠：快照整体替换，增量按消息 id 追加，工具按调用 id 合并，授权按 `requestId` 增删，序号已在视图中应用过的事件不会重放；通知有界且不进入消息流。切换标签、分屏与重新挂载时用 `list_acp_sessions` / `acp_session` 补齐切换期间的输出，两个会话的内容互不串台。
 - 首条提示只发一次：原生宿主在会话建立后提交 `initial_prompt`，界面从不再调用 `acp_prompt` 重发首条（用例直接断言 `acp_prompt` 未被调用）。
-- 快捷输入与中断按会话类型路由：选中的是对话时，工作台输入框把文本交给 `acp_prompt`（不走 PTY 写入、不包装 bracketed paste；对话分支也不做终端的秘密引用准备，首条提示仍走终端的准备路径，差异见上文「未完成与限制」），中断按钮调用 `acp_cancel`；终端会话仍走原来的写入路径。
+- 快捷输入与中断按会话类型路由：选中的是对话时，工作台输入框把文本交给 `acp_prompt`（不走 PTY 写入、不包装 bracketed paste；对话分支不做终端的秘密引用准备，首条提示也不再走该路径，见上文「未完成与限制」），中断按钮调用 `acp_cancel`；终端会话仍走原来的写入路径。
 - 启动入口：工具、项目卡片、工作台新建与托盘最近项目都走同一选择；`workbenchSessionId` 现在同时识别 `session_started` 与 `acp_started`，因此从首页或托盘打开的对话会聚焦到同一个工作台会话。历史恢复按记录自身的类型分流：ACP 记录走协议的 `session/load`（失败行为见上文「未完成与限制」），终端记录仍按原来匹配终端输出的方式恢复。新建会话对话框在 ACP 时显示所选 CLI 与实际工作目录，并停用该入口无法表达的 YOLO 选项（后端同样会拒绝）。
 - 失败恢复：对话框与面板都显示适配器的具体原因（缺桥接、YOLO 不可表达、Agent／会话参数不支持、项目模型覆盖等），并提供「新开一个对话」与「改用终端在此目录启动」两条明确路径，后者复用已创建的工作树与目录。
 
@@ -253,10 +257,11 @@
 | 前端类型检查与构建 | `npm run build` | 通过 |
 | Node 单测（含新增折叠测试） | `npm run test:unit` | 303 tests / 297 passed / 6 skipped / 0 failed |
 | 新增折叠测试 | `node --test tests/native/acp-session.test.mjs` | 8 passed |
-| 合成 IPC 界面用例 | `node scripts/test-ui.mjs workbench-acp.spec.ts` | 6 passed |
+| 合成 IPC 界面用例 | `node scripts/test-ui.mjs workbench-acp.spec.ts` | 9 passed |
+| 相关终端回归 | `node scripts/test-ui.mjs terminal-settings.spec.ts workbench-terminal.spec.ts` | 149 passed（T4 本轮复跑，含设置行与工作台终端全部用例） |
 | 工作台截图 | `node scripts/verify-ui-captures.mjs --skip-build --only workbench` | 见「截图」一节 |
 
-新增界面用例在 `tests/ui/workbench-acp.spec.ts`，合成 IPC 在 `tests/ui/acpMock.ts`，覆盖：设置里选择 ACP（含保存失败与无法识别的已存值）、从工作台新建以 ACP 启动、首条提示只发一次、流式增量与重复序号去重、工具卡片按调用 id 归并、授权卡只回答自己的请求、停止与 `stopping`、失败原因与同目录终端回退、两个会话切换时的内容隔离、760px 窄窗口无横向溢出。
+新增界面用例在 `tests/ui/workbench-acp.spec.ts`，合成 IPC 在 `tests/ui/acpMock.ts`（`acp` 声明可构造为三种状态），覆盖：设置里选择 ACP（含保存失败与无法识别的已存值）；**按描述符能力渲染**——`unsupported` 显示适配器原因、不宣称 ACP、禁用主启动并可从同一对话框改用终端，`unverified` 允许尝试但标注未验证与入口依赖，设置行在「ACP 对话」下给出注册表统计的可用性提示；从工作台新建以 ACP 启动、首条提示只发一次、流式增量与重复序号去重、工具卡片按调用 id 归并、授权卡只回答自己的请求、停止与 `stopping`、失败原因与同目录终端回退、两个会话切换时的内容隔离、760px 窄窗口无横向溢出。
 
 ### 截图
 
@@ -267,6 +272,8 @@
 - ACP 对话、授权卡、停止中与 720px 窄窗口的完整一组：`docs/verification/product-ui-ux/workbench-acp/`，命令 `CLIORA_CAPTURE_OUT=docs/verification/product-ui-ux/workbench-acp node scripts/capture-workbench.mjs --only 'workbench-acp-*' --size all --theme all`（需要先运行 `npm run dev -- --port 14736`）
 
 抓图不移动也不遮挡 Cliora 窗口；脚本自带的检查确认无横向溢出、无页面错误，但这些图片仍不是本机原生验收。
+
+**T4 返修后沿用旧图的原因**：本轮只改新建会话对话框的「启动方式」摘要与设置行的 ACP 可用性提示。抓图脚本的 `get_launch_settings` 合成返回值不带 `interaction`（按终端处理），因此设置行的提示不出现、对话框的 ACP 摘要也不渲染，`settings-launch-*` 与 `workbench-acp-*` 的画面与旧图一致；把抓图覆盖改成 `interaction: 'acp'` 属于新一轮抓图范围，本轮未重跑，沿用现有图库并在此说明。
 
 ### 未实证
 

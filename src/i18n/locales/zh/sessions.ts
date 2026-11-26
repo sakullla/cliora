@@ -578,4 +578,9 @@ export default {
   launchInteractionAcp: 'ACP 对话 · {{tool}}',
   launchInteractionAcpPlace: '工作目录 {{place}}。对话在工作台里直接与 agent 交谈；首条提示只发送一次。',
   yoloUnsupportedAcp: 'ACP 对话不能表达 YOLO 自动批准：需要 YOLO 时请在设置里改用终端启动',
+  launchInteractionAcpUnavailable: 'ACP 对话不可用 · {{tool}}',
+  launchInteractionAcpUnverified: '入口已声明，尚未完成真实会话验证：可以尝试，失败时仍可用终端在同一目录启动。',
+  launchInteractionAcpDependency: '需要另外安装 {{name}}：{{hint}}',
+  launchInteractionAcpTerminal: '改用终端启动',
+  launchAcpUnavailable: '{{tool}} 没有声明 ACP 入口，无法以对话启动；可以改用终端启动，或在设置里检查启动方式。',
 };

@@ -484,7 +484,12 @@ export const native = {
       const targetId = projects.find(item => `remote:${item.id}` === request.projectId)?.targetId ?? '';
       result = await remoteCommand<LaunchResult>('launch_cli', { request, targetId }, 'write', options);
     } else {
-      if (request.initialPrompt && !request.remoteIntent) {
+      // The secret prelude is a terminal instruction block. A conversation sends plain
+      // text to the ACP host, which does not resolve {{cliora-secret:…}} references, so
+      // preparing one there would describe a mechanism the host never runs. Callers that
+      // submit a first prompt resolve the interaction explicitly ('acp' or 'terminal');
+      // an absent value keeps the historical terminal preparation.
+      if (request.initialPrompt && !request.remoteIntent && request.interaction !== 'acp') {
         request = { ...request, initialPrompt: await localSessionPrompt(request.initialPrompt) };
       }
       result = request.workspaceId && request.repositoryId

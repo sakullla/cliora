@@ -127,6 +127,73 @@ test('a failed ACP start shows its reason and can start a terminal in the same d
   await expect(page.locator('[data-pane-session="t1"]').first()).toBeVisible();
 });
 
+test('a tool that declares no ACP entry is not offered as a conversation and keeps the terminal', async ({ page }) => {
+  await installAcpMock(page, {
+    interaction: 'acp',
+    acp: { state: 'unsupported', evidence: 'none', reason: '这个工具没有声明 ACP 入口（缺少 acp-bridge）' },
+  });
+  await openWorkbench(page);
+  await page.getByRole('button', { name: '新建会话', exact: true }).first().click();
+  const dialog = page.getByRole('dialog');
+  const summary = dialog.locator('[data-acp-launch]');
+  // The dialog says what it will not do, with the adapter's own reason.
+  await expect(summary).toHaveAttribute('data-acp-state', 'unsupported');
+  await expect(summary).toContainText('这个工具没有声明 ACP 入口');
+  await expect(summary).not.toContainText('ACP 对话 · Codex');
+  await expect(summary).not.toContainText('工作目录');
+  // An unavailable conversation is not confirmed: no launch is sent at all.
+  await expect(dialog.locator('[data-dialog-save]')).toBeDisabled();
+  await dialog.locator('textarea').fill('跑一次单测');
+  await dialog.locator('textarea').press('Control+Enter');
+  expect(await page.evaluate(() => (window as any).__acpTest.launches)).toEqual([]);
+  // The terminal stays available from the same dialog.
+  await summary.getByRole('button', { name: '改用终端启动', exact: true }).click();
+  const launches = await page.evaluate(() => (window as any).__acpTest.launches);
+  expect(launches).toHaveLength(1);
+  expect(launches[0]).toMatchObject({ toolId: 'codex', interaction: 'terminal', sessionId: null, initialPrompt: '跑一次单测' });
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('[data-acp="true"]')).toHaveCount(0);
+});
+
+test('a declared but unverified ACP entry may be tried and is never described as verified', async ({ page }) => {
+  await installAcpMock(page, {
+    interaction: 'acp',
+    acp: { state: 'unverified', evidence: 'handshake', reason: '入口已声明，尚未完成真实会话验证', entry: { executable: 'codex-acp', args: [], origin: 'bridge', dependency: { name: 'acp-bridge', installHint: '安装 acp-bridge 后重试' } } },
+  });
+  await openWorkbench(page);
+  await page.getByRole('button', { name: '新建会话', exact: true }).first().click();
+  const dialog = page.getByRole('dialog');
+  const summary = dialog.locator('[data-acp-launch]');
+  await expect(summary).toHaveAttribute('data-acp-state', 'unverified');
+  // The stored mode still applies: the launch is a conversation, and the dialog says so.
+  await expect(summary).toContainText('ACP 对话 · Codex');
+  await expect(summary.locator('[data-acp-unverified]')).toContainText('尚未完成真实会话验证');
+  // The entry's own missing dependency is named instead of hidden.
+  await expect(summary.locator('[data-acp-dependency]')).toContainText('acp-bridge');
+  await expect(dialog.locator('[data-dialog-save]')).toBeEnabled();
+  await expect(summary.getByRole('button', { name: '改用终端启动', exact: true })).toHaveCount(0);
+  await dialog.locator('[data-dialog-save]').click();
+  expect((await page.evaluate(() => (window as any).__acpTest.launches)).at(-1)).toMatchObject({ interaction: 'acp' });
+  await expect(page.locator('[data-acp="true"][data-pane-session="a1"]')).toBeVisible();
+});
+
+test('the settings row states that ACP availability depends on the chosen tool', async ({ page }) => {
+  await installAcpMock(page, { interaction: 'terminal', acp: { state: 'unverified', evidence: 'documented', reason: '入口尚未验证' } });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('tab', { name: '终端与启动', exact: true }).click();
+  const region = page.getByRole('region', { name: '终端与启动模式' });
+  const group = region.getByRole('radiogroup', { name: '启动方式' });
+  // The global row is never disabled by one tool's declaration, but it explains itself.
+  await expect(region.locator('[data-acp-capability]')).toHaveCount(0);
+  await group.getByRole('radio', { name: 'ACP 对话', exact: true }).click();
+  await expect(group.getByRole('radio', { name: 'ACP 对话', exact: true })).toHaveAttribute('aria-checked', 'true');
+  const note = region.locator('[data-acp-capability]');
+  await expect(note).toContainText('可用性取决于所选工具');
+  await expect(note).toContainText('1 款工具可用 ACP 入口');
+  await expect(note).toContainText('尚未完成真实会话验证');
+});
+
 test('two conversations keep their own messages when the workbench switches between them', async ({ page }) => {
   await installAcpMock(page, {
     interaction: 'acp',

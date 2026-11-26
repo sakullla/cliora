@@ -578,4 +578,9 @@ export default {
   launchInteractionAcp: 'ACP conversation · {{tool}}',
   launchInteractionAcpPlace: 'Working directory {{place}}. The conversation talks to the agent directly in the workbench; the first prompt is sent once.',
   yoloUnsupportedAcp: 'An ACP conversation cannot express YOLO auto-approval: choose a terminal start in Settings when you need YOLO',
+  launchInteractionAcpUnavailable: 'ACP conversation unavailable · {{tool}}',
+  launchInteractionAcpUnverified: 'An entry is declared but no real conversation has verified it: you can try, and the terminal in the same directory still works if it fails.',
+  launchInteractionAcpDependency: 'Requires {{name}} to be installed separately: {{hint}}',
+  launchInteractionAcpTerminal: 'Start a terminal instead',
+  launchAcpUnavailable: '{{tool}} declares no ACP entry, so it cannot start a conversation; use the terminal instead or check the start mode in Settings.',
 };

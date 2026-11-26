@@ -75,6 +75,9 @@ export function TerminalSettings() {
   const [saved, setSaved] = useState('');
   /** A start-mode write that failed, kept so the row can offer the same choice again. */
   const [failedInteraction, setFailedInteraction] = useState<InteractionMode | null>(null);
+  /** ACP entry points as the registered adapters declare them, so the setting can say
+   *  that availability depends on the chosen tool instead of promising it globally. */
+  const [acpTools, setAcpTools] = useState<{ usable: number; unverified: number; unsupported: number } | null>(null);
 
   // A write is only announced after the backend returned the stored settings.
   useEffect(() => {
@@ -91,6 +94,27 @@ export function TerminalSettings() {
       setArgsText((launch.custom?.args ?? ['{script}']).join('\n'));
       setShowCustom(launch.selected === 'custom' && !matchedPreset(launch));
     }).catch((value) => setError(loadFailure(value)));
+  }, []);
+
+  // Read once per visit: the catalog is the only source of what each tool declares.
+  useEffect(() => {
+    if (!nativeAvailable) return;
+    let active = true;
+    void native.listCliAdapters().then((catalog) => {
+      if (!active) return;
+      const counts = { usable: 0, unverified: 0, unsupported: 0 };
+      for (const item of catalog.registered) {
+        if (item.launchForm === 'desktop') continue;
+        const state = item.acp?.state ?? 'unsupported';
+        if (state === 'unsupported') counts.unsupported += 1;
+        else {
+          counts.usable += 1;
+          if (state === 'unverified') counts.unverified += 1;
+        }
+      }
+      if (counts.usable + counts.unsupported > 0) setAcpTools(counts);
+    }).catch(() => { /* A catalog read failure leaves the hint out, not the setting. */ });
+    return () => { active = false; };
   }, []);
 
   function selectionKey() {
@@ -210,6 +234,7 @@ export function TerminalSettings() {
     {selectionKey() === 'custom' && <div className="setting-row setting-row-top"><span><strong>{t('settings.terminal.customCommand')}</strong><small>{t('settings.terminal.customHint')}</small></span><span className="custom-terminal-fields"><input aria-label={t('settings.terminal.program')} value={program} onChange={(event) => setProgram(event.target.value)} placeholder="/Applications/Tabby.app" /><textarea aria-label={t('settings.terminal.args')} rows={4} value={argsText} onChange={(event) => setArgsText(event.target.value)} /><span className="custom-terminal-actions"><Button disabled={!nativeAvailable || busy} onClick={() => void pickProgram()}>{t('settings.terminal.pickProgram')}</Button><Button disabled={!nativeAvailable || busy || !program.trim()} onClick={() => void saveCustom()}>{t('settings.terminal.useCommand')}</Button></span></span></div>}
     <div className="setting-row"><span><strong>{t('settings.terminal.interaction')}</strong><small>{t('settings.terminal.interactionHint')}</small></span><Segmented label={t('settings.terminal.interactionAria')} value={interactionValue} options={interactionOptions} onChange={(mode) => void chooseInteraction(mode)} /></div>
     {settings?.interactionError && <p role="alert" className="setting-error">{t('settings.terminal.interactionUnknown')}</p>}
+    {interactionValue === 'acp' && acpTools && <p className="setting-note" data-acp-capability="">{t('settings.terminal.interactionAcpTools', acpTools)}</p>}
     {failedInteraction && <p role="alert" className="setting-error">{error}<Button size="sm" variant="ghost" onClick={() => void chooseInteraction(failedInteraction)}>{t('settings.terminal.interactionRetry')}</Button></p>}
     <div className="setting-row"><span><strong>{t('settings.terminal.cliMode')}</strong><small>{t('settings.terminal.cliModeHint')}</small></span><Segmented label={t('settings.terminal.cliModeAria')} value={settings?.cliMode ?? 'normal'} options={modeOptions} onChange={(mode) => void chooseMode('cli', mode)} /></div>
     <div className="setting-row"><span><strong>{t('settings.terminal.projectMode')}</strong><small>{t('settings.terminal.projectModeHint')}</small></span><Segmented label={t('settings.terminal.projectModeAria')} value={settings?.projectMode ?? 'normal'} options={modeOptions} onChange={(mode) => void chooseMode('project', mode)} /></div>

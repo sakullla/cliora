@@ -5,8 +5,19 @@ import type { Page } from '@playwright/test';
  * calls a model or reads a real conversation: the host is a plain object the test
  * drives, so the assertions are about Cliora's own wiring only.
  */
+/** The one tool's ACP declaration, exactly as the registry publishes it. The UI must
+ *  follow this field, not the tool id, so a test can declare any of the three states. */
+type AcpDeclaration = {
+  state: 'supported' | 'unverified' | 'unsupported';
+  evidence?: 'interactive' | 'handshake' | 'documented' | 'none';
+  reason?: string;
+  entry?: { executable: string; args: string[]; origin: 'native' | 'vendor' | 'bridge'; dependency?: { name: string; installHint: string }; capabilities?: Record<string, boolean> };
+};
+
 type Config = {
   interaction?: 'terminal' | 'acp';
+  /** Defaults to a verified entry so the existing conversation flows stay unchanged. */
+  acp?: AcpDeclaration;
   interactionError?: string | null;
   conversations?: Snapshot[];
   failInteractionSave?: boolean;
@@ -55,6 +66,16 @@ export async function installAcpMock(page: Page, config: Config = {}) {
       if (index === undefined) return;
       bridge.handlers[index]?.({ payload });
     };
+    // Published on the descriptor exactly like the registry does, entry included.
+    const acpDeclaration = (): Record<string, unknown> => {
+      const declared = config.acp ?? { state: 'supported' as const, evidence: 'interactive' as const, reason: '' };
+      return {
+        state: declared.state,
+        evidence: declared.evidence ?? (declared.state === 'unsupported' ? 'none' : 'handshake'),
+        reason: declared.reason ?? '',
+        ...(declared.entry ? { entry: { capabilities: { session: true, authorization: true, cancel: true, resume: false }, args: [], origin: 'native', executable: 'codex-acp', ...declared.entry } } : {}),
+      };
+    };
     const settings = () => ({
       selected: 'workbench',
       terminals: [{ id: 'workbench', label: '工作台', available: true }, { id: 'windows_terminal', label: 'Windows Terminal', available: true }],
@@ -84,6 +105,7 @@ export async function installAcpMock(page: Page, config: Config = {}) {
               id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false,
               launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' },
               resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' },
+              acp: acpDeclaration(),
             }],
             managedIds: ['codex'],
             preservedUnknown: [],

@@ -1264,6 +1264,24 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     () => terminalTools.find((item) => item.id === effectiveLaunchToolId) ?? null,
     [terminalTools, effectiveLaunchToolId],
   );
+  /**
+   * The selected tool's own ACP declaration, read from the adapter catalog instead of
+   * assumed from the global start mode: a tool without a declared entry cannot hold a
+   * conversation, and "declared" is not the same evidence as "verified".
+   */
+  const launchAcp = useMemo(() => {
+    const capability = selectedLaunchTool?.acp ?? null;
+    const state = capability?.state ?? 'unsupported';
+    return {
+      capability,
+      state,
+      usable: state !== 'unsupported',
+      reason: capability?.reason?.trim() ?? '',
+    };
+  }, [selectedLaunchTool]);
+  /** The saved start mode is a conversation this tool cannot open; the dialog says so
+   *  and offers the terminal instead of sending a launch the host would refuse. */
+  const acpUnavailable = savedInteraction === 'acp' && !launchAcp.usable;
   const selected = scopedSessions.find((item) => item.id === selectedId) ?? null;
   // Refresh the cheap branch hint while visible; enumerate checkouts only in the open menu.
   // A newly created worktree is read on each opening and while that menu remains visible.
@@ -2480,6 +2498,12 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       return;
     }
     if (!effectiveLaunchToolId || newLaunchPending.current) return;
+    if (!fallback && acpUnavailable) {
+      // The stored start mode is a conversation and this tool publishes no entry for it.
+      // Nothing is sent: the reason is shown in the dialog and the terminal stays available.
+      setDialogError(launchAcp.reason || t('sessions.launchAcpUnavailable', { tool: selectedLaunchTool?.name ?? '' }));
+      return;
+    }
     newLaunchPending.current = true;
     setLaunchingNew(true);
     setDialogError('');
@@ -2569,7 +2593,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         ...(promptText ? { initialPrompt: promptText } : {}),
         ...(resume ? { resumeLatest: true } : {}),
         worktreeIntent,
-        ...(fallback ? { interaction: fallback } : {}),
+        // Always explicit: a caller that prepares the prompt has to know whether this
+        // launch becomes a terminal (secret prelude) or a conversation (plain text).
+        interaction: fallback ?? savedInteraction,
         ...(!remoteLaunch && !resume && useWorkbench && taskLine ? { taskText: taskLine } : {}),
       };
       // An explicit creation runs in the background: the dialog closes at once,
@@ -4554,7 +4580,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       <div className={styles.dialogForm} onKeyDown={(event) => {
         if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.key !== 'Enter' || event.nativeEvent.isComposing || event.defaultPrevented) return;
         event.preventDefault();
-        if (!event.repeat && !launchingNew && effectiveLaunchToolId && !workspaceUnavailable) void launchFromDialog();
+        if (!event.repeat && !launchingNew && effectiveLaunchToolId && !workspaceUnavailable && !acpUnavailable) void launchFromDialog();
       }}>
         {dialogError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{dialogError}</p></div></div>}
         {dialogError && savedInteraction === 'acp' && <div className={styles.dialogField}><Button size="sm" variant="secondary" disabled={launchingNew} onClick={() => void launchFromDialog('terminal')} icon={<Icon name="terminal" size={13} />}>{t('sessions.acpFallbackTerminal')}</Button></div>}
@@ -4619,10 +4645,21 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
             {baseStale && <span className={styles.baseHint} role="status">{t('sessions.worktreeBaseStale')}</span>}
           </div>}
         </div>}
-        {savedInteraction === 'acp' && <div className={styles.baseSummary} role="status" data-acp-launch="">
+        {savedInteraction === 'acp' && <div className={styles.baseSummary} role={launchAcp.usable ? 'status' : 'alert'} data-acp-launch="" data-acp-state={launchAcp.state}>
           <span className={styles.baseLabel}>{t('sessions.launchInteractionLabel')}</span>
-          <strong>{t('sessions.launchInteractionAcp', { tool: selectedLaunchTool?.name ?? '' })}</strong>
-          <span className={styles.baseHint}>{t('sessions.launchInteractionAcpPlace', { place: workspaceValueLabel(workspaceValue) })}</span>
+          <strong>{launchAcp.usable
+            ? t('sessions.launchInteractionAcp', { tool: selectedLaunchTool?.name ?? '' })
+            : t('sessions.launchInteractionAcpUnavailable', { tool: selectedLaunchTool?.name ?? '' })}</strong>
+          {/* The reason comes from the adapter's own declaration; a tool that publishes no
+              entry still gets a sentence instead of an unexplained disabled button. */}
+          <span className={styles.baseHint} data-acp-reason="">{launchAcp.usable
+            ? t('sessions.launchInteractionAcpPlace', { place: workspaceValueLabel(workspaceValue) })
+            : launchAcp.reason || t('sessions.launchAcpUnavailable', { tool: selectedLaunchTool?.name ?? '' })}</span>
+          {launchAcp.state === 'unverified' && <span className={styles.baseHint} data-acp-unverified="">{t('sessions.launchInteractionAcpUnverified')}</span>}
+          {launchAcp.capability?.entry?.dependency && <span className={styles.baseHint} data-acp-dependency="">{t('sessions.launchInteractionAcpDependency', { name: launchAcp.capability.entry.dependency.name, hint: launchAcp.capability.entry.dependency.installHint })}</span>}
+          {!launchAcp.usable && <span className={styles.workspaceMissingActions}>
+            <Button size="sm" variant="secondary" disabled={launchingNew} onClick={() => void launchFromDialog('terminal')} icon={<Icon name="terminal" size={13} />}>{t('sessions.launchInteractionAcpTerminal')}</Button>
+          </span>}
         </div>}
         <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.launchModeLabel')}</span><div className={styles.modeCards} role="radiogroup" aria-label={t('sessions.launchModeLabel')}>
           <button type="button" role="radio" aria-checked={launchMode === 'normal'} className={styles.modeCard} onClick={() => { launchModeTouched.current = true; setLaunchMode('normal'); }}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="shield" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeNormal')}</strong><small>{t('sessions.modeNormalDesc')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
@@ -4701,7 +4738,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           })()}
           {selectedLaunchTool?.resumeLatestAvailable && !activeRemoteTarget && <label className={styles.checkboxRow}><input type="checkbox" checked={resumeLatest} onChange={(event) => setResumeLatest(event.target.checked)} /><span>{t('sessions.resumeLatest')}</span></label>}
         </div>}
-        <div className={styles.dialogActions}><Button onClick={() => setNewDialogOpen(false)}>{t('common.dialog.cancel')}</Button><Button variant="primary" className={styles.dialogPrimary} data-dialog-save disabled={launchingNew || !effectiveLaunchToolId || workspaceUnavailable} title={`${t('sessions.startInWorkbench')} (${modLabel}+Enter)`} aria-keyshortcuts={`${modAria}+Enter`} onClick={() => void launchFromDialog()} icon={<Icon name="play" size={14} />}>{launchingNew ? t('sessions.startingSession') : <>{t('sessions.startInWorkbench')}<kbd className={styles.dialogPrimaryKbd} aria-hidden="true">{modLabel}↵</kbd></>}</Button></div>
+        <div className={styles.dialogActions}><Button onClick={() => setNewDialogOpen(false)}>{t('common.dialog.cancel')}</Button><Button variant="primary" className={styles.dialogPrimary} data-dialog-save disabled={launchingNew || !effectiveLaunchToolId || workspaceUnavailable || acpUnavailable} title={acpUnavailable ? launchAcp.reason || t('sessions.launchAcpUnavailable', { tool: selectedLaunchTool?.name ?? '' }) : `${t('sessions.startInWorkbench')} (${modLabel}+Enter)`} aria-keyshortcuts={`${modAria}+Enter`} onClick={() => void launchFromDialog()} icon={<Icon name="play" size={14} />}>{launchingNew ? t('sessions.startingSession') : <>{t('sessions.startInWorkbench')}<kbd className={styles.dialogPrimaryKbd} aria-hidden="true">{modLabel}↵</kbd></>}</Button></div>
       </div>
     </GuideDialog>}
     {worktreeSetupDialog()}
