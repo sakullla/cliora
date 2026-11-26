@@ -152,6 +152,36 @@ impl CliAdapter for Codex {
     fn command(&self) -> &'static str {
         "codex"
     }
+    /// ACP 入口：`codex-acp` 桥接，启动 Codex App Server 并翻译 ACP 请求。
+    /// 桥接包内含一份 `@openai/codex`，`CODEX_PATH` 绑定用户选中的安装，
+    /// 否则 ACP 会运行另一份 Codex，与终端启动的身份不一致。
+    fn acp(&self) -> super::AcpCapability {
+        super::AcpCapability::unverified(
+            "documented",
+            "已核对 2026-11-26 ACP 注册表 codex-acp@2.12.1 与桥接说明；本机未安装桥接，握手与真实对话待验证",
+            super::AcpEntry {
+                executable: "codex-acp",
+                args: &[],
+                origin: super::AcpOrigin::Bridge,
+                dependency: Some(super::AcpDependency {
+                    name: "@agentclientprotocol/codex-acp",
+                    program: None,
+                    install_hint: "npm install -g @agentclientprotocol/codex-acp",
+                    help_url: "https://github.com/agentclientprotocol/codex-acp",
+                }),
+                environment: super::AcpEnvironmentPolicy {
+                    set: &[],
+                    bind_installation: &["CODEX_PATH"],
+                    remove: &[],
+                },
+                version_range: None,
+                version_range_reason: "",
+                capabilities: super::AcpCapabilities { session: true, authorization: true, cancel: true, resume: true },
+                rejects_system_program: false,
+            },
+        )
+    }
+
     fn npm_package(&self) -> &'static str {
         "@openai/codex"
     }

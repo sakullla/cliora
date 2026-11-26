@@ -98,6 +98,26 @@ impl CliAdapter for CommandCode {
             "cmd"
         }
     }
+    /// ACP 入口：官方 `cmd acp`。Windows 上 `cmd.exe` 就在 PATH 里，所以入口
+    /// 使用 `cmdc` 别名，并拒绝任何落在系统目录下的同名候选。
+    fn acp(&self) -> super::AcpCapability {
+        super::AcpCapability::unverified(
+            "handshake",
+            "2026-11-26 在 Windows 以 cmdc 1.88.0 完成 initialize 握手（agentInfo Command Code、loadSession、resume/close/list）；真实对话待验证",
+            super::AcpEntry {
+                executable: if cfg!(windows) { "cmdc" } else { "cmd" },
+                args: &["acp"],
+                origin: super::AcpOrigin::Native,
+                dependency: None,
+                environment: super::AcpEnvironmentPolicy::NONE,
+                version_range: None,
+                version_range_reason: "",
+                capabilities: super::AcpCapabilities { session: true, authorization: true, cancel: true, resume: true },
+                rejects_system_program: true,
+            },
+        )
+    }
+
     fn npm_package(&self) -> &'static str {
         "command-code"
     }
@@ -368,6 +388,7 @@ impl CliAdapter for CommandCode {
         AdapterDescriptor {
             remote: self.remote_capabilities(),
             secret_mcp: self.secret_mcp_capability(),
+            acp: self.acp(),
             id: self.id(),
             configuration: None,
             name: self.name(),

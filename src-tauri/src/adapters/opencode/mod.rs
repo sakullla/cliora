@@ -242,6 +242,25 @@ impl CliAdapter for OpenCode {
     fn command(&self) -> &'static str {
         "opencode"
     }
+    /// ACP 入口：原生 `opencode acp`。
+    fn acp(&self) -> super::AcpCapability {
+        super::AcpCapability::unverified(
+            "handshake",
+            "2026-11-26 在 Windows 以 opencode 2.3.0 完成 initialize 握手（loadSession、resume/close/delete/list/fork、auth opencode-login）；真实对话待验证",
+            super::AcpEntry {
+                executable: "opencode",
+                args: &["acp"],
+                origin: super::AcpOrigin::Native,
+                dependency: None,
+                environment: super::AcpEnvironmentPolicy::NONE,
+                version_range: None,
+                version_range_reason: "",
+                capabilities: super::AcpCapabilities { session: true, authorization: true, cancel: true, resume: true },
+                rejects_system_program: false,
+            },
+        )
+    }
+
     fn npm_package(&self) -> &'static str {
         "opencode-ai"
     }

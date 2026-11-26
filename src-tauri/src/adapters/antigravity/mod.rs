@@ -222,6 +222,31 @@ impl CliAdapter for Antigravity {
     fn command(&self) -> &'static str {
         "agy"
     }
+    /// ACP 入口：厂商单独分发的 `agy_acp_server`（平台压缩包，macOS/Linux 为 .par）。
+    /// 已安装 `agy` CLI 不等于已安装该组件，缺失时报告组件而不是 CLI。
+    fn acp(&self) -> super::AcpCapability {
+        super::AcpCapability::unverified(
+            "documented",
+            "已核对 2026-11-26 ACP 注册表 antigravity-acp@1.5.2 的平台程序；本机只装了 agy CLI，未装 agy_acp_server，握手与真实对话待验证",
+            super::AcpEntry {
+                executable: "agy_acp_server",
+                args: &[],
+                origin: super::AcpOrigin::Vendor,
+                dependency: Some(super::AcpDependency {
+                    name: "agy_acp_server（Antigravity ACP 组件）",
+                    program: None,
+                    install_hint: "从官方 ACP 注册表按平台下载 agy_acp_server（Linux 需要 --uid=，macOS/Linux 为 .par），agy CLI 本身不含该入口",
+                    help_url: "https://antigravity.google/docs/ide/extensions",
+                }),
+                environment: super::AcpEnvironmentPolicy::NONE,
+                version_range: None,
+                version_range_reason: "",
+                capabilities: super::AcpCapabilities { session: true, authorization: true, cancel: true, resume: true },
+                rejects_system_program: false,
+            },
+        )
+    }
+
     fn npm_package(&self) -> &'static str {
         ""
     }
@@ -904,6 +929,7 @@ impl CliAdapter for Antigravity {
         AdapterDescriptor {
             remote: self.remote_capabilities(),
             secret_mcp: self.secret_mcp_capability(),
+            acp: self.acp(),
             id: self.id(),
             configuration: self
                 .configuration()

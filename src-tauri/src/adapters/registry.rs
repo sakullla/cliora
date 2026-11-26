@@ -120,3 +120,6 @@ impl Registry {
 #[cfg(test)]
 #[path = "../../../tests/adapter/registry-additions.rs"]
 mod registry_additions_tests;
+#[cfg(test)]
+#[path = "../../../tests/adapter/acp-agents.rs"]
+mod acp_tests;

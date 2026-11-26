@@ -95,6 +95,26 @@ impl CliAdapter for CodeBuddy {
     fn command(&self) -> &'static str {
         "codebuddy"
     }
+    /// ACP 入口：原生 `codebuddy --acp`（stdio ndjson）；`--serve` 则是 HTTP/SSE，
+    /// 不带 `--acp` 时不会用 stdio 通信。
+    fn acp(&self) -> super::AcpCapability {
+        super::AcpCapability::unverified(
+            "handshake",
+            "2026-11-26 在 Windows 以 codebuddy 2.187.0 完成 initialize 握手（loadSession）；首次握手约 4 秒；真实对话待验证",
+            super::AcpEntry {
+                executable: "codebuddy",
+                args: &["--acp"],
+                origin: super::AcpOrigin::Native,
+                dependency: None,
+                environment: super::AcpEnvironmentPolicy::NONE,
+                version_range: None,
+                version_range_reason: "",
+                capabilities: super::AcpCapabilities { session: true, authorization: true, cancel: true, resume: true },
+                rejects_system_program: false,
+            },
+        )
+    }
+
     fn npm_package(&self) -> &'static str {
         "@tencent-ai/codebuddy-code"
     }

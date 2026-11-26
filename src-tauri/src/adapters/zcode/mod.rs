@@ -79,6 +79,36 @@ impl CliAdapter for ZCode {
     fn command(&self) -> &'static str {
         "zcode"
     }
+    /// ACP 入口：社区桥接 `zcode-acp`（PyPI，Python 3.9 起），把 ZCode 私有
+    /// app-server 协议翻成 ACP。`ZCODE_ACP_APPROVAL_BRIDGE` 会把授权改成文件
+    /// 桥而绕开客户端，因此必须从子进程中移除，保证逐次授权仍由 Cliora 应答。
+    fn acp(&self) -> super::AcpCapability {
+        super::AcpCapability::unverified(
+            "documented",
+            "已核对 2026-11-26 桥接仓库与 PyPI 发行（要求 Python 3.9 起、ZCode 已登录）；本机未安装，握手与真实对话待验证",
+            super::AcpEntry {
+                executable: "zcode-acp",
+                args: &[],
+                origin: super::AcpOrigin::Bridge,
+                dependency: Some(super::AcpDependency {
+                    name: "zcode-acp",
+                    program: None,
+                    install_hint: "pipx install zcode-acp，并保持 ZCode 应用已安装并登录",
+                    help_url: "https://github.com/Liang-HZ/zcode-acp",
+                }),
+                environment: super::AcpEnvironmentPolicy {
+                    set: &[],
+                    bind_installation: &[],
+                    remove: &["ZCODE_ACP_APPROVAL_BRIDGE", "ZCODE_ACP_APPROVAL_DIR"],
+                },
+                version_range: None,
+                version_range_reason: "",
+                capabilities: super::AcpCapabilities { session: true, authorization: true, cancel: true, resume: true },
+                rejects_system_program: false,
+            },
+        )
+    }
+
     fn npm_package(&self) -> &'static str {
         ""
     }
@@ -329,6 +359,7 @@ impl CliAdapter for ZCode {
         AdapterDescriptor {
             remote: self.remote_capabilities(),
             secret_mcp: self.secret_mcp_capability(),
+            acp: self.acp(),
             id: self.id(),
             configuration: self.configuration().map(|port| port.describe(Scope::Global)),
             name: self.name(),

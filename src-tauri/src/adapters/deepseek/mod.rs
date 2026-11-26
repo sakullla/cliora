@@ -71,6 +71,25 @@ impl CliAdapter for DeepSeek {
     fn command(&self) -> &'static str {
         "dsh"
     }
+    /// ACP 入口：原生 `dsh acp`（等价于 `dsh --profile acp`，在 stdio 上提供 ACP）。
+    fn acp(&self) -> super::AcpCapability {
+        super::AcpCapability::unverified(
+            "documented",
+            "已核对 2026-11-26 官方 CLI 帮助的 dsh acp 条目；本机未安装 Harness，握手与真实对话待验证",
+            super::AcpEntry {
+                executable: "dsh",
+                args: &["acp"],
+                origin: super::AcpOrigin::Native,
+                dependency: None,
+                environment: super::AcpEnvironmentPolicy::NONE,
+                version_range: None,
+                version_range_reason: "",
+                capabilities: super::AcpCapabilities { session: true, authorization: true, cancel: true, resume: true },
+                rejects_system_program: false,
+            },
+        )
+    }
+
     fn npm_package(&self) -> &'static str {
         ""
     }
@@ -344,6 +363,7 @@ impl CliAdapter for DeepSeek {
         AdapterDescriptor {
             remote: self.remote_capabilities(),
             secret_mcp: self.secret_mcp_capability(),
+            acp: self.acp(),
             id: self.id(),
             configuration: self.configuration().map(|port| port.describe(Scope::Global)),
             name: self.name(),

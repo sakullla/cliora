@@ -114,6 +114,26 @@ impl CliAdapter for MiniMaxCode {
     fn command(&self) -> &'static str {
         "mcode"
     }
+    /// ACP 入口：原生 `mcode acp`。注册表另有独立分发的
+    /// `@minimax-ai/code-acp`，本机 mcode 直接提供入口时优先本地 CLI。
+    fn acp(&self) -> super::AcpCapability {
+        super::AcpCapability::unverified(
+            "handshake",
+            "2026-11-26 在 Windows 以 mcode 0.6.13 完成 initialize 握手（agentInfo minimax-code、loadSession、无 authMethods）；真实对话待验证",
+            super::AcpEntry {
+                executable: "mcode",
+                args: &["acp"],
+                origin: super::AcpOrigin::Native,
+                dependency: None,
+                environment: super::AcpEnvironmentPolicy::NONE,
+                version_range: None,
+                version_range_reason: "",
+                capabilities: super::AcpCapabilities { session: true, authorization: true, cancel: true, resume: true },
+                rejects_system_program: false,
+            },
+        )
+    }
+
     fn npm_package(&self) -> &'static str {
         "@minimax-ai/code"
     }
@@ -497,6 +517,7 @@ impl CliAdapter for MiniMaxCode {
         AdapterDescriptor {
             remote: self.remote_capabilities(),
             secret_mcp: self.secret_mcp_capability(),
+            acp: self.acp(),
             id: self.id(),
             configuration: self.configuration().map(|port| port.describe(Scope::Global)),
             management: ManagementCapabilities {

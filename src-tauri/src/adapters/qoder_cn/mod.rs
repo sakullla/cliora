@@ -140,6 +140,26 @@ impl CliAdapter for QoderAdapter {
     fn command(&self) -> &'static str {
         self.command
     }
+    /// ACP 入口：中国版原生 `qodercn --acp`。入口用 `self.command` 以保持
+    /// 地区身份（国际版注册项是 `qoder --acp`，不得互相替代）。
+    fn acp(&self) -> super::AcpCapability {
+        super::AcpCapability::unverified(
+            "handshake",
+            "2026-11-26 在 Windows 以 qoderclicn 1.1.94 完成 initialize 握手（agentInfo qoder-cli-cn、loadSession、auth qoderclicn-login）；help 未列出 --acp，首次握手 12–16 秒；真实对话与权限模式待验证",
+            super::AcpEntry {
+                executable: self.command,
+                args: &["--acp"],
+                origin: super::AcpOrigin::Native,
+                dependency: None,
+                environment: super::AcpEnvironmentPolicy::NONE,
+                version_range: None,
+                version_range_reason: "",
+                capabilities: super::AcpCapabilities { session: true, authorization: true, cancel: true, resume: true },
+                rejects_system_program: false,
+            },
+        )
+    }
+
     fn npm_package(&self) -> &'static str {
         // Legacy but official channel; the recommended install is the native
         // installer in the CN documentation; never use the international channel.
@@ -415,6 +435,7 @@ impl CliAdapter for QoderAdapter {
         super::AdapterDescriptor {
             remote: self.remote_capabilities(),
             secret_mcp: self.secret_mcp_capability(),
+            acp: self.acp(),
             id: self.id(),
             configuration: self.configuration().map(|port| port.describe(Scope::Global)),
             management: super::ManagementCapabilities {

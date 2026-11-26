@@ -105,6 +105,27 @@ impl CliAdapter for KimiCode {
     fn command(&self) -> &'static str {
         "kimi"
     }
+    /// ACP 入口：原生 `kimi acp`（`@moonshot-ai/kimi-code`）。可执行名与已归档的
+    /// 旧版 Kimi CLI 相同，1.x 的会话和配置根都不同，因此用 2.x 兼容线把它排除，
+    /// 而不是静默把旧版当成 Kimi Code。
+    fn acp(&self) -> super::AcpCapability {
+        super::AcpCapability::unverified(
+            "handshake",
+            "2026-11-26 在 Windows 以 kimi 2.7.0 完成 initialize 握手（agentInfo Kimi Code CLI、loadSession、终端登录授权）；真实对话待验证",
+            super::AcpEntry {
+                executable: "kimi",
+                args: &["acp"],
+                origin: super::AcpOrigin::Native,
+                dependency: None,
+                environment: super::AcpEnvironmentPolicy::NONE,
+                version_range: Some(("2.0.0", "3.0.0")),
+                version_range_reason: "1.x 是已归档的旧版 Kimi CLI（1.52.0），ACP 会话与配置根与 Kimi Code 不同，不能互相替代；3.x 尚未核对",
+                capabilities: super::AcpCapabilities { session: true, authorization: true, cancel: true, resume: true },
+                rejects_system_program: false,
+            },
+        )
+    }
+
     fn npm_package(&self) -> &'static str {
         "@moonshot-ai/kimi-code"
     }
@@ -558,6 +579,7 @@ impl CliAdapter for KimiCode {
         AdapterDescriptor {
             remote: self.remote_capabilities(),
             secret_mcp: self.secret_mcp_capability(),
+            acp: self.acp(),
             id: self.id(),
             configuration: self.configuration().map(|port| port.describe(Scope::Global)),
             name: self.name(),

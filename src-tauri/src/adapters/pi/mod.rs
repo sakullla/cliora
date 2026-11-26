@@ -98,6 +98,31 @@ impl CliAdapter for Pi {
     fn command(&self) -> &'static str {
         "pi"
     }
+    /// ACP 入口：`pi-acp` 桥接。桥接自身运行 PATH 上的 `pi`（0.81.0 起），
+    /// 会话映射保存在 `~/.pi/pi-acp/session-map.json`，因此 Pi 必须在场。
+    fn acp(&self) -> super::AcpCapability {
+        super::AcpCapability::unverified(
+            "documented",
+            "已核对 2026-11-26 ACP 注册表 pi-acp@0.0.35 与桥接说明；本机未安装桥接，握手与真实对话待验证",
+            super::AcpEntry {
+                executable: "pi-acp",
+                args: &[],
+                origin: super::AcpOrigin::Bridge,
+                dependency: Some(super::AcpDependency {
+                    name: "pi-acp",
+                    program: Some("pi"),
+                    install_hint: "npm install -g pi-acp，并保持 pi 0.81.0 起可用（桥接运行该 pi）",
+                    help_url: "https://github.com/svkozak/pi-acp",
+                }),
+                environment: super::AcpEnvironmentPolicy::NONE,
+                version_range: None,
+                version_range_reason: "",
+                capabilities: super::AcpCapabilities { session: true, authorization: true, cancel: true, resume: true },
+                rejects_system_program: false,
+            },
+        )
+    }
+
     fn npm_package(&self) -> &'static str {
         "@earendil-works/pi-coding-agent"
     }

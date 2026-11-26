@@ -103,6 +103,25 @@ impl CliAdapter for Omp {
     fn command(&self) -> &'static str {
         COMMAND
     }
+    /// ACP 入口：原生 `omp acp`。oh-my-pi 独立于 Pi，不复用 `pi-acp` 桥接。
+    fn acp(&self) -> super::AcpCapability {
+        super::AcpCapability::unverified(
+            "handshake",
+            "2026-11-26 在 Windows 以 omp 19.2.1 完成 initialize 握手（agentInfo omp、loadSession、resume/list/fork/close、auth agent）；真实对话与交互式提问待验证",
+            super::AcpEntry {
+                executable: COMMAND,
+                args: &["acp"],
+                origin: super::AcpOrigin::Native,
+                dependency: None,
+                environment: super::AcpEnvironmentPolicy::NONE,
+                version_range: None,
+                version_range_reason: "",
+                capabilities: super::AcpCapabilities { session: true, authorization: true, cancel: true, resume: true },
+                rejects_system_program: false,
+            },
+        )
+    }
+
 
     fn npm_package(&self) -> &'static str {
         lifecycle::PACKAGE
@@ -614,6 +633,7 @@ impl CliAdapter for Omp {
         AdapterDescriptor {
             remote: self.remote_capabilities(),
             secret_mcp: self.secret_mcp_capability(),
+            acp: self.acp(),
             id: ID,
             name: NAME,
             interface_formats: self.interface_formats(),

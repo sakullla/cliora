@@ -178,6 +178,25 @@ impl CliAdapter for Kiro {
     fn command(&self) -> &'static str {
         "kiro-cli"
     }
+    /// ACP 入口：原生 `kiro-cli acp`。
+    fn acp(&self) -> super::AcpCapability {
+        super::AcpCapability::unverified(
+            "handshake",
+            "2026-11-26 在 Windows 以 kiro-cli 3.5.0 完成 initialize 握手（loadSession、list/close/delete/fork、auth aws-builder-id）；注册表 3.6.2 未列 Windows 包，但本机 3.5.0 可用；真实对话待验证",
+            super::AcpEntry {
+                executable: "kiro-cli",
+                args: &["acp"],
+                origin: super::AcpOrigin::Native,
+                dependency: None,
+                environment: super::AcpEnvironmentPolicy::NONE,
+                version_range: None,
+                version_range_reason: "",
+                capabilities: super::AcpCapabilities { session: true, authorization: true, cancel: true, resume: true },
+                rejects_system_program: false,
+            },
+        )
+    }
+
     fn npm_package(&self) -> &'static str {
         ""
     }
@@ -520,6 +539,7 @@ impl CliAdapter for Kiro {
         AdapterDescriptor {
             remote: self.remote_capabilities(),
             secret_mcp: self.secret_mcp_capability(),
+            acp: self.acp(),
             id: self.id(),
             configuration: None,
             name: self.name(),

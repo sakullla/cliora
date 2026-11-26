@@ -63,6 +63,26 @@ impl CliAdapter for Grok {
     fn command(&self) -> &'static str {
         "grok"
     }
+    /// ACP 入口：原生 `grok agent stdio`（1.0.77）。不能裸写 `agent stdio`：
+    /// 同目录的 `agent` 会进入交互界面而不是 ACP 服务器。
+    fn acp(&self) -> super::AcpCapability {
+        super::AcpCapability::unverified(
+            "handshake",
+            "2026-11-26 在 Windows 以 grok 1.0.77 完成 initialize 握手（loadSession、resume/close/list、auth grok.com）；真实对话待验证",
+            super::AcpEntry {
+                executable: "grok",
+                args: &["agent", "stdio"],
+                origin: super::AcpOrigin::Native,
+                dependency: None,
+                environment: super::AcpEnvironmentPolicy::NONE,
+                version_range: None,
+                version_range_reason: "",
+                capabilities: super::AcpCapabilities { session: true, authorization: true, cancel: true, resume: true },
+                rejects_system_program: false,
+            },
+        )
+    }
+
     fn npm_package(&self) -> &'static str {
         "@xai-official/grok"
     }

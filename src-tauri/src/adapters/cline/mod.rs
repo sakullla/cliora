@@ -112,6 +112,25 @@ impl CliAdapter for Cline {
     fn command(&self) -> &'static str {
         "cline"
     }
+    /// ACP 入口：原生 `cline --acp`。
+    fn acp(&self) -> super::AcpCapability {
+        super::AcpCapability::unverified(
+            "documented",
+            "已核对 2026-11-26 ACP 注册表 cline@3.0.75 的 --acp 启动参数；本机未安装 CLI，握手与真实对话待验证",
+            super::AcpEntry {
+                executable: "cline",
+                args: &["--acp"],
+                origin: super::AcpOrigin::Native,
+                dependency: None,
+                environment: super::AcpEnvironmentPolicy::NONE,
+                version_range: None,
+                version_range_reason: "",
+                capabilities: super::AcpCapabilities { session: true, authorization: true, cancel: true, resume: true },
+                rejects_system_program: false,
+            },
+        )
+    }
+
     fn npm_package(&self) -> &'static str {
         "cline"
     }
@@ -326,6 +345,7 @@ impl CliAdapter for Cline {
         AdapterDescriptor {
             remote: self.remote_capabilities(),
             secret_mcp: self.secret_mcp_capability(),
+            acp: self.acp(),
             id: self.id(),
             configuration: None,
             name: self.name(),

@@ -111,6 +111,265 @@ impl SecretMcpCapability {
     }
 }
 
+/// Why a registered CLI cannot offer an ACP conversation yet. The shared
+/// settings and session UI show this instead of hiding the choice.
+pub const ACP_UNSUPPORTED_REASON: &str = "此 CLI 没有已核对的 ACP 入口，可用终端启动";
+/// A version-shaped entry whose installed CLI falls outside the declared line.
+pub const ACP_VERSION_OUT_OF_RANGE: &str = "已安装版本不在该 ACP 入口的兼容范围内";
+
+/// Where an ACP entry point comes from. A local executable of the product, a
+/// separately distributed vendor component and a third-party bridge are
+/// different claims and stay distinguishable in the UI and the acceptance log.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AcpOrigin {
+    /// The product's own CLI binary, e.g. `opencode acp`.
+    Native,
+    /// A separate program the vendor distributes for ACP, e.g. Antigravity's
+    /// `agy_acp_server`. Installing the CLI does not install it.
+    Vendor,
+    /// A third-party bridge that translates ACP into a private protocol.
+    Bridge,
+}
+
+impl AcpOrigin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Vendor => "vendor",
+            Self::Bridge => "bridge",
+        }
+    }
+    /// A bridge or vendor component can be missing while the CLI itself works,
+    /// so the failure names the extra program instead of blaming the agent.
+    pub fn needs_own_install(self) -> bool {
+        !matches!(self, Self::Native)
+    }
+}
+
+/// A program the entry point needs but does not ship. `program` is checked
+/// before launch when the dependency is a local executable; a package that
+/// cannot be probed locally keeps only its install hint.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpDependency {
+    pub name: &'static str,
+    /// Local executable required by the entry, resolved with the same search
+    /// the entry itself uses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub program: Option<&'static str>,
+    pub install_hint: &'static str,
+    pub help_url: &'static str,
+}
+
+/// Environment contract for one ACP entry. The shared host applies this before
+/// it writes the first protocol frame, so the agent sees the account, provider
+/// and permission surface the terminal launch would have produced.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpEnvironmentPolicy {
+    /// Literal variables this entry always needs.
+    pub set: &'static [(&'static str, &'static str)],
+    /// Variables bound to the CLI installation the user selected. A bridge that
+    /// can run either its bundled engine or the user's install must be pointed
+    /// at the selected install, otherwise ACP would silently use another
+    /// identity than the terminal launch.
+    pub bind_installation: &'static [&'static str],
+    /// Variables that must not reach the agent. ACP-only removals are merged
+    /// with the account adapter's own list by the shared resolver.
+    pub remove: &'static [&'static str],
+}
+
+impl AcpEnvironmentPolicy {
+    pub const NONE: Self = Self { set: &[], bind_installation: &[], remove: &[] };
+}
+
+/// What this entry point can do, as far as the recorded evidence shows. A flag
+/// is `true` only when the entry point itself declares or demonstrates it;
+/// `AcpCapability::evidence` says how that was established.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpCapabilities {
+    /// Create a session in the selected working directory and run turns.
+    pub session: bool,
+    /// Ask the client before a tool or file action (`session/request_permission`).
+    pub authorization: bool,
+    /// Stop the current turn (`session/cancel`).
+    pub cancel: bool,
+    /// Load a previous native session (`session/load`) instead of starting over.
+    pub resume: bool,
+}
+
+impl AcpCapabilities {
+    pub const NONE: Self = Self { session: false, authorization: false, cancel: false, resume: false };
+}
+
+/// The adapter-owned declaration of one ACP entry point. Everything the shared
+/// host needs is here, so no shared service branches on a CLI id.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpEntry {
+    /// Program to run. This may differ from `CliAdapter::command()`: the Cursor
+    /// adapter's command is the desktop editor while its ACP entry is
+    /// `cursor-agent acp`, and Command Code's Windows shim is `cmdc`.
+    pub executable: &'static str,
+    pub args: &'static [&'static str],
+    pub origin: AcpOrigin,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dependency: Option<AcpDependency>,
+    pub environment: AcpEnvironmentPolicy,
+    /// Compatible CLI line as `[since, before)`; `None` is not version-shaped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_range: Option<(&'static str, &'static str)>,
+    /// Why the range starts there, e.g. the archived predecessor that shares
+    /// the executable name. Shown when the installed version is too old.
+    pub version_range_reason: &'static str,
+    pub capabilities: AcpCapabilities,
+    /// Windows only: the executable name also names a system program
+    /// (`cmd`), so a candidate outside the adapter's own installs is refused.
+    pub rejects_system_program: bool,
+}
+
+/// Whether `path` is a Windows system program. `cmd acp` must never be
+/// answered by `C:\Windows\System32\cmd.exe`, which is on PATH.
+fn acp_is_system_program(path: &Path) -> bool {
+    let text = path.to_string_lossy().to_ascii_lowercase().replace('/', "\\");
+    let roots = std::env::var_os("SystemRoot")
+        .map(|root| root.to_string_lossy().to_ascii_lowercase().replace('/', "\\"))
+        .unwrap_or_else(|| "c:\\windows".to_string());
+    ["\\system32\\", "\\syswow64\\"]
+        .iter()
+        .any(|suffix| text.starts_with(&format!("{roots}{suffix}")))
+}
+
+/// Platform filename suffixes of a runnable program, most specific first. A
+/// Windows npm install publishes `name.exe`, `name.cmd` and `name.ps1`; the
+/// extensionless file is a Unix shim and never a Win32 image.
+fn acp_program_suffixes() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &[".exe", ".cmd", ".ps1"]
+    } else {
+        &[""]
+    }
+}
+
+impl AcpEntry {
+    /// The `program args…` shape an operator would type, for diagnostics.
+    pub fn command_line(&self) -> String {
+        std::iter::once(self.executable)
+            .chain(self.args.iter().copied())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Whether this candidate may answer the entry. A same-named system
+    /// program is refused for entries that declare the collision.
+    pub fn accepts_candidate(&self, path: &Path) -> bool {
+        !(self.rejects_system_program && acp_is_system_program(path))
+    }
+
+    /// Search `directories` in order and return the first accepted program.
+    pub fn locate(&self, directories: &[PathBuf]) -> Result<PathBuf, AcpIssue> {
+        let mut rejected_system_program = false;
+        for directory in directories {
+            for suffix in acp_program_suffixes() {
+                let candidate = directory.join(format!("{}{suffix}", self.executable));
+                if !candidate.is_file() {
+                    continue;
+                }
+                if !self.accepts_candidate(&candidate) {
+                    rejected_system_program = true;
+                    continue;
+                }
+                return Ok(candidate);
+            }
+        }
+        if rejected_system_program {
+            return Err(AcpIssue {
+                code: "system-program",
+                reason: format!(
+                    "只找到同名的系统程序，不是该 CLI 的 ACP 入口（{}）；请确认产品自身的安装位置",
+                    self.command_line()
+                ),
+                help: self.dependency.map(|item| item.help_url).unwrap_or(""),
+            });
+        }
+        Err(AcpIssue {
+            code: if self.origin.needs_own_install() { "dependency-missing" } else { "not-installed" },
+            reason: match self.dependency {
+                Some(dependency) => format!(
+                    "未找到 {}（{}）：{}",
+                    self.executable, dependency.name, dependency.install_hint
+                ),
+                None => format!("未找到 {}；请先安装该 CLI 或修复 PATH", self.executable),
+            },
+            help: self.dependency.map(|item| item.help_url).unwrap_or(""),
+        })
+    }
+}
+
+/// What an adapter publishes about its ACP conversation route. `state` is the
+/// launch decision, `evidence` records how far the claim was actually verified,
+/// and `reason` explains both to the user.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpCapability {
+    /// `supported` requires a verified interactive turn; `unverified` is a
+    /// declared, reachable entry point; `unsupported` has no route.
+    pub state: &'static str,
+    /// `interactive`, `handshake` (the agent answered `initialize`) or
+    /// `documented` (upstream distribution and command checked, not started).
+    pub evidence: &'static str,
+    pub reason: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry: Option<AcpEntry>,
+}
+
+impl AcpCapability {
+    pub fn unsupported(reason: &'static str) -> Self {
+        Self { state: "unsupported", evidence: "none", reason, entry: None }
+    }
+
+    /// A declared entry point that has not yet completed a real turn.
+    pub fn unverified(evidence: &'static str, reason: &'static str, entry: AcpEntry) -> Self {
+        Self { state: "unverified", evidence, reason, entry: Some(entry) }
+    }
+
+    /// A declared entry point with a recorded interactive acceptance.
+    pub fn supported(reason: &'static str, entry: AcpEntry) -> Self {
+        Self { state: "supported", evidence: "interactive", reason, entry: Some(entry) }
+    }
+
+    /// ACP can be attempted: the entry exists and its version line was already
+    /// checked by `acp_for_version`.
+    pub fn is_launchable(self) -> bool {
+        self.entry.is_some() && self.state != "unsupported"
+    }
+}
+
+/// One resolved ACP launch: the program to spawn, its arguments and the
+/// environment the shared host must apply. The account adapter's own removals
+/// are merged in so ACP isolation matches the terminal launch.
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpCommand {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    pub environment: Vec<(String, String)>,
+    pub remove_environment: Vec<String>,
+    pub origin: &'static str,
+}
+
+/// Why an ACP launch cannot start, in the shape the UI reports. `code` is a
+/// closed set; the reason names the missing program and what to install.
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpIssue {
+    pub code: &'static str,
+    pub reason: String,
+    pub help: &'static str,
+}
+
 #[derive(Clone, Debug)]
 pub struct McpLocation {
     pub path: PathBuf,
@@ -145,6 +404,9 @@ pub struct AdapterDescriptor {
     /// Secret MCP capability for this CLI. Published even when unsupported so the
     /// library shows a reason and the CLI fallback instead of hiding the choice.
     pub secret_mcp: SecretMcpCapability,
+    /// ACP conversation route. Published even when unsupported so the launch
+    /// setting shows a reason and keeps the terminal fallback.
+    pub acp: AcpCapability,
     pub configuration: Option<super::configuration::ConfigurationDescriptor>,
     pub remote: RemoteCapabilities,
 }
@@ -1267,6 +1529,147 @@ pub trait CliAdapter: Sync {
     fn login_hint(&self) -> &'static str {
         ""
     }
+    /// The ACP conversation route this CLI declares. The adapter owns the
+    /// program, arguments, environment and version line; shared settings and
+    /// sessions read this through the registry and never branch on a CLI id.
+    fn acp(&self) -> AcpCapability {
+        AcpCapability::unsupported(ACP_UNSUPPORTED_REASON)
+    }
+    /// The same declaration after checking the installed version against the
+    /// adapter's own line. An unverified version never satisfies a range, so a
+    /// version-shaped entry stays unavailable until the version is known.
+    fn acp_for_version(&self, version: Option<&str>) -> AcpCapability {
+        let capability = self.acp();
+        match capability.entry {
+            Some(entry) if !version_in_range(version, entry.version_range) => AcpCapability {
+                state: "unsupported",
+                reason: entry.version_range_reason,
+                ..capability
+            },
+            _ => capability,
+        }
+    }
+    /// Directories searched for an ACP program: the adapter's own install
+    /// locations first, so the selected installation wins over PATH, then the
+    /// process PATH that a terminal launch would also use.
+    fn acp_search_directories(&self, home: &Path) -> Vec<PathBuf> {
+        let mut directories = self.native_binary_directories(home);
+        for directory in self
+            .native_installations(home)
+            .into_iter()
+            .filter_map(|item| PathBuf::from(item.path).parent().map(Path::to_path_buf))
+        {
+            if !directories.contains(&directory) {
+                directories.push(directory);
+            }
+        }
+        for candidate in self.extra_binary_candidates(home) {
+            if let Some(directory) = candidate.parent() {
+                if !directories.contains(&directory.to_path_buf()) {
+                    directories.push(directory.to_path_buf());
+                }
+            }
+        }
+        for directory in crate::process_environment::directories() {
+            if !directories.contains(&directory) {
+                directories.push(directory);
+            }
+        }
+        directories
+    }
+    /// Resolve the ACP launch for this CLI. `installation` is the CLI executable
+    /// the user selected for terminal launches; a bridge that can run either a
+    /// bundled engine or the user's install is bound to it, so ACP never runs a
+    /// different identity. Returns the concrete reason when it cannot start.
+    fn acp_command(
+        &self,
+        home: &Path,
+        installation: Option<&Path>,
+        version: Option<&str>,
+    ) -> Result<AcpCommand, AcpIssue> {
+        let capability = self.acp_for_version(version);
+        let Some(entry) = capability.entry else {
+            return Err(AcpIssue { code: "unsupported", reason: capability.reason.into(), help: "" });
+        };
+        if capability.state == "unsupported" {
+            let reason = match (entry.version_range, version) {
+                (Some((since, before)), Some(version)) => format!(
+                    "{}；当前 {}，该 ACP 入口适用 {} 起、{} 之前（{}）",
+                    capability.reason, version, since, before, entry.version_range_reason
+                ),
+                _ => capability.reason.to_string(),
+            };
+            return Err(AcpIssue { code: "version-unsupported", reason, help: "" });
+        }
+        let directories = self.acp_search_directories(home);
+        if let Some(dependency) = entry.dependency {
+            if let Some(program) = dependency.program {
+                let found = AcpEntry {
+                    executable: program,
+                    args: &[],
+                    origin: entry.origin,
+                    dependency: None,
+                    environment: AcpEnvironmentPolicy::NONE,
+                    version_range: None,
+                    version_range_reason: "",
+                    capabilities: AcpCapabilities::NONE,
+                    rejects_system_program: false,
+                };
+                found.locate(&directories).map_err(|mut issue| {
+                    issue.code = "dependency-missing";
+                    issue.reason = format!("{}：{}", dependency.name, dependency.install_hint);
+                    issue.help = dependency.help_url;
+                    issue
+                })?;
+            }
+        }
+        let program = entry.locate(&directories)?;
+        let mut environment = entry
+            .environment
+            .set
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+            .collect::<Vec<_>>();
+        if !entry.environment.bind_installation.is_empty() {
+            let installation = installation.ok_or_else(|| AcpIssue {
+                code: "identity-unresolved",
+                reason: format!(
+                    "{} 需要已选定的 CLI 安装路径才能运行用户选中的安装，当前未解析到安装",
+                    entry.command_line()
+                ),
+                help: entry.dependency.map(|item| item.help_url).unwrap_or(""),
+            })?;
+            let value = installation.to_string_lossy().to_string();
+            environment.extend(
+                entry
+                    .environment
+                    .bind_installation
+                    .iter()
+                    .map(|key| ((*key).to_string(), value.clone())),
+            );
+        }
+        let mut remove_environment = entry
+            .environment
+            .remove
+            .iter()
+            .map(|key| (*key).to_string())
+            .collect::<Vec<_>>();
+        if let Some(accounts) = self.accounts() {
+            for key in accounts.remove_environment() {
+                let key = (*key).to_string();
+                if !remove_environment.contains(&key) {
+                    remove_environment.push(key);
+                }
+            }
+        }
+        Ok(AcpCommand {
+            program,
+            args: entry.args.iter().map(|arg| (*arg).to_string()).collect(),
+            environment,
+            remove_environment,
+            origin: entry.origin.as_str(),
+        })
+    }
     fn launch_args(&self, session: Option<&str>, mode: LaunchMode) -> Result<Vec<String>, String>;
     /// Extra environment for a remote interactive session. Local launches
     /// ignore it. The default adds nothing.
@@ -1963,6 +2366,7 @@ pub trait CliAdapter: Sync {
                 memory_reason: "",
             },
             secret_mcp: self.secret_mcp_capability(),
+            acp: self.acp(),
             login: self.login_args().map(|_| LoginCapability {
                 hint: self.login_hint(),
             }),

@@ -49,6 +49,26 @@ impl CliAdapter for Cursor {
     fn command(&self) -> &'static str {
         "cursor"
     }
+    /// ACP 入口：Cursor CLI 的 `cursor-agent acp`。与本适配器的 `cursor`
+    /// （桌面编辑器）不是同一个程序，探测时也不回退到 `agent`。
+    fn acp(&self) -> super::AcpCapability {
+        super::AcpCapability::unverified(
+            "documented",
+            "已核对 2026-11-26 ACP 注册表 cursor 2026.11.22 的平台分发（cursor-agent acp；Windows 为 cursor-agent.cmd）；本机未安装 CLI，握手与真实对话待验证",
+            super::AcpEntry {
+                executable: "cursor-agent",
+                args: &["acp"],
+                origin: super::AcpOrigin::Native,
+                dependency: None,
+                environment: super::AcpEnvironmentPolicy::NONE,
+                version_range: None,
+                version_range_reason: "",
+                capabilities: super::AcpCapabilities { session: true, authorization: true, cancel: true, resume: true },
+                rejects_system_program: false,
+            },
+        )
+    }
+
     fn npm_package(&self) -> &'static str {
         ""
     }
@@ -331,6 +351,7 @@ impl CliAdapter for Cursor {
         AdapterDescriptor {
             remote: self.remote_capabilities(),
             secret_mcp: self.secret_mcp_capability(),
+            acp: self.acp(),
             id: self.id(),
             name: self.name(),
             interface_formats: self.interface_formats(),

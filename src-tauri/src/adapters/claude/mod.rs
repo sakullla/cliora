@@ -89,6 +89,35 @@ impl CliAdapter for Claude {
     fn command(&self) -> &'static str {
         "claude"
     }
+    /// ACP 入口：`claude-agent-acp` 桥接（Claude Agent SDK）。独立发行包内带一份
+    /// Claude Code，`CLAUDE_CODE_EXECUTABLE` 绑定 Cliora 选中的安装。
+    fn acp(&self) -> super::AcpCapability {
+        super::AcpCapability::unverified(
+            "documented",
+            "已核对 2026-11-26 ACP 注册表 claude-agent-acp@0.112.0 与桥接说明；本机未安装桥接，握手与真实对话待验证",
+            super::AcpEntry {
+                executable: "claude-agent-acp",
+                args: &[],
+                origin: super::AcpOrigin::Bridge,
+                dependency: Some(super::AcpDependency {
+                    name: "@agentclientprotocol/claude-agent-acp",
+                    program: None,
+                    install_hint: "npm install -g @agentclientprotocol/claude-agent-acp，或使用其独立发布包",
+                    help_url: "https://github.com/agentclientprotocol/claude-agent-acp",
+                }),
+                environment: super::AcpEnvironmentPolicy {
+                    set: &[],
+                    bind_installation: &["CLAUDE_CODE_EXECUTABLE"],
+                    remove: &[],
+                },
+                version_range: None,
+                version_range_reason: "",
+                capabilities: super::AcpCapabilities { session: true, authorization: true, cancel: true, resume: true },
+                rejects_system_program: false,
+            },
+        )
+    }
+
     fn npm_package(&self) -> &'static str {
         "@anthropic-ai/claude-code"
     }

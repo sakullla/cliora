@@ -211,6 +211,27 @@ impl CliAdapter for MiMoCode {
     fn command(&self) -> &'static str {
         "mimo"
     }
+    /// ACP 入口：原生 `mimo acp`。0.1.15 的 initialize 报出 `OpenCode` 身份与
+    /// `opencode-login` 授权方式（OpenCode 派生），选模型前要核对实际选用的型号，
+    /// 避免按默认模型产生意外计费。
+    fn acp(&self) -> super::AcpCapability {
+        super::AcpCapability::unverified(
+            "handshake",
+            "2026-11-26 在 Windows 以 mimo 0.1.15 完成 initialize 握手（loadSession、resume/list/fork）；agentInfo 自报 OpenCode，默认模型选择待实测",
+            super::AcpEntry {
+                executable: "mimo",
+                args: &["acp"],
+                origin: super::AcpOrigin::Native,
+                dependency: None,
+                environment: super::AcpEnvironmentPolicy::NONE,
+                version_range: None,
+                version_range_reason: "",
+                capabilities: super::AcpCapabilities { session: true, authorization: true, cancel: true, resume: true },
+                rejects_system_program: false,
+            },
+        )
+    }
+
     fn npm_package(&self) -> &'static str {
         "@mimo-ai/cli"
     }
@@ -612,6 +633,7 @@ impl CliAdapter for MiMoCode {
         AdapterDescriptor {
             remote: self.remote_capabilities(),
             secret_mcp: self.secret_mcp_capability(),
+            acp: self.acp(),
             id: self.id(),
             configuration: self.configuration().map(|port| port.describe(Scope::Global)),
             name: self.name(),
