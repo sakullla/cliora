@@ -13,7 +13,32 @@ import { remoteSessionMayExist, sessionConfirmedEnded } from './sessionState';
 import { partitionCollapsed, type TaskBucket, type TaskState } from './sessionTaskState';
 import styles from './SessionWorkbench.module.css';
 
-export type SessionTone = 'live' | 'idle' | 'bell' | 'error' | 'ended';
+export type SessionTone = 'live' | 'idle' | 'bell' | 'error' | 'ended' | 'warning';
+
+/** What a session row or badge shows: the task state, or the command fact that replaces it. */
+export type SessionCommand = {
+  /** The semantic slot of the command fact, for styling and tests. */
+  tone: string;
+  label: string;
+  /** The activity icon and colour that belong to that fact; one mapping for rail and stage. */
+  activityTone: SessionTone;
+};
+
+/** Progress moves like output, a warning is amber, a failure is the error tone. */
+export function commandActivityTone(tone: string): SessionTone {
+  if (tone === 'progress' || tone === 'indeterminate' || tone === 'running') return 'live';
+  if (tone === 'warning') return 'warning';
+  if (tone === 'error' || tone === 'failed') return 'error';
+  return 'idle';
+}
+
+/**
+ * A command fact may replace the task state only while the task is neutral. Waiting for a person,
+ * a review, a failure and an ended session stay visible: a progress bar must never hide them.
+ */
+export function commandReplacesTask(task: TaskState): boolean {
+  return task === 'working' || task === 'unknown';
+}
 
 export type RailSession = {
   session: WorkbenchSession;
@@ -32,7 +57,7 @@ export type RailSession = {
   taskLabel: string;
   taskHint: string | null;
   /** The terminal's own command phase or program progress, worded; null when there is nothing to say. */
-  command: { tone: string; label: string } | null;
+  command: SessionCommand | null;
   collapsed: boolean;
   /** The user marked this round for review; a display mark only. */
   marked: boolean;
@@ -231,15 +256,20 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
   const renderSession = (item: RailSession, group: string) => {
     const { session } = item;
     const selected = session.id === selectedId;
+    // A command fact takes the row's state slot while the task is neutral; otherwise the task wins.
+    const command = item.command && commandReplacesTask(item.task) ? item.command : null;
     const failed = sessionConfirmedEnded(session) && session.exitCode != null && session.exitCode !== 0;
     const yolo = session.mode === 'yolo';
     // YOLO stays discoverable in the tooltip and for assistive tech; the row itself spends its room on state.
     const tooltip = [stableTitle(item.title), item.place, [item.name, yolo ? t('sessions.modeYolo') : ''].filter(Boolean).join(' · '), item.directory, item.taskLabel, item.taskHint, item.command?.label ?? ''].filter(Boolean).join('\n');
     const pending = !session.running && remoteSessionMayExist(session);
-    const state = pending ? t('sessions.sshNeedsCheck') : item.taskLabel;
+    // The command's own wording replaces the task wording, and its icon replaces the task icon.
+    const state = pending ? t('sessions.sshNeedsCheck') : command ? command.label : item.taskLabel;
+    const rowTone: SessionTone = pending ? 'ended' : command ? command.activityTone : item.tone;
     // A running session that is only waiting for input already reads that way from its tool icon
     // and quiet state dot; repeating the label on every row would spend the room titles need.
-    const quietState = !pending && item.task === 'unknown' && item.session.running && item.taskLabel === t('sessions.stateIdle');
+    // A command fact is news, so it is never hidden as quiet.
+    const quietState = !pending && !command && item.task === 'unknown' && item.session.running && item.taskLabel === t('sessions.stateIdle');
     const dragging = drag?.id === session.id;
     const dropMark = drag && !dragging && drag.group === group && drag.target === session.id ? (drag.after ? 'after' : 'before') : undefined;
     return <div key={session.id} className={styles.row} data-running={session.running || undefined} data-pending={pending || undefined} data-attention={item.attention || undefined} data-task={item.task} data-bucket={item.bucket} data-collapsed={item.collapsed || undefined} data-marked={item.marked || undefined} data-selected={selected || undefined} data-on-screen={item.pane != null || undefined}
@@ -265,9 +295,9 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
             onOpenMenu(session, rect.left + 24, rect.bottom - 6);
           }
         }}>
-        <span className={styles.sessionIconWrap} data-rail-icon="" data-tone={pending ? 'pending' : item.tone}>
+        <span className={styles.sessionIconWrap} data-rail-icon="" data-tone={pending ? 'pending' : rowTone}>
           <ToolIcon toolId={session.toolId} size={compact ? 20 : 18} />
-          <SessionActivityIcon tone={item.tone} slot="rail" className={styles.sessionStateDot} />
+          <SessionActivityIcon tone={rowTone} slot="rail" className={styles.sessionStateDot} />
           {compact && (item.unread || item.attention) && <span className={styles.slimNotice} data-attention={item.attention || undefined} aria-hidden="true" />}
         </span>
         <span className={styles.sessionBody}>
@@ -280,12 +310,11 @@ export function SessionRail({ sessions, total, running, ended, search, selectedI
             <span className={styles.sessionPlace}>{item.title ? <PlaceLabel text={item.place} parts={places.get(item.place)} /> : <span className={styles.placeTail}>{item.name}</span>}</span>
             {item.pane != null && <span className={styles.paneTag} title={t('sessions.splitView')}><Icon name="columns" size={11} />{item.pane + 1}</span>}
             {failed && <span className={styles.exitTag}>{t('sessions.exitCode', { code: session.exitCode })}</span>}
-            {item.command && <span className={styles.commandTag} data-command={item.command.tone} title={item.command.label}>{item.command.label}</span>}
           </span>
           <span className={styles.srOnly}>{[item.title ? item.name : '', yolo ? t('sessions.modeYolo') : '', item.taskLabel, item.taskHint, item.command?.label ?? ''].filter(Boolean).join(' · ')}</span>
         </span>
         {/* What the session is doing now — only when it needs saying — then how long it has run. */}
-        <span className={styles.sessionMeta} data-tone={pending ? 'pending' : item.tone} data-task={item.task} data-quiet={quietState || undefined} aria-hidden="true">
+        <span className={styles.sessionMeta} data-tone={pending ? 'pending' : rowTone} data-task={item.task} data-command={command?.tone} data-quiet={quietState || undefined} aria-hidden="true">
           {item.marked && <span className={styles.markBadge} title={t('sessions.taskReviewMarked')}><Icon name="eye" size={11} /></span>}
           {!quietState && <span className={styles.sessionState}>{state}</span>}
           {session.running && item.elapsed && <span className={styles.sessionTime}>{item.elapsed}</span>}

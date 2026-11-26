@@ -169,7 +169,8 @@
 .activity > svg { display: block; width: 100%; height: 100%; overflow: visible; transform-origin: center; }
 .activity[data-tone='live'],
 .activity[data-tone='idle'] { color: var(--success); }
-.activity[data-tone='bell'] { color: var(--warning); }
+.activity[data-tone='bell'],
+.activity[data-tone='warning'] { color: var(--warning); }
 .activity[data-tone='error'] { color: var(--danger); }
 .activity[data-tone='live'] > svg { animation: wbActivity 1.8s var(--ease) infinite; }
 .activity[data-tone='bell'] > svg { animation: wbBell 2.4s var(--ease) infinite; }
@@ -507,7 +508,8 @@
 .sessionStateDot[data-tone='idle'] { color: color-mix(in srgb, var(--success) 45%, var(--line-strong)); }
 .sessionStateDot[data-tone='ended'] { color: var(--line-strong); }
 .sessionStateDot[data-tone='error'] { color: var(--danger); }
-.sessionStateDot[data-tone='bell'] { color: var(--warning); }
+.sessionStateDot[data-tone='bell'],
+.sessionStateDot[data-tone='warning'] { color: var(--warning); }
 .sessionIconWrap[data-tone='pending'] .sessionStateDot { color: var(--warning); }
 .sessionBody { display: grid; gap: 1px; min-width: 0; }
 .sessionTop,
@@ -525,6 +527,7 @@
 .sessionMeta[data-tone='live'] .sessionState::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: wbLiveDot 1.8s var(--ease) infinite; }
 .sessionMeta[data-tone='bell'] .sessionState { padding: 0 var(--space-1); border-radius: var(--radius-xs); background: var(--warning-soft); color: var(--warning); font-weight: var(--fw-semibold); }
 .sessionMeta[data-tone='error'] .sessionState { color: var(--danger); }
+.sessionMeta[data-tone='warning'] .sessionState { color: var(--warning); }
 .sessionMeta[data-tone='pending'] .sessionState { color: var(--warning); }
 .row:hover .sessionMeta,
 .row:focus-within .sessionMeta { visibility: hidden; }
@@ -537,16 +540,8 @@
 .placeHead { flex: 0 1000 auto; min-width: 1.6em; overflow: hidden; text-overflow: ellipsis; }
 .placeTail { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .exitTag,
-.commandTag,
 .paneTag { display: inline-flex; flex: none; align-items: center; gap: var(--space-0_5); padding: 0 var(--space-1); border-radius: var(--radius-xs); font-size: var(--fs-micro); line-height: 17px; white-space: nowrap; }
 .exitTag { background: var(--danger-soft); color: var(--danger); font-variant-numeric: tabular-nums; }
-/* A command's own result or a program's progress: its own tag, because it describes the command and
-   never the session's task state. Long wording truncates instead of widening the row. */
-.commandTag { max-width: 12ch; overflow: hidden; background: var(--surface-2); color: var(--text-2); text-overflow: ellipsis; }
-.commandTag[data-command='progress'] { background: var(--accent-soft); color: var(--accent); font-variant-numeric: tabular-nums; }
-.commandTag[data-command='failed'],
-.commandTag[data-command='error'] { background: var(--danger-soft); color: var(--danger); }
-.commandTag[data-command='warning'] { background: color-mix(in srgb, var(--term-warning) 14%, transparent); color: var(--term-warning); }
 .paneTag { background: var(--accent-soft); color: var(--accent); font-variant-numeric: tabular-nums; }
 .pinBadge { display: inline-flex; flex: none; color: var(--accent); }
 .rowActions { position: absolute; top: 50%; right: 6px; z-index: 1; display: flex; align-items: center; gap: 1px; opacity: 0; transform: translateY(-50%); transition: opacity var(--fast) var(--ease); pointer-events: none; }
@@ -785,12 +780,14 @@
   transition: box-shadow var(--fast) var(--ease);
 }
 .stageIcon[data-tone='live'] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--term-accent) 45%, transparent); }
-.stageIcon[data-tone='bell'] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--term-warning) 60%, transparent); }
+.stageIcon[data-tone='bell'],
+.stageIcon[data-tone='warning'] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--term-warning) 60%, transparent); }
 .stageIcon:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--term-accent) 40%, var(--term-frame)); }
 .stageIconDot { position: absolute; right: -3px; bottom: -3px; width: 13px; height: 13px; border: 2px solid var(--term-chrome); border-radius: 50%; background: var(--term-chrome); color: var(--term-text-3); }
 .stageIconDot[data-tone='live'],
 .stageIconDot[data-tone='idle'] { color: var(--term-success); }
-.stageIconDot[data-tone='bell'] { color: var(--term-warning); }
+.stageIconDot[data-tone='bell'],
+.stageIconDot[data-tone='warning'] { color: var(--term-warning); }
 .stageIconDot[data-tone='error'] { color: var(--term-danger); }
 .identityText { display: flex; flex: 1 1 auto; align-items: center; gap: var(--space-3); min-width: 0; overflow: hidden; }
 /* CLI spinner frames differ in width; a fixed slot keeps the task text from jittering. */
@@ -837,7 +834,8 @@
 .statusChip > span,
 .statusState > span { display: inline-flex; align-items: center; gap: var(--space-1); }
 .identityTitleRow .statusChip[data-state='live'],
-.identityTitleRow .statusChip[data-state='bell'] { box-shadow: none; }
+.identityTitleRow .statusChip[data-state='bell'],
+.identityTitleRow .statusChip[data-state='warning'] { box-shadow: none; }
 /* Reserved widths keep the button steady; the visible label hugs its icon instead of centering
    inside the widest reserved label. */
 .statusLabel { display: inline-grid; text-align: start; }
@@ -874,13 +872,6 @@
 /* YOLO skips the CLI's approvals: a small amber tag so the elevated mode is noticed at a glance,
    still smaller than the session state. */
 .modeChip[data-mode='yolo'] { height: 16px; padding: 0 var(--space-1); border-radius: var(--radius-xs); background: color-mix(in srgb, var(--term-warning) 14%, transparent); color: var(--term-warning); font-size: 10px; font-weight: var(--fw-semibold); letter-spacing: .05em; line-height: 16px; }
-/* What the terminal's own program reported (a command phase or a progress bar). It sits beside the
-   task state and always carries its wording, so the meaning never depends on colour alone. */
-.commandChip { display: inline-flex; flex: none; align-items: center; max-width: 20ch; height: 16px; padding: 0 var(--space-1_5); border-radius: var(--radius-xs); background: var(--surface-2); color: var(--term-text-2); font-size: var(--fs-micro); line-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.commandChip[data-command='progress'] { background: var(--accent-soft); color: var(--accent); font-variant-numeric: tabular-nums; }
-.commandChip[data-command='failed'],
-.commandChip[data-command='error'] { background: var(--danger-soft); color: var(--danger); }
-.commandChip[data-command='warning'] { background: color-mix(in srgb, var(--term-warning) 14%, transparent); color: var(--term-warning); }
 /* Running time sits between the title and the directory: it never shrinks, the path chip does. */
 .sessionElapsed { position: relative; display: inline-flex; flex: none; align-items: center; gap: var(--space-1); padding-left: var(--space-3); color: var(--term-text-2); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; line-height: 18px; white-space: nowrap; }
 .sessionElapsed::before { content: ''; position: absolute; top: 50%; left: 0; width: 1px; height: 14px; background: var(--term-frame); transform: translateY(-50%); }

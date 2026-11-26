@@ -85,13 +85,27 @@ clears the mark instead of recording a result. A new `A` ends the previous cycle
 command does not stay on screen after the shell prompted again. Only state `0` clears a progress
 bar: a command exit must not rewrite what the program itself reported.
 
-The workbench projects this beside the shared task state, never inside it: `commandHint()` words one
-fact (progress, a failing exit code, an unknown result, an executing command) and both the stage
-title bar and the rail row show that wording. A command failure therefore cannot read as a failed
-task, a full bar cannot read as a delivered task, and a progress error cannot ask for approval.
-`sessionTaskState.ts` keeps deciding the task from process, transport, adapter and user evidence.
-An ended session keeps its last command result but no progress bar, and a remote session whose
-transport may still hold it shows the connection state instead of either.
+`commandHint()` words one fact — progress, a failing exit code, an unknown result, an executing
+command — and that fact takes the session's own status slot; it is not an extra chip beside it. The
+stage badge shows the command wording and the icon that belongs to it (`progress`/`indeterminate`/
+`running` are the live waveform, `warning` is an amber triangle, `failed`/`error` are the error circle,
+`unknown` is the idle clock), the CLI icon's own state dot follows the same tone, and the rail row
+replaces its state wording and state dot the same way through one shared mapping
+(`commandActivityTone`/`commandReplacesTask` in `SessionRail.tsx`).
+
+The replacement happens only while the task is neutral — `working` or `unknown`. `needsYou`,
+`readyReview`, `error` and `ended` keep the slot: waiting for a person, a review, a failure and an
+ended process must stay visible, and a remote session whose transport may still hold it shows the
+connection state. When the task wins, the command fact is still kept — the rail tooltip carries its
+wording and the row's own state is unchanged — so nothing is lost, it just does not compete.
+
+The task state is never rewritten by this: both surfaces keep `data-task` (and the rail keeps
+`data-bucket`, unread, marks and the "needs you" jump), the command fact is published separately on
+`data-command`, and the stage tooltip reads "command wording · task state" so the replaced state stays
+readable. A command failure therefore cannot read as a failed task, a full bar cannot read as a
+delivered task, and a progress error cannot ask for approval: `sessionTaskState.ts` still decides the
+task from process, transport, adapter and user evidence. An ended session keeps its last command
+result but no progress bar.
 
 ### What a replay may and may not repeat
 
@@ -122,7 +136,9 @@ The command-phase, progress, palette and replay rules are covered by
 `tests/native/terminal-command-state.test.mjs`, `tests/native/terminal-replay-sanitizer.test.mjs`
 and the `terminal command phases, progress and colours` block of
 `tests/ui/workbench-terminal.spec.ts`, which drives the real xterm renderer through synthetic native
-IPC. Those runs prove the shared parser, the projection and the PTY bytes the workbench would send;
-they are not native platform evidence. No real PTY, ConPTY or SSH/tmux forwarder was sampled for this
+IPC. That block asserts the status slot itself — its wording, `data-command`, the activity icon tone
+and, for a session waiting for a person, that the command fact does not take the slot. Those runs
+prove the shared parser, the projection and the PTY bytes the workbench would send; they are not
+native platform evidence. No real PTY, ConPTY or SSH/tmux forwarder was sampled for this
 change: a transport that filters the sequences simply leaves the terminal in its base state, and a CLI
 that prints none keeps its existing adapter and screen evidence.

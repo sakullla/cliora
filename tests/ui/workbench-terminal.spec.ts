@@ -4968,55 +4968,89 @@ async function paletteHex(page: Page, sequence: string, marker: string): Promise
 }
 
 test.describe('terminal command phases, progress and colours', () => {
-  test('OSC 133 shows a failed command without changing the task state and clears it at the next prompt', async ({ page }) => {
-    await openWorkbench(page);
-    const stage = page.getByRole('region', { name: '当前会话' });
-    const row = page.locator('[data-session-id="s1"]').first();
-    // The marks arrive as separate chunks, the way a shell writes them.
-    await sendPtyText(page, '\x1b]133;A\x07$ ');
-    await sendPtyText(page, '\x1b]133;B\x07');
-    await sendPtyText(page, 'make test\r\n\x1b]133;C\x07');
-    await expect(stage.locator('[data-command="running"]')).toHaveText('命令执行中');
-    await sendPtyText(page, 'boom\r\n\x1b]133;D;1\x07');
-    await expect(stage.locator('[data-command="failed"]')).toHaveText('命令退出码 1');
-    await expect(row.locator('[data-command="failed"]')).toHaveText('命令退出码 1');
-    // The next prompt owns the cycle: the result of the previous command is no longer current.
-    await sendPtyText(page, '\x1b]133;A\x07$ ');
-    await expect(stage.locator('[data-command]')).toHaveCount(0);
-    await expect(row.locator('[data-command]')).toHaveCount(0);
-    // An input line that never executed and an orphan end marker record nothing.
-    await sendPtyText(page, '\x1b]133;B\x07typed\x1b]133;D;0\x07');
-    await expect(stage.locator('[data-command]')).toHaveCount(0);
-    await sendPtyText(page, '\x1b]133;D;0\x07');
-    await expect(stage.locator('[data-command]')).toHaveCount(0);
-  });
-
-  test('OSC 9;4 progress reaches the title bar and the list, and unknown reports invent nothing', async ({ page }) => {
+  test('OSC 133 fills the status slot with a failed command without changing the task state', async ({ page }) => {
     await openWorkbench(page);
     const stage = page.getByRole('region', { name: '当前会话' });
     const row = page.locator('[data-session-id="s1"]').first();
     const badge = stage.locator('header [data-state]').first();
+    const badgeLabel = badge.locator('[class*="statusLabel"] > span:first-child');
+    // The rail row's own state slot: the visible wording, not the assistive summary beside it.
+    const meta = row.locator('[data-task]');
+    // The marks arrive as separate chunks, the way a shell writes them.
+    await sendPtyText(page, '\x1b]133;A\x07$ ');
+    await sendPtyText(page, '\x1b]133;B\x07');
+    await sendPtyText(page, 'make test\r\n\x1b]133;C\x07');
+    // The command phase takes the status slot itself, with the icon that belongs to it.
+    await expect(badge).toHaveAttribute('data-command', 'running');
+    await expect(badgeLabel).toHaveText('命令执行中');
+    await expect(badge.locator('[data-activity-icon="live"]')).toHaveCount(1);
+    await expect(meta).toHaveAttribute('data-command', 'running');
+    await expect(meta).toContainText('命令执行中');
+    await sendPtyText(page, 'boom\r\n\x1b]133;D;1\x07');
+    await expect(badge).toHaveAttribute('data-command', 'failed');
+    await expect(badgeLabel).toHaveText('命令退出码 1');
+    await expect(badge.locator('[data-activity-icon="error"]')).toHaveCount(1);
+    await expect(meta).toHaveAttribute('data-command', 'failed');
+    await expect(meta).toContainText('命令退出码 1');
+    await expect(meta).not.toContainText('等待输入');
+    // The task state behind the command is unchanged, and its wording stays in the tooltip.
+    await expect(badge).toHaveAttribute('data-task', /^(working|unknown)$/);
+    await expect(badge).toHaveAttribute('title', /^命令退出码 1 · /);
+    // The next prompt owns the cycle: the status slot returns to the task state.
+    await sendPtyText(page, '\x1b]133;A\x07$ ');
+    await expect(badge).not.toHaveAttribute('data-command', /./);
+    await expect(meta).not.toHaveAttribute('data-command', /./);
+    await expect(badgeLabel).toHaveText('等待输入');
+    // An input line that never executed and an orphan end marker record nothing.
+    await sendPtyText(page, '\x1b]133;B\x07typed\x1b]133;D;0\x07');
+    await expect(badge).not.toHaveAttribute('data-command', /./);
+    await sendPtyText(page, '\x1b]133;D;0\x07');
+    await expect(badge).not.toHaveAttribute('data-command', /./);
+  });
+
+  test('OSC 9;4 progress fills the status slot with its own wording and icon', async ({ page }) => {
+    await openWorkbench(page);
+    const stage = page.getByRole('region', { name: '当前会话' });
+    const row = page.locator('[data-session-id="s1"]').first();
+    const badge = stage.locator('header [data-state]').first();
+    const badgeLabel = badge.locator('[class*="statusLabel"] > span:first-child');
+    const meta = row.locator('[data-task]');
     await sendPtyText(page, '\x1b]9;4;1;35\x07');
-    await expect(stage.locator('[data-command="progress"]')).toHaveText('进度 35%');
-    await expect(row.locator('[data-command="progress"]')).toHaveText('进度 35%');
+    await expect(badge).toHaveAttribute('data-command', 'progress');
+    await expect(badgeLabel).toHaveText('进度 35%');
+    await expect(badge.locator('[data-activity-icon="live"]')).toHaveCount(1);
+    await expect(meta).toHaveAttribute('data-command', 'progress');
+    await expect(meta).toContainText('进度 35%');
     await sendPtyText(page, '\x1b]9;4;3\x07');
-    await expect(stage.locator('[data-command="indeterminate"]')).toHaveText('进度进行中');
+    await expect(badge).toHaveAttribute('data-command', 'indeterminate');
+    await expect(badgeLabel).toHaveText('进度进行中');
+    await expect(badge.locator('[data-activity-icon="live"]')).toHaveCount(1);
     await sendPtyText(page, '\x1b]9;4;4;90\x07');
-    await expect(stage.locator('[data-command="warning"]')).toHaveText('进度警告');
+    await expect(badge).toHaveAttribute('data-command', 'warning');
+    await expect(badgeLabel).toHaveText('进度警告');
+    // A program warning gets its own amber triangle, never the bell that means "needs you" — on
+    // the status slot, the CLI icon's own dot and the rail row alike.
+    await expect(badge.locator('[data-activity-icon="warning"]')).toHaveCount(1);
+    await expect(stage.locator('[data-stage-icon] [data-activity-icon="warning"]')).toHaveCount(1);
+    await expect(row.locator('[data-rail-icon] [data-activity-icon="warning"]')).toHaveCount(1);
     await sendPtyText(page, '\x1b]9;4;2;40\x07');
-    await expect(stage.locator('[data-command="error"]')).toHaveText('进度错误');
+    await expect(badge).toHaveAttribute('data-command', 'error');
+    await expect(badgeLabel).toHaveText('进度错误');
+    await expect(badge.locator('[data-activity-icon="error"]')).toHaveCount(1);
+    await expect(stage.locator('[data-stage-icon] [data-activity-icon="error"]')).toHaveCount(1);
     // Unknown states, out-of-range percentages and plain OSC 9 notifications change nothing.
     for (const bad of ['\x1b]9;4;7\x07', '\x1b]9;4;1;250\x07', '\x1b]9;4;1\x07', '\x1b]9;Build finished\x07', '\x1b]9;4;1;abc\x07']) await sendPtyText(page, bad);
-    await expect(stage.locator('[data-command="error"]')).toHaveText('进度错误');
-    await expect(row.locator('[data-command="error"]')).toHaveText('进度错误');
+    await expect(badgeLabel).toHaveText('进度错误');
+    await expect(meta).toContainText('进度错误');
     // Progress describes the program: once its output goes quiet the task state is still the
     // session's own, and the bar is still the program's.
     await page.waitForTimeout(1700);
-    await expect(badge).toHaveAttribute('title', '等待输入');
-    await expect(stage.locator('[data-command="error"]')).toHaveText('进度错误');
+    await expect(badge).toHaveAttribute('title', /· 等待输入$/);
+    await expect(badgeLabel).toHaveText('进度错误');
     await sendPtyText(page, '\x1b]9;4;0\x07');
-    await expect(stage.locator('[data-command]')).toHaveCount(0);
-    await expect(row.locator('[data-command]')).toHaveCount(0);
+    await expect(badge).not.toHaveAttribute('data-command', /./);
+    await expect(meta).not.toHaveAttribute('data-command', /./);
+    await expect(badgeLabel).toHaveText('等待输入');
   });
 
   test('two split sessions keep their own command phase and progress', async ({ page }) => {
@@ -5028,15 +5062,20 @@ test.describe('terminal command phases, progress and colours', () => {
     const claudeRow = page.locator('[data-session-id="s2"]').first();
     await sendPtyText(page, '\x1b]133;A\x07\x1b]133;B\x07\x1b]133;C\x07\x1b]133;D;2\x07', 's1');
     await sendPtyText(page, '\x1b]9;4;1;60\x07', 's2');
-    await expect(codexRow.locator('[data-command="failed"]')).toHaveText('命令退出码 2');
-    await expect(claudeRow.locator('[data-command="progress"]')).toHaveText('进度 60%');
+    await expect(codexRow.locator('[data-task]')).toHaveAttribute('data-command', 'failed');
+    await expect(codexRow.locator('[data-task]')).toContainText('命令退出码 2');
+    await expect(codexRow.locator('[data-rail-icon] [data-activity-icon="error"]')).toHaveCount(1);
+    await expect(claudeRow.locator('[data-task]')).toHaveAttribute('data-command', 'progress');
+    await expect(claudeRow.locator('[data-task]')).toContainText('进度 60%');
+    await expect(claudeRow.locator('[data-rail-icon] [data-activity-icon="live"]')).toHaveCount(1);
     // The title bar speaks for the session it shows, not for its neighbour.
-    await expect(stage.locator('[data-command="failed"]')).toHaveCount(1);
-    await expect(stage.locator('[data-command="progress"]')).toHaveCount(0);
+    const badge = stage.locator('header [data-state]').first();
+    await expect(badge).toHaveAttribute('data-command', 'failed');
+    await expect(badge.locator('[class*="statusLabel"] > span:first-child')).toHaveText('命令退出码 2');
     // Clearing one pane's command state leaves the other untouched.
     await sendPtyText(page, '\x1b]133;A\x07', 's1');
-    await expect(codexRow.locator('[data-command]')).toHaveCount(0);
-    await expect(claudeRow.locator('[data-command="progress"]')).toHaveText('进度 60%');
+    await expect(codexRow.locator('[data-task]')).not.toHaveAttribute('data-command', /./);
+    await expect(claudeRow.locator('[data-task]')).toContainText('进度 60%');
   });
 
   test('restored history rebuilds its command state without repeating clipboard, bell or palette queries', async ({ page, context }) => {
@@ -5057,7 +5096,10 @@ test.describe('terminal command phases, progress and colours', () => {
     await openWorkbench(page);
     const stage = page.getByRole('region', { name: '当前会话' });
     // Known state is rebuilt: the program had reported an error and the command had failed.
-    await expect(stage.locator('[data-command="error"]')).toHaveText('进度错误');
+    const badge = stage.locator('header [data-state]').first();
+    const badgeLabel = badge.locator('[class*="statusLabel"] > span:first-child');
+    await expect(badge).toHaveAttribute('data-command', 'error');
+    await expect(badgeLabel).toHaveText('进度错误');
     // A replayed copy does not touch the clipboard, and a replayed bell does not ring again.
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('cliora-replay-sentinel');
     await expect(page.getByRole('tab', { name: /Codex/ }).first().locator('[data-activity-icon="bell"]')).toHaveCount(0);
@@ -5067,7 +5109,8 @@ test.describe('terminal command phases, progress and colours', () => {
     expect(await paletteHex(page, '\x1b]4;2;?\x07', ']4;2;')).toBe('#ff0000');
     // Clearing the program's bar reveals the command result the history recorded.
     await sendPtyText(page, '\x1b]9;4;0\x07');
-    await expect(stage.locator('[data-command="failed"]')).toHaveText('命令退出码 1');
+    await expect(badge).toHaveAttribute('data-command', 'failed');
+    await expect(badgeLabel).toHaveText('命令退出码 1');
   });
 
   test('a live OSC 4 with settings and queries applies each item and answers once', async ({ page }) => {
@@ -5119,5 +5162,26 @@ test.describe('terminal command phases, progress and colours', () => {
     // The same bytes with a real bell still ask for a look, so the check above is meaningful.
     await sendPtyText(page, '\x07', 's2');
     await expect(bell).toHaveCount(1);
+  });
+
+  test('a command fact never hides a session that needs a person', async ({ page }) => {
+    await openWorkbench(page);
+    const stage = page.getByRole('region', { name: '当前会话' });
+    const row = page.locator('[data-session-id="s1"]').first();
+    const badge = stage.locator('header [data-state]').first();
+    const badgeLabel = badge.locator('[class*="statusLabel"] > span:first-child');
+    // The selected session ignores its own bell while the window has focus; ask for one as an
+    // unfocused window would, so the task state is a real "needs you".
+    await page.evaluate(() => { document.hasFocus = () => false; });
+    await sendPtyText(page, '\x07');
+    await expect(badge).toHaveAttribute('data-task', 'needsYou');
+    await sendPtyText(page, '\x1b]9;4;1;35\x07');
+    // Waiting for a person outranks the program's own report on both surfaces.
+    await expect(badge).toHaveAttribute('data-task', 'needsYou');
+    await expect(badge).not.toHaveAttribute('data-command', /./);
+    await expect(badgeLabel).toHaveText('待处理');
+    await expect(row.locator('[data-task]')).not.toHaveAttribute('data-command', /./);
+    // The command fact stays readable where it does not compete with the task state.
+    await expect(row).toHaveAttribute('title', /进度 35%/);
   });
 });

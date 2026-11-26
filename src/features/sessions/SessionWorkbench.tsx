@@ -36,7 +36,7 @@ import { PendingTerminalOutput } from './pendingOutput';
 import { SessionActivityIcon, sessionBadgeTone } from './SessionActivityIcon';
 import type { TerminalTheme } from './terminalTheme';
 import { TERMINAL_FONT_SIZE_DEFAULT, TERMINAL_FONT_SIZE_MAX, TERMINAL_FONT_SIZE_MIN, TERMINAL_LINE_HEIGHT, getTerminalPreferences, setTerminalCursorBlink, setTerminalDensity, setTerminalFontSize, setTerminalScrollSpeed, setTerminalSoundEnabled, setTerminalThemePreference, useTerminalPreferences, type TerminalDensity, type TerminalScrollSpeed, type TerminalThemePreference } from '../../lib/terminalPreferences';
-import { PlaceLabel, SessionRail, type RailSession, type SessionTone } from './SessionRail';
+import { commandActivityTone, commandReplacesTask, PlaceLabel, SessionRail, type RailSession, type SessionCommand, type SessionTone } from './SessionRail';
 import { remoteSessionMayExist, sessionConfirmedEnded } from './sessionState';
 import { reviewEvidenceVerified, taskBucketFor, taskStateFor, taskStateHintKey, taskStateLabelKey, type TaskEvidence, type TaskState } from './sessionTaskState';
 import { commandHint, type TerminalCommandState } from './terminalCommandState';
@@ -2001,14 +2001,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
    * tech. It stays outside `taskStateFor`: a command exit, a full bar or a progress error never
    * makes the AI task look delivered, crashed or waiting for approval.
    */
-  function commandOf(session: WorkbenchSession): { tone: string; label: string } | null {
+  function commandOf(session: WorkbenchSession): SessionCommand | null {
     const state = commandById.get(session.id);
     if (!state) return null;
     // An ended session keeps its last result but has no live program: no bar survives its process.
     // A remote transport that may still hold the session reports the connection, not a progress bar.
     if (!session.running && remoteSessionMayExist(session)) return null;
     const hint = commandHint(session.running ? state : { ...state, progress: null });
-    return hint ? { tone: hint.tone, label: t(hint.key, hint.params) } : null;
+    return hint ? { tone: hint.tone, label: t(hint.key, hint.params), activityTone: commandActivityTone(hint.tone) } : null;
   }
 
   /** 收起只是列表动作：不调用 close、不清恢复记录、不停止本地或远程进程。 */
@@ -3860,8 +3860,16 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           const title = current ? taskTitle(current) : '';
           const elapsed = current ? elapsedOf(current) : '';
           const currentStateLabel = current ? stateLabel(current, tone) : '';
-          // The command's own facts sit beside the task state, never inside it.
+          // A command fact takes the status slot itself while the task is neutral: progress is the
+          // session's state then, not an extra chip beside it. Waiting for a person, a review, a
+          // failure and an ended session keep their own wording and icon.
           const currentCommand = current ? commandOf(current) : null;
+          const currentTask = current ? taskStateOf(current) : 'unknown';
+          const shownCommand = currentCommand && commandReplacesTask(currentTask) ? currentCommand : null;
+          const badgeLabel = shownCommand ? shownCommand.label : currentStateLabel;
+          const badgeTone: SessionTone = shownCommand ? shownCommand.activityTone : tone;
+          // The task state stays readable in the tooltip, so replacing the text never hides it.
+          const badgeTitle = shownCommand ? `${shownCommand.label} · ${currentStateLabel}` : currentStateLabel;
           // Only the common states reserve room: a chip that grows for a rare "needs you"
           // is clearer than one that is always as wide as its longest possible wording.
           const stateReserves = [
@@ -3870,7 +3878,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
             t('sessions.bellBadge'),
             t('sessions.stateError'),
             t('sessions.taskEnded'),
-          ].filter((label) => label !== currentStateLabel);
+          ].filter((label) => label !== badgeLabel);
           const endLabel = current && busy === current.id ? t('sessions.ending') : current && (current.running || remoteSessionMayExist(current)) ? t('sessions.endShort') : t('sessions.closeTabShort');
           const endReserves = [t('sessions.ending'), t('sessions.endShort'), t('sessions.closeTabShort')]
             .filter((label) => label !== endLabel);
@@ -3912,9 +3920,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
               setFocusMode((value) => !value);
             }}>
               <div className={styles.stageLead}>
-                <span className={styles.stageIcon} role="img" aria-label={toolName(current)} data-tone={tone} data-stage-icon="" data-tauri-drag-region="false" title={toolName(current) + ' · ' + t('sessions.stageIconHint')} onDoubleClick={(event) => { event.stopPropagation(); toggleRail(); }}><ToolIcon toolId={current.toolId} size={20} /><SessionActivityIcon tone={tone} slot="stage" className={styles.stageIconDot} /></span>
+                <span className={styles.stageIcon} role="img" aria-label={toolName(current)} data-tone={shownCommand ? badgeTone : tone} data-stage-icon="" data-tauri-drag-region="false" title={toolName(current) + ' · ' + t('sessions.stageIconHint')} onDoubleClick={(event) => { event.stopPropagation(); toggleRail(); }}><ToolIcon toolId={current.toolId} size={20} /><SessionActivityIcon tone={shownCommand ? badgeTone : tone} slot="stage" className={styles.stageIconDot} /></span>
                 <div className={styles.identityText}>
-                  <div className={styles.identityTitleRow} data-short={(title ? stableTitle(title) : toolName(current)).length <= SHORT_STAGE_TITLE || undefined}><h2 title={title ? toolName(current) + ' · ' + stableTitle(title) : toolName(current)}>{title ? <SessionTitle title={title} /> : toolName(current)}</h2><Badge className={styles.statusChip} tone={sessionBadgeTone(tone)} data-state={tone} data-task={current ? taskStateOf(current) : undefined} title={currentStateLabel}><SessionActivityIcon tone={tone} slot="status" className={styles.statusDot} /><span className={styles.statusLabel}><span>{currentStateLabel}</span>{stateReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></Badge></div>
+                  <div className={styles.identityTitleRow} data-short={(title ? stableTitle(title) : toolName(current)).length <= SHORT_STAGE_TITLE || undefined}><h2 title={title ? toolName(current) + ' · ' + stableTitle(title) : toolName(current)}>{title ? <SessionTitle title={title} /> : toolName(current)}</h2><Badge className={styles.statusChip} tone={sessionBadgeTone(badgeTone)} data-state={badgeTone} data-task={current ? currentTask : undefined} data-command={shownCommand?.tone} title={badgeTitle}><SessionActivityIcon tone={badgeTone} slot="status" className={styles.statusDot} /><span className={styles.statusLabel}><span>{badgeLabel}</span>{stateReserves.map((label) => <span key={label} aria-hidden="true">{label}</span>)}</span></Badge></div>
                   {/* The stage icon already names the CLI; the running time leads the context instead and
                       stays visible while the directory chip gives way. */}
                   {elapsed && <span className={styles.sessionElapsed} title={t('sessions.elapsedTitle', { time: elapsed })}><Icon name="clock" size={12} /><span className={styles.elapsedLabel}><span>{elapsed}</span></span></span>}
@@ -3923,7 +3931,6 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                     <span className={styles.identitySubAnchor} aria-hidden="true" />
                     <button type="button" className={styles.pathChip} title={current.directory ? displayPath(current.directory) + ' · ' + t('sessions.copyPath') : placeOf(current)} onClick={() => void copySessionPath(current)}><Icon name={copiedState === 'path' ? 'check' : 'folder'} size={12} /><span>{copiedState === 'path' ? t('sessions.pathCopied') : <PathLabel text={stagePlace} />}</span></button>
                     {current.mode === 'yolo' && <span className={styles.modeChip} data-mode="yolo" title={t('sessions.modeYoloDesc')}>{modeLabel(current.mode)}</span>}
-                    {currentCommand && <span className={styles.commandChip} data-command={currentCommand.tone} title={currentCommand.label}>{currentCommand.label}</span>}
                     {/* A remote session that may still run reports the SSH transport's code, not the CLI's: the
                         connection banner explains it, so the title bar does not show it as a failure. */}
                     {/* A clean exit is already said by the ended status and the banner below; only a failure earns room here. */}

@@ -280,7 +280,12 @@ export function guardReplayReplies(term: Terminal): { replaying: boolean; dispos
   const swallow = () => state.replaying;
   const query = (data: string) => {
     if (!state.replaying) return false;
-    const values = data.split(';').slice(1);
+    // OSC 4 sends `index;value` pairs, so its sequence number sits in front of the first value;
+    // OSC 10/11/12 send the value alone. Drop a leading number before asking what the rest is,
+    // otherwise a bare `?` payload would read as "not a query" and be answered from history.
+    const parts = data.split(';');
+    const numbered = parts.length > 1 && /^\d{1,3}$/.test((parts[0] ?? '').trim());
+    const values = numbered ? parts.slice(1) : parts;
     return values.length > 0 && values.every((part) => part.trim() === '?');
   };
   const reportOps = new Set([11, 13, 14, 15, 16, 18, 19, 20, 21]);
