@@ -640,9 +640,8 @@ fn independent_request(project: &crate::remote::RemoteProject) -> LaunchRequest 
         session_id: None, directory: None, initial_prompt: None, mode: LaunchMode::Normal,
         resume_latest: false, remote_intent: Some(RemoteLaunchIntent::New), agent: None,
         session_options: None,
-    
         interaction: None,
-}
+    }
 }
 
 #[test]

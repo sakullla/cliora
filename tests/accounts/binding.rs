@@ -298,12 +298,10 @@ fn spawn_rejects_logout_or_reauthentication_since_plan_before_terminal_side_effe
         remote_session_id: None,
         remote_end_args: None,
         environment: Vec::new(),
-    
         interaction: crate::launch::InteractionMode::Terminal,
-
-    acp: None,
-    initial_prompt: None,
-};
+        acp: None,
+        initial_prompt: None,
+    };
     let command = crate::launch::native_command(&plan).unwrap();
     assert!(command.contains("CODEX_HOME"));
     assert!(command.contains("OPENAI_API_KEY"));

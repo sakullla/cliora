@@ -185,7 +185,9 @@ pub struct AcpSessionSnapshot {
     pub mode: LaunchMode,
     /// Always acp: a snapshot only exists for a conversation session.
     pub interaction: &'static str,
-    /// One of starting, ready, running, waiting_permission, closed or failed.
+    /// One of starting, ready, running, stopping, waiting_permission, closed or
+    /// failed. "stopping" is a turn the user stopped that has not reported its
+    /// own result yet.
     pub state: &'static str,
     pub native_session_id: Option<String>,
     /// One of none, unsupported, loaded or failed.
@@ -194,7 +196,10 @@ pub struct AcpSessionSnapshot {
     pub tools: Vec<AcpToolCall>,
     pub permissions: Vec<AcpPermissionCard>,
     pub diagnostics: Vec<String>,
-    /// The reason the last turn ended, as the protocol reported it.
+    /// The reason the last turn ended: one of end_turn, limit, refusal,
+    /// cancelled, disconnected, failed or unknown. An empty string means no turn
+    /// has ended yet; "unknown" means the agent ended the turn without a reason
+    /// this host recognizes.
     pub last_turn_reason: &'static str,
     pub seq: u64,
 }
@@ -377,12 +382,20 @@ impl Session {
         if matches!(*guard(&self.state), "closed" | "failed") {
             return;
         }
+        let previous = *guard(&self.state);
         let waiting = !guard(&self.permissions).is_empty();
         let running = guard(&self.turn).is_some();
         *guard(&self.state) = if waiting {
             "waiting_permission"
         } else if running {
-            "running"
+            // A stop was requested but the agent has not reported its own
+            // result yet: the turn is still open, so the session stays stopping
+            // instead of looking running again.
+            if previous == "stopping" {
+                "stopping"
+            } else {
+                "running"
+            }
         } else {
             "ready"
         };
@@ -515,6 +528,9 @@ impl Session {
     fn open_permission(&self, id: Value, params: Value) {
         let request_id = id.to_string();
         let turn_id = guard(&self.turn).as_ref().map(|turn| turn.id.clone()).unwrap_or_default();
+        // A card asked for by a turn the user already stopped is withdrawn as
+        // soon as it arrives: it must never appear under a stopped turn.
+        let cancelled = guard(&self.turn).as_ref().is_some_and(|turn| turn.cancel_requested);
         let tool = params.get("toolCall").cloned().unwrap_or(Value::Null);
         let title = tool
             .get("title")
@@ -542,6 +558,15 @@ impl Session {
                     .collect()
             })
             .unwrap_or_default();
+        if cancelled {
+            let _ = self.write_value(&json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": { "outcome": { "outcome": "cancelled" } },
+            }));
+            self.notice("warning", "本轮已停止，新的授权请求已取消");
+            return;
+        }
         if turn_id.is_empty() || options.is_empty() {
             // Nothing to attach the card to: answer once so the agent is not
             // left waiting, and say so instead of showing a dead card.
@@ -756,14 +781,31 @@ impl Session {
             };
             turn.cancel_requested = true;
         }
+        // A card from this turn cannot be answered any more: the user withdrew
+        // the whole turn, so the cards leave the panel now rather than waiting
+        // for the agent's own result. Whoever clicks a retired card is refused,
+        // because it is no longer in the pending list.
+        let withdrawn: Vec<PendingPermission> = std::mem::take(&mut *guard(&self.permissions));
+        for pending in withdrawn {
+            let _ = self.write_value(&json!({
+                "jsonrpc": "2.0",
+                "id": pending.id,
+                "result": { "outcome": { "outcome": "cancelled" } },
+            }));
+            self.emit_update(AcpUpdate::PermissionClosed {
+                request_id: pending.card.request_id,
+                decision: "cancelled",
+            });
+        }
         self.write_value(&json!({
             "jsonrpc": "2.0",
             "method": "session/cancel",
             "params": { "sessionId": native },
         }))?;
         // The turn stays open until the agent reports its own result: a stop
-        // request is not a stop confirmation.
-        self.settle_state();
+        // request is not a stop confirmation, so the session shows stopping.
+        *guard(&self.state) = "stopping";
+        self.publish();
         Ok(())
     }
 
@@ -865,13 +907,17 @@ fn tool_detail(update: &Value) -> String {
     capped.chars().take(MAX_TOOL_DETAIL_CHARS).collect()
 }
 
+/// The turn outcome, as a closed set. A missing or unrecognized reason is its
+/// own outcome: the turn did end, but claiming it ended normally would tell the
+/// user the agent finished the work when it may have stopped for a reason this
+/// host does not know.
 fn stop_reason(reason: Option<&str>) -> &'static str {
     match reason {
         Some("end_turn") => "end_turn",
         Some("max_tokens") | Some("max_turn_requests") => "limit",
         Some("refusal") => "refusal",
         Some("cancelled") => "cancelled",
-        _ => "end_turn",
+        _ => "unknown",
     }
 }
 
@@ -884,6 +930,7 @@ pub fn turn_reason_text(reason: &str) -> &'static str {
         "cancelled" => "本轮已停止",
         "disconnected" => "与 agent 的连接已断开，可新建会话重试",
         "failed" => "会话初始化失败",
+        "unknown" => "agent 报告了未知的结束原因，本轮已结束，可再次发送",
         _ => "本轮已结束",
     }
 }
@@ -954,13 +1001,25 @@ fn lookup(id: &str) -> Result<Arc<Session>, String> {
 pub fn start(spec: AcpStart, credential: Option<(String, String)>) -> Result<AcpSessionSnapshot, String> {
     let mut spec = spec;
     spec.credential = credential;
-    let io = spawn_io(&spec)?;
-    open(spec, io)
+    let (io, secret_session) = spawn_io(&spec)?;
+    open_with(spec, io, Some(secret_session))
 }
 
 /// Start from an already connected stream pair: the tests use this, and the
-/// process start calls it once the child owns the pipes.
+/// process start uses it once the child owns the pipes and its broker session.
+#[cfg(test)]
 pub(crate) fn open(spec: AcpStart, io: AcpIo) -> Result<AcpSessionSnapshot, String> {
+    open_with(spec, io, None)
+}
+
+/// The one start path. A session that cannot finish its handshake — or whose
+/// first turn cannot be submitted — is failed and then removed: a launcher that
+/// shows an error must not leave a registered session or a live agent behind.
+fn open_with(
+    spec: AcpStart,
+    io: AcpIo,
+    secret_session: Option<crate::secrets::session::LocalSession>,
+) -> Result<AcpSessionSnapshot, String> {
     if !spec.directory.is_dir() {
         return Err("工作目录不存在，无法在选定的目录创建 ACP 会话".into());
     }
@@ -987,7 +1046,7 @@ pub(crate) fn open(spec: AcpStart, io: AcpIo) -> Result<AcpSessionSnapshot, Stri
         next_request: AtomicU64::new(0),
         turn: Mutex::new(None),
         timeout: spec.timeout,
-        secret_session: Mutex::new(None),
+        secret_session: Mutex::new(secret_session),
     });
     sessions().insert(id.clone(), Arc::clone(&session));
 
@@ -1062,14 +1121,29 @@ pub(crate) fn open(spec: AcpStart, io: AcpIo) -> Result<AcpSessionSnapshot, Stri
 
     if let Err(error) = handshake {
         session.fail(&error);
+        abandon(&session);
         return Err(error);
     }
     *guard(&session.state) = "ready";
     session.publish();
     if let Some(prompt) = spec.initial_prompt.clone() {
-        session.begin_turn(&prompt)?;
+        if let Err(error) = session.begin_turn(&prompt) {
+            session.fail(&error);
+            abandon(&session);
+            return Err(error);
+        }
     }
     Ok(session.snapshot())
+}
+
+/// Give up on a session that never became usable: drop it from the registry,
+/// close its streams and terminate the agent. The failure stays on the snapshot
+/// the caller already received through its events, but nothing stays reachable
+/// by id, so a retry starts from a clean state instead of colliding with a
+/// half-started session.
+fn abandon(session: &Arc<Session>) {
+    sessions().remove(&session.id);
+    session.exited(None);
 }
 
 fn read_frames(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
@@ -1133,7 +1207,10 @@ pub(crate) struct ChildEnvironment {
 }
 
 pub(crate) fn child_environment(spec: &AcpStart) -> ChildEnvironment {
-    let mut remove: Vec<String> = vec!["NO_COLOR".to_owned()];
+    // A session token belongs to the process that owns the broker session. The
+    // child gets the token of its own session; whatever this process holds must
+    // never be inherited, so the name is removed before that value is written.
+    let mut remove: Vec<String> = vec!["NO_COLOR".to_owned(), crate::secrets::session::ENV.to_owned()];
     for name in spec.session_markers {
         remove.push((*name).to_owned());
     }
@@ -1177,7 +1254,12 @@ pub(crate) fn child_environment(spec: &AcpStart) -> ChildEnvironment {
 /// Spawn the agent and hand its pipes to the shared session. The environment is
 /// the planned one: the adapter's removals, the selected account and the stored
 /// connection key, never the caller's whole environment.
-fn spawn_io(spec: &AcpStart) -> Result<AcpIo, String> {
+///
+/// The child also receives the token of its own secret-broker session. The
+/// guard is returned with the streams because dropping it revokes the session:
+/// the conversation keeps it for as long as the agent runs, exactly like the
+/// terminal launch, and a prompt body still only carries a reference.
+fn spawn_io(spec: &AcpStart) -> Result<(AcpIo, crate::secrets::session::LocalSession), String> {
     let program = &spec.command.program;
     if !program.is_file() {
         return Err("ACP 入口程序不存在，请在工具页重新检测安装路径".into());
@@ -1222,22 +1304,47 @@ fn spawn_io(spec: &AcpStart) -> Result<AcpIo, String> {
     for (name, value) in &environment.set {
         command.env(name, value);
     }
+    // An agent that starts children of its own must be killed as a tree, the
+    // same way a workbench terminal is: give the child its own process group so
+    // termination reaches its descendants too.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    // The broker session outlives this call: the token goes to the child, the
+    // guard travels with the session so the grant ends when the agent does.
+    let secret_session = crate::secrets::session::LocalSession::new();
+    command.env(crate::secrets::session::ENV, secret_session.token());
     let mut child = command.spawn().map_err(|error| format!("无法启动 ACP 入口：{error}"))?;
-    let stdin = child.stdin.take().ok_or("无法连接 ACP 进程的标准输入")?;
-    let stdout = child.stdout.take().ok_or("无法连接 ACP 进程的标准输出")?;
+    #[cfg(target_os = "macos")]
+    secret_session.bind_root(child.id());
+    // A pipe that cannot be taken would leave a running agent with no host, so
+    // the child is terminated before the error travels up.
+    let Some(stdin) = child.stdin.take() else {
+        crate::background_process::terminate(&mut child);
+        return Err("无法连接 ACP 进程的标准输入".into());
+    };
+    let Some(stdout) = child.stdout.take() else {
+        crate::background_process::terminate(&mut child);
+        return Err("无法连接 ACP 进程的标准输出".into());
+    };
     let stderr = child.stderr.take();
     let shell = Arc::new(Mutex::new(child));
     let killer = Arc::clone(&shell);
-    Ok(AcpIo {
-        reader: Box::new(stdout),
-        writer: Box::new(stdin),
-        diagnostics: stderr.map(|stderr| Box::new(stderr) as Box<dyn Read + Send>),
-        shutdown: Some(Box::new(move || {
-            if let Ok(mut child) = killer.lock() {
-                crate::background_process::terminate(&mut child);
-            }
-        })),
-    })
+    Ok((
+        AcpIo {
+            reader: Box::new(stdout),
+            writer: Box::new(stdin),
+            diagnostics: stderr.map(|stderr| Box::new(stderr) as Box<dyn Read + Send>),
+            shutdown: Some(Box::new(move || {
+                if let Ok(mut child) = killer.lock() {
+                    crate::background_process::terminate(&mut child);
+                }
+            })),
+        },
+        secret_session,
+    ))
 }
 
 #[cfg(windows)]

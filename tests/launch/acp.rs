@@ -545,6 +545,39 @@ fn the_first_prompt_is_sent_exactly_once() {
 }
 
 #[test]
+fn a_secret_reference_is_forwarded_verbatim_and_never_resolved_here() {
+    let directory = temp_dir();
+    let (io, mut agent) = pair();
+    let reference = "{{cliora-secret:11111111-2222-4333-8444-555555555555}}".to_string();
+    let sent = reference.clone();
+    let worker = std::thread::spawn(move || {
+        agent.handshake(false);
+        let prompt = agent.next_line();
+        // The body keeps only the reference: the value stays behind the broker
+        // and is never inserted into the protocol by this host.
+        assert_eq!(prompt["params"]["prompt"][0]["text"], sent.as_str());
+        agent.send(json!({
+            "jsonrpc": "2.0",
+            "id": prompt["id"],
+            "result": { "stopReason": "end_turn" },
+        }));
+        agent.stay_connected();
+    });
+    let snapshot = open(spec(directory.path()), io).unwrap();
+    prompt(&snapshot.id, &reference).unwrap();
+    wait_until_idle(&snapshot.id, Duration::from_secs(8)).unwrap();
+    let current = snapshot_of(&snapshot.id);
+    assert!(current.messages.iter().any(|message| message.text == reference));
+    assert!(
+        current.diagnostics.iter().all(|line| !line.contains("11111111-2222-4333-8444-555555555555")),
+        "{:?}",
+        current.diagnostics
+    );
+    close(&snapshot.id).unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
 fn a_missing_working_directory_is_refused_before_connecting() {
     let (io, _agent) = pair();
     let mut start = spec(Path::new("no-such-directory-anywhere"));
@@ -592,6 +625,394 @@ fn diagnostics_are_bounded_and_redacted() {
 }
 
 #[test]
+fn a_frame_over_the_size_limit_fails_the_session_instead_of_growing() {
+    let directory = temp_dir();
+    let (io, mut agent) = pair();
+    let worker = std::thread::spawn(move || {
+        agent.handshake(false);
+        // One line longer than the frame budget: the reader must refuse it
+        // rather than buffer without bound.
+        agent.send_raw(&vec![b'a'; MAX_FRAME_BYTES + 4096]);
+        agent.stay_connected();
+    });
+    let snapshot = open(spec(directory.path()), io).unwrap();
+    let failed = wait_for(
+        || (snapshot_of(&snapshot.id).state == "failed").then_some(snapshot_of(&snapshot.id)),
+        "帧超限后的失败状态",
+    );
+    assert!(
+        failed.diagnostics.iter().any(|line| line.contains("超过大小上限")),
+        "{:?}",
+        failed.diagnostics
+    );
+    let _ = close(&snapshot.id);
+    worker.join().unwrap();
+}
+
+#[test]
+fn an_unknown_client_method_is_answered_with_method_not_found() {
+    let directory = temp_dir();
+    let (io, mut agent) = pair();
+    let worker = std::thread::spawn(move || {
+        agent.handshake(false);
+        // The host advertises no file-system and no terminal capability, so a
+        // request for one has to be refused explicitly instead of hanging.
+        agent.send(json!({
+            "jsonrpc": "2.0",
+            "id": 77,
+            "method": "fs/read_text_file",
+            "params": { "path": "/etc/hosts" },
+        }));
+        let reply = agent.next_line();
+        assert_eq!(reply["id"], 77);
+        assert_eq!(reply["error"]["code"], -32601, "未声明的客户端能力必须明确拒绝");
+        agent.stay_connected();
+    });
+    let snapshot = open(spec(directory.path()), io).unwrap();
+    wait_for(
+        || {
+            snapshot_of(&snapshot.id)
+                .diagnostics
+                .iter()
+                .any(|line| line.contains("未声明的客户端能力"))
+                .then_some(())
+        },
+        "拒绝未声明能力的记录",
+    );
+    close(&snapshot.id).unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
+fn session_new_carries_the_selected_directory() {
+    let directory = temp_dir();
+    let expected = directory.path().canonicalize().unwrap();
+    let (io, mut agent) = pair();
+    let worker = std::thread::spawn(move || {
+        let initialize = agent.next_line();
+        agent.send(json!({
+            "jsonrpc": "2.0",
+            "id": initialize["id"],
+            "result": { "protocolVersion": 1, "agentCapabilities": { "loadSession": false } },
+        }));
+        let new = agent.next_line();
+        assert_eq!(new["method"], "session/new");
+        let sent = PathBuf::from(new["params"]["cwd"].as_str().expect("会话必须带工作目录"));
+        assert_eq!(
+            sent.canonicalize().ok(),
+            Some(expected),
+            "session/new 必须使用选定的目录"
+        );
+        agent.send(json!({
+            "jsonrpc": "2.0",
+            "id": new["id"],
+            "result": { "sessionId": "session-1" },
+        }));
+        agent.stay_connected();
+    });
+    let snapshot = open(spec(directory.path()), io).unwrap();
+    assert_eq!(snapshot.native_session_id.as_deref(), Some("session-1"));
+    close(&snapshot.id).unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
+fn a_second_turn_is_refused_while_the_first_is_running() {
+    let directory = temp_dir();
+    let (io, mut agent) = pair();
+    let worker = std::thread::spawn(move || {
+        agent.handshake(false);
+        let first = agent.next_line();
+        assert_eq!(first["method"], "session/prompt");
+        // The first turn stays open for a moment; nothing else may arrive.
+        assert!(agent.inbox.recv_timeout(Duration::from_millis(200)).is_err(), "未完成的轮次不得接受第二轮");
+        agent.send(json!({
+            "jsonrpc": "2.0",
+            "id": first["id"],
+            "result": { "stopReason": "end_turn" },
+        }));
+        // Once the first turn ended, a second one is accepted.
+        let second = agent.next_line();
+        assert_eq!(second["method"], "session/prompt");
+        agent.send(json!({
+            "jsonrpc": "2.0",
+            "id": second["id"],
+            "result": { "stopReason": "end_turn" },
+        }));
+        agent.stay_connected();
+    });
+    let snapshot = open(spec(directory.path()), io).unwrap();
+    prompt(&snapshot.id, "第一轮").unwrap();
+    let refusal = prompt(&snapshot.id, "第二轮").unwrap_err();
+    assert!(refusal.contains("尚未结束"), "{refusal}");
+    wait_until_idle(&snapshot.id, Duration::from_secs(8)).unwrap();
+    prompt(&snapshot.id, "第二轮").unwrap();
+    wait_until_idle(&snapshot.id, Duration::from_secs(8)).unwrap();
+    close(&snapshot.id).unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
+fn an_unrecognized_stop_reason_is_reported_as_unknown() {
+    let directory = temp_dir();
+    let (io, mut agent) = pair();
+    let worker = std::thread::spawn(move || {
+        agent.handshake(false);
+        let prompt = agent.next_line();
+        // No stopReason at all: the turn ended for a reason this host cannot
+        // name, so it must not claim a normal end.
+        agent.send(json!({ "jsonrpc": "2.0", "id": prompt["id"], "result": {} }));
+        let second = agent.next_line();
+        assert_eq!(second["method"], "session/prompt");
+        agent.send(json!({
+            "jsonrpc": "2.0",
+            "id": second["id"],
+            "result": { "stopReason": "some_future_reason" },
+        }));
+        agent.stay_connected();
+    });
+    let snapshot = open(spec(directory.path()), io).unwrap();
+    prompt(&snapshot.id, "第一轮").unwrap();
+    wait_until_idle(&snapshot.id, Duration::from_secs(8)).unwrap();
+    assert_eq!(snapshot_of(&snapshot.id).last_turn_reason, "unknown");
+    assert!(turn_reason_text("unknown").contains("未知"));
+    prompt(&snapshot.id, "第二轮").unwrap();
+    wait_until_idle(&snapshot.id, Duration::from_secs(8)).unwrap();
+    assert_eq!(snapshot_of(&snapshot.id).last_turn_reason, "unknown");
+    close(&snapshot.id).unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
+fn stopping_withdraws_the_card_and_refuses_a_late_answer() {
+    let directory = temp_dir();
+    let (io, mut agent) = pair();
+    let worker = std::thread::spawn(move || {
+        agent.handshake(false);
+        let prompt = agent.next_line();
+        agent.send(json!({
+            "jsonrpc": "2.0",
+            "id": 902,
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": "session-1",
+                "toolCall": { "toolCallId": "call-2", "title": "删除文件" },
+                "options": [{ "optionId": "allow", "name": "允许", "kind": "allow_once" }],
+            },
+        }));
+        // The stop must reach the agent, and the card must already be withdrawn.
+        let withdrawn = agent.next_line();
+        assert_eq!(withdrawn["id"], 902);
+        assert_eq!(withdrawn["result"]["outcome"]["outcome"], "cancelled");
+        let stop = agent.next_line();
+        assert_eq!(stop["method"], "session/cancel");
+        agent.send(json!({
+            "jsonrpc": "2.0",
+            "id": prompt["id"],
+            "result": { "stopReason": "cancelled" },
+        }));
+        agent.stay_connected();
+    });
+    let snapshot = open(spec(directory.path()), io).unwrap();
+    prompt(&snapshot.id, "请删除").unwrap();
+    wait_for(|| (snapshot_of(&snapshot.id).permissions.len() == 1).then_some(()), "授权卡");
+    cancel(&snapshot.id).unwrap();
+    let stopping = snapshot_of(&snapshot.id);
+    assert!(stopping.permissions.is_empty(), "停止后授权卡必须立即撤下");
+    assert_eq!(stopping.state, "stopping", "取消后到终态前都显示停止中");
+    // The retired card can no longer be answered.
+    let refused = respond_permission(&snapshot.id, "902", Some("allow")).unwrap_err();
+    assert!(refused.contains("失效"), "{refused}");
+    wait_until_idle(&snapshot.id, Duration::from_secs(8)).unwrap();
+    let ended = snapshot_of(&snapshot.id);
+    assert_eq!(ended.last_turn_reason, "cancelled");
+    assert_eq!(ended.state, "ready");
+    close(&snapshot.id).unwrap();
+    worker.join().unwrap();
+}
+
+/// A start that cannot finish leaves neither a session nor a running agent.
+#[test]
+fn a_failed_start_removes_the_session_and_terminates_the_agent() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    let directory = temp_dir();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&stopped);
+    let (mut io, mut agent) = pair();
+    io.shutdown = Some(Box::new(move || flag.store(true, Ordering::SeqCst)));
+    let worker = std::thread::spawn(move || {
+        let initialize = agent.next_line();
+        agent.send(json!({
+            "jsonrpc": "2.0",
+            "id": initialize["id"],
+            "error": { "code": -32000, "message": "not authenticated" },
+        }));
+    });
+    let error = open(spec(directory.path()), io).expect_err("初始化失败必须报错");
+    assert!(error.contains("not authenticated"), "{error}");
+    assert!(stopped.load(Ordering::SeqCst), "失败的启动必须终止子进程");
+    let leaked = list()
+        .into_iter()
+        .filter(|session| session.directory == directory.path().display().to_string())
+        .count();
+    assert_eq!(leaked, 0, "失败的启动不得留下会话");
+    worker.join().unwrap();
+}
+
+/// The same for a first turn that cannot be submitted: the handshake succeeded,
+/// so only the turn write fails.
+#[test]
+fn a_first_turn_that_cannot_be_sent_removes_the_session() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    struct FailAfterWriter {
+        remaining: usize,
+        sender: Sender<Vec<u8>>,
+    }
+    impl Write for FailAfterWriter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            if self.remaining == 0 {
+                return Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed"));
+            }
+            self.remaining -= 1;
+            let _ = self.sender.send(buffer.to_vec());
+            Ok(buffer.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let directory = temp_dir();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&stopped);
+    let (host_writer, agent_inbox) = channel();
+    let (agent_outbox, host_reader) = channel();
+    let io = AcpIo {
+        reader: Box::new(ChannelReader { receiver: host_reader, pending: Vec::new() }),
+        // initialize and session/new succeed; session/prompt cannot be written.
+        writer: Box::new(FailAfterWriter { remaining: 2, sender: host_writer }),
+        diagnostics: None,
+        shutdown: Some(Box::new(move || flag.store(true, Ordering::SeqCst))),
+    };
+    let mut agent = Agent { inbox: agent_inbox, outbox: agent_outbox, buffer: Vec::new() };
+    let worker = std::thread::spawn(move || {
+        agent.handshake(false);
+        // Stay connected so the failure comes from the prompt write itself and
+        // not from an agent that already disconnected.
+        agent.stay_connected();
+    });
+    let mut start = spec(directory.path());
+    start.initial_prompt = Some("开工".into());
+    let error = open(start, io).expect_err("首轮写入失败必须报错");
+    assert!(error.contains("无法写入"), "{error}");
+    assert!(stopped.load(Ordering::SeqCst), "失败的启动必须终止子进程");
+    let leaked = list()
+        .into_iter()
+        .filter(|session| session.directory == directory.path().display().to_string())
+        .count();
+    assert_eq!(leaked, 0, "首轮失败的会话不得留在注册表里");
+    worker.join().unwrap();
+}
+
+/// The agent receives the token of its own broker session and never the one
+/// this process holds.
+#[test]
+fn the_child_receives_its_own_secret_session_token() {
+    let directory = temp_dir();
+    let output = directory.path().join("token.txt");
+    #[cfg(windows)]
+    let program = {
+        let path = directory.path().join("dump-token.cmd");
+        std::fs::write(
+            &path,
+            format!("@echo off\r\n> \"{}\" echo %CLIORA_SECRET_SESSION%\r\n", output.display()),
+        )
+        .unwrap();
+        path
+    };
+    #[cfg(unix)]
+    let program = {
+        use std::os::unix::fs::PermissionsExt;
+        let path = directory.path().join("dump-token.sh");
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\nprintenv CLIORA_SECRET_SESSION > \"{}\"\n", output.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    };
+    let mut start = spec(directory.path());
+    start.command.program = program;
+    start.command.args = Vec::new();
+    // A stale token a caller could have forwarded: it must never reach the
+    // child, because the host writes the real one after removing the name.
+    start.environment = vec![(crate::secrets::session::ENV.to_owned(), "stale-parent-token".to_owned())];
+    let (mut io, token_guard) = spawn_io(&start).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !output.exists() {
+        assert!(Instant::now() < deadline, "子进程没有写出环境");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let seen = std::fs::read_to_string(&output).unwrap();
+    let seen = seen.trim().to_string();
+    assert_ne!(seen, "stale-parent-token", "子进程不得继承旧令牌");
+    assert_eq!(seen.len(), 36, "子进程必须拿到一个新会话令牌：{seen}");
+    assert_eq!(seen, token_guard.token().to_owned(), "令牌必须属于该会话本身的 broker 会话");
+    if let Some(mut stop) = io.shutdown.take() {
+        stop();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn closing_a_conversation_terminates_the_agents_process_tree() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = temp_dir();
+    let pid_file = directory.path().join("descendant.pid");
+    let script = directory.path().join("agent-tree.sh");
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\nsleep 30 &\necho $! > \"{}\"\nwait\n", pid_file.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut start = spec(directory.path());
+    start.command.program = script;
+    start.command.args = Vec::new();
+    let (mut io, _token) = spawn_io(&start).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !pid_file.exists() {
+        assert!(Instant::now() < deadline, "后代进程没有启动");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let pid: u32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+    if let Some(mut stop) = io.shutdown.take() {
+        stop();
+    }
+    // The whole group must go: the agent is a group leader, so its own children
+    // are stopped with it instead of surviving as orphans.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let alive = std::process::Command::new("/bin/kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !alive {
+            break;
+        }
+        assert!(Instant::now() < deadline, "子进程树没有被终止");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
 fn the_child_environment_keeps_the_planned_boundaries() {
     let mut start = spec(Path::new("."));
     start.credential = Some(("FIXTURE_KEY".into(), "value".into()));
@@ -607,4 +1028,10 @@ fn the_child_environment_keeps_the_planned_boundaries() {
         !environment.set.iter().any(|(name, _)| name == "FIXTURE_LEAK"),
         "被移除的变量不得又被设回"
     );
+    // A token this process holds for its own broker session must never be
+    // inherited: the child gets its own, written after this removal.
+    let token_name = crate::secrets::session::ENV.to_string();
+    assert!(environment.remove.contains(&token_name), "子进程不得继承父进程的令牌");
+    assert!(!environment.set.iter().any(|(name, _)| name == &token_name));
 }
+

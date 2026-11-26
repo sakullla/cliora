@@ -41,7 +41,8 @@ export type AcpSessionSnapshot = {
   directory: string;
   mode: 'normal' | 'yolo';
   interaction: 'acp';
-  state: 'starting' | 'ready' | 'running' | 'waiting_permission' | 'closed' | 'failed';
+  /** 'stopping' is a turn the user stopped that has not reported its own result yet. */
+  state: 'starting' | 'ready' | 'running' | 'stopping' | 'waiting_permission' | 'closed' | 'failed';
   nativeSessionId: string | null;
   resume: 'none' | 'unsupported' | 'loaded' | 'failed';
   messages: AcpMessage[];
@@ -49,8 +50,9 @@ export type AcpSessionSnapshot = {
   permissions: AcpPermissionCard[];
   /** Bounded, redacted standard-error lines; never a protocol body. */
   diagnostics: string[];
-  /** The reason the last turn ended, as the protocol reported it. */
-  lastTurnReason: '' | 'end_turn' | 'limit' | 'refusal' | 'cancelled' | 'disconnected' | 'failed';
+  /** The reason the last turn ended. Empty means no turn has ended yet; 'unknown'
+   *  means the agent ended the turn without a reason this host recognizes. */
+  lastTurnReason: '' | 'end_turn' | 'limit' | 'refusal' | 'cancelled' | 'disconnected' | 'failed' | 'unknown';
   seq: number;
 };
 

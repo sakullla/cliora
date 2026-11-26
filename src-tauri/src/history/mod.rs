@@ -1806,7 +1806,9 @@ pub fn resume_plan(
             mode,
             resume_latest: false, remote_intent: None, agent: None,
             session_options: None,
-            interaction: None,
+            // A history resume continues an existing CLI conversation, so it is
+            // a terminal even when the stored preference is ACP.
+            interaction: Some(crate::launch::InteractionMode::Terminal),
         },
         &cwd,
         context,

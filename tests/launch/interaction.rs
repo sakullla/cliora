@@ -96,23 +96,46 @@ fn a_conversation_is_chosen_only_for_a_local_new_session() {
     assert_eq!(mode, InteractionMode::Terminal);
     assert!(command.is_none());
 
-    // A resumed record, an agent selection and session switches belong to the
-    // terminal launch; they never become a conversation.
+    // A resumed record and a latest-session resume belong to the terminal
+    // launch: they continue an existing CLI conversation, so the stored
+    // preference falls back instead of refusing to open the record at all.
     let mut resumed = request("open_code");
     resumed.session_id = Some("native-1".into());
-    let failure = resolve_interaction(
+    let (mode, command) = resolve_interaction(
         &db, &resumed, LaunchForm::Terminal, adapter, home, &installation, Some("2.7.0"),
     )
-    .unwrap_err();
-    assert_eq!(failure.stage, LaunchStage::Tool);
-    assert!(failure.message.contains("恢复既有会话"), "{}", failure.message);
+    .unwrap();
+    assert_eq!(mode, InteractionMode::Terminal);
+    assert!(command.is_none());
 
     let mut latest = request("open_code");
     latest.resume_latest = true;
-    assert!(resolve_interaction(
+    let (mode, command) = resolve_interaction(
         &db, &latest, LaunchForm::Terminal, adapter, home, &installation, Some("2.7.0"),
     )
-    .is_err());
+    .unwrap();
+    assert_eq!(mode, InteractionMode::Terminal);
+    assert!(command.is_none());
+
+    // YOLO asks the CLI to approve every tool by itself. An ACP entry publishes
+    // no such switch and a conversation surfaces approvals as cards, so the
+    // mode is refused instead of silently disappearing.
+    let mut yolo = request("open_code");
+    yolo.mode = LaunchMode::Yolo;
+    let failure = resolve_interaction(
+        &db, &yolo, LaunchForm::Terminal, adapter, home, &installation, Some("2.7.0"),
+    )
+    .unwrap_err();
+    assert_eq!(failure.stage, LaunchStage::Tool);
+    assert!(failure.message.contains("YOLO"), "{}", failure.message);
+    // A YOLO terminal launch is unaffected by the stored preference.
+    yolo.interaction = Some(InteractionMode::Terminal);
+    assert_eq!(
+        resolve_interaction(&db, &yolo, LaunchForm::Terminal, adapter, home, &installation, Some("2.7.0"))
+            .unwrap()
+            .0,
+        InteractionMode::Terminal
+    );
 
     let mut agent = request("open_code");
     agent.agent = Some("reviewer".into());
@@ -145,6 +168,46 @@ fn a_conversation_is_chosen_only_for_a_local_new_session() {
         .unwrap().0,
         InteractionMode::Terminal
     );
+}
+
+/// The stored preference decides a *new* session only. An existing record and a
+/// history resume are terminal conversations, so they must keep planning a
+/// terminal launch while the preference says ACP, or every old tab would be
+/// unopenable.
+#[test]
+fn a_stored_conversation_preference_still_plans_existing_records_as_terminals() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("app.db")).unwrap();
+    let home = temp.path();
+    let (installation, _program) = fixture_installation(home, "opencode");
+    let mut registry = Registry::builtins();
+    registry.fixture_installations.insert("open_code".into(), vec![installation.clone()]);
+    set_interaction(&db, "acp").unwrap();
+
+    // A saved terminal tab: the restore worker plans it with its own
+    // interaction, which is the terminal.
+    let mut saved = request("open_code");
+    saved.session_id = Some("native-1".into());
+    saved.interaction = Some(InteractionMode::Terminal);
+    let plan = plan_history_context(&db, &registry, home, saved, home, None)
+        .expect("既有终端记录必须仍能规划");
+    assert_eq!(plan.interaction, InteractionMode::Terminal);
+    assert!(plan.acp.is_none(), "终端恢复不得解析 ACP 入口");
+    assert_eq!(plan.resume_native_id.as_deref(), Some("native-1"));
+
+    // A history resume plans the same way; the preference never leaks into it.
+    let mut history = request("open_code");
+    history.session_id = Some("native-2".into());
+    let plan = plan_history_context(&db, &registry, home, history, home, None)
+        .expect("历史续聊必须仍能规划");
+    assert_eq!(plan.interaction, InteractionMode::Terminal);
+    assert!(plan.acp.is_none());
+
+    // A new session still follows the preference: the fallback above is about
+    // records, not about the setting.
+    let plan = plan_history_context(&db, &registry, home, request("open_code"), home, None).unwrap();
+    assert_eq!(plan.interaction, InteractionMode::Acp);
+    assert!(plan.acp.is_some());
 }
 
 #[test]

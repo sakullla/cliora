@@ -1,3 +1,5 @@
+import type { AcpSessionSnapshot } from './acp';
+
 export type LaunchMode = 'normal' | 'yolo';
 export type TerminalId = 'auto' | 'workbench' | 'windows_terminal' | 'pwsh' | 'power_shell' | 'cmd' | 'mac_terminal' | 'custom' | 'gnome_terminal' | 'konsole' | 'xterm' | 'desktop';
 
@@ -151,8 +153,11 @@ export type WorkbenchRestoreEvent = {
   stage: WorkbenchRestoreStage;
   detail: string | null;
   candidates: WorkbenchRestoreCandidate[];
-  /** The real session, once this record is restored. */
+  /** The real terminal session, once this record is restored. */
   session: WorkbenchSession | null;
+  /** The live conversation, once an ACP record is restored: a conversation is
+   *  not a PTY session, so it publishes its own snapshot. */
+  acpSession?: AcpSessionSnapshot | null;
 };
 export type TrayStatus = { available: boolean; error: string | null };
 

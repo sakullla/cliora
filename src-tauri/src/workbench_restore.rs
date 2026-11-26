@@ -9,8 +9,11 @@ const PREFIX: &str = "workbench_session_v1:";
 /// Bounds how many CLI/account contexts discover and start at the same time.
 const MAX_PARALLEL_CONTEXTS: usize = 4;
 static RESTORING: Mutex<()> = Mutex::new(());
-/// One CLI and account context, and the native conversation a tab claims in it.
-type ContextKey = (String, Option<String>, Option<String>);
+/// One CLI, account context and interaction, and the native conversation a tab
+/// claims in it. The interaction belongs to the key because a terminal tab and a
+/// conversation tab of the same CLI and account take different restore paths and
+/// must never share one worker's context.
+type ContextKey = (String, Option<String>, Option<String>, crate::launch::InteractionMode);
 type ClaimKey = (ContextKey, String);
 static RESTORE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
@@ -193,8 +196,12 @@ pub struct RestoreEvent {
     pub stage: RestoreStage,
     pub detail: Option<String>,
     pub candidates: Vec<RestoreCandidate>,
-    /// The live session, published once the restore succeeded.
+    /// The live terminal session, published once the restore succeeded.
     pub session: Option<crate::session_host::SessionSnapshot>,
+    /// The live conversation, published once an ACP record is restored. A
+    /// conversation is not a PTY session, so it carries its own snapshot
+    /// instead of being reported as a missing terminal.
+    pub acp_session: Option<crate::acp_host::AcpSessionSnapshot>,
 }
 
 /// An event sink. Every worker reports through the same sink, so it must be
@@ -228,6 +235,7 @@ fn progress(scope: &RestoreScope<'_>, session: &SavedSession, stage: RestoreStag
         detail,
         candidates,
         session: id.and_then(snapshot),
+        acp_session: id.and_then(|id| crate::acp_host::snapshot(id).ok()),
     });
 }
 
@@ -278,14 +286,7 @@ fn restore_inner(db: &Database, registry: &Registry, home: &Path, selection: Opt
     // One worker per CLI and account context: discovery and launching of a slow
     // context delay only that context's own tabs, and each worker enters that
     // account's thread-local guard on its own thread.
-    let mut groups: Vec<(ContextKey, Vec<usize>)> = Vec::new();
-    for (index, session) in targets.iter().enumerate() {
-        let key = (session.tool_id.clone(), session.account_id.clone(), session.context_id.clone());
-        match groups.iter_mut().find(|(existing, _)| existing == &key) {
-            Some((_, items)) => items.push(index),
-            None => groups.push((key, vec![index])),
-        }
-    }
+    let groups = group_targets(&targets);
     let claimed = Mutex::new(HashSet::new());
     let scope = RestoreScope {
         db, registry, home, targets: &targets, all: &all, live: &live, until,
@@ -331,6 +332,28 @@ fn restore_inner(db: &Database, registry: &Registry, home: &Path, selection: Opt
         }
     }
     Ok(report)
+}
+
+/// Group saved tabs into units of work. A worker enters one CLI and account
+/// context once, so the key is exactly what the restore path depends on: the
+/// CLI, the account context and how the tab talked to it. A terminal tab and a
+/// conversation tab of the same CLI and account therefore start on their own
+/// workers and take their own path.
+fn group_targets(targets: &[SavedSession]) -> Vec<(ContextKey, Vec<usize>)> {
+    let mut groups: Vec<(ContextKey, Vec<usize>)> = Vec::new();
+    for (index, session) in targets.iter().enumerate() {
+        let key = (
+            session.tool_id.clone(),
+            session.account_id.clone(),
+            session.context_id.clone(),
+            session.interaction,
+        );
+        match groups.iter_mut().find(|(existing, _)| existing == &key) {
+            Some((_, items)) => items.push(index),
+            None => groups.push((key, vec![index])),
+        }
+    }
+    groups
 }
 
 /// One CLI/account context: discover its native identities once, then match and
@@ -423,7 +446,10 @@ fn restore_items(
         }
         // Claims are shared by the workers, so two tabs can never resume one
         // conversation at the same time.
-        let claim = ((session.tool_id.clone(), session.account_id.clone(), session.context_id.clone()), native.clone());
+        let claim = (
+            (session.tool_id.clone(), session.account_id.clone(), session.context_id.clone(), session.interaction),
+            native.clone(),
+        );
         let duplicate = !claimed.lock().unwrap_or_else(|error| error.into_inner()).insert(claim);
         if duplicate {
             let detail = "此会话已经恢复".to_owned();
@@ -436,7 +462,9 @@ fn restore_items(
             let mut plan = launch::plan_history_context(db, registry, home, launch::LaunchRequest {
                 tool_id: session.tool_id.clone(), project_id: session.project_id.clone(), session_id: Some(native),
                 directory: None, initial_prompt: None, mode: session.mode, resume_latest: false, remote_intent: None, agent: None,
-                session_options: None, interaction: None,
+                // This worker matched a terminal record, so the launch stays a
+                // terminal even when the stored preference is ACP.
+                session_options: None, interaction: Some(session.interaction),
             }, Path::new(&session.directory), context.cloned()).map_err(|error| error.message)?;
             plan.terminal = TerminalId::Workbench;
             let baseline = saved_baseline(db, &session.id)?;
@@ -469,6 +497,27 @@ fn restore_items(
     outcomes
 }
 
+/// What a restored conversation may claim. Only a negotiated load continues the
+/// original conversation; anything else is a new session, and reporting it as
+/// restored would close the old record for a conversation that never came back.
+fn conversation_resume_failure(resume: &str, native: Option<&str>) -> Option<String> {
+    let fresh = native.map(|id| format!("（新会话 {id}）")).unwrap_or_default();
+    match resume {
+        "loaded" => None,
+        // The old record stays; the user can retry later or fall back to the
+        // terminal, and the first prompt is never resent automatically.
+        "unsupported" => Some(format!(
+            "该 agent 不支持恢复原会话，已在原目录新开一段会话{fresh}；原记录已保留，可稍后重试"
+        )),
+        "failed" => Some(format!(
+            "agent 无法加载原会话，已在原目录新开一段会话{fresh}；原记录已保留，可稍后重试"
+        )),
+        _ => Some(format!(
+            "原会话未被恢复，已在原目录新开一段会话{fresh}；原记录已保留，可稍后重试"
+        )),
+    }
+}
+
 /// Restore conversation tabs. The agent's own negotiated load decides whether
 /// the old conversation comes back; when it does not, the tab is reported as
 /// failed and the first prompt is never resent automatically.
@@ -488,7 +537,7 @@ fn restore_conversation_items(
                 .clone()
                 .ok_or("原对话缺少会话编号，无法恢复")?;
             let claim = (
-                (session.tool_id.clone(), session.account_id.clone(), session.context_id.clone()),
+                (session.tool_id.clone(), session.account_id.clone(), session.context_id.clone(), session.interaction),
                 native.clone(),
             );
             if !claimed.lock().unwrap_or_else(|error| error.into_inner()).insert(claim) {
@@ -521,6 +570,22 @@ fn restore_conversation_items(
             plan.resume_native_id = Some(native);
             let result = launch::spawn(db, plan)?;
             let id = result.session_id.ok_or("未创建恢复会话")?;
+            // Starting the agent is not the restore. Only the load the agent
+            // itself negotiated continues the old conversation; a fresh session
+            // must not take over the old record and report success.
+            let resume = match crate::acp_host::snapshot(&id) {
+                Ok(snapshot) => (snapshot.resume, snapshot.native_session_id),
+                Err(error) => {
+                    let _ = crate::acp_host::close(&id);
+                    let _ = forget(db, &id);
+                    return Err(format!("无法读取新会话的状态：{error}"));
+                }
+            };
+            if let Some(detail) = conversation_resume_failure(resume.0, resume.1.as_deref()) {
+                let _ = crate::acp_host::close(&id);
+                let _ = forget(db, &id);
+                return Err(detail);
+            }
             if let Err(error) = crate::workspaces::restore_session_context(db, &session.id, &id) {
                 let _ = crate::acp_host::close(&id);
                 let _ = forget(db, &id);
@@ -552,7 +617,7 @@ fn restore_conversation_items(
     outcomes
 }
 
-#[cfg(test)]#[cfg(test)]
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
@@ -707,17 +772,62 @@ mod tests {
         assert!(matches(&legacy, &two, &unnamed, &unnamed, 20_000));
     }
 
+    /// One CLI and account can hold a terminal tab and a conversation tab at the
+    /// same time. They take different restore paths, so they must never share a
+    /// worker's account context or its discovery.
+    #[test]
+    fn terminal_and_conversation_tabs_of_one_account_are_grouped_apart() {
+        let saved = |id: &str, interaction| SavedSession {
+            id: id.into(), tool_id: "codex".into(), project_id: None, directory: "/work".into(),
+            mode: LaunchMode::Normal, started_at: 1, stopped_at: None, native_id: None,
+            account_id: Some("account".into()), context_id: Some("ctx".into()), interaction,
+        };
+        let targets = vec![
+            saved("terminal-1", crate::launch::InteractionMode::Terminal),
+            saved("conversation-1", crate::launch::InteractionMode::Acp),
+            saved("terminal-2", crate::launch::InteractionMode::Terminal),
+        ];
+        let groups = group_targets(&targets);
+        assert_eq!(groups.len(), 2, "同账号下终端与对话必须分成两组");
+        let terminal = groups
+            .iter()
+            .find(|(key, _)| key.3 == crate::launch::InteractionMode::Terminal)
+            .expect("终端分组必须存在");
+        let conversation = groups
+            .iter()
+            .find(|(key, _)| key.3 == crate::launch::InteractionMode::Acp)
+            .expect("对话分组必须存在");
+        assert_eq!(terminal.1, vec![0, 2]);
+        assert_eq!(conversation.1, vec![1]);
+    }
+
+    /// Starting the agent is not the restore: only a loaded conversation may
+    /// replace the saved record.
+    #[test]
+    fn only_a_loaded_conversation_counts_as_a_restore() {
+        assert!(conversation_resume_failure("loaded", Some("native-1")).is_none());
+        let unsupported = conversation_resume_failure("unsupported", Some("fresh-1")).unwrap();
+        assert!(unsupported.contains("不支持"), "{unsupported}");
+        assert!(unsupported.contains("原记录已保留"), "{unsupported}");
+        let failed = conversation_resume_failure("failed", None).unwrap();
+        assert!(failed.contains("无法加载"), "{failed}");
+        assert!(failed.contains("原记录已保留"), "{failed}");
+        assert!(conversation_resume_failure("none", None).unwrap().contains("原记录已保留"));
+    }
+
     #[test]
     fn restore_events_publish_camel_case_fields_and_stage_names() {
         let event = RestoreEvent {
             restore_id: "restore-7".into(), saved_session_id: "tab".into(), stage: RestoreStage::Restored,
-            detail: None, candidates: Vec::new(), session: None,
+            detail: None, candidates: Vec::new(), session: None, acp_session: None,
         };
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["restoreId"], "restore-7");
         assert_eq!(json["savedSessionId"], "tab");
         assert_eq!(json["stage"], "restored");
         assert!(json["candidates"].is_array());
+        // A conversation publishes its own snapshot under its own field.
+        assert!(json.get("acpSession").is_some());
         assert_eq!(serde_json::to_value(RestoreStage::Discovering).unwrap(), "discovering");
         assert_eq!(serde_json::to_value(RestoreStage::Starting).unwrap(), "starting");
         assert_eq!(serde_json::to_value(RestoreStage::Failed).unwrap(), "failed");

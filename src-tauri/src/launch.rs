@@ -87,7 +87,7 @@ impl TerminalId {
 /// ACP conversation in the workbench. It is independent of the terminal type,
 /// of normal/YOLO and of the worktree preference, and never applies to a
 /// remote project, a native login, a desktop application or a resumed record.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InteractionMode {
     /// The historical launch: an interactive terminal.
@@ -1513,7 +1513,10 @@ fn executable_directory(executable: &Path) -> PathBuf {
 /// Which host owns this local launch, and the ACP entry when it is a
 /// conversation. Everything that must be known before a worktree exists is
 /// decided here: a missing bridge, an incompatible version line, an
-/// installation that does not match, or a request carrying CLI-only switches.
+/// installation that does not match, a request carrying CLI-only switches, or
+/// a permission mode the entry cannot express. Only a local *new* session can
+/// become a conversation; an existing record and a history resume stay
+/// terminals whatever the stored preference says.
 fn resolve_interaction(
     db: &Database,
     request: &LaunchRequest,
@@ -1542,10 +1545,22 @@ fn resolve_interaction(
     if !wants {
         return Ok((InteractionMode::Terminal, None));
     }
+    // A request that already carries a session identity, or that resumes the
+    // latest one, is a terminal resume: it continues an existing CLI
+    // conversation, which is a terminal concept. The stored preference must
+    // never turn an old record or a history resume into a conversation, so it
+    // falls back instead of refusing to recover at all.
     if request.session_id.is_some() || request.resume_latest {
+        return Ok((InteractionMode::Terminal, None));
+    }
+    // A YOLO launch asks the CLI to approve every tool itself. The ACP entry
+    // publishes no such switch, and a conversation surfaces approvals as cards,
+    // so silently starting a quiet conversation would lose the mode the user
+    // chose.
+    if request.mode == LaunchMode::Yolo {
         return Err(LaunchPlanError::new(
             LaunchStage::Tool,
-            "恢复既有会话暂不支持 ACP 对话，请在设置中改用终端启动".into(),
+            "ACP 对话不能表达 YOLO 自动批准：请在设置中改用终端启动，或改用普通模式".into(),
         ));
     }
     if request.agent.is_some() || request.session_options.as_ref().is_some_and(|options| !options.is_empty()) {
@@ -3035,10 +3050,9 @@ mod installed_desktop_launch {
             mode: LaunchMode::Normal,
             resume_latest: false, remote_intent: None, agent: None,
             session_options: None,
-        
             interaction: None,
+        }
     }
-}
 
     #[test]
     fn workbench_launch_names_a_new_claude_conversation_for_restore() {
@@ -3107,7 +3121,7 @@ mod installed_desktop_launch {
             resume_latest: false, remote_intent: None, agent: None,
             session_options: None,
             interaction: None,
-    };
+        };
         let zcode = plan(&db, &registry, temp.path(), request("zcode")).unwrap();
         assert_eq!(zcode.directory, canonical);
         assert_eq!(
@@ -3179,7 +3193,7 @@ mod installed_desktop_launch {
                     resume_latest: false, remote_intent: None, agent: None,
                     session_options: None,
                     interaction: None,
-            },
+                },
             )
             .unwrap_or_else(|error| panic!("{tool}: {error}"));
             assert_eq!(resumed.cli_args, via_native.cli_args, "{tool}");
@@ -3279,7 +3293,7 @@ mod installed_desktop_launch {
                 agent: None,
                 session_options: None,
                 interaction: None,
-        },
+            },
             worktree_intent: WorktreeIntent::Preference,
             task_text: None,
             worktree: WorktreeLaunchOptions::default(),
@@ -3372,7 +3386,7 @@ mod installed_desktop_launch {
                 agent: None,
                 session_options: None,
                 interaction: None,
-        },
+            },
             worktree_intent: intent,
             task_text: Some("feat: hello?".into()),
             worktree: WorktreeLaunchOptions::default(),
@@ -3470,7 +3484,7 @@ mod installed_desktop_launch {
                 agent: None,
                 session_options: None,
                 interaction: None,
-        },
+            },
             worktree_intent: WorktreeIntent::Preference,
             task_text: None,
             worktree: WorktreeLaunchOptions::default(),
@@ -3627,7 +3641,7 @@ mod installed_desktop_launch {
                 agent: None,
                 session_options: None,
                 interaction: None,
-        },
+            },
             worktree_intent: WorktreeIntent::Explicit,
             task_text: Some("feat: hello?".into()),
             worktree: options,

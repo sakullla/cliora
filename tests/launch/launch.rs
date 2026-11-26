@@ -1172,11 +1172,10 @@ fn workbench_session_accepts_input_resize_and_close_without_leaking_credentials(
         remote_session_id: None,
         remote_end_args: None,
         environment: Vec::new(),
-    
         interaction: crate::launch::InteractionMode::Terminal,
         acp: None,
         initial_prompt: None,
-};
+    };
     let started = spawn(&db, plan).unwrap();
     assert_eq!(started.status, "session_started");
     assert_eq!(started.terminal, TerminalId::Workbench);
