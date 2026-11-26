@@ -24,7 +24,7 @@ pub fn sources_controlled(
         |path| path.extension().is_some_and(|value| value == "jsonl"),
         cancelled,
     )?;
-    for source in &mut sources { source.fingerprint = format!("pi-title-v1|{}", source.fingerprint); }
+    for source in &mut sources { source.fingerprint = format!("pi-native-cost-v2|{}", source.fingerprint); }
     Ok(sources)
 }
 
@@ -51,6 +51,7 @@ fn remember(
         events,
         id,
         RequestUsage {
+            native_cost_usd: usage.pointer("/cost/total").and_then(Value::as_f64).filter(|value| value.is_finite() && *value >= 0.0),
             counts,
             model,
             timestamp: time,
@@ -151,7 +152,7 @@ pub fn parse_controlled(
     let key = source.key();
     session.usage = events
         .into_iter()
-        .map(|(id, event)| UsageEvent { native_usage: None,
+        .map(|(id, event)| UsageEvent { native_cost_usd: event.native_cost_usd, native_usage: None,
             request_count: Some(1),
             id: format!("{key}:{id}"),
             model: event.model,
@@ -214,6 +215,8 @@ mod tests {
             Some("33333333-3333-4333-8333-333333333333")
         );
         assert_eq!(session.usage.len(), 2, "原有用量仍可查看");
+        let costs: Vec<_> = session.usage.iter().map(|event| event.native_cost_usd).collect();
+        assert_eq!(costs, [Some(0.0018), None]);
         assert!(!session.messages.is_empty());
         assert_unlinked(&session);
     }

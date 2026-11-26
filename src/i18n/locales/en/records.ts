@@ -1,5 +1,6 @@
 export default {
   native: {
+    costUsd: 'CLI-reported cost · USD {{value}}',
     title: 'CLI-reported units', billable: 'Native flag: billable', unbilled: 'Native flag: not billed', unknownBilling: 'Billing status unknown',
     original: 'Original: {{value}}', unknownOriginal: '{{count}} records with unknown original value', unknown: 'Unknown',
     hint: 'Values come from local logs, not a balance or currency amount. Billing flags retain their native meaning.',
@@ -439,7 +440,7 @@ export default {
     noteStale: 'the source files of {{count}} sessions failed to read recently',
     notePartialSuffix: '; they only count the parts that were read.',
     costLabel: 'Cost',
-    noteCost: 'is an estimate, not a bill: your configured prices are used first, then built-in public prices; tokens of unpriced models are excluded.',
+    noteCost: ' uses the cost recorded by the CLI when available. Other calls use configured, imported or public rates. Unpriced tokens are excluded.',
     noteMixed: 'Some prices are not in {{currency}} and were not merged.',
     noteLatest: 'Most recent call in local records: {{time}}.',
     noteIndexed: 'Indexed {{count}} session sources{{failed}}.',

@@ -326,13 +326,13 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent
     const key = JSON.stringify(current); setFilterLoading(true); setListError(false);
     try {
       const items = (await native.listHistorySessions(current)) ?? [];
+      if (sequence !== request.current || key !== JSON.stringify(filterRef.current)) return false;
       if (unfilteredQuery(current)) {
         setUnfilteredTotal(items.length);
         // A complete read is the record of which sessions still exist; forget the reading
         // place of the rest so the cache follows the index instead of growing.
         readingContexts.current.retainSessions(remoteTargetId, new Set(items.map((item) => item.id)));
       }
-      if (sequence !== request.current || key !== JSON.stringify(filterRef.current)) return false;
       loadedFilter.current = key;
       setSessions(items); toasts.setError(null);
       setModelCatalog((old) => { const next = [...new Set([...old, ...items.flatMap((item) => item.model ? [item.model] : [])])].sort(); return next.length === old.length ? old : next; });
@@ -475,10 +475,15 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent
   }, [scanning, backgroundScanning, active]);
 
   useEffect(() => {
-    if (!backgroundScanning || !active) return;
+    if (!backgroundScanning || !active || sessionTotal.current) return;
     // Refreshes commit bounded batches while the native scan is running. Read the
     // index periodically so a cold scan can show its first sessions immediately.
-    const timer = window.setInterval(() => { void load(filterRef.current); }, 2000);
+    let reading = false;
+    const timer = window.setInterval(async () => {
+      if (reading) return;
+      reading = true;
+      try { await load(filterRef.current); } finally { reading = false; }
+    }, 2000);
     return () => window.clearInterval(timer);
   }, [backgroundScanning, active, load]);
 
@@ -499,7 +504,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent
       // native log discovery continue in the background. This applies to the
       // automatic refresh as well, whose cold scan can take minutes on a large
       // local history directory.
-      await load(filterRef.current);
+      if (!auto || loadedFilter.current !== JSON.stringify(filterRef.current)) await load(filterRef.current);
       if (sequence !== scanRequest.current) return;
       scanningRef.current = false;
       setScanning(false);
@@ -829,7 +834,7 @@ export function RecordsPage({ active, remoteTargetId = 'local', tools, tabIntent
           {selected.resumeReason && <button type="button" onClick={onOpenProjects}>{t('records.page.relinkProject')}</button>}
         </div>}
         </div>
-        {remoteTargetId === 'local' && !openedChild && selected.totals && <NativeUsageSummary totals={selected.totals} />}
+        {!openedChild && selected.totals && <NativeUsageSummary totals={selected.totals} />}
         {openedChild && !openedChild.readable ? <>{detailNotice}<div className={styles.empty} role="status"><Icon name="records" size={24} /><h3>{t('records.association.unreadable')}</h3></div></> : readerDetail && <SessionReader key={`${selected.session.id}:${childPath.join('\u001f')}`} detail={readerDetail} toolName={toolName(selected.session.toolId)} children={selectedFacet?.state === 'available' ? (openedChild ? openedChild.children : selected.children) : undefined} onOpenChild={openChild} context={readerContext} onContextChange={saveReading} notice={detailNotice} />}
       </> : detailError ? <div className={styles.empty} role="alert"><Icon name="alert" size={24} /><h3>{t('records.page.openFailed')}</h3><p>{detailError}</p><button type="button" onClick={retryDetail}>{t('records.page.reloadSession')}</button></div> : (selectedId && sessions.some((item) => item.id === selectedId)) || (remoteTargetId !== 'local' && filterLoading && !sessions.length) ? <div className={styles.detailLoading} role="status" aria-label={t('records.page.loadingSession')}><span className={styles.detailSkeleton} /><span className={styles.detailSkeleton} data-size="short" /><span className={styles.detailSkeleton} data-size="block" /></div>
       : <div className={styles.empty}><span className="empty-symbol"><Icon name="records" size={20} /></span><h3>{t('records.page.pickSessionTitle')}</h3><p>{t('records.page.pickSession')}</p></div>}</div>

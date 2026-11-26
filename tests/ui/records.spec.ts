@@ -33,7 +33,7 @@ function todayReport() {
 
 test('records show the index before scanning and reuse a fresh usage report until refresh', async ({ page }) => {
   await page.addInitScript((report) => {
-    const state = { scans: 0, reports: 0, listReady: false, releaseList: () => {}, releaseScan: () => {}, offset: 0 };
+    const state = { scans: 0, reports: 0, lists: 0, listReady: false, releaseList: () => {}, releaseScan: () => {}, offset: 0 };
     const session = { id: 'indexed', toolId: 'codex', nativeId: null, title: 'Indexed session', cwd: 'C:/fixture', model: null, projectId: null as string | null, startedAt: 1, updatedAt: 1, favorite: false, partial: false, stale: false, messageCount: 0, usageCount: 0 };
     (window as unknown as { __loadProbe: typeof state }).__loadProbe = state;
     const now = Date.now.bind(Date);
@@ -46,6 +46,8 @@ test('records show the index before scanning and reuse a fresh usage report unti
         if (command === 'list_projects') return [{ id: 'project-a', name: 'Fixture', path: 'C:/fixture', available: true, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {} }];
         if (command === 'list_history_prices') return [];
         if (command === 'list_history_sessions') {
+          if (args.filter.limit) return [{ ...session }];
+          state.lists++;
           if (!state.listReady) await new Promise<void>(resolve => { state.releaseList = () => { state.listReady = true; resolve(); }; });
           return [{ ...session }];
         }
@@ -70,6 +72,7 @@ test('records show the index before scanning and reuse a fresh usage report unti
   expect(await probe()).toEqual({ scans: 0, reports: 0 });
   await page.evaluate(() => (window as unknown as { __loadProbe: { releaseList: () => void } }).__loadProbe.releaseList());
   await expect.poll(async () => (await probe()).scans).toBe(1);
+  expect(await page.evaluate(() => (window as any).__loadProbe.lists)).toBe(1);
   await page.getByRole('tab', { name: '用量', exact: true }).click();
   await expect.poll(async () => (await probe()).reports).toBe(1);
   await expect(page.getByRole('button', { name: '设置估算价格', exact: true })).toBeVisible();
@@ -1505,7 +1508,7 @@ test('an OMP session keeps its native --resume command and shows only local usag
   await page.addInitScript(({ id }) => {
     const usage = { id: 'usage-1', requestCount: 1, attributions: [], model: 'fixture/fixture-model', timestamp: 1794700816828, input: 1000, output: 340, cacheRead: 200, cacheWrite: 0, inputIncludesCache: false };
     const session = { id: 'omp-record', toolId: 'omp', nativeId: id, title: 'Explain the fixture project in one sentence.', cwd: 'C:/fixture/project', model: 'fixture/fixture-model', projectId: 'project-a', startedAt: 1794700800000, updatedAt: 1794700817000, favorite: false, partial: false, stale: false, messageCount: 2, usageCount: 1 };
-    const report = { generatedAt: 1794700817000, from: null, to: null, bucket: 'day', currency: 'USD', totals: { requests: 1, usageRecords: 1, unknownRequestRecords: 0, sessions: 1, input: 1000, cacheRead: 200, cacheWrite: 0, output: 340, total: 1540, cost: 1.5, unpricedTokens: 0 }, previous: null, timeline: [], byModel: [], byTool: [], byProject: [], topSessions: [], models: [], untimedRequests: 0, duplicateRequests: 0, partialSessions: 0, staleSessions: 0, mixedCurrency: false, latestEventAt: 1794700816828, priceSources: [], scans: [] };
+    const report = { generatedAt: 1794700817000, from: null, to: null, bucket: 'day', currency: 'USD', totals: { requests: 1, usageRecords: 1, unknownRequestRecords: 0, sessions: 1, input: 1000, cacheRead: 200, cacheWrite: 0, output: 340, total: 1540, nativeCostUsd: 0.0017, cost: 0.0017, unpricedTokens: 0 }, previous: null, timeline: [], byModel: [], byTool: [], byProject: [], topSessions: [], models: [], untimedRequests: 0, duplicateRequests: 0, partialSessions: 0, staleSessions: 0, mixedCurrency: false, latestEventAt: 1794700816828, priceSources: [], scans: [] };
     Object.assign(window, {
       isTauri: true, __ompResume: null,
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, unknown> = {}) => {
@@ -1533,11 +1536,12 @@ test('an OMP session keeps its native --resume command and shows only local usag
   await expect(page.getByRole('button', { name: /Explain the fixture project/ })).toBeVisible();
   await expect(page.getByLabel('会话正文')).toContainText('Fixture reply from the local test endpoint.');
   await expect(page.getByRole('button', { name: '在外部终端继续' })).toBeVisible();
+  await expect(page.getByText('CLI 原生费用 · USD 0.0017', { exact: true })).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as any).__ompResume?.args?.id)).toBe('omp-record');
   await expect.poll(() => page.evaluate(() => (window as any).__ompResume?.command)).toBe(`omp --resume ${nativeId}`);
   await page.getByRole('tab', { name: '用量', exact: true }).click();
   await expect(page.getByText('查看本机记录中的 Token、费用与调用次数。')).toBeVisible();
-  await expect(page.getByText('估算费用', { exact: false })).toBeVisible();
+  await expect(page.getByText('CLI 原生费用 · USD 0.0017', { exact: true })).toBeVisible();
   await expect(page.getByText('无限', { exact: true })).toHaveCount(0);
   await expect(page.getByText('零余额', { exact: false })).toHaveCount(0);
   await expect(page.getByText('订阅', { exact: false })).toHaveCount(0);

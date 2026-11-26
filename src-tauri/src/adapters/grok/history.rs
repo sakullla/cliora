@@ -271,7 +271,7 @@ fn push_usage(
         .and_then(Value::as_u64)
         .filter(|value| *value > 0);
     if usage::active(counts) || request_count.is_some() {
-        events.push(UsageEvent { native_usage: None,
+        events.push(UsageEvent { native_cost_usd: None, native_usage: None,
             id,
             model,
             timestamp: time,
@@ -367,7 +367,7 @@ fn reconcile(
         return;
     }
     *partial = true;
-    events.push(UsageEvent { native_usage: None,
+    events.push(UsageEvent { native_cost_usd: None, native_usage: None,
         id,
         model: None,
         timestamp: time,

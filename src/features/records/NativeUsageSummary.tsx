@@ -10,10 +10,12 @@ export function NativeUsageSummary({ totals }: { totals: UsageTotals }) {
   const { t } = useTranslation();
   const units = totals.nativeUsage ?? [];
   const unknown = totals.unknownTokenRecords ?? 0;
-  if (!units.length && !unknown) return null;
+  const cost = totals.nativeCostUsd;
+  const costNote = cost != null && <p className={styles.note}>{t('records.native.costUsd', { value: formatNativeValue(cost) })}</p>;
+  if (!units.length && !unknown) return costNote || null;
   const lead = unknown ? t('records.native.unknownTokens', { count: unknown }) : t('records.native.extra');
-  if (!units.length) return <p className={styles.note}><Icon name="info" size={14} /><span>{lead}</span></p>;
-  return <section className={styles.note} aria-label={t('records.native.title')}>
+  if (!units.length) return <>{costNote}<p className={styles.note}><Icon name="info" size={14} /><span>{lead}</span></p></>;
+  return <>{costNote}<section className={styles.note} aria-label={t('records.native.title')}>
     <details>
       <summary><Icon name="info" size={14} /><span>{lead}</span><small>{t('records.native.more', { count: units.length })}</small></summary>
       <ul>{units.map((usage) => <li key={`${usage.unit}:${usage.billable}`}>
@@ -22,5 +24,5 @@ export function NativeUsageSummary({ totals }: { totals: UsageTotals }) {
       </li>)}</ul>
       <p>{t('records.native.hint')}</p>
     </details>
-  </section>;
+  </section></>;
 }

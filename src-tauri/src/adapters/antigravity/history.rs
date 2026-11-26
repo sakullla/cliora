@@ -739,6 +739,7 @@ fn record_transcript_usage(
             session,
             seen,
             UsageEvent {
+                native_cost_usd: None,
                 native_usage: None,
                 request_count: Some(1),
                 id: format!("{conversation}:tr:{}", event.line),
@@ -779,6 +780,7 @@ fn append_usage(
             Ok(Some(event)) => {
                 let response_id = event.response_id.clone();
                 record_usage(session, seen, UsageEvent {
+                    native_cost_usd: None,
                     native_usage: None,
                     request_count: Some(1),
                     id: response_id,

@@ -6,7 +6,7 @@ declarations and product assertions, not native CLI evidence by themselves.
 
 | Case | Action | Contract |
 | --- | --- | --- |
-| `session-v3.json` | `session` | Real 18.20.2 wire shape: 256-byte title slot, v3 header, two turns appended by `--resume`, four-way token split and local cost outside the shared pipeline. |
+| `session-v3.json` | `session` | Real 18.20.2 wire shape: 256-byte title slot, v3 header, two turns appended by `--resume`, four-way token split and per-call native USD cost. |
 | `branch-compaction.json` | `session` | User title slot wins, only the active branch enters the transcript, compaction/branch summaries remain visible, an interrupted assistant turn and a title `model_usage` call still count locally. |
 | `auto-title.json` | `session` | An `source: "auto"` title slot is read as the current title; the repository keeps one auto and one user slot fixture. |
 | `damaged-record.json` | `session` | One malformed JSONL row marks the session partial without hiding the readable rows. |
@@ -15,10 +15,8 @@ declarations and product assertions, not native CLI evidence by themselves.
 
 The sanitized session bodies live in `tests/fixtures/history/omp-*`. The real
 18.20.2 sample is documented in `docs/verification/omp-history.md`; all paths,
-titles and message text in the fixture are neutral placeholders. Native
-`usage.cost` is parsed and asserted in the Rust module, but the records page
-labels its money figure `估算费用` and computes it from the user/known price
-table rather than showing the native per-call amount.
+titles and message text in the fixture are neutral placeholders.
+The records page shows the deduplicated sum of native USD amounts from `usage.cost`. Calls without a recorded amount use the configured or known model price when available.
 
 An unknown version/header file is intentionally absent from the verified
 session list. The records page shows the per-source reason from

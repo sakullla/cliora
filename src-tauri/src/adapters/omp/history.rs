@@ -12,9 +12,7 @@
 //! title, and an empty slot title clears it instead of falling back.
 //!
 //! This module only reads. It never rewrites the JSONL body or the title slot,
-//! and never substitutes Pi's JSONL/session semantics. Native cost has no
-//! channel in the shared `UsageEvent`; it is verified in this module's tests and
-//! deliberately left out of the shared pipeline, matching other adapters.
+//! and preserves the native USD cost alongside each deduplicated call.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
@@ -101,7 +99,7 @@ pub(crate) fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
     // A title-only rewrite keeps the file size but changes mtime/change-time;
     // the explicit prefix also rebuilds indexes written by the pre-title parser.
     for source in &mut sources {
-        source.fingerprint = format!("omp-title-slot-v1|{}", source.fingerprint);
+        source.fingerprint = format!("omp-native-cost-v2|{}", source.fingerprint);
     }
     Ok(sources)
 }
@@ -127,9 +125,6 @@ struct Header {
 #[derive(Clone, Debug)]
 struct UsageSample {
     counts: usage::TokenCounts,
-    /// Native priced cost has no shared `UsageEvent` channel; module tests verify
-    /// it from the same parse without persisting a currency claim.
-    #[allow(dead_code)]
     cost: Option<f64>,
     model: Option<String>,
     timestamp: Option<i64>,
@@ -188,7 +183,7 @@ fn cost_total(usage: &Value) -> Option<f64> {
             seen = true;
         }
     }
-    seen.then_some(sum)
+    (seen && sum.is_finite()).then_some(sum)
 }
 
 fn model_identifier(provider: Option<&str>, model: Option<&str>) -> Option<String> {
@@ -591,6 +586,7 @@ fn parse_controlled(
             &mut events,
             format!("{source_key}:{}", entry_key(entry)),
             RequestUsage {
+                native_cost_usd: sample.cost,
                 counts: sample.counts,
                 model: sample.model.clone(),
                 timestamp: sample.timestamp,
@@ -600,6 +596,7 @@ fn parse_controlled(
     session.usage = events
         .into_iter()
         .map(|(id, event)| UsageEvent {
+            native_cost_usd: event.native_cost_usd,
             native_usage: None,
             request_count: Some(1),
             id,
@@ -1060,26 +1057,10 @@ mod tests {
     }
 
     #[test]
-    fn native_cost_is_read_per_call_without_entering_the_shared_pipeline() {
-        let fixture = fs::read_to_string(fixture_path("omp-v3-branch-compaction.jsonl")).unwrap();
-        let mut total = 0.0;
-        for line in fixture.lines() {
-            let row: Value = serde_json::from_str(line).unwrap();
-            let usage = match row.get("type").and_then(Value::as_str) {
-                Some("message") => row.get("message").and_then(|message| message.get("usage")),
-                Some("model_usage") => row.get("usage"),
-                _ => None,
-            };
-            if let Some(usage) = usage {
-                total += cost_total(usage).unwrap_or(0.0);
-            }
-        }
-        assert!((total - 0.000895).abs() < 1e-12, "实际 {total}");
+    fn native_cost_includes_branch_and_model_usage_calls() {
         let parsed = parse_fixture("omp-v3-branch-compaction.jsonl");
-        assert!(parsed
-            .usage
-            .iter()
-            .all(|event| event.native_usage.is_none()));
+        let costs = parsed.usage.iter().map(|event| event.native_cost_usd.unwrap());
+        assert!((costs.sum::<f64>() - 0.000895).abs() < 1e-12);
     }
 
     #[test]
@@ -1213,6 +1194,9 @@ mod tests {
             Some("0190f4a2-0000-7000-8000-000000000001")
         );
         assert_eq!(stored.usage_count, 2);
+        let totals = crate::history::detail(&db, &stored.id).unwrap().totals;
+        assert_eq!(totals.native_cost_usd, Some(0.0034));
+        assert_eq!(totals.cost, Some(0.0034));
         assert_eq!(stored.message_count, 4);
         assert!(!stored.partial);
 

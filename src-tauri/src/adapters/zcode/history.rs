@@ -313,7 +313,7 @@ fn parse_internal(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Resul
             if session.model.is_none() {
                 session.model.clone_from(&model);
             }
-            session.usage.push(UsageEvent { native_usage: None,
+            session.usage.push(UsageEvent { native_cost_usd: None, native_usage: None,
                 request_count: Some(1),
                 id: usage_id,
                 timestamp: started,
@@ -586,6 +586,7 @@ fn parse_rollout(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result
             &mut events,
             key,
             RequestUsage {
+                native_cost_usd: None,
                 counts,
                 model,
                 timestamp: row.get("startedAt").and_then(timestamp),
@@ -595,7 +596,7 @@ fn parse_rollout(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result
     session.partial |= partial;
     session.usage = events
         .into_iter()
-        .map(|(id, event)| UsageEvent { native_usage: None,
+        .map(|(id, event)| UsageEvent { native_cost_usd: None, native_usage: None,
             request_count: Some(1),
             id,
             model: event.model,

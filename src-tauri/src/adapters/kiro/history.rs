@@ -378,6 +378,7 @@ fn parse_current(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result
                             .map(str::to_owned)
                             .unwrap_or_else(|| format!("line-{line}"));
                         session.usage.push(UsageEvent {
+                            native_cost_usd: None,
                             native_usage: Some(NativeUsage {
                                 unit: "context-usage-percent".into(),
                                 value: percent,
@@ -430,6 +431,7 @@ fn parse_current(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result
                                     .map(str::to_owned)
                                     .unwrap_or_else(|| format!("line-{line}"));
                                 session.usage.push(UsageEvent {
+                                    native_cost_usd: None,
                                     native_usage: Some(NativeUsage {
                                         unit: unit.to_owned(),
                                         value,

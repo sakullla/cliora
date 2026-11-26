@@ -129,6 +129,9 @@ impl NativeUsage {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageEvent {
+    /// Per-call cost in USD recorded by the CLI, including an explicit zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_cost_usd: Option<f64>,
     /// Native units are independent from tokens and monetary estimates.
     #[serde(default)]
     pub native_usage: Option<NativeUsage>,
@@ -1153,8 +1156,8 @@ fn store_encoded_session(
         .map_err(|error| error.to_string())?;
     let mut insert = conn
         .prepare_cached(
-            "INSERT OR REPLACE INTO history_usage (session_id,event_id,tool,model,timestamp,input,output,cache_read,cache_write,input_includes_cache,request_count,native_usage_json)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            "INSERT OR REPLACE INTO history_usage (session_id,event_id,tool,model,timestamp,input,output,cache_read,cache_write,input_includes_cache,request_count,native_usage_json,native_cost_usd)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
         )
         .map_err(|error| error.to_string())?;
     for event in &parsed.usage {
@@ -1178,7 +1181,8 @@ fn store_encoded_session(
                 event.cache_write.map(|value| value as i64),
                 event.input_includes_cache as i64,
                 event.request_count.map(|value| value.min(i64::MAX as u64) as i64),
-                event.native_usage.as_ref().map(serde_json::to_string).transpose().map_err(|error| error.to_string())?
+                event.native_usage.as_ref().map(serde_json::to_string).transpose().map_err(|error| error.to_string())?,
+                event.native_cost_usd
             ])
             .map_err(|error| error.to_string())?;
     }
@@ -1527,9 +1531,16 @@ pub fn list(db: &Database, filter: &HistoryFilter) -> Result<Vec<HistorySession>
     db.with_read_connection(|conn| {
         // A session belongs to a date range when it was last active there or when any
         // of its model calls happened there, so long sessions show up on every day used.
-        let mut sql = String::from(
+        // Browsing needs only metadata. For a multi-tool list SQLite otherwise
+        // probes idx_history_tool_time, visits transcript rows and sorts them.
+        let source = if search.is_none() && filter.tool_id.is_none() && tools.len() > 1 {
+            "history_sessions s INDEXED BY idx_history_list"
+        } else {
+            "history_sessions s"
+        };
+        let mut sql = format!(
             "SELECT id,tool,native_id,title,cwd,model,project_id,started_at,updated_at,favorite,partial,stale,message_count,usage_count
-             FROM history_sessions s WHERE (?1 IS NULL OR tool = ?1)
+             FROM {source} WHERE (?1 IS NULL OR tool = ?1)
              AND (?2 IS NULL OR project_id = ?2 OR (?2 = '__unknown__' AND project_id IS NULL))
              AND ((?4 IS NULL AND ?5 IS NULL)
                OR ((?4 IS NULL OR updated_at >= ?4) AND (?5 IS NULL OR updated_at < ?5))
@@ -1561,6 +1572,18 @@ pub fn list(db: &Database, filter: &HistoryFilter) -> Result<Vec<HistorySession>
     })
 }
 
+fn resume_reason(native_id: Option<&str>, path: Option<&str>, stale: bool) -> Option<String> {
+    if native_id.is_none() {
+        Some("原始记录没有可验证的恢复 ID".into())
+    } else if path.is_none_or(|cwd| !Path::new(cwd).is_dir()) {
+        Some("原项目目录不存在，请先关联有效目录".into())
+    } else if stale {
+        Some("会话源最近读取失败，请修复后刷新索引".into())
+    } else {
+        None
+    }
+}
+
 pub fn detail(db: &Database, id: &str) -> Result<HistoryDetail, String> {
     let session = db.with_read_connection(|conn| conn.query_row(
         "SELECT id,tool,native_id,title,cwd,model,project_id,started_at,updated_at,favorite,partial,stale,message_count,usage_count,messages_json,usage_json,children_json
@@ -1588,15 +1611,7 @@ pub fn detail(db: &Database, id: &str) -> Result<HistoryDetail, String> {
         .flatten()
         .flatten();
     let resume_path = session.0.cwd.as_deref().or(linked_path.as_deref());
-    let reason = if session.0.native_id.is_none() {
-        Some("原始记录没有可验证的恢复 ID".into())
-    } else if resume_path.is_none_or(|cwd| !Path::new(cwd).is_dir()) {
-        Some("原项目目录不存在，请先关联有效目录".into())
-    } else if session.0.stale {
-        Some("会话源最近读取失败，请修复后刷新索引".into())
-    } else {
-        None
-    };
+    let reason = resume_reason(session.0.native_id.as_deref(), resume_path, session.0.stale);
     Ok(HistoryDetail {
         session: session.0,
         messages,
@@ -1755,24 +1770,23 @@ pub fn resume_plan(
     id: &str,
     mode: crate::adapters::LaunchMode,
 ) -> Result<crate::launch::LaunchPlan, String> {
-    let detail = detail(db, id)?;
-    if let Some(reason) = detail.resume_reason {
+    // Rendering the resume button needs launch metadata only. The transcript
+    // and its usage report have already been loaded by the session reader.
+    let (tool_id, native_id, project_id, cwd, stale, source_path) = db.with_read_connection(|conn| {
+        conn.query_row(
+            "SELECT s.tool, s.native_id, s.project_id, COALESCE(s.cwd, p.path), s.stale, s.source_path
+             FROM history_sessions s LEFT JOIN projects p ON p.id = s.project_id WHERE s.id = ?1",
+            [id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?,
+                row.get::<_, bool>(4)?, row.get::<_, String>(5)?)),
+        ).optional().map_err(|error| error.to_string())
+    })?.ok_or("会话已从本机索引移除")?;
+    if let Some(reason) = resume_reason(native_id.as_deref(), cwd.as_deref(), stale) {
         return Err(reason);
     }
-    let native_id = detail
-        .session
-        .native_id
-        .ok_or("原始记录没有可验证的恢复 ID")?;
-    if detail.session.cwd.is_none() && detail.session.project_id.is_none() {
-        return Err("原会话没有项目目录".into());
-    }
-    let cwd = match detail.session.cwd.as_deref() {
-        Some(cwd)=>PathBuf::from(cwd),
-        None=>crate::projects::get(db,detail.session.project_id.as_deref().ok_or("原会话没有工作目录")?)?.path.map(PathBuf::from).ok_or("原会话没有工作目录")?,
-    };
-    let source_path:String=db.with_connection(|conn|conn.query_row("SELECT source_path FROM history_sessions WHERE id=?1",[id],|row|row.get(0)).map_err(|e|e.to_string()))?;
+    let cwd = PathBuf::from(cwd.ok_or("原会话没有工作目录")?);
     let mut context=None;
-    for account in crate::accounts::list(db)?.into_iter().filter(|account|account.tool_id==detail.session.tool_id) {
+    for account in crate::accounts::list(db)?.into_iter().filter(|account|account.tool_id==tool_id) {
         for ctx in account.context.iter().chain(&account.retired_contexts) {
             if ctx.history_roots.iter().any(|root|Path::new(&source_path).starts_with(root)) {
                 context=Some((account.id.clone(),crate::accounts::resolve_retained(db,home,&account.id,&account.tool_id,&ctx.id)?));
@@ -1784,9 +1798,9 @@ pub fn resume_plan(
         registry,
         home,
         crate::launch::LaunchRequest {
-            tool_id: detail.session.tool_id,
-            project_id: detail.session.project_id,
-            session_id: Some(native_id),
+            tool_id,
+            project_id,
+            session_id: native_id,
             directory: None,
             initial_prompt: None,
             mode,
@@ -1890,6 +1904,9 @@ pub fn export(db: &Database, id: &str, format: &str, destination: &Path) -> Resu
             let token_note = if detail.totals.unknown_token_records == detail.totals.usage_records { "未知".into() }
                 else { format!("{}（另有 {} 条记录 token 未知）", detail.totals.total, detail.totals.unknown_token_records) };
             text.push_str(&format!("## 用量\n\nToken：{token_note}\n\n"));
+            if let Some(cost) = detail.totals.native_cost_usd {
+                text.push_str(&format!("CLI 原生费用：USD {cost}\n\n"));
+            }
             for usage in &detail.totals.native_usage {
                 let status = match usage.billable { Some(true) => "原生标记可计费", Some(false) => "原生标记未计费", None => "计费状态未知" };
                 text.push_str(&format!("- {}：{}；原始值：{}；{}；原始值未知记录：{}\n", usage.unit, usage.value,

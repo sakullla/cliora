@@ -468,13 +468,18 @@ fn totals_of(usage: &[super::UsageEvent]) -> UsageTotals {
         } else {
             input
         };
+        if let Some(cost) = event.native_cost_usd {
+            *totals.native_cost_usd.get_or_insert(0.0) += cost;
+        } else {
+            totals.unpriced_tokens += fresh + event.output.unwrap_or(0) + cache_read + cache_write;
+        }
         totals.input += fresh;
         totals.output += event.output.unwrap_or(0);
         totals.cache_read += cache_read;
         totals.cache_write += cache_write;
     }
     totals.total = totals.input + totals.output + totals.cache_read + totals.cache_write;
-    totals.unpriced_tokens = totals.total;
+    totals.cost = totals.native_cost_usd;
     totals
 }
 

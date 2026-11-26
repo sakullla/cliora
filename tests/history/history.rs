@@ -638,7 +638,7 @@ fn same_length_and_restored_mtime_still_refreshes_changed_content() {
 /// `counts` is (input, output, cache read, cache write).
 fn event(id: &str, model: Option<&str>, timestamp: i64, counts: (u64, u64, Option<u64>, Option<u64>), includes_cache: bool) -> UsageEvent {
     let (input, output, read, write) = counts;
-    UsageEvent { native_usage: None, request_count: Some(1), id: id.into(), model: model.map(str::to_owned), timestamp: Some(timestamp), input: Some(input), output: Some(output), cache_read: read, cache_write: write, input_includes_cache: includes_cache, attributions: Vec::new() }
+    UsageEvent { native_cost_usd: None, native_usage: None, request_count: Some(1), id: id.into(), model: model.map(str::to_owned), timestamp: Some(timestamp), input: Some(input), output: Some(output), cache_read: read, cache_write: write, input_includes_cache: includes_cache, attributions: Vec::new() }
 }
 
 /// Stores a synthetic session through the same path a scan uses.
@@ -657,12 +657,47 @@ const DAY: i64 = 86_400_000;
 const FIXTURE_DAY: i64 = 1790668800000;
 
 #[test]
+fn native_dollars_override_rates_per_call_and_keep_their_currency() {
+    let db = Database::open(Path::new(":memory:")).unwrap();
+    let registry = Registry::with_adapters(vec![&CODEX]).unwrap();
+    let price = HistoryPrice {
+        tool_id: "codex".into(), model: "fixture-model".into(), currency: "USD".into(),
+        input_per_million: 1.0, output_per_million: 0.0, cache_read_per_million: 0.0,
+        cache_write_per_million: 0.0, source: "fixture rate".into(), updated_at: 0,
+    };
+    save_price(&db, &registry, price.clone()).unwrap();
+    let sample = |id, cost| UsageEvent {
+        native_cost_usd: cost,
+        ..event(id, Some("fixture-model"), FIXTURE_DAY, (1_000_000, 0, None, None), false)
+    };
+    let id = store_events(&db, "codex", "native-cost", None, vec![
+        sample("paid", Some(0.25)), sample("free", Some(0.0)), sample("estimate", None),
+    ]);
+    store_events(&db, "codex", "duplicate", None, vec![sample("paid", Some(0.25))]);
+    let totals = detail(&db, &id).unwrap().totals;
+    assert_eq!(totals.native_cost_usd, Some(0.25));
+    assert_eq!(totals.cost, Some(1.25));
+    let report = usage_report(&db, &HistoryFilter::default()).unwrap();
+    assert_eq!(report.totals.cost, Some(1.25));
+    assert_eq!(report.by_model[0].totals.native_cost_usd, Some(0.25));
+    assert_eq!(report.duplicate_requests, 1);
+    assert_eq!(report.totals.unpriced_tokens, 0);
+    save_price(&db, &registry, HistoryPrice { currency: "CNY".into(), ..price }).unwrap();
+    let mixed = usage_report(&db, &HistoryFilter::default()).unwrap();
+    assert!(mixed.mixed_currency);
+    assert_eq!(mixed.totals.cost, Some(1.0));
+    assert_eq!(mixed.currency, "CNY");
+    assert_eq!(mixed.totals.native_cost_usd, Some(0.25));
+}
+
+#[test]
 fn native_units_roundtrip_filter_group_deduplicate_and_export_without_token_prices() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("native.db")).unwrap();
     // An unregistered implementation label exercises the shared contract without
     // adding any tool-specific dispatch or model pricing exceptions.
     let unit_event = |id: &str, at, value, original, billable| UsageEvent {
+        native_cost_usd: None,
         native_usage: Some(NativeUsage { unit: "work_units".into(), value, original_value: original, billable }),
         id: id.into(), model: Some("synthetic-priced-model".into()), timestamp: Some(at), request_count: Some(1),
         input: None, output: None, cache_read: None, cache_write: None, input_includes_cache: false, attributions: Vec::new(),
@@ -712,6 +747,7 @@ fn percent_gauge_units_aggregate_by_maximum_instead_of_summing() {
     // context-usage-percent rows are instantaneous samples of one session's
     // context occupancy; adding them would exceed 100% and misreport usage.
     let sample = |id: &str, at, value| UsageEvent {
+        native_cost_usd: None,
         native_usage: Some(NativeUsage { unit: "context-usage-percent".into(), value, original_value: None, billable: None }),
         id: id.into(), model: None, timestamp: Some(at), request_count: Some(1),
         input: None, output: None, cache_read: None, cache_write: None, input_includes_cache: false, attributions: Vec::new(),
@@ -724,11 +760,13 @@ fn percent_gauge_units_aggregate_by_maximum_instead_of_summing() {
     ]);
     // Additive native units in the same report keep summing.
     let credit = UsageEvent {
+        native_cost_usd: None,
         native_usage: Some(NativeUsage { unit: "credits".into(), value: 2.0, original_value: None, billable: Some(true) }),
         id: "credit-a".into(), model: None, timestamp: Some(day), request_count: Some(1),
         input: None, output: None, cache_read: None, cache_write: None, input_includes_cache: false, attributions: Vec::new(),
     };
     let credit_again = UsageEvent {
+        native_cost_usd: None,
         native_usage: Some(NativeUsage { unit: "credits".into(), value: 3.0, original_value: None, billable: Some(true) }),
         id: "credit-b".into(),
         timestamp: Some(day + 3_000),
@@ -2039,6 +2077,7 @@ fn parent_detail_keeps_attribution_and_child_bodies_out_of_list_search_report_an
     parsed.updated_at = Some(FIXTURE_DAY);
     parsed.messages.push(transcript("parent-msg", "user", "父会话正文可见"));
     parsed.usage.push(UsageEvent {
+        native_cost_usd: None,
         native_usage: None,
         request_count: Some(1),
         id: "shared-call".into(),

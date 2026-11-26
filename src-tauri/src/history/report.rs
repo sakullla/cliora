@@ -21,6 +21,8 @@ const MAX_GROUPS: usize = 24;
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageTotals {
+    /// Sum of USD amounts recorded by the CLI, independent of the report currency.
+    pub native_cost_usd: Option<f64>,
     pub native_usage: Vec<NativeUsageTotal>,
     /// Records with no reported token buckets (native credits are not tokens).
     pub unknown_token_records: u64,
@@ -289,6 +291,7 @@ impl PricedModel {
 /// One de-duplicated usage record with disjoint token buckets.
 #[derive(Clone, Debug)]
 struct Call {
+    native_cost_usd: Option<f64>,
     native_usage: Option<super::NativeUsage>,
     tokens_known: bool,
     session: usize,
@@ -342,6 +345,9 @@ impl Tally {
         totals.usage_records += 1;
         totals.unknown_request_records += u64::from(call.request_count.is_none());
         totals.unknown_token_records += u64::from(!call.tokens_known);
+        if let Some(cost) = call.native_cost_usd {
+            *totals.native_cost_usd.get_or_insert(0.0) += cost;
+        }
         if let Some(native) = &call.native_usage {
             let index = totals.native_usage.iter().position(|item| item.unit == native.unit && item.billable == native.billable);
             let total = if let Some(index) = index { &mut totals.native_usage[index] } else {
@@ -465,7 +471,7 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
     }
     let sql = format!(
         "SELECT u.session_id, u.event_id, u.tool, u.model, u.timestamp, u.input, u.output, u.cache_read, u.cache_write,
-                u.input_includes_cache, u.request_count, u.native_usage_json
+                u.input_includes_cache, u.request_count, u.native_usage_json, u.native_cost_usd
          FROM {}
          WHERE {clause}
          ORDER BY u.timestamp", usage_source(filter)
@@ -498,7 +504,7 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
     let mut sources = std::collections::BTreeSet::new();
     let mut model_index = HashMap::<(usize, Option<String>), usize>::new();
     let mut last_model: Option<usize> = None;
-    let mut rates: Vec<Option<PricedModel>> = Vec::new();
+    let mut rates = HashMap::new();
     let mut tool_index = HashMap::<String, usize>::new();
     let count = |value: Option<i64>| value.unwrap_or(0).max(0) as u64;
     while let Some(row) = rows.next().map_err(|error| error.to_string())? {
@@ -541,10 +547,7 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
             let index = match model_index.get(&key) {
                 Some(index) => *index,
                 None => {
-                    let rate = key.1.as_deref().and_then(|model| book.resolve(&loaded.tools[tool], model));
-                    if let Some(price) = &rate { sources.insert(price.label.clone()); }
                     let index = loaded.models.len();
-                    rates.push(rate);
                     loaded.models.push(key.clone());
                     model_index.insert(key, index);
                     index
@@ -574,6 +577,7 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
             input
         };
         let mut call = Call {
+            native_cost_usd: row.get(12).map_err(|error| error.to_string())?,
             native_usage: row.get_ref(11).map_err(|error| error.to_string())?.as_str_or_null().map_err(|error| error.to_string())?
                 .map(serde_json::from_str::<super::NativeUsage>).transpose().map_err(|error| error.to_string())?
                 .filter(super::NativeUsage::valid),
@@ -589,7 +593,21 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
             output,
             cost: None,
         };
-        if call.tokens_known { call.cost = rates[call.model].as_ref().map(|price| price.cost(&call)); }
+        if let Some(cost) = call.native_cost_usd {
+            if book.currency == "USD" {
+                call.cost = Some(cost);
+            } else {
+                book.mixed.set(true);
+            }
+        } else if call.tokens_known {
+            let rate = rates.entry(model).or_insert_with(|| {
+                let name = loaded.models[model].1.as_deref()?;
+                let price = book.resolve(tool_name, name)?;
+                sources.insert(price.label.clone());
+                Some(price)
+            });
+            call.cost = rate.as_ref().map(|price| price.cost(&call));
+        }
         loaded.calls.push(call);
     }
     loaded.price_sources = sources.into_iter().collect();

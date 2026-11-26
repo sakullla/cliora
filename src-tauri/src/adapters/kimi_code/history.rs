@@ -521,7 +521,7 @@ pub fn parse_controlled(
                     // event_id) with INSERT OR REPLACE, so a session-level id
                     // would let one agent stream silently overwrite another's
                     // token events.
-                    session.usage.push(UsageEvent { native_usage: None,
+                    session.usage.push(UsageEvent { native_cost_usd: None, native_usage: None,
                         request_count: Some(1),
                         id: format!("{}:usage-{usage_index}", wire_source.key()),
                         model: row.get("model").and_then(Value::as_str).map(str::to_owned),

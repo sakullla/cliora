@@ -19,7 +19,7 @@ pub struct Database {
     read_path: Option<std::path::PathBuf>,
 }
 
-pub(crate) const LATEST_VERSION: u32 = 39;
+pub(crate) const LATEST_VERSION: u32 = 40;
 
 impl Database {
     /// Independent consumers can read a configured desktop without creating or migrating its DB.
@@ -847,6 +847,12 @@ impl Database {
             )?;
             tx.commit()?;
         }
+        if version < 40 {
+            let tx = connection.transaction()?;
+            tx.execute_batch("ALTER TABLE history_usage ADD COLUMN native_cost_usd REAL CHECK (native_cost_usd >= 0);
+                              PRAGMA user_version = 40;")?;
+            tx.commit()?;
+        }
         crate::secrets::audit::prune(&connection, crate::prompts::timestamp())?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -931,6 +937,9 @@ impl Database {
 /// strict CREATE TABLE checks and never repair a contradictory user_version.
 #[cfg(test)]
 pub(crate) fn remove_later_fixture_tables(conn: &Connection, target_version: u32) -> rusqlite::Result<()> {
+    if target_version < 40 {
+        conn.execute_batch("ALTER TABLE history_usage DROP COLUMN native_cost_usd;")?;
+    }
     if target_version < 39 {
         conn.execute_batch("DROP TABLE IF EXISTS secret_direct_reads;")?;
     }

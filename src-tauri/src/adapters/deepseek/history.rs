@@ -171,7 +171,7 @@ pub fn parse_controlled(
     let scope = session.native_id.clone().unwrap_or_else(|| source.key());
     session.usage = events
         .into_iter()
-        .map(|(id, event)| UsageEvent { native_usage: None,
+        .map(|(id, event)| UsageEvent { native_cost_usd: None, native_usage: None,
             request_count: Some(1),
             id: format!("deepseek:{scope}:{id}"),
             model: event.model,
@@ -268,6 +268,7 @@ fn fold_usage(
         events,
         key,
         RequestUsage {
+            native_cost_usd: None,
             counts,
             model: data.pointer("/message/source/model")
                 .and_then(Value::as_str)

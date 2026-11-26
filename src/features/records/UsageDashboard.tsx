@@ -149,7 +149,7 @@ function TrendChart({ report, metric, now, average }: { report: UsageReport; met
           <p><span>{i18n.t('records.usage.totalTokens')}</span><b>{formatTotalTokens(shown.totals)}</b></p>
           {metric.startsWith('native:') && <p><span>{nativeUnitLabel(metric.slice(7))}</span><b>{format(value(shown.totals))}</b></p>}
           {tokenParts().map((part) => shown.totals[part.key] > 0 && <p key={part.key}><span><i data-key={part.key} />{part.label}</span><b>{formatTokens(shown.totals[part.key])}</b></p>)}
-          <p><span>{i18n.t('records.usage.estCost')}</span><b>{formatMoney(shown.totals.cost, report.currency)}</b></p>
+          <p><span>{i18n.t(shown.totals.nativeCostUsd != null ? 'records.usage.cost' : 'records.usage.estCost')}</span><b>{formatMoney(shown.totals.cost, report.currency)}</b></p>
           <p><span>{i18n.t('records.usage.requests')}</span><b>{i18n.t('records.usage.requestCount', { count: shown.totals.requests.toLocaleString() })}{shown.totals.unknownRequestRecords > 0 ? i18n.t('records.usage.partialUnknown') : ''}{i18n.t('records.usage.sessionCount', { count: shown.totals.sessions })}</b></p>
         </> : <p><span>{shown.start > now ? i18n.t('records.usage.future') : i18n.t('records.usage.noCalls')}</span></p>}
       </div>}
@@ -418,7 +418,7 @@ export function UsageDashboard({ search, onSearchChange, favoriteOnly, onClearSe
               <Delta current={totals.unknownTokenRecords ? null : totals.total} previous={previous?.totals.total} label={compare} title={compareTitle} />
             </div>
             <div className={styles.metric} data-focus={shownMetric === 'cost' || undefined} data-interactive={canSwitch || undefined} role={canSwitch ? 'button' : undefined} tabIndex={canSwitch ? 0 : undefined} title={canSwitch && shownMetric !== 'cost' ? t('records.usage.switchMetricCost') : undefined} onClick={canSwitch ? (event) => { if (!(event.target instanceof Element && event.target.closest('button'))) setMetric('cost'); } : undefined} onKeyDown={canSwitch ? (event) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setMetric('cost'); } } : undefined}>
-              <small><Icon name="archive" size={16} />{t('records.usage.estCost')} <span className={styles.currency}>{report.currency}</span></small>
+              <small><Icon name="archive" size={16} />{t(totals.nativeCostUsd != null ? 'records.usage.cost' : 'records.usage.estCost')} <span className={styles.currency}>{report.currency}</span></small>
               <strong title={exactMoney(totals.cost, report.currency)} data-unpriced={totals.cost === null || undefined}>{formatMoney(totals.cost, report.currency)}</strong>
               {totals.unpricedTokens > 0
                 ? <button type="button" className={styles.metricNote} onClick={() => openPrice()}>{t('records.usage.unpricedNote', { percent: formatPercent(1 - pricedShare) })}</button>

@@ -330,7 +330,7 @@ pub fn parse_controlled(
         let session_key = child_ids.contains(&message_session).then(|| message_session.clone());
         // message.data.cost (per-message provider cost accumulation) has no
         // channel in the shared UsageEvent contract; see the module docs.
-        session.usage.push(UsageEvent { native_usage: None,
+        session.usage.push(UsageEvent { native_cost_usd: None, native_usage: None,
             request_count: Some(1),
             id: message_id,
             model,

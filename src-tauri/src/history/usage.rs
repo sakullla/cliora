@@ -15,6 +15,7 @@ pub struct TokenCounts {
 
 #[derive(Clone, Debug)]
 pub struct RequestUsage {
+    pub native_cost_usd: Option<f64>,
     pub counts: TokenCounts,
     pub model: Option<String>,
     pub timestamp: Option<i64>,

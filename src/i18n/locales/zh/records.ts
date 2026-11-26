@@ -1,5 +1,6 @@
 export default {
   native: {
+    costUsd: 'CLI 原生费用 · USD {{value}}',
     title: 'CLI 自带计量', billable: '原生标记：可计费', unbilled: '原生标记：未计费', unknownBilling: '计费状态未知',
     original: '原始值：{{value}}', unknownOriginal: '{{count}} 条记录原始值未知', unknown: '未知',
     hint: '这些值来自本机日志，不代表余额或货币金额。计费标记保留原生含义。',
@@ -439,7 +440,7 @@ export default {
     noteStale: '{{count}} 个会话的源文件最近读取失败',
     notePartialSuffix: '；它们只计入已读取到的部分。',
     costLabel: '费用',
-    noteCost: '为估算，不等于账单：优先使用你设置的价格，其次使用内置公开价；未定价模型的 token 不计入费用。',
+    noteCost: '优先使用 CLI 日志中的逐次调用金额。其余调用按自定义、导入或内置价格估算，未定价的 token 不计入费用。',
     noteMixed: '部分价格不是 {{currency}}，未合并计入。',
     noteLatest: '本机记录里最近一次调用：{{time}}。',
     noteIndexed: '已索引 {{count}} 个会话源{{failed}}。',

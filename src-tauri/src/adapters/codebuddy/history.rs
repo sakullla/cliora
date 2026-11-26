@@ -219,6 +219,7 @@ fn record_usage(
     }
     let index = session.usage.len();
     session.usage.push(UsageEvent {
+        native_cost_usd: None,
         native_usage: None,
         request_count: Some(1),
         id: event,

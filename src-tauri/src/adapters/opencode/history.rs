@@ -284,7 +284,7 @@ fn legacy_usage(id: String, message: &Value, time: Option<i64>) -> Option<UsageE
     if message.get("role").and_then(Value::as_str) != Some("assistant") { return None; }
     let tokens = message.get("tokens")?;
     let cache = tokens.get("cache").unwrap_or(&Value::Null);
-    Some(UsageEvent { native_usage: None,
+    Some(UsageEvent { native_cost_usd: None, native_usage: None,
         request_count: Some(1), id, model: message_model(message), timestamp: time,
         input: token(tokens, "input"),
         output: usage::generated(token(tokens, "output"), token(tokens, "reasoning")),
@@ -354,7 +354,7 @@ fn parse_v2(
                     // Same accounting as 1.x: stored input already excludes
                     // cache; reasoning is generated and counted into output.
                     let cache = tokens.get("cache").unwrap_or(&Value::Null);
-                    session.usage.push(UsageEvent { native_usage: None,
+                    session.usage.push(UsageEvent { native_cost_usd: None, native_usage: None,
                         request_count: Some(1),
                         id: message_id.clone(),
                         model,

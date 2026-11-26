@@ -365,6 +365,7 @@ pub fn parse_controlled(
     session.usage = events
         .into_iter()
         .map(|(id, event)| UsageEvent {
+            native_cost_usd: None,
             native_usage: None,
             request_count: Some(1),
             id: id.clone(),
@@ -620,6 +621,7 @@ fn fold_assistant(
                 events,
                 key.clone(),
                 RequestUsage {
+                    native_cost_usd: None,
                     counts,
                     model: model.clone(),
                     timestamp: time,
@@ -659,6 +661,7 @@ fn fold_assistant(
             events,
             advisor_key.clone(),
             RequestUsage {
+                native_cost_usd: None,
                 counts,
                 model: advisor_model,
                 timestamp: time,
