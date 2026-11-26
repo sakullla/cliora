@@ -3,6 +3,23 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Command;
 
+/// Filename suffixes one Windows installation publishes for the same command,
+/// most specific first. An npm install ships `name`, `name.cmd` and `name.ps1`;
+/// the extensionless file is a Unix shim and never a Win32 image.
+#[cfg(windows)]
+pub(crate) fn windows_program_suffixes() -> &'static [&'static str] {
+    &[".exe", ".cmd", ".bat", ".ps1"]
+}
+
+/// Suffixes that can answer a direct child-process launch. A `.ps1` file is a
+/// PowerShell script: an interactive shell can run it, `CreateProcess` cannot,
+/// so a spawn-only caller must never resolve to one. `.cmd`/`.bat` are batch
+/// files and need the command interpreter as their program image.
+#[cfg(windows)]
+pub(crate) fn windows_spawn_suffixes() -> &'static [&'static str] {
+    &[".exe", ".cmd", ".bat"]
+}
+
 /// Finder-launched macOS apps do not inherit the user's terminal PATH. Keep the
 /// recovered PATH on child commands rather than mutating the process environment.
 pub(crate) fn path() -> Option<OsString> {

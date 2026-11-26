@@ -120,10 +120,81 @@ export type AdapterDescriptor = {
    * is reported by the secret MCP status instead of this field.
    */
   secretMcp?: { state: 'supported' | 'unverified' | 'unsupported'; reason: string };
+  /**
+   * The adapter's own declaration of an ACP conversation route. Published even
+   * when unsupported so the launch setting keeps the terminal fallback and can
+   * explain itself. 'supported' requires a recorded interactive turn; a
+   * declared but untested entry stays 'unverified'.
+   */
+  acp?: AcpCapability;
   remoteNativeFiles?: RemoteNativeDocument[];
   remoteResources?: import('./remote').RemoteResourceLayout;
   remoteSkillDirectories?: import('./remote').RemoteSkillDirectory[];
 };
+/** Where an ACP entry point comes from: the product's own binary, a separately
+ *  distributed vendor component, or a third-party bridge. */
+export type AcpOrigin = 'native' | 'vendor' | 'bridge';
+
+/** A program the entry needs but does not ship. */
+export type AcpDependency = {
+  name: string;
+  program?: string;
+  installHint: string;
+  helpUrl: string;
+};
+
+/** Environment contract for one ACP entry, applied before the first frame. */
+export type AcpEnvironmentPolicy = {
+  set: [string, string][];
+  /** Variables bound to the installation the user selected, so ACP never runs
+   *  a different identity than the terminal launch. */
+  bindInstallation: string[];
+  /** Variables that must not reach the agent. */
+  remove: string[];
+};
+
+/** What this entry point can do, as far as the recorded evidence shows. */
+export type AcpCapabilities = {
+  session: boolean;
+  authorization: boolean;
+  cancel: boolean;
+  resume: boolean;
+};
+
+/** The adapter-owned declaration of one ACP entry point. */
+export type AcpEntry = {
+  executable: string;
+  args: string[];
+  origin: AcpOrigin;
+  dependency?: AcpDependency;
+  environment: AcpEnvironmentPolicy;
+  /** Compatible CLI line as [since, before); absent when not version-shaped. */
+  versionRange?: [string, string];
+  versionRangeReason: string;
+  capabilities: AcpCapabilities;
+  /** Windows only: the name also names a system program, so a candidate
+   *  outside the adapter's own installs is refused. */
+  rejectsSystemProgram: boolean;
+};
+
+export type AcpCapability = {
+  state: 'supported' | 'unverified' | 'unsupported';
+  evidence: 'interactive' | 'handshake' | 'documented' | 'none';
+  reason: string;
+  entry?: AcpEntry;
+};
+
+/** Why an ACP launch cannot start. The code is a closed set. */
+export type AcpFailureCode =
+  | 'unsupported'
+  | 'version-unsupported'
+  | 'dependency-missing'
+  | 'not-installed'
+  | 'system-program'
+  | 'identity-unresolved';
+
+export type AcpFailure = { code: AcpFailureCode; reason: string; help: string };
+
 export type AdapterCatalog = {
   registered: AdapterDescriptor[];
   managedIds: string[];

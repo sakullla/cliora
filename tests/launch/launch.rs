@@ -234,6 +234,9 @@ fn macos_terminal_denial_is_an_error_and_does_not_echo_private_commands() {
 fn sample(terminal: TerminalId) -> LaunchPlan {
     LaunchPlan {
         resume_native_id: None,
+        interaction: InteractionMode::Terminal,
+        acp: None,
+        initial_prompt: None,
         account_version: None,
         account_context: None,
         tool_id: "grok".into(),
@@ -368,6 +371,7 @@ fn agent_selection_composes_only_for_verified_adapters_and_new_sessions() {
         resume_latest: false, remote_intent: None,
         agent,
         session_options: None,
+        interaction: None,
     };
     // A 1.5.9 selection composes after the launch flags; no selection keeps
     // the historical argument list byte-for-byte.
@@ -441,6 +445,7 @@ fn agent_selection_composes_only_for_verified_adapters_and_new_sessions() {
         mode: LaunchMode::Normal,
         resume_latest: false, remote_intent: None, agent: Some("probe".into()),
         session_options: None,
+        interaction: None,
     };
     let refused_default = plan(&db, &others, temp.path(), grok_request).unwrap_err();
     assert!(refused_default.contains("不支持"), "{refused_default}");
@@ -476,6 +481,7 @@ fn session_options_are_published_validated_and_version_gated() {
         mode: LaunchMode::Normal,
         resume_latest: false, remote_intent: None, agent: None,
         session_options: options,
+        interaction: None,
     };
     // No selection keeps the historical argument list for both lines, with
     // and without YOLO/resume.
@@ -539,6 +545,7 @@ fn session_options_are_published_validated_and_version_gated() {
         mode: LaunchMode::Normal,
         resume_latest: false, remote_intent: None, agent: None,
         session_options: Some(BTreeMap::from([("mode".into(), "plan".into())])),
+        interaction: None,
     };
     let refused = plan(&db, &legacy, temp.path(), legacy_request).unwrap_err();
     assert!(refused.contains("未发布会话参数"), "{refused}");
@@ -572,6 +579,7 @@ fn missing_project_never_falls_back_to_user_home() {
             mode: LaunchMode::Normal,
             resume_latest: false, remote_intent: None, agent: None,
             session_options: None,
+            interaction: None,
         },
     );
     let failure = result.unwrap_err();
@@ -607,6 +615,7 @@ fn launch_recovers_interrupted_skills_before_tool_probe_without_opening_tools_pa
             mode: LaunchMode::Normal,
             resume_latest: false, remote_intent: None, agent: None,
             session_options: None,
+            interaction: None,
         },
     );
     assert_eq!(result.unwrap_err().stage, LaunchStage::Tool);
@@ -666,6 +675,7 @@ fn damaged_claude_skill_backup_blocks_claude_but_not_grok_launch() {
             mode: LaunchMode::Normal,
             resume_latest: false, remote_intent: None, agent: None,
             session_options: None,
+            interaction: None,
         },
     )
     .unwrap();
@@ -683,6 +693,7 @@ fn damaged_claude_skill_backup_blocks_claude_but_not_grok_launch() {
             mode: LaunchMode::Normal,
             resume_latest: false, remote_intent: None, agent: None,
             session_options: None,
+            interaction: None,
         },
     )
     .unwrap_err();
@@ -753,6 +764,7 @@ fn damaged_project_skill_backup_only_blocks_that_project() {
         mode: LaunchMode::Normal,
         resume_latest: false, remote_intent: None, agent: None,
         session_options: None,
+        interaction: None,
     };
     assert_eq!(
         plan_with_stage(&db, &registry, temp.path(), request(Some(first.id)))
@@ -812,6 +824,7 @@ fn project_launch_plan_uses_real_probe_and_project_model_without_shell_expansion
         mode: LaunchMode::Yolo,
         resume_latest: false, remote_intent: None, agent: None,
         session_options: None,
+        interaction: None,
     };
     let defaulted = plan(&db, &registry, temp.path(), request.clone()).unwrap();
     assert_eq!(defaulted.terminal, TerminalId::Workbench);
@@ -854,6 +867,7 @@ fn project_launch_plan_uses_real_probe_and_project_model_without_shell_expansion
             mode: LaunchMode::Normal,
             resume_latest: false, remote_intent: None, agent: None,
             session_options: None,
+            interaction: None,
         },
     )
     .unwrap_err();
@@ -1158,7 +1172,11 @@ fn workbench_session_accepts_input_resize_and_close_without_leaking_credentials(
         remote_session_id: None,
         remote_end_args: None,
         environment: Vec::new(),
-    };
+    
+        interaction: crate::launch::InteractionMode::Terminal,
+        acp: None,
+        initial_prompt: None,
+};
     let started = spawn(&db, plan).unwrap();
     assert_eq!(started.status, "session_started");
     assert_eq!(started.terminal, TerminalId::Workbench);

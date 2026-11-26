@@ -11,7 +11,8 @@ import type { AccountCapability, AccountImpact, AccountReapplyRequest, AuthAccou
 import type { AgentSnapshot, AgentRequest, AgentResult, PluginTarget, PluginRequest, PluginSnapshot, PluginResult, PluginContents, PluginFile } from '../types/resources';
 import type { Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, MemoryAggregate, MemoryReadRequest, MemoryReadResult, MemoryDelete, MemoryDocument, MemoryEnable, MemoryList, MemorySave, MemoryTarget, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
-import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, SavedWorkbenchSession, TerminalId, TrayStatus, TwiglaneFeedbackPreview, TwiglaneFeedbackSendOutcome, TwiglaneLinkOutcome, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchGitContext, WorkbenchWorktree, WorkbenchReplay, WorkbenchSession, WorkbenchTerminalSize, RemoteSessionIndexEntry, WorktreeBase, WorktreeBasePreview, WorktreeCleanupReport, WorktreeLedgerEntry, WorktreeMenuStatus, WorktreePrepareCommand } from '../types/launch';
+import type { InteractionMode, LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, SavedWorkbenchSession, TerminalId, TrayStatus, TwiglaneFeedbackPreview, TwiglaneFeedbackSendOutcome, TwiglaneLinkOutcome, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchGitContext, WorkbenchWorktree, WorkbenchReplay, WorkbenchSession, WorkbenchTerminalSize, RemoteSessionIndexEntry, WorktreeBase, WorktreeBasePreview, WorktreeCleanupReport, WorktreeLedgerEntry, WorktreeMenuStatus, WorktreePrepareCommand } from '../types/launch';
+import type { AcpEvent, AcpSessionSnapshot } from '../types/acp';
 import type { LibraryDraft, LibraryItem, LibraryTitle, LibraryKind } from '../types/library';
 import type { ScriptAccessOptions, NewSecretExecutor, PromptSecret, PromptSecretPage, PromptSecretReference, SecretAuditEntry, SecretBrokerStatus, SecretCliContext, SecretExecutor, SecretGrant, SecretInstallation, SecretInstallationKind, SecretMcpState, SecretMcpTarget } from '../types/secrets';
 import type { McpDefinition, McpDraft, McpDraftPreview, McpDraftTargetRequest, McpCommitResult, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpStore, NativeRuleFile, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue, SkillManifest, SkillFileListing, SkillFilePreview } from '../types/resources';
@@ -632,6 +633,34 @@ export const native = {
   deleteMemory: (request: MemoryDelete) => command<void>('delete_memory', { request }),
   setMemoryEnabled: (request: MemoryEnable) => command<MemoryList>('set_memory_enabled', { request }),
 };
+
+/**
+ * ACP conversation commands. They mirror the native names one to one; the event
+ * payload carries the session id so a view only renders its own conversation.
+ */
+export const acpEventName = 'cliora:acp-event';
+
+export const acp = {
+  list: () => command<AcpSessionSnapshot[]>('list_acp_sessions'),
+  session: (sessionId: string) => command<AcpSessionSnapshot>('acp_session', { sessionId }),
+  prompt: (sessionId: string, text: string) => command<void>('acp_prompt', { sessionId, text }),
+  cancel: (sessionId: string) => command<void>('acp_cancel', { sessionId }),
+  respondPermission: (sessionId: string, requestId: string, optionId: string | null = null) =>
+    command<void>('acp_respond_permission', { sessionId, requestId, optionId }),
+  close: (sessionId: string) => command<void>('acp_close', { sessionId }),
+};
+
+/** How a local new session starts. Independent of the terminal type and of YOLO. */
+export const setLaunchInteraction = (mode: InteractionMode) =>
+  command<LaunchSettings>('set_launch_interaction', { mode });
+
+/** Subscribe to streamed conversation events. The caller filters by session id. */
+export async function onAcpEvent(listener: (event: AcpEvent) => void): Promise<() => void> {
+  if (!isTauri()) return () => {};
+  const { listen } = await import('@tauri-apps/api/event');
+  const dispose = await listen<AcpEvent>(acpEventName, event => listener(event.payload));
+  return dispose;
+}
 
 export const describeConfiguration = (toolId: string, scope: Scope) => command<ConfigurationDescriptor | null>('describe_configuration', { toolId, scope });
 export const openConfigurationDraft = (profile: RegisteredProfile, scope: Scope, sessionId: string) => command<ConfigurationDraft>('open_configuration_draft', { profile, scope, sessionId });

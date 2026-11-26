@@ -464,6 +464,7 @@ fn old_checkpoint_gets_exact_project_scope_without_rewriting_account_or_director
         native_id: Some("native".into()),
         account_id: Some("account".into()),
         context_id: Some("context".into()),
+        interaction: crate::launch::InteractionMode::Terminal,
     };
     crate::workbench_restore::save(&db, &saved).unwrap();
     let contexts = session_contexts(&db).unwrap();

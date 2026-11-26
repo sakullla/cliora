@@ -1806,6 +1806,7 @@ pub fn resume_plan(
             mode,
             resume_latest: false, remote_intent: None, agent: None,
             session_options: None,
+            interaction: None,
         },
         &cwd,
         context,

@@ -242,15 +242,71 @@ fn acp_is_system_program(path: &Path) -> bool {
         .any(|suffix| text.starts_with(&format!("{roots}{suffix}")))
 }
 
-/// Platform filename suffixes of a runnable program, most specific first. A
-/// Windows npm install publishes `name.exe`, `name.cmd` and `name.ps1`; the
-/// extensionless file is a Unix shim and never a Win32 image.
+/// Platform filename suffixes of a program an ACP host can start directly,
+/// most specific first. It shares the terminal launch's Windows policy, minus
+/// the PowerShell script: a `.ps1` entry cannot be a child process image, so
+/// publishing it would report a launch that can never start.
 fn acp_program_suffixes() -> &'static [&'static str] {
-    if cfg!(windows) {
-        &[".exe", ".cmd", ".ps1"]
-    } else {
-        &[""]
+    #[cfg(windows)]
+    return crate::process_environment::windows_spawn_suffixes();
+    #[cfg(not(windows))]
+    return &[""];
+}
+
+/// Where an ACP program's suffix comes from, for the Windows diagnostics: a
+/// `.cmd`/`.bat` entry needs the command interpreter, so the shared host
+/// starts it through one instead of handing the file to `CreateProcess`.
+pub fn acp_needs_command_interpreter(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat"))
+}
+
+/// Resolve the program an ACP entry must start.
+///
+/// The version line and the identity both come from the installation the user
+/// selected, so a program from a different installation must never answer the
+/// entry: the archived release that shares an executable name would otherwise
+/// bypass the version check, and two installations would run the wrong one.
+fn resolve_acp_program(
+    entry: &AcpEntry,
+    directories: &[PathBuf],
+    installation: Option<&Path>,
+) -> Result<PathBuf, AcpIssue> {
+    let selected = installation.filter(|path| path.exists());
+    if let Some(installation) = selected {
+        // The selected installation's own directory wins: an npm or vendor
+        // install publishes the entry beside the executable the user chose.
+        if let Some(parent) = installation.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            if let Ok(found) = entry.locate(std::slice::from_ref(&parent.to_path_buf())) {
+                return Ok(found);
+            }
+        }
+        // The selected program may already be the entry itself.
+        if entry.same_program(installation) && entry.accepts_candidate(installation) {
+            return Ok(installation.to_path_buf());
+        }
     }
+    let found = entry.locate(directories)?;
+    // A product-binary entry searched elsewhere resolved to another install.
+    // Report the disagreement instead of running a version the launch never
+    // validated.
+    let same_install = selected
+        .and_then(Path::parent)
+        .is_some_and(|parent| found.parent() == Some(parent));
+    if let Some(installation) = selected.filter(|_| entry.origin == AcpOrigin::Native && !same_install) {
+        return Err(AcpIssue {
+            code: "identity-unresolved",
+            reason: format!(
+                "命中程序与所选安装不一致：{} 解析到 {}，所选安装是 {}；请重装该 CLI 或重新检测安装路径",
+                entry.command_line(),
+                found.display(),
+                installation.display()
+            ),
+            help: entry.dependency.map(|item| item.help_url).unwrap_or(""),
+        });
+    }
+    Ok(found)
 }
 
 impl AcpEntry {
@@ -266,6 +322,16 @@ impl AcpEntry {
     /// program is refused for entries that declare the collision.
     pub fn accepts_candidate(&self, path: &Path) -> bool {
         !(self.rejects_system_program && acp_is_system_program(path))
+    }
+
+    /// Whether `path` names the same program as `executable`, ignoring the
+    /// platform suffix an installation adds (`kimi.cmd` answers `kimi`). The
+    /// selected installation may itself be the entry instead of sitting beside
+    /// it; this is the only case where that is allowed.
+    pub fn same_program(&self, path: &Path) -> bool {
+        path.file_stem()
+            .and_then(|stem| stem.to_str())
+            .is_some_and(|stem| stem.eq_ignore_ascii_case(self.executable))
     }
 
     /// Search `directories` in order and return the first accepted program.
@@ -1594,10 +1660,11 @@ pub trait CliAdapter: Sync {
         if capability.state == "unsupported" {
             let reason = match (entry.version_range, version) {
                 (Some((since, before)), Some(version)) => format!(
-                    "{}；当前 {}，该 ACP 入口适用 {} 起、{} 之前（{}）",
-                    capability.reason, version, since, before, entry.version_range_reason
+                    "{}：{}；当前 {}，该 ACP 入口适用 {} 起、{} 之前（{}）",
+                    ACP_VERSION_OUT_OF_RANGE, capability.reason, version, since, before,
+                    entry.version_range_reason
                 ),
-                _ => capability.reason.to_string(),
+                _ => format!("{}：{}", ACP_VERSION_OUT_OF_RANGE, capability.reason),
             };
             return Err(AcpIssue { code: "version-unsupported", reason, help: "" });
         }
@@ -1623,7 +1690,10 @@ pub trait CliAdapter: Sync {
                 })?;
             }
         }
-        let program = entry.locate(&directories)?;
+        // The program must come from the installation the version was read
+        // from; a different install would run a version this launch never
+        // validated.
+        let program = resolve_acp_program(&entry, &directories, installation)?;
         let mut environment = entry
             .environment
             .set

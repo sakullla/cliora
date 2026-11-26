@@ -22,6 +22,10 @@ pub struct SavedSession {
     pub project_id: Option<String>,
     pub directory: String,
     pub mode: LaunchMode,
+    /// How the tab talked to its CLI. A record written before this field
+    /// existed reads as a terminal, which is what it was.
+    #[serde(default)]
+    pub interaction: crate::launch::InteractionMode,
     pub started_at: u64,
     pub stopped_at: Option<u64>,
     pub native_id: Option<String>,
@@ -53,7 +57,8 @@ pub fn from_plan(plan: &LaunchPlan) -> Option<SavedSession> {
     if plan.terminal != TerminalId::Workbench || plan.project_id.as_deref().is_some_and(|id| id.starts_with("remote:")) { return None; }
     Some(SavedSession {
         id: String::new(), tool_id: plan.tool_id.clone(), project_id: plan.project_id.clone(),
-        directory: plan.directory.display().to_string(), mode: plan.mode, started_at: now(), stopped_at: None,
+        directory: plan.directory.display().to_string(), mode: plan.mode, interaction: plan.interaction,
+        started_at: now(), stopped_at: None,
         native_id: plan.resume_native_id.clone(),
         account_id: plan.account_context.as_ref().map(|(id, _)| id.clone()),
         context_id: plan.account_context.as_ref().map(|(_, context)| context.id.clone()),
@@ -336,6 +341,21 @@ fn restore_context(scope: &RestoreScope<'_>, indices: &[usize]) -> Vec<(usize, I
     let Some(adapter) = scope.registry.get(&session.tool_id) else {
         return fail_group(scope, indices, "此 CLI 已不可用，恢复记录已保留");
     };
+    // A conversation tab knows its own protocol session id, so it restores
+    // through the agent instead of the CLI's history index.
+    if scope.targets[indices[0]].interaction == crate::launch::InteractionMode::Acp {
+        let context = match (&session.account_id, &session.context_id) {
+            (Some(account), Some(context)) => {
+                match crate::accounts::resolve_retained(scope.db, scope.home, account, &session.tool_id, context) {
+                    Ok(context) => Some((account.clone(), context)),
+                    Err(detail) => return fail_group(scope, indices, &detail),
+                }
+            }
+            (None, None) => None,
+            _ => return fail_group(scope, indices, "原账号上下文不完整，不能恢复到其他账号"),
+        };
+        return restore_conversation_items(scope, indices, context.as_ref());
+    }
     if !adapter.history_supported() {
         return fail_group(scope, indices, "此 CLI 尚不支持精确恢复；请从新会话重新启动");
     }
@@ -416,7 +436,7 @@ fn restore_items(
             let mut plan = launch::plan_history_context(db, registry, home, launch::LaunchRequest {
                 tool_id: session.tool_id.clone(), project_id: session.project_id.clone(), session_id: Some(native),
                 directory: None, initial_prompt: None, mode: session.mode, resume_latest: false, remote_intent: None, agent: None,
-                session_options: None,
+                session_options: None, interaction: None,
             }, Path::new(&session.directory), context.cloned()).map_err(|error| error.message)?;
             plan.terminal = TerminalId::Workbench;
             let baseline = saved_baseline(db, &session.id)?;
@@ -430,6 +450,89 @@ fn restore_items(
             let cleanup = if live.contains_key(&session.id) { crate::session_host::close(&session.id) } else { Ok(()) };
             if let Err(error) = cleanup.and_then(|()| forget(db, &session.id)) {
                 let _ = crate::session_host::close(&id);
+                let _ = forget(db, &id);
+                return Err(error);
+            }
+            Ok(id)
+        })();
+        match attempt {
+            Ok(id) => {
+                progress(scope, session, RestoreStage::Restored, None, Vec::new(), Some(&id));
+                outcomes.push((index, ItemOutcome::Restored(id)));
+            }
+            Err(detail) => {
+                progress(scope, session, RestoreStage::Failed, Some(detail.clone()), Vec::new(), None);
+                outcomes.push((index, ItemOutcome::Failed { detail, candidates: Vec::new() }));
+            }
+        }
+    }
+    outcomes
+}
+
+/// Restore conversation tabs. The agent's own negotiated load decides whether
+/// the old conversation comes back; when it does not, the tab is reported as
+/// failed and the first prompt is never resent automatically.
+fn restore_conversation_items(
+    scope: &RestoreScope<'_>,
+    indices: &[usize],
+    context: Option<&(String, crate::accounts::NativeContext)>,
+) -> Vec<(usize, ItemOutcome)> {
+    let RestoreScope { db, registry, home, targets, live, claimed, .. } = *scope;
+    let _context = crate::accounts::selection::enter(context.map(|(_, context)| context.clone()));
+    let mut outcomes = Vec::with_capacity(indices.len());
+    for &index in indices {
+        let session = &targets[index];
+        let attempt = (|| -> Result<String, String> {
+            let native = session
+                .native_id
+                .clone()
+                .ok_or("原对话缺少会话编号，无法恢复")?;
+            let claim = (
+                (session.tool_id.clone(), session.account_id.clone(), session.context_id.clone()),
+                native.clone(),
+            );
+            if !claimed.lock().unwrap_or_else(|error| error.into_inner()).insert(claim) {
+                return Err("此会话已经恢复".into());
+            }
+            progress(scope, session, RestoreStage::Starting, None, Vec::new(), None);
+            let mut plan = launch::plan_history_context(
+                db,
+                registry,
+                home,
+                launch::LaunchRequest {
+                    tool_id: session.tool_id.clone(),
+                    project_id: session.project_id.clone(),
+                    session_id: None,
+                    directory: None,
+                    initial_prompt: None,
+                    mode: session.mode,
+                    resume_latest: false,
+                    remote_intent: None,
+                    agent: None,
+                    session_options: None,
+                    interaction: Some(crate::launch::InteractionMode::Acp),
+                },
+                Path::new(&session.directory),
+                context.cloned(),
+            )
+            .map_err(|error| error.message)?;
+            // The conversation is identified by the protocol's own session id,
+            // not by a CLI resume flag.
+            plan.resume_native_id = Some(native);
+            let result = launch::spawn(db, plan)?;
+            let id = result.session_id.ok_or("未创建恢复会话")?;
+            if let Err(error) = crate::workspaces::restore_session_context(db, &session.id, &id) {
+                let _ = crate::acp_host::close(&id);
+                let _ = forget(db, &id);
+                return Err(error);
+            }
+            let cleanup = if live.contains_key(&session.id) {
+                crate::acp_host::close(&session.id)
+            } else {
+                Ok(())
+            };
+            if let Err(error) = cleanup.and_then(|()| forget(db, &session.id)) {
+                let _ = crate::acp_host::close(&id);
                 let _ = forget(db, &id);
                 return Err(error);
             }
@@ -475,7 +578,9 @@ mod tests {
         std::fs::write(root.join("before.txt"), "pre-existing\n").unwrap();
         let mut saved = SavedSession { id: uuid::Uuid::new_v4().to_string(), tool_id: "codex".into(),
             project_id: None, directory: root.display().to_string(), mode: LaunchMode::Normal,
-            started_at: 0, stopped_at: None, native_id: None, account_id: None, context_id: None };
+            started_at: 0, stopped_at: None, native_id: None, account_id: None, context_id: None,
+            interaction: crate::launch::InteractionMode::Terminal,
+        };
         let path = temp.path().join("restore.db");
         baseline::capture(&saved.id, &root);
         let original = baseline::get(&saved.id).unwrap();
@@ -528,7 +633,9 @@ mod tests {
         assert!(!identities[0].title.is_empty());
         let saved = SavedSession { id: "tab".into(), tool_id: "codebuddy".into(), project_id: None,
             directory: identities[0].cwd.clone().unwrap(), mode: LaunchMode::Normal,
-            started_at: 0, stopped_at: None, native_id: identities[0].native_id.clone(), account_id: None, context_id: None };
+            started_at: 0, stopped_at: None, native_id: identities[0].native_id.clone(), account_id: None, context_id: None,
+            interaction: crate::launch::InteractionMode::Terminal,
+        };
         assert!(candidate(&saved, &identities[0], now()));
         std::fs::remove_file(&sources[0].path).unwrap();
         let error = crate::history::restore_identities(&db, adapter, &sources).unwrap_err();
@@ -538,7 +645,9 @@ mod tests {
     fn checkpoint_metadata_round_trips_without_launch_secrets() {
         let temp = tempfile::tempdir().unwrap();
         let db = Database::open(&temp.path().join("restore.db")).unwrap();
-        let session = SavedSession { id: "tab".into(), tool_id: "codex".into(), project_id: None, directory: "/work".into(), mode: LaunchMode::Normal, started_at: 10_000, stopped_at: Some(20_000), native_id: None, account_id: None, context_id: None };
+        let session = SavedSession { id: "tab".into(), tool_id: "codex".into(), project_id: None, directory: "/work".into(), mode: LaunchMode::Normal, started_at: 10_000, stopped_at: Some(20_000), native_id: None, account_id: None, context_id: None,
+        interaction: crate::launch::InteractionMode::Terminal,
+    };
         save(&db, &session).unwrap();
         assert_eq!(list(&db).unwrap()[0].id, "tab");
         forget(&db, "tab").unwrap();
@@ -546,7 +655,9 @@ mod tests {
     }
     #[test]
     fn matching_requires_directory_time_and_native_identity() {
-        let saved = SavedSession { id: "tab".into(), tool_id: "codex".into(), project_id: None, directory: "/work".into(), mode: LaunchMode::Normal, started_at: 10_000, stopped_at: Some(20_000), native_id: None, account_id: None, context_id: None };
+        let saved = SavedSession { id: "tab".into(), tool_id: "codex".into(), project_id: None, directory: "/work".into(), mode: LaunchMode::Normal, started_at: 10_000, stopped_at: Some(20_000), native_id: None, account_id: None, context_id: None,
+        interaction: crate::launch::InteractionMode::Terminal,
+    };
         let mut parsed = SessionIdentity {
             cwd: Some("/work".into()), native_id: Some("one".into()), started_at: Some(10_000), ..Default::default()
         };
@@ -578,7 +689,9 @@ mod tests {
     fn conversation_named_by_another_tab_is_not_ambiguous() {
         // Claude writes a transcript only after the first message, so a tab
         // opened earlier can see a sibling's conversation inside its window.
-        let legacy = SavedSession { id: "legacy".into(), tool_id: "claude".into(), project_id: None, directory: "/work".into(), mode: LaunchMode::Normal, started_at: 10_000, stopped_at: Some(20_000), native_id: None, account_id: None, context_id: None };
+        let legacy = SavedSession { id: "legacy".into(), tool_id: "claude".into(), project_id: None, directory: "/work".into(), mode: LaunchMode::Normal, started_at: 10_000, stopped_at: Some(20_000), native_id: None, account_id: None, context_id: None,
+        interaction: crate::launch::InteractionMode::Terminal,
+    };
         let named = SavedSession { id: "named".into(), native_id: Some("two".into()), started_at: 9_000, ..legacy.clone() };
         let all = [named.clone(), legacy.clone()];
         let session = |id: &str, at: i64| SessionIdentity {
@@ -610,7 +723,9 @@ mod tests {
         assert_eq!(serde_json::to_value(RestoreStage::Failed).unwrap(), "failed");
         // The saved-record list IPC keeps the same field spelling.
         let saved = SavedSession { id: "tab".into(), tool_id: "codex".into(), project_id: None, directory: "/work".into(),
-            mode: LaunchMode::Normal, started_at: 1, stopped_at: None, native_id: None, account_id: None, context_id: None };
+            mode: LaunchMode::Normal, started_at: 1, stopped_at: None, native_id: None, account_id: None, context_id: None,
+            interaction: crate::launch::InteractionMode::Terminal,
+        };
         let json = serde_json::to_value(&saved).unwrap();
         assert_eq!(json["toolId"], "codex");
         assert_eq!(json["startedAt"], 1);
@@ -664,7 +779,9 @@ mod tests {
             rusqlite::params![account.id, account.tool_id, account.version, data]).map(|_| ()).map_err(|error| error.to_string())).unwrap();
         let saved = SavedSession { id: "account-tab".into(), tool_id: "codex".into(), project_id: None,
             directory: home.display().to_string(), mode: LaunchMode::Normal, started_at, stopped_at: Some(now()),
-            native_id: Some(native.into()), account_id: Some(account.id.clone()), context_id: Some(context.id.clone()) };
+            native_id: Some(native.into()), account_id: Some(account.id.clone()), context_id: Some(context.id.clone()),
+            interaction: crate::launch::InteractionMode::Terminal,
+        };
         save(&db, &saved).unwrap();
         let mut registry = Registry::builtins();
         registry.fixture_installations.insert("codex".into(), vec![crate::native::adapter::Installation {
@@ -730,11 +847,15 @@ mod tests {
         std::fs::write(&program, "[Console]::WriteLine('restored-args:' + ($args -join '|')); $null = [Console]::ReadLine(); [Console]::WriteLine('RESTORE_EXIT_TAIL')").unwrap();
         let directory = home.display().to_string();
         let restorable = SavedSession { id: "codex-tab".into(), tool_id: "codex".into(), project_id: None, directory: directory.clone(),
-            mode: LaunchMode::Normal, started_at, stopped_at: Some(now()), native_id: None, account_id: None, context_id: None };
+            mode: LaunchMode::Normal, started_at, stopped_at: Some(now()), native_id: None, account_id: None, context_id: None,
+            interaction: crate::launch::InteractionMode::Terminal,
+        };
         // This tab names a conversation its own native history never held.
         let missing = SavedSession { id: "claude-tab".into(), tool_id: "claude_code".into(), project_id: None, directory,
             mode: LaunchMode::Normal, started_at, stopped_at: Some(now()), native_id: Some("22222222-2222-4222-8222-222222222222".into()),
-            account_id: None, context_id: None };
+            account_id: None, context_id: None,
+            interaction: crate::launch::InteractionMode::Terminal,
+        };
         let db = Database::open(&home.join("restore.db")).unwrap();
         save(&db, &missing).unwrap();
         save(&db, &restorable).unwrap();
@@ -784,7 +905,9 @@ mod tests {
         std::fs::write(logs.join("rollout-fixture.jsonl"), format!("{line}\n")).unwrap();
         let program = home.join("fixture.ps1");
         std::fs::write(&program, "[Console]::WriteLine('restored-args:' + ($args -join '|')); $null = [Console]::ReadLine(); [Console]::WriteLine('RESTORE_EXIT_TAIL')").unwrap();
-        let saved = SavedSession { id: "previous-process".into(), tool_id: "codex".into(), project_id: None, directory: home.display().to_string(), mode: LaunchMode::Normal, started_at, stopped_at: Some(now()), native_id: None, account_id: None, context_id: None };
+        let saved = SavedSession { id: "previous-process".into(), tool_id: "codex".into(), project_id: None, directory: home.display().to_string(), mode: LaunchMode::Normal, started_at, stopped_at: Some(now()), native_id: None, account_id: None, context_id: None,
+        interaction: crate::launch::InteractionMode::Terminal,
+    };
         let original: crate::session_baseline::SessionBaseline = serde_json::from_value(serde_json::json!({
             "root": home, "head": "a".repeat(40), "dirty": {"old.txt": null}
         })).unwrap();
@@ -913,13 +1036,17 @@ mod restore_fixture {
             write_codex_transcript(home, native);
             saved.push(SavedSession { id: format!("codex-tab-{index}"), tool_id: "codex".into(), project_id: None,
                 directory: directory.clone(), mode: LaunchMode::Normal, started_at: 10_000 + index as u64 * 1_000,
-                stopped_at: Some(20_000), native_id: Some((*native).into()), account_id: None, context_id: None });
+                stopped_at: Some(20_000), native_id: Some((*native).into()), account_id: None, context_id: None,
+                interaction: crate::launch::InteractionMode::Terminal,
+            });
         }
         for (index, native) in claude.iter().enumerate() {
             write_claude_transcript(home, &format!("claude-{index}"), native);
             saved.push(SavedSession { id: format!("claude-tab-{index}"), tool_id: "claude_code".into(), project_id: None,
                 directory: directory.clone(), mode: LaunchMode::Normal, started_at: 10_000 + index as u64 * 1_000,
-                stopped_at: Some(20_000), native_id: Some((*native).into()), account_id: None, context_id: None });
+                stopped_at: Some(20_000), native_id: Some((*native).into()), account_id: None, context_id: None,
+                interaction: crate::launch::InteractionMode::Terminal,
+            });
         }
         saved
     }

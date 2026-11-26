@@ -644,6 +644,7 @@ pub(crate) fn start_with_baseline(plan: LaunchPlan, credential: Option<&(String,
         project_id: plan.project_id,
         mode: plan.mode,
         terminal: TerminalId::Workbench,
+        interaction: plan.interaction,
         status: "session_started",
         session_id: Some(id),
         remote_session_id: plan.remote_session_id,
@@ -1377,6 +1378,9 @@ fn local_process_exit_closes_conpty_and_preserves_the_tail() {
         executable: script, cli_args: vec![], directory: directory.path().into(),
         terminal: TerminalId::Workbench, session_markers: &[], credential: None,
         remote_session_id: None, remote_end_args: None, environment: vec![],
+        interaction: crate::launch::InteractionMode::Terminal,
+        acp: None,
+        initial_prompt: None,
     };
     let id = start(plan, None).unwrap().session_id.unwrap();
     struct Cleanup(String);
@@ -1416,6 +1420,9 @@ fn local_shim_handoff_stays_live_until_its_descendant_exits() {
         directory: directory.path().into(), terminal: TerminalId::Workbench,
         session_markers: &[], credential: None, remote_session_id: None,
         remote_end_args: None, environment: vec![],
+        interaction: crate::launch::InteractionMode::Terminal,
+        acp: None,
+        initial_prompt: None,
     };
     let id = start(plan, None).unwrap().session_id.unwrap();
     struct Cleanup(String);
@@ -1464,6 +1471,9 @@ fn ending_a_session_terminates_the_process_tree() {
         remote_session_id: None,
         remote_end_args: None,
         environment: Vec::new(),
+        interaction: crate::launch::InteractionMode::Terminal,
+        acp: None,
+        initial_prompt: None,
     };
     let result = start(plan, None).expect("session started");
     let id = result.session_id.expect("session id");
@@ -1528,7 +1538,11 @@ fn ending_a_session_leaves_its_directory_in_place() {
         remote_session_id: None,
         remote_end_args: None,
         environment: Vec::new(),
-    };
+    
+        interaction: crate::launch::InteractionMode::Terminal,
+        acp: None,
+        initial_prompt: None,
+};
     let id = start(plan, None).expect("session started").session_id.expect("session id");
     close(&id).expect("session closed");
     assert!(directory.is_dir());
@@ -1657,6 +1671,9 @@ exit 255
             mode: LaunchMode::Normal, executable: script, cli_args: vec![], directory: directory.path().into(),
             terminal: TerminalId::Workbench, session_markers: &[], credential: None,
             remote_session_id: Some("cliora-controlled".into()), remote_end_args: Some(vec!["-NoProfile".into(), "-Command".into(), "unused".into()]), environment: vec![],
+            interaction: crate::launch::InteractionMode::Terminal,
+            acp: None,
+            initial_prompt: None,
         };
         let id = start(plan, None).unwrap().session_id.unwrap();
         struct Cleanup(String);
@@ -1722,7 +1739,11 @@ exit 255
             mode: LaunchMode::Normal, executable: script, cli_args: vec![], directory: directory.path().into(),
             terminal: TerminalId::Workbench, session_markers: &[], credential: None,
             remote_session_id: Some(remote_id.into()), remote_end_args: Some(vec!["-NoProfile".into(), "-Command".into(), "unused".into()]), environment: vec![],
-        };
+        
+            interaction: crate::launch::InteractionMode::Terminal,
+            acp: None,
+            initial_prompt: None,
+    };
         struct Cleanup(String);
         impl Drop for Cleanup { fn drop(&mut self) { detach_for_tests(&self.0); } }
 
@@ -1778,7 +1799,11 @@ exit 255
                 terminal: TerminalId::Workbench, session_markers: &[], credential: None,
                 remote_session_id: remote.then(|| "cliora-paste".into()),
                 remote_end_args: remote.then(|| vec!["-NoProfile".into(), "-Command".into(), "unused".into()]), environment: vec![],
-            };
+            
+                interaction: crate::launch::InteractionMode::Terminal,
+                acp: None,
+                initial_prompt: None,
+        };
             let id = start(plan, None).unwrap().session_id.unwrap();
             struct Cleanup(String);
             impl Drop for Cleanup { fn drop(&mut self) { detach_for_tests(&self.0); } }
@@ -1837,7 +1862,11 @@ while ($null -ne [Console]::ReadLine()) {}
             terminal: TerminalId::Workbench, session_markers: &[], credential: None,
             remote_session_id: Some("cliora-quit".into()),
             remote_end_args: Some(vec!["-NoProfile".into(), "-Command".into(), "unused".into()]), environment: vec![],
-        };
+        
+            interaction: crate::launch::InteractionMode::Terminal,
+            acp: None,
+            initial_prompt: None,
+    };
         let id = start(plan, None).unwrap().session_id.unwrap();
         wait_for_replay(&id, "QUIT_WAITING").unwrap();
         shutdown();
@@ -1869,7 +1898,11 @@ while ($null -ne [Console]::ReadLine()) {}
             remote_session_id: Some("cliora-controlled".into()),
             remote_end_args: Some(vec!["-NoProfile".into(), "-Command".into(), "$code=[int](Get-Content -LiteralPath $env:CLIORA_TEST_END_STATUS); if ($code -eq 0) { [Console]::WriteLine('CLIORA_REMOTE_ABSENT:cliora-controlled') }; exit $code".into()]),
             environment: vec![("CLIORA_TEST_END_STATUS".into(), control.display().to_string())],
-        };
+        
+            interaction: crate::launch::InteractionMode::Terminal,
+            acp: None,
+            initial_prompt: None,
+    };
         let id = start(plan, None).unwrap().session_id.unwrap();
         struct Cleanup(String);
         impl Drop for Cleanup { fn drop(&mut self) { detach_for_tests(&self.0); } }

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::database::Database;
 use crate::native::adapter::{self, Scope};
-use crate::adapters::{self, CliAdapter, LaunchForm, LaunchMode, Registry};
+use crate::adapters::{self, AcpCommand, CliAdapter, LaunchForm, LaunchMode, Registry};
 use crate::credentials::{CredentialStore, AppCredentialStore};
 use crate::projects;
 use crate::resources::skills;
@@ -83,6 +83,29 @@ impl TerminalId {
     }
 }
 
+/// How a local new session talks to its CLI: an interactive terminal or an
+/// ACP conversation in the workbench. It is independent of the terminal type,
+/// of normal/YOLO and of the worktree preference, and never applies to a
+/// remote project, a native login, a desktop application or a resumed record.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InteractionMode {
+    /// The historical launch: an interactive terminal.
+    #[default]
+    Terminal,
+    /// ACP over the agent's standard input and output, inside the workbench.
+    Acp,
+}
+
+impl InteractionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Terminal => "terminal",
+            Self::Acp => "acp",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalOption {
@@ -100,6 +123,12 @@ pub struct LaunchSettings {
     pub custom: Option<CustomTerminal>,
     pub cli_mode: LaunchMode,
     pub project_mode: LaunchMode,
+    /// How a local new session starts. A missing or unrecognized value reads as
+    /// the terminal, so an installation from before this field keeps working.
+    pub interaction: InteractionMode,
+    /// Set when the stored interaction value cannot be recognized; the row is
+    /// left unchanged and the setting shows the value actually read.
+    pub interaction_error: Option<String>,
     /// `None` when the stored value cannot be recognized. The row is left unchanged.
     pub worktree_launch: Option<WorktreeLaunchMode>,
     pub worktree_launch_error: Option<String>,
@@ -174,6 +203,11 @@ pub struct LaunchRequest {
     pub session_options: Option<std::collections::BTreeMap<String, String>>,
     #[serde(default)]
     pub remote_intent: Option<RemoteLaunchIntent>,
+    /// Explicit interaction for this launch only. Absent follows the stored
+    /// preference; an explicit terminal is how a failed ACP launch retries in
+    /// the same directory without changing the setting.
+    #[serde(default)]
+    pub interaction: Option<InteractionMode>,
 }
 
 /// Whether this launch may create a worktree. Absent and unknown values stay
@@ -269,6 +303,8 @@ pub struct LaunchResult {
     pub project_id: Option<String>,
     pub mode: LaunchMode,
     pub terminal: TerminalId,
+    /// terminal or acp: which host actually owns the session.
+    pub interaction: InteractionMode,
     pub status: &'static str,
     pub session_id: Option<String>,
     pub remote_session_id: Option<String>,
@@ -292,6 +328,14 @@ pub struct LaunchPlan {
     /// Native conversation this launch resumes, or the id assigned to a new
     /// workbench conversation through `assigned_session_args`.
     pub resume_native_id: Option<String>,
+    /// How this launch talks to the CLI.
+    pub interaction: InteractionMode,
+    /// The resolved ACP entry, present only for an ACP launch. It carries the
+    /// program, arguments and environment the shared host applies.
+    pub acp: Option<AcpCommand>,
+    /// The first prompt, kept apart from `cli_args`: an ACP launch submits it
+    /// through the protocol instead of the command line.
+    pub initial_prompt: Option<String>,
     pub account_version: Option<u32>,
     pub account_context: Option<(String, crate::accounts::NativeContext)>,
     pub tool_id: String,
@@ -704,6 +748,10 @@ fn remote_launch_plan(
         .map_err(|error| LaunchPlanError::new(LaunchStage::Terminal, error))?;
     Ok(Some(LaunchPlan {
         resume_native_id: None,
+        // A remote session stays a terminal: the ACP host is local only.
+        interaction: InteractionMode::Terminal,
+        acp: None,
+        initial_prompt: None,
         account_version: None,
         account_context: None,
         tool_id: request.tool_id.clone(),
@@ -1015,6 +1063,7 @@ fn worktree_launch_fields(db: &Database) -> Result<(Option<WorktreeLaunchMode>, 
 pub fn settings(db: &Database) -> Result<LaunchSettings, String> {
     let (cli_mode, project_mode) = saved_launch_modes(db)?;
     let (worktree_launch, worktree_launch_error) = worktree_launch_fields(db)?;
+    let (interaction, interaction_error) = interaction_preference(db)?;
     Ok(LaunchSettings {
         selected: terminal_preference(db)?,
         terminals: terminal_options(),
@@ -1022,9 +1071,41 @@ pub fn settings(db: &Database) -> Result<LaunchSettings, String> {
         custom: stored_custom(db)?,
         cli_mode,
         project_mode,
+        interaction,
+        interaction_error,
         worktree_launch,
         worktree_launch_error,
     })
+}
+
+const INTERACTION_KEY: &str = "launch_interaction";
+const INTERACTION_FORMAT: &str = "启动方式无法识别，已按终端启动";
+
+/// The stored interaction preference. A missing row is the historical terminal
+/// launch, so an installation from before this field keeps its behaviour. An
+/// unrecognized row reads as terminal and reports itself instead of silently
+/// starting a terminal the user did not choose.
+pub fn interaction_preference(db: &Database) -> Result<(InteractionMode, Option<String>), String> {
+    match read_setting(db, INTERACTION_KEY)? {
+        None => Ok((InteractionMode::Terminal, None)),
+        Some(text) => match serde_json::from_str::<InteractionMode>(&text) {
+            Ok(mode) => Ok((mode, None)),
+            Err(_) => Ok((InteractionMode::Terminal, Some(INTERACTION_FORMAT.to_owned()))),
+        },
+    }
+}
+
+/// Rejects an unknown mode before writing, so a failed save keeps the stored
+/// row and the page can show the value actually read.
+pub fn set_interaction(db: &Database, mode: &str) -> Result<LaunchSettings, String> {
+    let parsed = match mode {
+        "terminal" => InteractionMode::Terminal,
+        "acp" => InteractionMode::Acp,
+        _ => return Err("启动方式无效".into()),
+    };
+    let value = serde_json::to_string(&parsed).map_err(|error| error.to_string())?;
+    write_setting(db, INTERACTION_KEY, &value)?;
+    settings(db)
 }
 
 /// Rejects an unknown mode before writing, so a failed save keeps the stored row.
@@ -1429,6 +1510,63 @@ fn executable_directory(executable: &Path) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// Which host owns this local launch, and the ACP entry when it is a
+/// conversation. Everything that must be known before a worktree exists is
+/// decided here: a missing bridge, an incompatible version line, an
+/// installation that does not match, or a request carrying CLI-only switches.
+fn resolve_interaction(
+    db: &Database,
+    request: &LaunchRequest,
+    launch_form: LaunchForm,
+    adapter: &dyn CliAdapter,
+    home: &Path,
+    installation: &crate::native::adapter::Installation,
+    version: Option<&str>,
+) -> Result<(InteractionMode, Option<AcpCommand>), LaunchPlanError> {
+    let stored = || {
+        interaction_preference(db)
+            .map(|(mode, _)| mode)
+            .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))
+    };
+    let wants = match (request.interaction, launch_form) {
+        (Some(InteractionMode::Acp), LaunchForm::Desktop) => {
+            return Err(LaunchPlanError::new(
+                LaunchStage::Tool,
+                "此 CLI 以桌面应用启动，不能使用 ACP 对话".into(),
+            ))
+        }
+        (Some(mode), LaunchForm::Terminal) => mode == InteractionMode::Acp,
+        (_, LaunchForm::Desktop) => false,
+        (None, LaunchForm::Terminal) => stored()? == InteractionMode::Acp,
+    };
+    if !wants {
+        return Ok((InteractionMode::Terminal, None));
+    }
+    if request.session_id.is_some() || request.resume_latest {
+        return Err(LaunchPlanError::new(
+            LaunchStage::Tool,
+            "恢复既有会话暂不支持 ACP 对话，请在设置中改用终端启动".into(),
+        ));
+    }
+    if request.agent.is_some() || request.session_options.as_ref().is_some_and(|options| !options.is_empty()) {
+        return Err(LaunchPlanError::new(
+            LaunchStage::Tool,
+            "ACP 对话不接受 Agent 或会话参数，请在设置中改用终端启动".into(),
+        ));
+    }
+    let command = adapter
+        .acp_command(home, Some(Path::new(&installation.path)), version)
+        .map_err(|issue| {
+            let reason = if issue.help.is_empty() {
+                issue.reason
+            } else {
+                format!("{}（{}）", issue.reason, issue.help)
+            };
+            LaunchPlanError::new(LaunchStage::Tool, format!("无法以 ACP 对话启动：{reason}"))
+        })?;
+    Ok((InteractionMode::Acp, Some(command)))
+}
+
 fn plan_with_stage_at(
     db: &Database,
     registry: &Registry,
@@ -1566,6 +1704,29 @@ fn plan_with_stage_at(
         ));
     }
     let version = installation_version.unwrap_or("");
+    // The interaction is fixed before any worktree exists, and only a local new
+    // session on the workbench can become a conversation. A remote project, a
+    // native login, a desktop application and a resumed record keep their own
+    // path.
+    let (interaction, acp) = resolve_interaction(
+        db,
+        &request,
+        launch_form,
+        adapter,
+        home,
+        &installation,
+        installation_version,
+    )?;
+    if let (InteractionMode::Acp, Some(project)) = (interaction, project.as_ref()) {
+        // A project model override travels as a CLI argument; the ACP entry has
+        // no such channel, so the launch would silently ignore it.
+        if project.model_overrides.contains_key(&request.tool_id) {
+            return Err(LaunchPlanError::new(
+                LaunchStage::Tool,
+                "项目为此 CLI 设定了模型覆盖，ACP 对话尚不能应用该覆盖；请在设置中改用终端启动".into(),
+            ));
+        }
+    }
     // Desktop apps have no resume command. A session id only names a directory
     // that was already selected, so the terminal resume-version gate does not apply.
     if launch_form == LaunchForm::Terminal
@@ -1639,14 +1800,24 @@ fn plan_with_stage_at(
     // may follow the stored preference. External, desktop, resume, an existing
     // session, and every non-preference launch keep the selected directory.
     // Account and skill checks stay on that checkout.
-    let terminal = match launch_form {
-        LaunchForm::Terminal => session_terminal(db)
+    let terminal = match (launch_form, interaction) {
+        // A conversation always lives in the workbench: it is the only host
+        // that can render it, and the only one that may create a worktree.
+        (_, InteractionMode::Acp) => TerminalId::Workbench,
+        (LaunchForm::Terminal, InteractionMode::Terminal) => session_terminal(db)
             .map_err(|message| LaunchPlanError::new(LaunchStage::Terminal, message))?,
-        LaunchForm::Desktop => TerminalId::Desktop,
+        (LaunchForm::Desktop, InteractionMode::Terminal) => TerminalId::Desktop,
     };
-    let executable = PathBuf::from(selected_path);
+    let executable = match &acp {
+        Some(command) => command.program.clone(),
+        None => PathBuf::from(selected_path),
+    };
+    // Only a terminal launch carries the prompt on the command line, so only it
+    // needs the batch-shim pre-resolution.
     #[cfg(windows)]
-    let (executable, entry_arg) = if request.initial_prompt.as_deref().is_some_and(|text| text.trim().contains(['\r', '\n'])) {
+    let (executable, entry_arg) = if interaction == InteractionMode::Terminal
+        && request.initial_prompt.as_deref().is_some_and(|text| text.trim().contains(['\r', '\n']))
+    {
         multiline_prompt_entry(&executable, adapter, version)
             .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?
     } else {
@@ -1676,8 +1847,11 @@ fn plan_with_stage_at(
     // attaches the selected directory.
     let selected_directory = directory_override.is_some() || project.is_some();
     let mut attached_desktop_directory = false;
-    let mut cli_args = match launch_form {
-        LaunchForm::Terminal => adapters::plan_launch(
+    let mut cli_args = match (&acp, launch_form) {
+        // The ACP entry owns its arguments; the CLI launch arguments would be
+        // protocol-incompatible switches.
+        (Some(command), _) => command.args.clone(),
+        (None, LaunchForm::Terminal) => adapters::plan_launch(
             registry,
             &request.tool_id,
             version,
@@ -1686,7 +1860,7 @@ fn plan_with_stage_at(
             request.mode,
         )
         .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?,
-        LaunchForm::Desktop => {
+        (None, LaunchForm::Desktop) => {
             let mut args = adapter
                 .launch_args(None, request.mode)
                 .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?;
@@ -1704,14 +1878,23 @@ fn plan_with_stage_at(
     // up front keeps tabs opened in the same directory from becoming
     // indistinguishable in history; CLIs without a verified flag keep matching.
     let mut native_id = request.session_id.clone();
-    if terminal == TerminalId::Workbench && native_id.is_none() && !request.resume_latest {
+    if terminal == TerminalId::Workbench
+        && interaction == InteractionMode::Terminal
+        && native_id.is_none()
+        && !request.resume_latest
+    {
         let id = uuid::Uuid::new_v4().to_string();
         if let Some(args) = adapter.assigned_session_args(version, &id) {
             cli_args.extend(args);
             native_id = Some(id);
         }
     }
-    if let Some((_, context)) = &account_context { cli_args.splice(0..0, context.cli_args.clone()); }
+    // An ACP entry declares its own arguments; account flags meant for the
+    // interactive CLI would be unread switches. The account environment still
+    // reaches the agent through the plan.
+    if interaction == InteractionMode::Terminal {
+        if let Some((_, context)) = &account_context { cli_args.splice(0..0, context.cli_args.clone()); }
+    }
     if let Some(project) = &project {
         let model = project
             .model_overrides
@@ -1737,6 +1920,7 @@ fn plan_with_stage_at(
                 .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?,
         );
     }
+    let mut plan_prompt: Option<String> = None;
     if let Some(prompt) = request.initial_prompt.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
         if launch_form == LaunchForm::Desktop {
             return Err(LaunchPlanError::new(
@@ -1747,7 +1931,13 @@ fn plan_with_stage_at(
         if prompt.chars().count() > 20_000 {
             return Err(LaunchPlanError::new(LaunchStage::Tool, "提示词过长，请先缩短后再启动。".into()));
         }
-        cli_args.push(prompt.to_owned());
+        if interaction == InteractionMode::Acp {
+            // A conversation submits the first turn over the protocol; on the
+            // command line it would be read as an argument.
+            plan_prompt = Some(prompt.to_owned());
+        } else {
+            cli_args.push(prompt.to_owned());
+        }
     }
     #[cfg(windows)]
     if let Some(entry) = entry_arg {
@@ -1760,6 +1950,9 @@ fn plan_with_stage_at(
     };
     Ok(LaunchPlan {
         resume_native_id: native_id,
+        interaction,
+        acp,
+        initial_prompt: plan_prompt,
         account_version: account_context.as_ref().map(|(id,_)|crate::accounts::get(db,id).map(|account|account.version)).transpose().map_err(|message|LaunchPlanError::new(LaunchStage::Configuration,message))?,
         account_context,
         tool_id: request.tool_id,
@@ -1789,7 +1982,7 @@ pub fn login_plan(db: &Database, registry: &Registry, home: &Path, tool: &str, c
     let cli_args = adapter.login_args().ok_or("此 CLI 没有原生交互登录入口，请配置 API 连接")?;
     let probe = adapter::probe_registered(registry, tool, custom, home, None, Scope::Global)?;
     let selected = probe.selected_path.ok_or("未找到可验证的 CLI，先安装或重新检测")?;
-    Ok(LaunchPlan {resume_native_id:None,account_version:None,account_context:None,tool_id:tool.into(),project_id:None,mode:LaunchMode::Normal,executable:PathBuf::from(selected),cli_args,
+    Ok(LaunchPlan {resume_native_id:None,interaction:InteractionMode::Terminal,acp:None,initial_prompt:None,account_version:None,account_context:None,tool_id:tool.into(),project_id:None,mode:LaunchMode::Normal,executable:PathBuf::from(selected),cli_args,
         directory:projects::checked_directory(&home.display().to_string())?,session_markers:adapter.session_env_markers(),terminal:selected_terminal(db)?,credential:None,remote_session_id:None,remote_end_args:None,environment:Vec::new()})
 }
 
@@ -1936,8 +2129,10 @@ fn windows_cli_path(path: &Path) -> PathBuf {
     // npm's extensionless sibling is a Unix shell script, not a Win32 entry.
     // Resolve only siblings of that exact installation, never another PATH hit.
     if path.extension().is_none() {
-        for extension in ["exe", "cmd", "bat", "ps1"] {
-            let candidate = path.with_extension(extension);
+        // One shared list: the ACP host's direct-spawn policy reads the same
+        // table minus the PowerShell script it can never start.
+        for suffix in crate::process_environment::windows_program_suffixes() {
+            let candidate = path.with_extension(suffix.trim_start_matches('.'));
             if candidate.is_file() { return candidate; }
         }
     }
@@ -2385,6 +2580,33 @@ pub(crate) fn spawn_with_baseline(db: &Database, plan: LaunchPlan, restored: Opt
     if plan.terminal == TerminalId::Desktop {
         return spawn_desktop(&plan, credential.as_ref());
     }
+    // A conversation is owned by the shared ACP host. It starts the agent,
+    // negotiates the session and keeps the snapshot; only a terminal launch
+    // goes through the PTY host.
+    if plan.interaction == InteractionMode::Acp {
+        let saved = crate::workbench_restore::from_plan(&plan);
+        let spec = crate::acp_host::AcpStart::from_plan(&plan, None)?;
+        let snapshot = crate::acp_host::start(spec, credential)?;
+        if let Some(mut saved) = saved {
+            saved.id = snapshot.id.clone();
+            saved.native_id = snapshot.native_session_id.clone();
+            if let Err(error) = crate::workbench_restore::save(db, &saved) {
+                let _ = crate::acp_host::close(&snapshot.id);
+                return Err(format!("无法保存会话恢复记录：{error}"));
+            }
+        }
+        return Ok(LaunchResult {
+            tool_id: plan.tool_id,
+            project_id: plan.project_id,
+            mode: plan.mode,
+            terminal: plan.terminal,
+            interaction: InteractionMode::Acp,
+            status: "acp_started",
+            session_id: Some(snapshot.id),
+            remote_session_id: None,
+            warnings: Vec::new(),
+        });
+    }
     if plan.terminal == TerminalId::Workbench {
         let saved = crate::workbench_restore::from_plan(&plan);
         let result = match restored {
@@ -2408,6 +2630,7 @@ pub(crate) fn spawn_with_baseline(db: &Database, plan: LaunchPlan, restored: Opt
         project_id: plan.project_id,
         mode: plan.mode,
         terminal: plan.terminal,
+        interaction: InteractionMode::Terminal,
         status: "terminal_requested",
         session_id: None,
         remote_session_id: plan.remote_session_id,
@@ -2458,6 +2681,7 @@ fn spawn_desktop(plan: &LaunchPlan, credential: Option<&(String, String)>) -> Re
         project_id: plan.project_id.clone(),
         mode: plan.mode,
         terminal: TerminalId::Desktop,
+        interaction: InteractionMode::Terminal,
         status: "desktop_requested",
         session_id: None,
         remote_session_id: plan.remote_session_id.clone(),
@@ -2578,6 +2802,7 @@ mod desktop_launch {
             mode,
             resume_latest: false, remote_intent: None, agent: None,
             session_options: None,
+            interaction: None,
         }
     }
 
@@ -2710,7 +2935,10 @@ mod desktop_launch {
             credential: None,
             remote_session_id: None,
             remote_end_args: None,
-        environment: Vec::new(),
+            environment: Vec::new(),
+            interaction: InteractionMode::Terminal,
+            acp: None,
+            initial_prompt: None,
         }
     }
 
@@ -2807,8 +3035,10 @@ mod installed_desktop_launch {
             mode: LaunchMode::Normal,
             resume_latest: false, remote_intent: None, agent: None,
             session_options: None,
-        }
+        
+            interaction: None,
     }
+}
 
     #[test]
     fn workbench_launch_names_a_new_claude_conversation_for_restore() {
@@ -2876,7 +3106,8 @@ mod installed_desktop_launch {
             mode: LaunchMode::Normal,
             resume_latest: false, remote_intent: None, agent: None,
             session_options: None,
-        };
+            interaction: None,
+    };
         let zcode = plan(&db, &registry, temp.path(), request("zcode")).unwrap();
         assert_eq!(zcode.directory, canonical);
         assert_eq!(
@@ -2947,7 +3178,8 @@ mod installed_desktop_launch {
                     mode: LaunchMode::Normal,
                     resume_latest: false, remote_intent: None, agent: None,
                     session_options: None,
-                },
+                    interaction: None,
+            },
             )
             .unwrap_or_else(|error| panic!("{tool}: {error}"));
             assert_eq!(resumed.cli_args, via_native.cli_args, "{tool}");
@@ -3046,7 +3278,8 @@ mod installed_desktop_launch {
                 remote_intent: None,
                 agent: None,
                 session_options: None,
-            },
+                interaction: None,
+        },
             worktree_intent: WorktreeIntent::Preference,
             task_text: None,
             worktree: WorktreeLaunchOptions::default(),
@@ -3138,7 +3371,8 @@ mod installed_desktop_launch {
                 remote_intent: None,
                 agent: None,
                 session_options: None,
-            },
+                interaction: None,
+        },
             worktree_intent: intent,
             task_text: Some("feat: hello?".into()),
             worktree: WorktreeLaunchOptions::default(),
@@ -3235,7 +3469,8 @@ mod installed_desktop_launch {
                 remote_intent: None,
                 agent: None,
                 session_options: None,
-            },
+                interaction: None,
+        },
             worktree_intent: WorktreeIntent::Preference,
             task_text: None,
             worktree: WorktreeLaunchOptions::default(),
@@ -3391,7 +3626,8 @@ mod installed_desktop_launch {
                 remote_intent: None,
                 agent: None,
                 session_options: None,
-            },
+                interaction: None,
+        },
             worktree_intent: WorktreeIntent::Explicit,
             task_text: Some("feat: hello?".into()),
             worktree: options,
@@ -3520,6 +3756,10 @@ mod installed_desktop_launch {
         assert_eq!(rows[0].environment, "prepared");
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/launch/interaction.rs"]
+mod interaction_tests;
 
 #[cfg(test)]
 #[path = "../../tests/launch/launch.rs"]

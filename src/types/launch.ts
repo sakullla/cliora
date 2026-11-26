@@ -5,7 +5,10 @@ export type TerminalOption = { id: TerminalId; label: string; available: boolean
 export type CustomTerminal = { program: string; args: string[] };
 export type TerminalPreset = { id: string; label: string; program: string; args: string[] };
 export type WorktreeLaunchMode = 'direct' | 'worktree';
-export type LaunchSettings = { selected: TerminalId; terminals: TerminalOption[]; presets?: TerminalPreset[]; custom?: CustomTerminal | null; cliMode?: LaunchMode; projectMode?: LaunchMode; worktreeLaunch?: WorktreeLaunchMode | null; worktreeLaunchError?: string | null };
+/** How a local new session talks to its CLI: an interactive terminal or an ACP conversation. */
+export type InteractionMode = 'terminal' | 'acp';
+
+export type LaunchSettings = { selected: TerminalId; terminals: TerminalOption[]; presets?: TerminalPreset[]; custom?: CustomTerminal | null; cliMode?: LaunchMode; projectMode?: LaunchMode; /** Independent of the terminal type, of normal/YOLO and of the worktree preference. A stored value from before this field reads as the terminal. */ interaction?: InteractionMode; /** Set only when the stored value cannot be recognized; the row is left unchanged. */ interactionError?: string | null; worktreeLaunch?: WorktreeLaunchMode | null; worktreeLaunchError?: string | null };
 
 /** Whether a launch may create a worktree. Only an explicit creation reports stages. */
 export type WorktreeLaunchIntent = 'given' | 'preference' | 'explicit' | 'prepareRetry';
@@ -117,8 +120,9 @@ export type Project = {
 };
 
 export type RemoteLaunchIntent = { kind: 'new' } | { kind: 'reattach'; remoteSessionId: string };
-export type LaunchRequest = { workspaceId?: string; repositoryId?: string; toolId: string; projectId: string | null; sessionId: string | null; mode: LaunchMode; directory?: string | null; initialPrompt?: string | null; resumeLatest?: boolean; remoteIntent?: RemoteLaunchIntent; worktreeIntent?: WorktreeLaunchIntent; taskText?: string | null; worktree?: WorktreeLaunchOptions; /** Native agent roster selection for a new session; only CLIs that publish `agentLaunchAvailable` honor it. */ agent?: string | null; /** Session-only parameter values validated against the adapter's published options for the resolved installation; absent adds no arguments. */ sessionOptions?: Record<string, string> | null };
-export type LaunchResult = { toolId: string; projectId: string | null; mode: LaunchMode; terminal: TerminalId; status: 'terminal_requested' | 'desktop_requested' | 'session_started'; sessionId?: string | null; remoteSessionId?: string | null; warnings?: string[] };
+export type LaunchRequest = { workspaceId?: string; repositoryId?: string; toolId: string; projectId: string | null; sessionId: string | null; mode: LaunchMode; directory?: string | null; initialPrompt?: string | null; resumeLatest?: boolean; remoteIntent?: RemoteLaunchIntent; worktreeIntent?: WorktreeLaunchIntent; taskText?: string | null; worktree?: WorktreeLaunchOptions; /** Native agent roster selection for a new session; only CLIs that publish `agentLaunchAvailable` honor it. */ agent?: string | null; /** Session-only parameter values validated against the adapter's published options for the resolved installation; absent adds no arguments. */ sessionOptions?: Record<string, string> | null; /** Explicit interaction for this launch only. Absent follows the stored preference; 'terminal' is how a failed ACP start retries in the same directory. */ interaction?: InteractionMode | null };
+/** Which host actually owns the session: the terminal PTY or the shared ACP host. */
+export type LaunchResult = { toolId: string; projectId: string | null; mode: LaunchMode; terminal: TerminalId; interaction: InteractionMode; status: 'terminal_requested' | 'desktop_requested' | 'session_started' | 'acp_started'; sessionId?: string | null; remoteSessionId?: string | null; warnings?: string[] };
 /** Recent session output: a mode prelude plus the retained bytes, ending at stream offset `endOffset`. */
 export type WorkbenchReplay = { dataBase64: string; endOffset: number; cols: number; rows: number };
 export type WorkbenchTerminalSize = { cols: number; rows: number };
@@ -135,7 +139,7 @@ export type WorktreePrepareCommand = { mainCheckout: string; command: string };
 export type WorktreeCleanupReport = { removed: boolean; needsConfirmation: boolean; detail: string };
 export type RemoteSessionEndResult = { outcome: 'confirmed_absent' | 'failed' | 'unknown'; stage: string; exitCode: number | null };
 export type WorkbenchSession = { id: string; toolId: string; projectId: string | null; directory: string; mode: LaunchMode; running: boolean; exitCode: number | null; startedAt?: number; connectionState?: 'connecting' | 'connected' | 'disconnected' | 'remote_ended' | 'unknown' | 'closed'; exitReason?: 'running' | 'process_exit' | 'connection_lost' | 'remote_ended' | 'unknown'; reattachable?: boolean; remoteSessionId?: string | null; remoteEndResult?: RemoteSessionEndResult | null; stateRevision?: number };
-export type SavedWorkbenchSession = { id: string; toolId: string; projectId: string | null; directory: string; mode: LaunchMode; startedAt: number; stoppedAt: number | null; nativeId: string | null; accountId: string | null; contextId: string | null };
+export type SavedWorkbenchSession = { id: string; toolId: string; projectId: string | null; directory: string; mode: LaunchMode; /** Absent on a record written before the field existed; that tab was a terminal. */ interaction?: InteractionMode; startedAt: number; stoppedAt: number | null; nativeId: string | null; accountId: string | null; contextId: string | null };
 export type WorkbenchRestoreCandidate = { nativeId: string; title: string; startedAt: number | null; updatedAt: number | null };
 export type WorkbenchRestoreReport = { restored: Record<string, string>; failures: Array<{ session: SavedWorkbenchSession; detail: string; candidates: WorkbenchRestoreCandidate[] }> };
 export type WorkbenchRestoreStage = 'discovering' | 'starting' | 'restored' | 'failed';

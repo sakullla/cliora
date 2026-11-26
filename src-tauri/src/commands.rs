@@ -3782,6 +3782,58 @@ pub async fn launch_cli(
     remote_blocking(window, operation, crate::remote::operations::Kind::Write, move || launch_now(&app, request)).await
 }
 
+/// How a local new session starts (terminal or ACP conversation). Unknown
+/// values are rejected before writing, so a failed save keeps the stored row.
+#[tauri::command]
+pub async fn set_launch_interaction(app: AppHandle, mode: String) -> Result<launch::LaunchSettings, ApiError> {
+    blocking(move || {
+        app.state::<AppState>()
+            .with_database(&app, |db| launch::set_interaction(db, &mode).map_err(native_error))
+    })
+    .await
+}
+
+/// One conversation's full state, for a panel that mounts after the session
+/// started. Every ACP command is session-scoped: nothing here addresses "the
+/// current conversation".
+#[tauri::command]
+pub fn acp_session(session_id: String) -> Result<crate::acp_host::AcpSessionSnapshot, ApiError> {
+    crate::acp_host::snapshot(&session_id).map_err(native_error)
+}
+
+#[tauri::command]
+pub fn list_acp_sessions() -> Vec<crate::acp_host::AcpSessionSnapshot> {
+    crate::acp_host::list()
+}
+
+#[tauri::command]
+pub fn acp_prompt(session_id: String, text: String) -> Result<(), ApiError> {
+    crate::acp_host::prompt(&session_id, &text).map_err(native_error)
+}
+
+/// Stop the current turn only. The turn stays open until the agent reports its
+/// own result, so the panel keeps showing it as stopping.
+#[tauri::command]
+pub fn acp_cancel(session_id: String) -> Result<(), ApiError> {
+    crate::acp_host::cancel(&session_id).map_err(native_error)
+}
+
+/// Answer a pending authorization request once. A missing option withdraws it.
+#[tauri::command]
+pub fn acp_respond_permission(
+    session_id: String,
+    request_id: String,
+    option_id: Option<String>,
+) -> Result<(), ApiError> {
+    crate::acp_host::respond_permission(&session_id, &request_id, option_id.as_deref())
+        .map_err(native_error)
+}
+
+#[tauri::command]
+pub fn acp_close(session_id: String) -> Result<(), ApiError> {
+    crate::acp_host::close(&session_id).map_err(native_error)
+}
+
 #[tauri::command]
 pub async fn set_worktree_launch(app: AppHandle, mode: String) -> Result<launch::LaunchSettings, ApiError> {
     blocking(move || {

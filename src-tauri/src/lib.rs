@@ -76,6 +76,7 @@ mod path_policy {
 }
 pub mod accounts;
 mod background_process;
+pub mod acp_host;
 pub mod commands;
 pub mod credentials;
 pub mod database;
@@ -138,6 +139,7 @@ pub fn run() {
             // The window must remain available when local storage needs repair.
             app.manage(commands::AppState::default());
             session_host::install(app.handle().clone());
+            acp_host::install(app.handle().clone());
             register_deep_link(app.handle());
             // Windows and Linux draw their own title bar (src/components/WindowControls.tsx), so the
             // native frame goes before the first paint. macOS keeps its Overlay title bar and traffic
@@ -403,6 +405,13 @@ pub fn run() {
             commands::set_preferred_terminal,
             commands::set_custom_terminal,
             commands::set_default_launch_mode,
+            commands::set_launch_interaction,
+            commands::list_acp_sessions,
+            commands::acp_session,
+            commands::acp_prompt,
+            commands::acp_cancel,
+            commands::acp_respond_permission,
+            commands::acp_close,
             commands::set_worktree_launch,
             commands::launch_cli,
             commands::list_workbench_sessions,
@@ -592,6 +601,7 @@ fn handle_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
         if let Err(error) = commands::checkpoint_workbench(app) {
             eprintln!("工作台恢复检查点保存失败：{error}");
         }
+        acp_host::shutdown();
         session_host::shutdown();
     }
     #[cfg(target_os = "macos")]
