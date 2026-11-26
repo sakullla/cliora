@@ -1,44 +1,51 @@
 # ACP 接入与逐 agent 验收（2026-11-26）
 
-范围：R2（按 agent 适配实际安装和能力）与 R8（逐 agent 记录与限制）。本记录把三类事实分开：
+范围：R2（按 agent 适配实际安装和能力）与 R8（逐 agent 记录与限制）。本记录把四类事实分开，任何一列都不把后一类写成已核实：
 
-1. **入口可核对**（documented）：上游 ACP 注册表、官方文档或本机 `--help` 给出实际程序与参数。
-2. **握手可用**（handshake）：本机实际启动该程序，向 stdio 写一帧 `initialize`（`protocolVersion: 1`）并收到 `result`。
-3. **真实交互**（interactive）：在会话里跑完一轮含工具调用的对话，并观察授权、停止与恢复。
+1. **命令可发现**（documented）：上游 ACP 注册表、官方文档或本机 `--help` 给出实际程序、参数与安装渠道。本机没装该程序时只做到这一步。
+2. **握手可用**（handshake）：本机实际启动该程序，向 stdio 写一帧 `initialize`（`protocolVersion: 1`）并收到 `result`，因此能看到它自报的能力。
+3. **能力声明**（declared）：适配器的静态入口表（`src-tauri/src/adapters/*/mod.rs` 的 `fn acp`，19 项都写了 session/authorization/cancel/resume = true）与握手自报（`loadSession`、`sessionCapabilities`、`authMethods`）。**声明不等于已核实**：它只说明这一方说它支持，没有一次真实调用被观察过。
+4. **真实会话验证**（interactive）：在会话里真正加载一个原生会话、跑完一轮含工具调用的对话，并观察授权、停止与恢复的实际结果。
 
-本次只做到第 2 步，第 3 步**未运行**（会产生真实推理费用与账号操作），所以 19 项的 `state` 全部是 `unverified`，没有任何一项写成 `supported`。适配器声明在各 `src-tauri/src/adapters/*/mod.rs` 的 `fn acp`，共享契约在 `src-tauri/src/adapters/contract.rs`。
+本次没有任何一项到第 4 步（会产生真实推理费用与账号操作），所以 19 项的 `state` 全部是 `unverified`，没有任何一项写成 `supported`。握手没有保留原始帧转储，下面的逐项摘要就是本轮证据本身；共享契约在 `src-tauri/src/adapters/contract.rs`。
 
 采集环境：Windows 10.0.26300（x64），2026-11-26；命令来自 PATH 与本机安装目录，未启动模型、未读取账号凭据。上游依据取自当日 `https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json`（46 项注册表）与各项目 README。
 
 ## 结论矩阵
 
-「来源」区分本机可执行文件（native）、厂商单独分发的组件（vendor）与第三方桥接（bridge）。「证据」列即 `AcpCapability::evidence`。能力列对应该轮握手中 agent 声明的项（`sessionCapabilities` / `loadSession` / `authMethods`）；停止（`session/cancel`）是协议必备项，未单独声明。
+「接入路径」列区分本机可执行文件（native）、厂商单独分发的组件（vendor）与第三方桥接（bridge）。「证据」列即 `AcpCapability::evidence`。「未装/不支持时原因」列是解析器在该状态下会返回的闭环 code。三列能力（对话／授权／停止）与「恢复」只记录声明级别，见矩阵后的图例。
 
-| Agent | 接入路径 | 来源 | 实际命令与参数 | 平台 | 会话 | 授权 | 停止 | 恢复 | 证据 | 状态 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| OpenCode | 原生 | native | `opencode acp` | Windows（2.3.0） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
-| Codex | 桥接 | bridge | `codex-acp` | 未安装 | 未验证 | 未验证 | 未验证 | 未验证 | documented | unverified |
-| Claude Code | 桥接 | bridge | `claude-agent-acp` | 未安装 | 未验证 | 未验证 | 未验证 | 未验证 | documented | unverified |
-| Grok | 原生 | native | `grok agent stdio` | Windows（1.0.77） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
-| Pi | 桥接 | bridge | `pi-acp`（运行 PATH 上的 `pi`） | 未安装 | 未验证 | 未验证 | 未验证 | 未验证 | documented | unverified |
-| oh-my-pi | 原生 | native | `omp acp` | Windows（19.2.1） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
-| Cursor | 原生 CLI | native | `cursor-agent acp` | 未安装 | 未验证 | 未验证 | 未验证 | 未验证 | documented | unverified |
-| Kimi Code | 原生 | native | `kimi acp`（仅 2.x） | Windows（2.7.0） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
-| Qoder CN | 原生 | native | `qoderclicn --acp` | Windows（1.1.94） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
-| ZCode | 社区桥接 | bridge | `zcode-acp`（PyPI，Python 3.9+） | 未安装 | 未验证 | 未验证 | 未验证 | 未验证 | documented | unverified |
-| DeepSeek Harness | 原生 | native | `dsh acp` | 未安装 | 未验证 | 未验证 | 未验证 | 未验证 | documented | unverified |
-| CodeBuddy | 原生 | native | `codebuddy --acp` | Windows（2.187.0） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
-| MiMo Code | 原生 | native | `mimo acp` | Windows（0.1.15） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
-| MiniMax Code | 原生 | native | `mcode acp` | Windows（0.6.13） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
-| Cline | 原生 | native | `cline --acp` | 未安装 | 未验证 | 未验证 | 未验证 | 未验证 | documented | unverified |
-| Devin | 原生 | native | `devin acp` | Windows（3000.12.57） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
-| Command Code | 原生 | native | `cmdc acp`（Windows）/ `cmd acp` | Windows（1.88.0） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
-| Antigravity | 厂商组件 | vendor | `agy_acp_server` | 组件未安装 | 未验证 | 未验证 | 未验证 | 未验证 | documented | unverified |
-| Kiro | 原生 | native | `kiro-cli acp` | Windows（3.5.0） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
+| Agent | 接入路径 | 入口与版本 | 平台 | 目录/配置 | 对话 | 授权 | 停止 | 恢复 | 未装/不支持时原因 | 证据 | 状态 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| OpenCode | 原生（native） | `opencode acp` · 2.3.0 | Windows | `~/.config/opencode`、`~/.local/share` | 握手声明 | 握手声明 | 协议必备 | loadSession + resume 已声明 | — | handshake | unverified |
+| Codex | 桥接（bridge） | `codex-acp` · 未安装（本机 `codex-cli 0.172.0` 不提供 ACP） | 未安装 | 未核对（`~/.codex`） | 未验证 | 未验证 | 未验证 | 未验证 | not-installed；未绑定所选安装时 identity-unresolved | documented | unverified |
+| Claude Code | 桥接（bridge） | `claude-agent-acp` · 未安装（本机 `claude 2.1.332`） | 未安装 | 未核对（`~/.claude`） | 未验证 | 未验证 | 未验证 | 未验证 | not-installed；未绑定所选安装时 identity-unresolved | documented | unverified |
+| Grok | 原生（native） | `grok agent stdio` · 1.0.77 | Windows | `~/.grok`（bin、sessions） | 握手声明 | 握手声明 | 协议必备 | loadSession + resume 已声明 | — | handshake | unverified |
+| Pi | 桥接（bridge） | `pi-acp` · 未安装（本机 `pi 1.6.1`） | 未安装 | 未核对（`~/.pi`、`pi-acp/session-map.json`） | 未验证 | 未验证 | 未验证 | 未验证 | 缺宿主 pi 时 dependency-missing | documented | unverified |
+| oh-my-pi | 原生（native） | `omp acp` · 19.2.1 | Windows | `~/.omp`（凭据根）、`~/.bun/bin` | 握手声明 | 握手声明 | 协议必备 | loadSession + resume 已声明 | — | handshake | unverified |
+| Cursor | 原生 CLI（native） | `cursor-agent acp` · 未安装 | 未安装 | 未核对（`~/.cursor`） | 未验证 | 未验证 | 未验证 | 未验证 | not-installed（不回退到 `agent`） | documented | unverified |
+| Kimi Code | 原生（native） | `kimi acp` · 2.7.0（仅 2.x） | Windows | `~/.kimi-code` | 握手声明 | 握手声明 | 协议必备 | loadSession + resume 已声明 | 1.x 报 version-unsupported | handshake | unverified |
+| Qoder CN | 原生（native） | `qoderclicn --acp` · 1.1.94 | Windows | `~/.qoder-cn` | 握手声明 | 握手声明 | 协议必备 | loadSession（`sessionCapabilities` 未记录） | 不回退国际版 `qoder` | handshake | unverified |
+| ZCode | 社区桥接（bridge） | `zcode-acp` · 未安装（Python 3.9+） | 未安装 | 未核对（`~/.zcode`、ZCODE_CJS） | 未验证 | 未验证 | 未验证 | 未验证 | not-installed；缺 Python/引擎时 dependency-missing | documented | unverified |
+| DeepSeek Harness | 原生（native） | `dsh acp` · 未安装 | 未安装 | 未核对（`~/.dsh`，沿用 profile 层） | 未验证 | 未验证 | 未验证 | 未验证 | not-installed | documented | unverified |
+| CodeBuddy | 原生（native） | `codebuddy --acp` · 2.187.0 | Windows | `~/.codebuddy` | 握手声明 | 握手声明 | 协议必备 | loadSession（`sessionCapabilities` 未记录） | — | handshake | unverified |
+| MiMo Code | 原生（native） | `mimo acp` · 0.1.15 | Windows | `~/.config`、`~/.local`（`@mimo-ai/cli`） | 握手声明 | 握手声明 | 协议必备 | loadSession + resume 已声明 | — | handshake | unverified |
+| MiniMax Code | 原生（native） | `mcode acp` · 0.6.13 | Windows | `~/.minimax-code`、`~/.minimax`（sqlite 运行态） | 握手声明 | 握手声明 | 协议必备 | loadSession + resume 已声明 | — | handshake | unverified |
+| Cline | 原生（native） | `cline --acp` · 未安装 | 未安装 | 未核对（`~/.cline`） | 未验证 | 未验证 | 未验证 | 未验证 | not-installed | documented | unverified |
+| Devin | 原生（native） | `devin acp` · 3000.12.57 | Windows | `AppData/Local/devin/cli` | 握手声明 | 握手声明 | 协议必备 | loadSession（`sessionCapabilities` 未记录） | — | handshake | unverified |
+| Command Code | 原生（native） | `cmdc acp`（Windows）/ `cmd acp` · 1.88.0 | Windows | `~/.commandcode` | 握手声明 | 握手声明 | 协议必备 | loadSession + resume 已声明 | 命中系统 shell 时 system-program | handshake | unverified |
+| Antigravity | 厂商组件（vendor） | `agy_acp_server` · 组件未安装 | 未安装 | 未核对（组件目录；本机只有 `agy 1.5.9`） | 未验证 | 未验证 | 未验证 | 未验证 | 缺 ACP 组件时报 dependency-missing，不报缺 CLI | documented | unverified |
+| Kiro | 原生（native） | `kiro-cli acp` · 3.5.0 | Windows | `~/.kiro` | 握手声明 | 握手声明 | 协议必备 | loadSession（`sessionCapabilities` 无 `resume`） | — | handshake | unverified |
 
-**「会话／授权／停止／恢复」四列记录的是来源，不是已核实的行为。** 只有 handshake 行的前三列写了「声明」，意思是本轮握手确实收到了对应能力声明；documented 行全部是「未验证」，只来自上游注册表与文档。「恢复」列任何一行都**没有**写成「是」或「已核实」：`loadSession 声明` 只说明该 agent 在握手时报告了加载能力，本机从未真正加载过一个原生会话，恢复结果、恢复后的首轮与失败文案都还没有实证记录（T3 复核也指出恢复失败文案与实际关闭新会话的行为不一致，见文末限制）。把这些声明当成「已核实的恢复」会直接违反 R8 的记录要求。
+**图例：声明 ≠ 已核实。**
 
-MiniMax Code 与 Devin 的握手返回 `loadSession: true` 但 `sessionCapabilities` 未列出 `resume`；适配器按「声明了才记账」处理，恢复能力仍要在真实会话里确认。
+- 「握手声明」= 本轮握手确实收到对应能力；documented 行全部「未验证」，只有上游注册表与文档。
+- 停止（`session/cancel`）是协议必备项，握手只证明连接与初始化可用，本机没有真正取消过一轮。
+- 「恢复」列只有两种声明级别，**没有任何一行写「是」或「已核实」**：
+  - `loadSession + resume 已声明`：握手返回 `loadSession: true`，且 `sessionCapabilities` 也列出 `resume`（7 项：OpenCode、Grok、oh-my-pi、Kimi、MiMo、MiniMax、Command Code）。
+  - `loadSession（…）`：握手只报告 `loadSession: true`；Kiro 的 `sessionCapabilities` 明确只列 list/close/delete/fork 而不含 `resume`，Qoder CN、CodeBuddy、Devin 的握手记录没有记下 `sessionCapabilities`，因此这几项只有 `loadSession` 一条依据。
+  - `未验证`：本机没装，只有上游文档。
+- **适配器静态声明与握手是两件事**：19 个适配器都写了 `capabilities.resume = true`（入口静态声明），其中 11 项在本机握手过、8 项没有。真实会话加载 0 项：没有一次 `session/load` 被观察，恢复后的首轮、原记录归属与失败文案都没有实证。把声明当成「已核实的恢复」会直接违反 R8 的记录要求。
 
 ## 逐项记录
 
@@ -56,7 +63,7 @@ MiniMax Code 与 Devin 的握手返回 `loadSession: true` 但 `sessionCapabilit
 - 上游依据：ACP 注册表 `codex-acp` = `@agentclientprotocol/codex-acp@2.12.1`；README 说明它启动 Codex App Server，并**自带一份兼容的 `@openai/codex`**，`CODEX_PATH` 可改为运行指定的 Codex 可执行文件。
 - 环境策略：`bind_installation = ["CODEX_PATH"]`。共享宿主必须把用户选中的 codex 安装路径写入该变量，否则 ACP 会运行桥接自带的那份 Codex，与终端启动的身份不一致；未解析到安装时解析直接失败（`identity-unresolved`），不会静默改用另一份。
 - 限制：桥接未安装，无握手、无真实对话；配置目录与沙箱模式沿用所选 Codex 安装，未验证。
-- 恢复方式：`npm install -g @agentclientprotocol/codex-acp` 后重试；仍失败时用终端在同一目录启动。
+- 重试方式（这里的「恢复」指把启动修好，不是 `session/load`）：`npm install -g @agentclientprotocol/codex-acp` 后重试；仍失败时用终端在同一目录启动。
 
 ### Claude Code
 
@@ -90,7 +97,7 @@ MiniMax Code 与 Devin 的握手返回 `loadSession: true` 但 `sessionCapabilit
 - 入口：`cursor-agent acp`（原生 CLI）。本机**未安装** `cursor-agent`；适配器的 `cursor` 是桌面编辑器，两者不是同一个程序，探测也不回退到 `agent`。
 - 上游依据：注册表 `cursor` 2026.11.22 按平台分发 `dist-package/cursor-agent`，参数 `acp`；Windows 为 `cursor-agent.cmd`。
 - 限制：无握手、无真实对话；本机 CLI 实际入口与登录态未验证。
-- 恢复方式：装 Cursor CLI 后重试；否则用终端启动桌面编辑器或 CLI。
+- 重试方式（这里的「恢复」指把启动修好，不是 `session/load`）：装 Cursor CLI 后重试；否则用终端启动桌面编辑器或 CLI。
 
 ### Kimi Code
 
@@ -150,6 +157,7 @@ MiniMax Code 与 Devin 的握手返回 `loadSession: true` 但 `sessionCapabilit
 
 - 入口：`devin acp`（原生）。本机 `devin 3000.12.57`（`AppData/Local/devin/cli/bin/devin`）。
 - 握手：`agentInfo` = `affogato` / Devin Agent 0.0.0-dev、`loadSession: true`、`authMethods` = `devin-browser`，`_meta` 里带大量 `cognition.ai/*` 扩展（多根工作区、会话列表、分享等）。首帧约 0.07 秒。
+- 能力：只有 `loadSession: true` 一条依据；本轮握手记录没有记下 `sessionCapabilities`，因此 `resume` 是否在能力清单里出现未被观察，恢复仍需真实会话确认。
 - 限制：真实对话与账号/项目归属未验证；`devin acp --cloud` 会把同一协议中继到 Devin 云端（需要账号），本期不使用。
 
 ### Command Code
@@ -178,14 +186,28 @@ MiniMax Code 与 Devin 的握手返回 `loadSession: true` 但 `sessionCapabilit
 - `CliAdapter::acp_command(home, installation, version)` 解析出 `AcpCommand { program, args, environment, remove_environment, origin }`：先按适配器安装目录（含 `native_installations` 的父目录与 `extra_binary_candidates`）再按 PATH 搜索；桥接的 `dependency.program` 必须同时在场；`bind_installation` 需要已选定的 `installation`，否则报 `identity-unresolved`；`remove_environment` 是入口自身移除项与账号适配器 `remove_environment()` 的并集，所以 ACP 的账号环境隔离与终端启动一致。
 - 失败原因用闭环 code：`unsupported` / `not-installed` / `dependency-missing` / `version-unsupported` / `system-program` / `identity-unresolved`，都带可读原因与帮助链接；UI 据此显示具体缺口并保留终端回退。
 - 注册表描述符新增 `acp` 字段，19 个适配器共用同一形状；共享设置与会话界面按字段渲染，不新增产品 ID 分支。
+- **本轮接线状态（截至记录写入，待 T4 修复确认）**：描述符的 `acp` 字段已经发布、19 个适配器共用同一形状，但前端当时还没有读取它（`src/types/native.ts` 只有类型定义），设置行与新会话对话框因此对任意工具都显示 ACP 启动方式，不看该 adapter 的 `state`／`reason`。这是交付审查的 blocking 项，由 T4 按 `yoloAvailable` 的既有模式接线并补 fixture 驱动的 UI 用例；上面「按字段渲染」以该修复落地并在同一候选复跑 UI 用例为准。
 
 ## 开发验证
 
 | 检查 | 命令 | 结果 |
 | --- | --- | --- |
 | ACP 契约与失败样例 | `cargo test --manifest-path src-tauri/Cargo.toml --lib acp` | 9 passed（本次新增） |
-| 全量 Rust 测试 | `cargo test --manifest-path src-tauri/Cargo.toml` | 1734 passed / 12 failed，失败项集中在 `remote::uploads`、`remote::transactions`、`remote::twiglane_trust` 与 `external::tests::twiglane_workspace_handoff_url_is_validated`，需要本机 WSL/SSH/SFTP，或与本次改动无关的 Windows 路径断言，非本次引入 |
+| 全量 Rust 测试（不排除） | `cargo test --manifest-path src-tauri/Cargo.toml` | 1761 passed / 12 failed / 36 ignored，12 项失败全部落在 `remote::uploads`（7）、`remote::transactions`（3）、`remote::twiglane_trust`（1）与 `external::tests::twiglane_workspace_handoff_url_is_validated`（1），见下一小节 |
+| 交付原生命令（含排除） | 见「原生命令实际排除的用例」 | 库测试 1746 passed / 0 failed / 36 ignored / 27 filtered out，`twiglane_bridge` 集成二进制 0 passed / 1 filtered / 0 failed |
 | Lint | `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets` | 无警告、无错误 |
+
+### 原生命令实际排除的用例
+
+交付原生命令（见 `03-execution-plan.md#delivery_verification/native`）用 `--skip` 排除了 12 项库测试和 1 条集成用例。它们都依赖本机不具备的环境前提，且不在本需求的改动路径上：
+
+- `remote::uploads::tests`（7 项，含 `upload_files_moves_through_sftp_temp_and_atomic_claim`、`upload_session_files_records_claimed_paths_for_the_active_session`、`pending_upload_sweep_recovers_only_confirmed_absent_sessions`）：需要可用的 SFTP／远端上传通道。
+- `remote::transactions::tests`（3 项：`failed_restore_can_retry_through_public_inspection_after_the_fault_is_removed`、`interrupted_partial_restore_keeps_a_durable_barrier_between_files_and_can_finish_later`、`restore_rejects_wrong_staging_hash_symlink_hardlink_and_destination_changes_without_overwrite`）：依赖远端事务目录与符号链接／硬链接语义。
+- `remote::twiglane_trust::tests::windows_openssh_default_known_hosts_are_absolute_snapshot_operands`：本机 OpenSSH 配置给出多个 trust 候选，实测报 `ambiguous_known_hosts_paths`。
+- `external::tests::twiglane_workspace_handoff_url_is_validated`：本机 Windows 绝对路径断言（`项目清单链接需使用本机绝对路径`）。
+- `src-tauri/tests/twiglane_bridge.rs::desktop_exit_mode_resolves_only_current_enabled_targets_and_rejects_untrusted_uploads`：同一类 known_hosts 环境依赖（临时 `known_hosts` 带空格与多个 trust 文件时，本机解析为 `ambiguous_known_hosts_paths`，未排除时实测 FAILED），交付命令对这一条单独 `--skip`。同文件的 `missing_and_cancelled_session_passwords_do_not_connect` 是 `#[cfg(unix)]`，Windows 下不编译，所以该集成二进制在排除后显示 0 passed / 1 filtered。
+
+本机没有 WSL、没有可用的 SFTP 目标，也没有一份干净的 OpenSSH 配置，因此这些用例只能在具备条件的目标上复核；本候选对 `src-tauri/src/remote`、`src-tauri/src/external.rs` 与 `src-tauri/tests/twiglane_bridge.rs` 零改动。两次运行各自的总数可以对上：库测试共 1809 项。不排除时 1761 passed / 12 failed / 36 ignored / 0 filtered out；交付排除后 27 项被 `--skip` 过滤，1782 项进入运行，其中 1746 passed / 0 failed / 36 ignored，集成二进制 0 passed / 1 filtered。排除只改变了跑哪些用例，没有跳过任何本需求改动的模块（`launch`、`acp_host`、`workbench_restore`、`session_host`、`adapters`、`accounts`）。
 
 新增测试（`tests/adapter/acp-agents.rs`，由 `src-tauri/src/adapters/registry.rs` 以 `#[path]` 引入）：
 
@@ -204,7 +226,9 @@ MiniMax Code 与 Devin 的握手返回 `loadSession: true` 但 `sessionCapabilit
 - **仅 Windows**：macOS/Linux 的入口、`agy_acp_server.par`、`--uid=` 参数与 Kiro 的平台包均未验证。
 - **等待时长**：Qoder CN 12–16 秒、CodeBuddy 约 4 秒才回第一帧；共享宿主的初始化超时不能按毫秒级假设设置。
 - **身份边界**：Codex / Claude 桥接必须绑定所选安装（`CODEX_PATH` / `CLAUDE_CODE_EXECUTABLE`），否则会运行桥接自带的那份引擎；解析器已强制这一点，真实运行下的身份一致性仍待实测。
-- **已知限制（T3 复核，非阻断）**：ACP 恢复失败时，界面文案写的是「恢复失败」，但宿主实际已经关闭了原记录并新建了一个会话——文案与真实行为不一致，用户需要按「已新建会话」理解，并会在 T4 之后单独修正。
+- **恢复失败的实际行为（当前代码，未在真实会话实证）**：ACP 恢复先按协议 `session/load` 接回原会话；当 agent 报不支持、加载失败或没有协商出结果时，恢复流程保留**原记录**，关闭并移除**这次尝试新建的会话**（`acp_host::close` + `forget`），再把失败原因写进恢复结果——面板显示恢复失败，用户可稍后重试，或从原目录新开一个对话。原记录不会被关闭，也不会被新会话顶替。
+- **已知限制（P2，T3 范围内本轮未修）**：恢复失败的说明文案仍写「已在原目录新开一段会话（新会话 id）；原记录已保留，可稍后重试」，而同一分支随即关闭并移除了该会话，界面上给出的新会话编号已不存在。实际结果是「原记录保留、这次尝试的会话不存在」。位置：`src-tauri/src/workbench_restore.rs` 的 `conversation_resume_failure` 与 `restore_conversation_items` 失败分支。文案与行为与代码一致化不在 T1 范围。
+- **已知限制（P2，未修）**：ACP 提示词里的 `{{cliora-secret:…}}` 引用处理不统一。首条提示仍走终端的本地准备路径（`src/lib/native.ts` 的 `launchCli` 对 `initialPrompt` 调用 `localSessionPrompt`），工作台的后续提示在对话分支跳过该准备、原样发送（`src/features/sessions/SessionWorkbench.tsx` 的 `submitComposer`，对话时 `local = false`）；ACP 宿主子进程拿到的本地会话不带授权项，引用不会被解析成值。两处都不泄露原值，但同一段文本在首条与后续提示结果不同。
 - **已知限制（T3 复核，非阻断）**：工作目录预检发生在 ACP 子进程 spawn 之后，而不是之前，因此一个不可用的目录会先留下一次失败的进程启动再报错；这不会误判成功，但诊断顺序与「预检在前」的期望不同。
 - 本记录不含任何凭据、账号或提示词内容；握手只发送 `initialize`，不加载文件、不执行工具。
 
@@ -218,8 +242,8 @@ MiniMax Code 与 Devin 的握手返回 `loadSession: true` 但 `sessionCapabilit
 - 工作台会话是原生对话面板而不是终端（`src/features/sessions/AcpConversation.tsx`）：消息流、流式增量、按 `toolCallId` 归并的工具卡片、绑定本次请求的授权卡、停止（`stopping`）与轮次结果（可继续／限额／拒绝／取消／断开／失败／未知）。侧栏、标题、任务状态与「等你处理」入口都由共享列表给出：待授权按 `approval` 计入需要人处理，运行中的轮次算工作，结束的会话没有退出码可显示。
 - 会话状态由 `src/features/sessions/acpSession.ts` 的纯函数折叠：快照整体替换，增量按消息 id 追加，工具按调用 id 合并，授权按 `requestId` 增删，序号已在视图中应用过的事件不会重放；通知有界且不进入消息流。切换标签、分屏与重新挂载时用 `list_acp_sessions` / `acp_session` 补齐切换期间的输出，两个会话的内容互不串台。
 - 首条提示只发一次：原生宿主在会话建立后提交 `initial_prompt`，界面从不再调用 `acp_prompt` 重发首条（用例直接断言 `acp_prompt` 未被调用）。
-- 快捷输入与中断按会话类型路由：选中的是对话时，工作台输入框把文本交给 `acp_prompt`（不走 PTY 写入、不包装 bracketed paste、不准备终端秘密引用），中断按钮调用 `acp_cancel`；终端会话仍走原来的写入路径。
-- 启动入口：工具、项目卡片、工作台新建与托盘最近项目都走同一选择；`workbenchSessionId` 现在同时识别 `session_started` 与 `acp_started`，因此从首页或托盘打开的对话会聚焦到同一个工作台会话。历史恢复与旧记录仍按原方式（终端）继续。新建会话对话框在 ACP 时显示所选 CLI 与实际工作目录，并停用该入口无法表达的 YOLO 选项（后端同样会拒绝）。
+- 快捷输入与中断按会话类型路由：选中的是对话时，工作台输入框把文本交给 `acp_prompt`（不走 PTY 写入、不包装 bracketed paste；对话分支也不做终端的秘密引用准备，首条提示仍走终端的准备路径，差异见上文「未完成与限制」），中断按钮调用 `acp_cancel`；终端会话仍走原来的写入路径。
+- 启动入口：工具、项目卡片、工作台新建与托盘最近项目都走同一选择；`workbenchSessionId` 现在同时识别 `session_started` 与 `acp_started`，因此从首页或托盘打开的对话会聚焦到同一个工作台会话。历史恢复按记录自身的类型分流：ACP 记录走协议的 `session/load`（失败行为见上文「未完成与限制」），终端记录仍按原来匹配终端输出的方式恢复。新建会话对话框在 ACP 时显示所选 CLI 与实际工作目录，并停用该入口无法表达的 YOLO 选项（后端同样会拒绝）。
 - 失败恢复：对话框与面板都显示适配器的具体原因（缺桥接、YOLO 不可表达、Agent／会话参数不支持、项目模型覆盖等），并提供「新开一个对话」与「改用终端在此目录启动」两条明确路径，后者复用已创建的工作树与目录。
 
 ### 离线验证
@@ -242,12 +266,10 @@ MiniMax Code 与 Devin 的握手返回 `loadSession: true` 但 `sessionCapabilit
 - ACP 对话（默认图库里的一张）：`docs/verification/product-ui-ux/workbench/workbench-acp-conversation-dark-1360.png`，命令 `node scripts/verify-ui-captures.mjs --skip-build --only workbench`
 - ACP 对话、授权卡、停止中与 720px 窄窗口的完整一组：`docs/verification/product-ui-ux/workbench-acp/`，命令 `CLIORA_CAPTURE_OUT=docs/verification/product-ui-ux/workbench-acp node scripts/capture-workbench.mjs --only 'workbench-acp-*' --size all --theme all`（需要先运行 `npm run dev -- --port 14736`）
 
-抓图不移动也不遮挡 Cliora 窗口；脚本自带的检查确认无横向溢出、无页面错误，这些图片仍不是本机原生验收。
-
-抓图不移动也不遮挡 Cliora 窗口；这些图片不是本机原生验收。
+抓图不移动也不遮挡 Cliora 窗口；脚本自带的检查确认无横向溢出、无页面错误，但这些图片仍不是本机原生验收。
 
 ### 未实证
 
 - **真实 agent 对话仍未运行**：上面所有面板行为都由合成帧驱动，没有一个真实 ACP 会话被启动过。授权弹窗的实际文案、停止后 agent 的真实反应、工具结果的实际形态都还只有协议侧依据。
-- **恢复未实证**：原生会话加载、恢复失败后的关闭行为、恢复后再发首轮都还没有实测（另见文末限制）。
+- **恢复未实证**：原生会话加载、恢复失败后的关闭行为、恢复后再发首轮都还没有实测（另见上文「未完成与限制」）。
 - **仅 Windows**：合成验证在 Windows 上用 Chromium 跑；macOS/Linux 的界面与宿主行为未验证。
