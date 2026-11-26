@@ -861,6 +861,8 @@ for(const width of widths)for(const theme of themes){
    if(name==='sessions'||name==='usage'){await nav.getByRole('button',{name:'记录',exact:true}).click();await page.getByLabel('会话列表').getByRole('button').first().waitFor();if(name==='usage')await page.getByRole('tab',{name:'用量',exact:true}).click();}
    if(name==='settings'||name==='migration'){await nav.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('tab',{name:'同步与备份'}).waitFor();await page.locator('.skeleton-page').first().waitFor({state:'detached'});if(name==='migration'){await page.getByRole('tab',{name:'同步与备份'}).click();await page.getByRole('button',{name:'导出加密配置包',exact:true}).waitFor();}}
    await capture(name);
+   // The launch section carries the start mode beside the terminal, the modes and the start place.
+   if(name==='settings'){await page.getByRole('tab',{name:'终端与启动'}).click();await page.getByRole('region',{name:'终端与启动模式'}).waitFor();await captureImage(page,'settings-launch',theme,width,{category:'pages',title:'settings-launch'});}
   }
   await page.close();continue;
  }
@@ -872,6 +874,8 @@ for(const width of widths)for(const theme of themes){
   await nav.getByRole('button',{name:'记录'}).click();await page.getByLabel('会话列表').getByRole('button').first().waitFor();await capture('sessions');
   await page.getByRole('tab',{name:'用量',exact:true}).click();await capture('usage');
   await nav.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('tab',{name:'同步与备份'}).waitFor();await page.locator('.skeleton-page').first().waitFor({state:'detached'});await capture('settings');
+  // The launch section carries the start mode beside the terminal, the modes and the start place.
+  await page.getByRole('tab',{name:'终端与启动'}).click();await page.getByRole('region',{name:'终端与启动模式'}).waitFor();await capture('settings-launch');
   if(!process.argv.includes('--skip-migration')){await page.getByRole('tab',{name:'同步与备份'}).click();await page.getByRole('button',{name:'导出加密配置包',exact:true}).waitFor();await capture('migration');}
   await page.close();continue;
  }
@@ -908,6 +912,8 @@ for(const width of widths)for(const theme of themes){
  await page.getByRole('tab',{name:'用量',exact:true}).click();await capture('usage');
  await captureUsageDetails(page,capture,theme,width);
  await nav.getByRole('button',{name:'设置',exact:true}).click();await page.locator('.skeleton-page').first().waitFor({state:'detached'}).catch(()=>{});await capture('settings');
+ // The launch section carries the start mode beside the terminal, the modes and the start place.
+ await page.getByRole('tab',{name:'终端与启动'}).click();await page.getByRole('region',{name:'终端与启动模式'}).waitFor();await capture('settings-launch');
  await page.getByRole('tab',{name:'同步与备份'}).click();await capture('migration');
  await page.getByRole('button',{name:'导出加密配置包',exact:true}).click();await page.getByRole('region',{name:'导出加密配置包'}).waitFor();await capture('migration-export');await page.keyboard.press('Escape');await page.getByRole('region',{name:'导出加密配置包'}).waitFor({state:'hidden'});
  await page.getByRole('button',{name:'从配置包恢复',exact:true}).click();const importView=page.getByRole('region',{name:'从配置包恢复'});await importView.waitFor();await importView.getByRole('button',{name:/选择配置包文件/}).click();await importView.getByRole('button',{name:/backup\.cliora/}).waitFor();await importView.getByPlaceholder('输入导出时的口令').fill('correct-password');await capture('migration-import');await page.keyboard.press('Escape');await importView.waitFor({state:'hidden'});

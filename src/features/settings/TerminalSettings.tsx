@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { open as pickPath } from '@tauri-apps/plugin-dialog';
-import { native, nativeAvailable } from '../../lib/native';
+import { native, nativeAvailable, setLaunchInteraction } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
 import {
   TERMINAL_FONT_SIZE_DEFAULT,
@@ -22,7 +22,7 @@ import {
 import { Icon } from '../../components/Icon';
 import { FilterSelect, type FilterSelectOption } from '../../components/FilterSelect';
 import { Button, Segmented, Switch } from '../../components/ui';
-import type { LaunchMode, LaunchSettings, TerminalId, TerminalPreset, TrayStatus } from '../../types/launch';
+import type { InteractionMode, LaunchMode, LaunchSettings, TerminalId, TerminalPreset, TrayStatus } from '../../types/launch';
 import i18n from '../../i18n';
 
 function matchedPreset(current: LaunchSettings | null) {
@@ -73,6 +73,8 @@ export function TerminalSettings() {
   const [argsText, setArgsText] = useState('{script}');
   const [showCustom, setShowCustom] = useState(false);
   const [saved, setSaved] = useState('');
+  /** A start-mode write that failed, kept so the row can offer the same choice again. */
+  const [failedInteraction, setFailedInteraction] = useState<InteractionMode | null>(null);
 
   // A write is only announced after the backend returned the stored settings.
   useEffect(() => {
@@ -172,7 +174,31 @@ export function TerminalSettings() {
     finally { setBusy(false); }
   }
 
+  /** A stored value the backend cannot recognize reads as a terminal; nothing is rewritten. */
+  const interactionValue: InteractionMode = settings?.interactionError ? 'terminal' : settings?.interaction === 'acp' ? 'acp' : 'terminal';
   const writesDisabled = !nativeAvailable || busy || !settings;
+
+  /** Only later launches follow this: an open session keeps the way it was started. */
+  async function chooseInteraction(mode: InteractionMode) {
+    if (writesDisabled || mode === interactionValue) return;
+    setBusy(true); setError(''); setFailedInteraction(null);
+    try {
+      setSettings(await setLaunchInteraction(mode));
+      setSaved(t('settings.terminal.saved'));
+    } catch (value) {
+      setSaved('');
+      setFailedInteraction(mode);
+      // The terminal-specific recovery advice (re-pick a terminal) does not apply here.
+      const detail = value && typeof value === 'object' && 'message' in value && String(value.message).trim()
+        ? String(value.message).trim().replace(/[。！？\s]+$/, '')
+        : '';
+      setError(detail || t('settings.terminal.interactionSaveFailed'));
+    } finally { setBusy(false); }
+  }
+  const interactionOptions = [
+    { value: 'terminal' as InteractionMode, label: t('settings.terminal.interactionTerminal'), disabled: writesDisabled },
+    { value: 'acp' as InteractionMode, label: t('settings.terminal.interactionAcp'), disabled: writesDisabled },
+  ];
   const modeOptions = [
     { value: 'normal' as LaunchMode, label: t('settings.terminal.modeNormal'), disabled: writesDisabled },
     { value: 'yolo' as LaunchMode, label: t('settings.terminal.modeYolo'), disabled: writesDisabled },
@@ -182,9 +208,12 @@ export function TerminalSettings() {
     <div className="setting-intro"><h2>{t('settings.terminal.title')}</h2><p>{t('settings.terminal.description')}</p>{saved && <span className="setting-saved" role="status"><Icon name="check" size={13} />{saved}</span>}</div>
     <div className="setting-row"><span><strong>{t('settings.terminal.launch')}</strong><small>{t('settings.terminal.launchHint')}</small></span><FilterSelect className="setting-select" label={t('settings.terminal.launch')} value={selectionKey()} options={terminalOptions()} disabled={writesDisabled} searchable={false} onChange={(value) => void choose(value)} /></div>
     {selectionKey() === 'custom' && <div className="setting-row setting-row-top"><span><strong>{t('settings.terminal.customCommand')}</strong><small>{t('settings.terminal.customHint')}</small></span><span className="custom-terminal-fields"><input aria-label={t('settings.terminal.program')} value={program} onChange={(event) => setProgram(event.target.value)} placeholder="/Applications/Tabby.app" /><textarea aria-label={t('settings.terminal.args')} rows={4} value={argsText} onChange={(event) => setArgsText(event.target.value)} /><span className="custom-terminal-actions"><Button disabled={!nativeAvailable || busy} onClick={() => void pickProgram()}>{t('settings.terminal.pickProgram')}</Button><Button disabled={!nativeAvailable || busy || !program.trim()} onClick={() => void saveCustom()}>{t('settings.terminal.useCommand')}</Button></span></span></div>}
+    <div className="setting-row"><span><strong>{t('settings.terminal.interaction')}</strong><small>{t('settings.terminal.interactionHint')}</small></span><Segmented label={t('settings.terminal.interactionAria')} value={interactionValue} options={interactionOptions} onChange={(mode) => void chooseInteraction(mode)} /></div>
+    {settings?.interactionError && <p role="alert" className="setting-error">{t('settings.terminal.interactionUnknown')}</p>}
+    {failedInteraction && <p role="alert" className="setting-error">{error}<Button size="sm" variant="ghost" onClick={() => void chooseInteraction(failedInteraction)}>{t('settings.terminal.interactionRetry')}</Button></p>}
     <div className="setting-row"><span><strong>{t('settings.terminal.cliMode')}</strong><small>{t('settings.terminal.cliModeHint')}</small></span><Segmented label={t('settings.terminal.cliModeAria')} value={settings?.cliMode ?? 'normal'} options={modeOptions} onChange={(mode) => void chooseMode('cli', mode)} /></div>
     <div className="setting-row"><span><strong>{t('settings.terminal.projectMode')}</strong><small>{t('settings.terminal.projectModeHint')}</small></span><Segmented label={t('settings.terminal.projectModeAria')} value={settings?.projectMode ?? 'normal'} options={modeOptions} onChange={(mode) => void chooseMode('project', mode)} /></div>
-    {error && <p role="alert" className="setting-error">{error}</p>}
+    {error && !failedInteraction && <p role="alert" className="setting-error">{error}</p>}
   </section>;
 }
 

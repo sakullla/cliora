@@ -97,8 +97,10 @@ test('unsaved or system default shows the workbench, and launch modes stay norma
   await select.click();
   await expect(page.getByRole('option', { name: '工作台', exact: true })).toHaveCount(1);
   await page.keyboard.press('Escape');
-  // The worktree start preference lives under Worktrees now; modes are segmented radios.
-  await expect(region.getByRole('radiogroup')).toHaveCount(2);
+  // The worktree start preference lives under Worktrees now; the start mode and the two
+  // modes are segmented radios.
+  await expect(region.getByRole('radiogroup')).toHaveCount(3);
+  await expect(region.getByRole('radiogroup', { name: '启动方式' }).getByRole('radio')).toHaveText(['终端', 'ACP 对话']);
   for (const name of ['CLI 默认启动模式', '项目默认启动模式']) {
     const mode = region.getByRole('radiogroup', { name });
     await expect(mode.getByRole('radio')).toHaveText(['普通模式', 'YOLO 模式']);

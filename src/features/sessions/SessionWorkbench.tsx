@@ -8,7 +8,7 @@ import { createPortal } from 'react-dom';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open } from '@tauri-apps/plugin-dialog';
-import { localSessionPrompt, native, nativeAvailable, onLaunchSettingsChange } from '../../lib/native';
+import { acp, localSessionPrompt, native, nativeAvailable, onAcpEvent, onLaunchSettingsChange } from '../../lib/native';
 import type { WindowChrome } from '../../components/WindowControls';
 import { formatFailure } from '../../lib/feedback';
 import { displayPath, shortPath } from '../../lib/paths';
@@ -43,6 +43,9 @@ import { commandHint, type TerminalCommandState } from './terminalCommandState';
 import { placeParts, railPlace, railTaskTitle } from './railTitle';
 import { uploadDisplayName, useSessionUploads, type SessionUploadTask } from './sessionUploads';
 import uploadStyles from './sessionUploads.module.css';
+import { AcpConversation } from './AcpConversation';
+import { applyAcpEvent, acpIsLive, acpRow, type AcpConversation as AcpConversationState } from './acpSession';
+import type { AcpEvent, AcpSessionSnapshot } from '../../types/acp';
 import { WorkbenchComposer } from './WorkbenchComposer';
 import { PromptPicker } from './PromptPicker';
 import { TerminalAppearance } from './TerminalAppearance';
@@ -53,7 +56,7 @@ import { requestWriteRecovery, useWriteRecoveryNeeded } from '../remote/writeRec
 import { RemoteSshSettings } from '../settings/GeneralSettings';
 import styles from './SessionWorkbench.module.css';
 
-import { workbenchSessionId, type WorkbenchFailure, type RemoteWorkbenchIntent } from './workbenchLaunch';
+import { isAcpLaunch, workbenchSessionId, type WorkbenchFailure, type RemoteWorkbenchIntent } from './workbenchLaunch';
 
 function subscribeVisibility(notify: () => void): () => void {
   document.addEventListener('visibilitychange', notify);
@@ -467,6 +470,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const windowVisible = useSyncExternalStore(subscribeVisibility, documentVisible);
   const renderActive = active && windowVisible;
   const [sessions, setSessions] = useState<WorkbenchSession[]>([]);
+  /** ACP conversations this window holds. They are not PTY sessions, so they keep
+   *  their own ordered snapshot map instead of the listed session rows. */
+  const [conversations, setConversations] = useState<Map<string, AcpConversationState>>(() => new Map());
+  /** A conversation the user closed: a later list read must not put its row back. */
+  const retiredConversations = useRef(new Set<string>());
   const sessionStateUpdates = useRef(new Map<string, WorkbenchSession>());
   /** A restored snapshot can arrive before any list contains it. It survives the list reads
    *  that have not seen it yet; once the native list names that id, the list is authoritative. */
@@ -489,6 +497,24 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       const candidates = [item, current.find(session => session.id === item.id), sessionStateUpdates.current.get(item.id)];
       return candidates.reduce<WorkbenchSession>((newest, candidate) => candidate && (candidate.stateRevision ?? 0) > (newest.stateRevision ?? 0) ? { ...item, ...candidate } : newest, item);
     }));
+  }
+  /** Registers a native conversation snapshot. A snapshot the window already holds with a
+   *  newer sequence is kept: an older read must not undo output that already arrived. */
+  function registerConversation(snapshot: AcpSessionSnapshot | null | undefined) {
+    if (!snapshot || typeof snapshot.id !== 'string' || retiredConversations.current.has(snapshot.id)) return;
+    setConversations((current) => {
+      const existing = current.get(snapshot.id);
+      if (existing && existing.snapshot.seq > snapshot.seq) return current;
+      const next = new Map(current);
+      next.set(snapshot.id, { snapshot, notices: existing?.notices ?? [] });
+      return next;
+    });
+  }
+  const conversationsRef = useRef(conversations);
+  conversationsRef.current = conversations;
+  /** The native conversation of a session id, or null for a terminal session. */
+  function conversationOf(id: string): AcpSessionSnapshot | null {
+    return conversations.get(id)?.snapshot ?? null;
   }
   const allSessionsRef = useRef(sessions);
   allSessionsRef.current = sessions;
@@ -529,6 +555,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [activeTargetId, setActiveTargetId] = useState(remoteTargetId);
   const [hostManagerOpen, setHostManagerOpen] = useState(false);
   const [launchSettings, setLaunchSettings] = useState<LaunchSettings | null>(null);
+  /** How the next local session talks to its CLI. A stored value that cannot be
+   *  recognized reads as the terminal, exactly as the settings row does. */
+  const savedInteraction: 'terminal' | 'acp' = launchSettings?.interactionError ? 'terminal' : launchSettings?.interaction === 'acp' ? 'acp' : 'terminal';
   const [selectedId, setSelectedId] = useState<string | null>(focusSessionId);
   const pendingSelectionId = useRef<string | null>(focusSessionId);
   const selectionTarget = useRef(activeTargetId);
@@ -696,11 +725,19 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [pruningRemote, setPruningRemote] = useState(false);
   const remotePicker = useRemoteFolderPicker();
 
+  /** The rail rows of this window's conversations. They join the same list as the
+   *  terminal sessions, so selection, ordering, splitting and the attention entry treat
+   *  both kinds the same way. The ACP host runs on this machine, so remote hosts never
+   *  list one. */
+  const conversationRows = useMemo<WorkbenchSession[]>(
+    () => (activeTargetId !== 'local' ? [] : [...conversations.values()].map((item) => acpRow(item.snapshot))),
+    [activeTargetId, conversations],
+  );
   const scopedSessions = useMemo(() => {
-    if (activeTargetId === 'local') return sessions.filter((item) => !item.projectId?.startsWith('remote:'));
+    if (activeTargetId === 'local') return [...sessions.filter((item) => !item.projectId?.startsWith('remote:')), ...conversationRows];
     const remoteProjectIds = new Set(remoteProjects.filter((item) => item.targetId === activeTargetId).map((item) => `remote:${item.id}`));
     return sessions.filter((item) => !!item.projectId && remoteProjectIds.has(item.projectId));
-  }, [activeTargetId, remoteProjects, sessions]);
+  }, [activeTargetId, remoteProjects, sessions, conversationRows]);
   useEffect(() => {
     const targetChanged = selectionTarget.current !== activeTargetId;
     selectionTarget.current = activeTargetId;
@@ -1048,6 +1085,37 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       if (!decided) autoLocalRestoreAttempted.current = false;
     };
   }, [active]);
+  /**
+   * Conversations live in the shared native host, not in this component. The list read
+   * hydrates what is already running (another window, a previous mount) and the ordered
+   * event stream keeps it current. Events are folded by sequence, so a remount, a
+   * split or a switch never replays a reply into the wrong conversation.
+   */
+  useEffect(() => {
+    if (!active || !nativeAvailable) return;
+    let alive = true;
+    let stop: (() => void) | undefined;
+    void acp.list().then((listed) => {
+      if (!alive || !Array.isArray(listed)) return;
+      for (const snapshot of listed) registerConversation(snapshot);
+    }).catch(() => { /* A missing list read leaves the event stream as the only source. */ });
+    void onAcpEvent((event: AcpEvent) => {
+      if (!alive || !event || typeof event.sessionId !== 'string') return;
+      if (retiredConversations.current.has(event.sessionId)) return;
+      const known = conversationsRef.current.has(event.sessionId);
+      setConversations((current) => {
+        const updated = applyAcpEvent(current.get(event.sessionId), event);
+        if (!updated || updated === current.get(event.sessionId)) return current;
+        const next = new Map(current);
+        next.set(event.sessionId, updated);
+        return next;
+      });
+      // A conversation this window has not seen yet (another window started it): read the
+      // full snapshot rather than rendering a fragment of its event stream.
+      if (!known) void acp.session(event.sessionId).then(registerConversation).catch(() => {});
+    }).then((unlisten) => { if (alive) stop = unlisten; else unlisten(); }).catch(() => {});
+    return () => { alive = false; stop?.(); };
+  }, [active]);
   // Each saved record publishes its own stages. A restored record becomes a real session at
   // once; a failed one keeps the record and its retry, and never blocks the others.
   useEffect(() => {
@@ -1069,6 +1137,12 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       if (restoreStages.current.size > 512) restoreStages.current.clear();
       if (payload.stage === 'restored') {
         if (payload.session && typeof payload.session.id === 'string') applyRestoredSession(payload.savedSessionId, payload.session);
+        // A restored conversation is not a PTY session: it publishes its own snapshot.
+        else if (payload.acpSession && typeof payload.acpSession.id === 'string') {
+          registerConversation(payload.acpSession);
+          remapLocalSelection({ [payload.savedSessionId]: payload.acpSession.id });
+          dropRestoreRow(payload.savedSessionId);
+        }
         else dropRestoreRow(payload.savedSessionId);
         return;
       }
@@ -1800,7 +1874,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   useEffect(() => {
     if (!selectedLaunchTool?.yoloAvailable && launchMode === 'yolo') setLaunchMode('normal');
     if (!selectedLaunchTool?.resumeLatestAvailable && resumeLatest) setResumeLatest(false);
-  }, [selectedLaunchTool, launchMode, resumeLatest]);
+    // A conversation surfaces approvals as cards, so a YOLO flag the ACP entry does not
+    // publish would silently lose the chosen mode. The dialog keeps the choice it can express.
+    if (savedInteraction === 'acp' && launchMode === 'yolo') setLaunchMode('normal');
+    if (savedInteraction === 'acp' && resumeLatest) setResumeLatest(false);
+  }, [selectedLaunchTool, launchMode, resumeLatest, savedInteraction]);
 
   useEffect(() => {
     if (!findOpen || !selectedId || !findQuery.trim()) {
@@ -1955,6 +2033,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
 
   function sessionTone(session: WorkbenchSession): SessionTone {
+    const conversation = conversationOf(session.id);
+    if (conversation) {
+      if (conversation.state === 'failed') return 'error';
+      if (conversation.state === 'waiting_permission') return 'bell';
+      if (conversation.state === 'running' || conversation.state === 'starting' || conversation.state === 'stopping') return 'live';
+      return acpIsLive(conversation) ? 'idle' : 'ended';
+    }
     if (!session.running && remoteSessionMayExist(session)) return 'ended';
     if (!session.running) return session.exitCode != null && session.exitCode !== 0 ? 'error' : 'ended';
     if (attentionIds.has(session.id)) return 'bell';
@@ -1967,6 +2052,23 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
    * publishes the screen evidence; this function only assembles facts it did not invent.
    */
   function taskEvidenceOf(session: WorkbenchSession): TaskEvidence {
+    // A conversation's evidence is its own protocol state: a pending authorization is
+    // the only thing that asks for a person, and only a running turn is work.
+    const conversation = conversationOf(session.id);
+    if (conversation) {
+      return {
+        running: acpIsLive(conversation),
+        exitCode: null,
+        remoteUnconfirmed: false,
+        attention: conversation.permissions.length > 0 ? 'approval' : null,
+        bell: false,
+        outputActive: conversation.state === 'running',
+        resting: conversation.state === 'ready',
+        marked: arrangement.reviewMarks.includes(session.id),
+        verified: false,
+        unread: unreadIds.has(session.id),
+      };
+    }
     const semantics = semanticsById.get(session.id) ?? null;
     const review = reviewStates.get(session.id) ?? null;
     return {
@@ -2063,6 +2165,19 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   async function endSession(session: WorkbenchSession) {
     if (busy) return;
+    // A conversation ends by closing its host session, not by a terminal close or a kill.
+    if (conversationOf(session.id)) {
+      const accepted = session.running
+        ? await confirmAction(
+          t('sessions.endConfirmMessage', { tool: toolName(session), place: placeOf(session) }),
+          () => sessionsRef.current.some((item) => item.id === session.id),
+          { title: t('sessions.endConfirmTitle'), confirmLabel: t('sessions.endConfirmAction'), destructive: true },
+        )
+        : true;
+      if (!accepted) return;
+      await closeConversation(session);
+      return;
+    }
     if (session.running || remoteSessionMayExist(session)) {
       const accepted = await confirmAction(
         t('sessions.endConfirmMessage', { tool: toolName(session), place: placeOf(session) }),
@@ -2102,8 +2217,18 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
 
   async function clearEndedSessions() {
-    const ended = scopedSessions.filter(sessionConfirmedEnded);
-    if (!ended.length || busy) return;
+    const all = scopedSessions.filter(sessionConfirmedEnded);
+    const ended = all.filter((session) => !conversationOf(session.id));
+    const endedConversations = all.filter((session) => !!conversationOf(session.id));
+    if (!all.length || busy) return;
+    if (!ended.length) {
+      // Only conversations are left: each is closed on its own host session.
+      setBusy('__clear_ended');
+      try {
+        for (const session of endedConversations) await closeConversationNow(session.id).catch((value) => { setActionError(formatFailure(value, t('sessions.closeFailed'), t('sessions.closeNext'))); });
+      } finally { setBusy(''); }
+      return;
+    }
     setBusy('__clear_ended');
     setActionError('');
     const order = arrangedSessions.map((item) => item.id);
@@ -2124,6 +2249,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         setSessions((current) => current.filter((item) => !closedIds.has(item.id)));
         setSelectedId((current) => selectionAfterClose(current, closedIds, order, rest));
       }
+      // Ended conversations share the same action; each is closed on its own host session.
+      for (const session of endedConversations) {
+        await closeConversationNow(session.id).catch((value) => { setActionError(formatFailure(value, t('sessions.closeFailed'), t('sessions.closeNext'))); });
+      }
       setBusy('');
     }
   }
@@ -2136,7 +2265,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     try {
       const result = failure.retry.kind === 'launch' ? await native.launchCli(failure.retry.request) : await native.resumeHistorySession(failure.retry.id, failure.retry.mode);
       if (result.warnings?.length) setNotice(result.warnings.join('\n'));
-      const opened = workbenchSessionId(result);
+      const opened = await adoptLaunchResult(result);
       if (opened) {
         onFailure(null);
         selectPendingSession(opened);
@@ -2281,7 +2410,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         worktreeIntent: 'given',
       });
       if (result.warnings?.length) setNotice(result.warnings.join('\n'));
-      const opened = workbenchSessionId(result);
+      const opened = await adoptLaunchResult(result);
       if (opened) {
         onFailure(null);
         setNewDialogOpen(false);
@@ -2342,7 +2471,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     }
   }
 
-  async function launchFromDialog() {
+  /** `fallback` retries the same launch as an explicit terminal start in the same
+   *  directory, which is the documented recovery when a conversation cannot start. */
+  async function launchFromDialog(fallback?: 'terminal') {
     if (workspaceUnavailable) {
       // The inherited place is gone: ask for a fix instead of choosing another one.
       setDialogError(t('sessions.workspaceUnavailable', { path: workspaceValueLabel(workspaceValue) }));
@@ -2438,6 +2569,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         ...(promptText ? { initialPrompt: promptText } : {}),
         ...(resume ? { resumeLatest: true } : {}),
         worktreeIntent,
+        ...(fallback ? { interaction: fallback } : {}),
         ...(!remoteLaunch && !resume && useWorkbench && taskLine ? { taskText: taskLine } : {}),
       };
       // An explicit creation runs in the background: the dialog closes at once,
@@ -2481,7 +2613,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         setInitialPrompt('');
         setDialogError('');
         void native.launchCli(tracked).then((result) => {
-          settleWorktreeOperation(operationId, result, watched);
+          void settleWorktreeOperation(operationId, result, watched);
         }).catch((error) => {
           failWorktreeOperation(operationId, formatFailure(error, t('sessions.worktreeOpCreateFailed'), t('sessions.failureHint')));
         });
@@ -2489,7 +2621,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       }
       const result = await native.launchCli(request);
       if (result.warnings?.length) setNotice(result.warnings.join('\n'));
-      const opened = workbenchSessionId(result);
+      const opened = await adoptLaunchResult(result);
       if (opened) {
         onFailure(null);
         setNewDialogOpen(false);
@@ -2508,8 +2640,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   /** A creation's command result is final: it converges the row even when no event
    *  arrived, and never steals the selection the user made afterwards. */
-  function settleWorktreeOperation(operationId: string, result: LaunchResult, watched: string | null) {
-    const opened = workbenchSessionId(result);
+  async function settleWorktreeOperation(operationId: string, result: LaunchResult, watched: string | null) {
+    const opened = await adoptLaunchResult(result);
     setWorktreeOps((current) => current.map((item) => item.operationId === operationId
       ? { ...item, stage: 'succeeded', sessionId: opened ?? item.sessionId }
       : item));
@@ -2581,6 +2713,91 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     return operation.request.directory || null;
   }
 
+  /**
+   * A launch answer becomes a session the workbench can show. A conversation is read
+   * from the shared host so the panel renders the real snapshot, not a guess built from
+   * the launch request; a terminal session is already in the native list.
+   */
+  async function adoptLaunchResult(result: LaunchResult): Promise<string | null> {
+    const opened = workbenchSessionId(result);
+    if (opened && isAcpLaunch(result)) registerConversation(await acp.session(opened).catch(() => null));
+    return opened;
+  }
+
+  /** One prompt in an existing conversation. The launch's own first prompt was already
+   *  submitted by the native host, so nothing here resends it. */
+  async function promptConversation(sessionId: string, text: string) {
+    await acp.prompt(sessionId, text);
+  }
+
+  /** Withdraw the turn: pending authorizations are withdrawn by the host until the turn
+   *  reports its own result, so the panel keeps reading "stopping" until then. */
+  async function stopConversation(sessionId: string) {
+    await acp.cancel(sessionId);
+  }
+
+  /** Answer exactly the request the card was rendered for. */
+  async function answerConversation(sessionId: string, requestId: string, optionId: string | null) {
+    await acp.respondPermission(sessionId, requestId, optionId);
+  }
+
+  /** Closing a conversation is a native close plus a local row removal: the host may still
+   *  report its own exit, and a later list read must not put the row back. */
+  async function closeConversationNow(sessionId: string) {
+    const order = arrangedSessions.map((item) => item.id);
+    await acp.close(sessionId);
+    retiredConversations.current.add(sessionId);
+    setConversations((current) => {
+      if (!current.has(sessionId)) return current;
+      const next = new Map(current);
+      next.delete(sessionId);
+      return next;
+    });
+    forgetSession(sessionId);
+    const rest = sessionsRef.current.filter((item) => item.id !== sessionId);
+    setSelectedId((current) => selectionAfterClose(current, new Set([sessionId]), order, rest));
+  }
+
+  async function closeConversation(session: WorkbenchSession) {
+    if (busy) return;
+    setBusy(session.id);
+    setActionError('');
+    try { await closeConversationNow(session.id); }
+    catch (value) { setActionError(formatFailure(value, t('sessions.closeFailed'), t('sessions.closeNext'))); }
+    finally { setBusy(''); }
+  }
+
+  /**
+   * The two documented recoveries in the same working directory: a new conversation
+   * (a fresh native session, nothing replayed) or an explicit terminal start that reuses
+   * the directory and project configuration an earlier attempt created.
+   */
+  async function launchInDirectory(session: WorkbenchSession, interaction: 'acp' | 'terminal') {
+    if (busy) return;
+    setBusy(session.id);
+    setActionError('');
+    setNotice('');
+    try {
+      const result = await native.launchCli({
+        toolId: session.toolId,
+        projectId: session.projectId,
+        sessionId: null,
+        mode: session.mode,
+        directory: session.directory || null,
+        worktreeIntent: 'given',
+        initialPrompt: null,
+        resumeLatest: false,
+        interaction,
+      });
+      if (result.warnings?.length) setNotice(result.warnings.join('\n'));
+      const opened = await adoptLaunchResult(result);
+      if (opened) { onFailure(null); selectPendingSession(opened); return; }
+      setNotice(result.status === 'desktop_requested' ? t('sessions.desktopOpened') : t('sessions.externalOpened'));
+    } catch (value) {
+      setActionError(formatFailure(value, t('sessions.launchFailed'), t('sessions.failureHint')));
+    } finally { setBusy(''); refreshLedger(); }
+  }
+
   async function restartOrCloneSession(session: WorkbenchSession, replaceEnded: boolean, directoryIntent?: 'given' | 'preference') {
     if (busy) return;
     const remote = !!session.projectId?.startsWith('remote:');
@@ -2607,7 +2824,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         ...(taskLine ? { taskText: taskLine } : {}),
       });
       if (result.warnings?.length) setNotice(result.warnings.join('\n'));
-      const opened = workbenchSessionId(result);
+      const opened = await adoptLaunchResult(result);
       if (opened) {
         if (replaceEnded && !session.running) {
           await native.closeWorkbenchSession(session.id).catch(() => {});
@@ -2628,6 +2845,20 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   async function sendToSession(session: WorkbenchSession, rawText: string): Promise<boolean> {
     if (!session.running || !rawText) return false;
     setActionError('');
+    // A conversation receives a prompt message, never PTY bytes: the shared composer and the
+    // interrupt control route by session kind instead of writing into a terminal that is absent.
+    if (conversationOf(session.id)) {
+      const text = rawText.replace(/[\r\n]+$/, '');
+      // A control byte is not text: with no composer text there is nothing to send.
+      if (!text.replace(/[\u0000-\u001f]/g, '').trim()) return false;
+      try {
+        await acp.prompt(session.id, text);
+        return true;
+      } catch (error) {
+        setActionError(formatFailure(error, t('sessions.acpRetryFailed'), t('sessions.failureHint')));
+        return false;
+      }
+    }
     try {
       await native.writeWorkbenchSession(session.id, encodeBase64(new TextEncoder().encode(rawText)));
       if (selectedIdRef.current === session.id) handles.current.get(session.id)?.focus();
@@ -2668,6 +2899,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
    */
   function sessionResumable(session: WorkbenchSession): boolean {
     if (session.projectId?.startsWith('remote:')) return false;
+    // A conversation restores through the ACP host, never through a terminal resume command.
+    if (conversationOf(session.id)) return false;
     return tools.some((tool) => tool.id === session.toolId && tool.resume?.state === 'available' && tool.history?.state === 'available');
   }
 
@@ -2816,10 +3049,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     const text = composerDrafts[selected.id] ?? '';
     composerSending.current.add(selected.id);
     try {
-      const local = !selected.remoteSessionId && !selected.projectId?.startsWith('remote:');
+      // A conversation sends plain text to the host: there is no PTY to prepare secret
+      // references for and no bracketed paste to wrap.
+      const conversation = !!conversationOf(selected.id);
+      const local = !conversation && !selected.remoteSessionId && !selected.projectId?.startsWith('remote:');
       const outgoing = local ? await localSessionPrompt(text) : text;
       if (selectedIdRef.current !== selected.id || peekSessionIdRef.current) return;
-      const input = outgoing.includes('\n') && handles.current.get(selected.id)?.bracketedPaste
+      const input = !conversation && outgoing.includes('\n') && handles.current.get(selected.id)?.bracketedPaste
         ? `\x1b[200~${outgoing.replace(/\x1b/g, '')}\x1b[201~` : outgoing;
       if (!await sendToSession(selected, input + '\r')) return;
       if (text) setComposerDrafts((current) => current[selected.id] === text ? { ...current, [selected.id]: '' } : current);
@@ -3041,6 +3277,12 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   function openTerminalMenu(session: WorkbenchSession, x: number, y: number, trigger: HTMLElement | null = null, surface = false) {
     setAppearanceOpen(false);
     refreshLedger();
+    // A conversation holds no terminal text: its menu is the session menu, never the
+    // selection/copy menu (which would address a terminal that does not exist).
+    if (conversationOf(session.id)) {
+      setMenu({ kind: 'session', sessionId: session.id, x, y, trigger, besideId: null });
+      return;
+    }
     const handle = handles.current.get(session.id);
     const hasSelection = !!handle?.hasSelection();
     // The first selected line seeds find; a selection read here survives the menu taking focus.
@@ -3710,7 +3952,23 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   // into a fresh xterm. Ended ones are mounted only while on screen or recently viewed.
   // A temporary look keeps its own terminal mounted without putting it in visibleIds.
   const scopedSessionIds = useMemo(() => new Set(scopedSessions.map(session => session.id)), [scopedSessions]);
-  const mountedSessions = sessions.filter((session) => session.running || visibleIds.includes(session.id) || recentSessionIds.includes(session.id) || session.id === peekSessionId || session.id === menu?.sessionId);
+  /** The pane head shared by both session kinds, so a split reads the same way. */
+  function paneHeader(session: WorkbenchSession) {
+    // Focus follows the same rule the terminal pane uses: on screen and selected.
+    const focused = renderActive && session.id === selectedId;
+    return <div className={styles.paneHead}>
+                      <SessionActivityIcon tone={sessionTone(session)} slot="pane" className={styles.paneDot} label={stateLabel(session, sessionTone(session))} />
+                      <ToolIcon toolId={session.toolId} size={14} />
+                      <strong>{taskTitle(session) ? <SessionTitle title={taskTitle(session)} /> : toolName(session)}</strong>
+                      <span className={styles.panePlace}>{placeOf(session)}</span>
+                      {focused && <span className={styles.paneFocus}>{t('sessions.paneFocused')}</span>}
+                      <button type="button" className={styles.paneClose} aria-label={t('sessions.closePane', { name: toolName(session) })} title={t('sessions.closePane', { name: toolName(session) })} onClick={(event) => { event.stopPropagation(); closePane(session.id); }}><Icon name="close" size={12} /></button>
+                    </div>;
+  }
+
+  // Conversations join the same mount set: a live one stays mounted so its stream keeps
+  // arriving while another session is selected.
+  const mountedSessions = [...sessions, ...conversationRows].filter((session) => session.running || visibleIds.includes(session.id) || recentSessionIds.includes(session.id) || session.id === peekSessionId || session.id === menu?.sessionId);
   // A pending selection has no input target until that identity has been listed.
   const stageSession = selected;
 
@@ -3952,7 +4210,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   </span>}
                   <span className={`${styles.actionGroup} ${styles.runningActions}`} data-running={current.running || undefined} aria-hidden={current.running ? undefined : true}>
                     <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.composerTrigger}`} aria-label={t('sessions.composerShort')} aria-pressed={composerOpen} title={t('sessions.composerShort') + ` (${modLabel}+Shift+M)`} disabled={!current.running} onClick={() => toggleComposer()} icon={<Icon name="pencil" size={14} />}><span className={styles.toolLabel}>{t('sessions.composerShort')}</span></Button>
-                    <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.interruptBtn}`} aria-label={t('sessions.sendInterrupt')} title={t('sessions.sendInterrupt')} disabled={!current.running} onClick={() => void sendToSession(current, '\x03')} icon={<Icon name="ban" size={14} />}><span className={styles.toolLabel}>{t('sessions.interruptShort')}</span></Button>
+                    <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.interruptBtn}`} aria-label={t('sessions.sendInterrupt')} title={t('sessions.sendInterrupt')} disabled={!current.running} onClick={() => void (conversationOf(current.id) ? stopConversation(current.id).catch(() => {}) : sendToSession(current, '\x03'))} icon={<Icon name="ban" size={14} />}><span className={styles.toolLabel}>{t('sessions.interruptShort')}</span></Button>
                   </span>
                   {/* An ended session's banner owns its recovery actions (continue, write recovery); the toolbar
                       repeats none of them. A live session still reaches write recovery from here. */}
@@ -4054,22 +4312,18 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   const pane = visibleIds.indexOf(session.id);
                   const visible = renderActive && pane >= 0;
                   const focused = renderActive && session.id === selectedId;
-                  const paneTitle = taskTitle(session);
                   const failed = !session.running && session.exitCode != null && session.exitCode !== 0;
                   const remotePane = session.projectId?.startsWith('remote:') ? session.projectId : undefined;
                   // 适配器只在支持该能力时才带对应端口；缺少 resume 端口不能让整个工作台崩掉。
                   const canResume = sessionResumable(session);
                   // Clipboard files use the same queue; local sessions retain staged files.
                   const peeking = peekSessionId === session.id;
+                  // A conversation renders its own panel: its content never reaches an xterm,
+                  // and a terminal never receives conversation text.
+                  const conversation = conversations.get(session.id);
+                  if (conversation) return <AcpConversation key={session.id} conversation={conversation} toolName={toolName(session)} active={visible} focused={focused} pane={split ? pane : undefined} header={split && visible ? paneHeader(session) : null} onSend={(text) => promptConversation(session.id, text)} onStop={() => stopConversation(session.id)} onAnswer={(requestId, optionId) => answerConversation(session.id, requestId, optionId)} onClose={() => endSession(session)} />;
                   return <SessionTerminal key={session.id} sessionId={session.id} toolId={session.toolId} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} suspendInput={!!peekSession && session.id === selectedId} peeking={peeking} keepRendererWarm={renderActive && scopedSessionIds.has(session.id)} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onFilesPaste={(inputs) => uploads.enqueueUpload(session.id, remotePane || null, inputs)} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={TERMINAL_LINE_HEIGHT[density]} scrollSpeed={scrollSpeed} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
-                    header={split && visible ? <div className={styles.paneHead}>
-                      <SessionActivityIcon tone={sessionTone(session)} slot="pane" className={styles.paneDot} label={stateLabel(session, sessionTone(session))} />
-                      <ToolIcon toolId={session.toolId} size={14} />
-                      <strong>{paneTitle ? <SessionTitle title={paneTitle} /> : toolName(session)}</strong>
-                      <span className={styles.panePlace}>{placeOf(session)}</span>
-                      {focused && <span className={styles.paneFocus}>{t('sessions.paneFocused')}</span>}
-                      <button type="button" className={styles.paneClose} aria-label={t('sessions.closePane', { name: toolName(session) })} title={t('sessions.closePane', { name: toolName(session) })} onClick={(event) => { event.stopPropagation(); closePane(session.id); }}><Icon name="close" size={12} /></button>
-                    </div> : null}
+                    header={split && visible ? paneHeader(session) : null}
                     overlay={<>
                       {visible && scrolledIds.has(session.id) && <button type="button" className={styles.jumpLatest} aria-label={t('sessions.jumpToBottom')} title={t('sessions.jumpToBottom')} onClick={() => { const handle = handles.current.get(session.id); handle?.scrollToBottom(); handle?.focus(); }}><Icon name="arrowDown" size={14} /><span>{t('sessions.jumpToBottom')}</span></button>}
                       {visible && dropTarget === session.id && <div className={styles.dropOverlay} aria-hidden="true"><div className={styles.dropCard}><span className={styles.dropGlyph}><Icon name="upload" size={22} /></span><strong>{t('sessions.dropHint')}</strong><span>{t('sessions.dropHintDetail', { tool: toolName(session) })}</span></div></div>}
@@ -4224,10 +4478,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     </>, railHost)}
 
     {menu && (() => {
-      const session = sessions.find((item) => item.id === menu.sessionId);
+      const session = scopedSessions.find((item) => item.id === menu.sessionId);
       if (!session) return null;
       const name = toolName(session);
       const handle = handles.current.get(session.id);
+      // A conversation has no terminal text and no CLI restart command: its own entries
+      // replace the terminal-only ones, and the terminal fallback stays explicit.
+      const conversation = conversationOf(session.id);
       return createPortal(<div ref={menuRef} className={`${rowMenuStyles.rowMenuList} ${styles.contextMenu}`} role="menu" aria-label={menu.kind === 'session' ? t('sessions.sessionMenu', { name }) : t('sessions.terminalMenu')} style={menuBox ?? { top: 0, left: -10000 }} onKeyDown={menuNavigate} onContextMenu={(event) => event.preventDefault()} onClick={() => setMenu(null)}>
         {menu.kind === 'terminal' && menu.surface ? <>
           {/* Right-click on the terminal: only what acts on its text. Session actions stay on the
@@ -4247,11 +4504,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         </> : menu.kind === 'terminal' ? <>
           {/* Title-bar menu: the next step for this session. Text actions live on right-click,
               list arrangement on the session list, the interrupt and display on the toolbar. */}
-          {session.directory && <button role="menuitem" disabled={!!reviewBusy || !!busy} title={t('sessions.reviewHint')} onClick={() => { selectSession(session.id, false); void startReview(session); }}><Icon name="branch" size={14} /><span>{t('sessions.taskChanges')}</span></button>}
+          {session.directory && !conversation && <button role="menuitem" disabled={!!reviewBusy || !!busy} title={t('sessions.reviewHint')} onClick={() => { selectSession(session.id, false); void startReview(session); }}><Icon name="branch" size={14} /><span>{t('sessions.taskChanges')}</span></button>}
           {session.projectId && !session.projectId.startsWith('remote:') && <button role="menuitem" onClick={() => void native.openProjectDirectory(session.projectId!).catch(() => {})}><Icon name="arrowUpRight" size={14} /><span>{t('sessions.openFolder')}</span></button>}
           {session.directory && <button role="menuitem" onClick={() => void copySessionPath(session)}><Icon name="folder" size={14} /><span>{t('sessions.copyPath')}</span></button>}
           <span className={styles.menuDivider} role="separator" />
-          <button role="menuitem" disabled={!!busy} title={!session.running ? t('sessions.restartHint') : undefined} onClick={() => void restartOrCloneSession(session, !session.running)}><Icon name={session.running ? 'plus' : 'refresh'} size={14} /><span>{session.running ? t('sessions.cloneSession') : t('sessions.restartSession')}</span></button>
+          {conversation
+            ? <button role="menuitem" disabled={!!busy} onClick={() => void launchInDirectory(session, 'acp')}><Icon name="refresh" size={14} /><span>{t('sessions.acpNewConversation')}</span></button>
+            : <button role="menuitem" disabled={!!busy} title={!session.running ? t('sessions.restartHint') : undefined} onClick={() => void restartOrCloneSession(session, !session.running)}><Icon name={session.running ? 'plus' : 'refresh'} size={14} /><span>{session.running ? t('sessions.cloneSession') : t('sessions.restartSession')}</span></button>}
+          {conversation && <button role="menuitem" disabled={!!busy} onClick={() => void launchInDirectory(session, 'terminal')}><Icon name="terminal" size={14} /><span>{t('sessions.acpFallbackTerminal')}</span></button>}
           {!session.projectId?.startsWith('remote:') && <button role="menuitem" onClick={() => openWorktreeSetup(setupDirectoryOf(session))}><Icon name="gitWorktree" size={14} /><span>{t('sessions.worktreeSetupOpen')}</span>{ledger.length > 0 && <span className={styles.menuCount}>{ledger.length}</span>}</button>}
           <span className={styles.menuDivider} role="separator" />
           <button role="menuitem" data-danger="true" disabled={!!busy} onClick={() => void endSession(session)}><Icon name="close" size={14} /><span>{session.running ? t('sessions.end') : t('sessions.closeTab')}</span></button>
@@ -4262,7 +4522,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           {peekOffered && session.id !== selectedId && <button role="menuitem" onClick={() => openPeek(session.id)}><Icon name="eye" size={14} /><span>{t('sessions.peekSession')}</span></button>}
           {splitRoom && menu.besideId && sessions.some((item) => item.id === menu.besideId) && <button role="menuitem" onClick={() => { setPeekSessionId(null); setSelectedId(session.id); setSplit([menu.besideId!, session.id]); }}><Icon name="columns" size={14} /><span>{t('sessions.openBeside', { name: toolName(sessions.find((item) => item.id === menu.besideId)!) })}</span></button>}
           <span className={styles.menuDivider} role="separator" />
-          <button role="menuitem" disabled={!!busy} onClick={() => void restartOrCloneSession(session, !session.running)}><Icon name={session.running ? 'plus' : 'refresh'} size={14} /><span>{session.running ? t('sessions.cloneSession') : t('sessions.restartSession')}</span></button>
+          {conversation
+            ? <button role="menuitem" disabled={!!busy} onClick={() => void launchInDirectory(session, 'acp')}><Icon name="refresh" size={14} /><span>{t('sessions.acpNewConversation')}</span></button>
+            : <button role="menuitem" disabled={!!busy} onClick={() => void restartOrCloneSession(session, !session.running)}><Icon name={session.running ? 'plus' : 'refresh'} size={14} /><span>{session.running ? t('sessions.cloneSession') : t('sessions.restartSession')}</span></button>}
+          {conversation && <button role="menuitem" disabled={!!busy} onClick={() => void launchInDirectory(session, 'terminal')}><Icon name="terminal" size={14} /><span>{t('sessions.acpFallbackTerminal')}</span></button>}
           {session.directory && <button role="menuitem" onClick={() => void copySessionPath(session)}><Icon name="folder" size={14} /><span>{t('sessions.copyPath')}</span></button>}
           {session.projectId && !session.projectId.startsWith('remote:') && <button role="menuitem" onClick={() => void native.openProjectDirectory(session.projectId!).catch(() => {})}><Icon name="arrowUpRight" size={14} /><span>{t('sessions.openFolder')}</span></button>}
           {/* The short row menu only surfaces worktree settings when there is something to clean up. */}
@@ -4294,6 +4557,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         if (!event.repeat && !launchingNew && effectiveLaunchToolId && !workspaceUnavailable) void launchFromDialog();
       }}>
         {dialogError && <div className={styles.banner} role="alert"><div className={styles.bannerCopy}><p>{dialogError}</p></div></div>}
+        {dialogError && savedInteraction === 'acp' && <div className={styles.dialogField}><Button size="sm" variant="secondary" disabled={launchingNew} onClick={() => void launchFromDialog('terminal')} icon={<Icon name="terminal" size={13} />}>{t('sessions.acpFallbackTerminal')}</Button></div>}
         <div className={styles.dialogPrimaryGrid}>
           <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.pickToolLabel')}</span><FilterSelect label={t('sessions.pickToolLabel')} value={effectiveLaunchToolId} options={cliSelectOptions} placeholder={t('home.launcher.pickTool')} searchLabel={t('sessions.searchCliTool')} onChange={pickLaunchTool} />
             {/* One click for the CLIs used most; the list above still reaches every tool. */}
@@ -4355,9 +4619,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
             {baseStale && <span className={styles.baseHint} role="status">{t('sessions.worktreeBaseStale')}</span>}
           </div>}
         </div>}
+        {savedInteraction === 'acp' && <div className={styles.baseSummary} role="status" data-acp-launch="">
+          <span className={styles.baseLabel}>{t('sessions.launchInteractionLabel')}</span>
+          <strong>{t('sessions.launchInteractionAcp', { tool: selectedLaunchTool?.name ?? '' })}</strong>
+          <span className={styles.baseHint}>{t('sessions.launchInteractionAcpPlace', { place: workspaceValueLabel(workspaceValue) })}</span>
+        </div>}
         <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.launchModeLabel')}</span><div className={styles.modeCards} role="radiogroup" aria-label={t('sessions.launchModeLabel')}>
           <button type="button" role="radio" aria-checked={launchMode === 'normal'} className={styles.modeCard} onClick={() => { launchModeTouched.current = true; setLaunchMode('normal'); }}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="shield" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeNormal')}</strong><small>{t('sessions.modeNormalDesc')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
-          <button type="button" role="radio" aria-checked={launchMode === 'yolo'} disabled={!selectedLaunchTool?.yoloAvailable} title={!selectedLaunchTool?.yoloAvailable ? t('sessions.yoloUnsupported') : undefined} className={styles.modeCard} onClick={() => { launchModeTouched.current = true; setLaunchMode('yolo'); }}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="sparkle" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeYolo')}</strong><small>{selectedLaunchTool?.yoloAvailable ? t('sessions.modeYoloDesc') : t('sessions.yoloUnsupported')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
+          <button type="button" role="radio" aria-checked={launchMode === 'yolo'} disabled={!selectedLaunchTool?.yoloAvailable || savedInteraction === 'acp'} title={savedInteraction === 'acp' ? t('sessions.yoloUnsupportedAcp') : !selectedLaunchTool?.yoloAvailable ? t('sessions.yoloUnsupported') : undefined} className={styles.modeCard} onClick={() => { launchModeTouched.current = true; setLaunchMode('yolo'); }}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="sparkle" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeYolo')}</strong><small>{selectedLaunchTool?.yoloAvailable ? t('sessions.modeYoloDesc') : t('sessions.yoloUnsupported')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
         </div></div>
         {/* Advanced options fold away; every edited value stays in the dialog's own state. */}
         {/* Only offer the fold when it holds something for this launch. */}

@@ -16,25 +16,27 @@
 
 | Agent | 接入路径 | 来源 | 实际命令与参数 | 平台 | 会话 | 授权 | 停止 | 恢复 | 证据 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| OpenCode | 原生 | native | `opencode acp` | Windows（2.3.0） | 是 | 是 | 是 | 是 | handshake | unverified |
-| Codex | 桥接 | bridge | `codex-acp` | 未安装 | 声明 | 声明 | 声明 | 声明 | documented | unverified |
-| Claude Code | 桥接 | bridge | `claude-agent-acp` | 未安装 | 声明 | 声明 | 声明 | 声明 | documented | unverified |
-| Grok | 原生 | native | `grok agent stdio` | Windows（1.0.77） | 是 | 是 | 是 | 是 | handshake | unverified |
-| Pi | 桥接 | bridge | `pi-acp`（运行 PATH 上的 `pi`） | 未安装 | 声明 | 声明 | 声明 | 声明 | documented | unverified |
-| oh-my-pi | 原生 | native | `omp acp` | Windows（19.2.1） | 是 | 是 | 是 | 是 | handshake | unverified |
-| Cursor | 原生 CLI | native | `cursor-agent acp` | 未安装 | 声明 | 声明 | 声明 | 声明 | documented | unverified |
-| Kimi Code | 原生 | native | `kimi acp`（仅 2.x） | Windows（2.7.0） | 是 | 是 | 是 | 是 | handshake | unverified |
-| Qoder CN | 原生 | native | `qoderclicn --acp` | Windows（1.1.94） | 是 | 是 | 是 | 是 | handshake | unverified |
-| ZCode | 社区桥接 | bridge | `zcode-acp`（PyPI，Python 3.9+） | 未安装 | 声明 | 声明 | 声明 | 声明 | documented | unverified |
-| DeepSeek Harness | 原生 | native | `dsh acp` | 未安装 | 声明 | 声明 | 声明 | 声明 | documented | unverified |
-| CodeBuddy | 原生 | native | `codebuddy --acp` | Windows（2.187.0） | 是 | 是 | 是 | 是 | handshake | unverified |
-| MiMo Code | 原生 | native | `mimo acp` | Windows（0.1.15） | 是 | 是 | 是 | 是 | handshake | unverified |
-| MiniMax Code | 原生 | native | `mcode acp` | Windows（0.6.13） | 是 | 是 | 是 | 是 | handshake | unverified |
-| Cline | 原生 | native | `cline --acp` | 未安装 | 声明 | 声明 | 声明 | 声明 | documented | unverified |
-| Devin | 原生 | native | `devin acp` | Windows（3000.12.57） | 是 | 是 | 是 | 是 | handshake | unverified |
-| Command Code | 原生 | native | `cmdc acp`（Windows）/ `cmd acp` | Windows（1.88.0） | 是 | 是 | 是 | 是 | handshake | unverified |
-| Antigravity | 厂商组件 | vendor | `agy_acp_server` | 组件未安装 | 声明 | 声明 | 声明 | 声明 | documented | unverified |
-| Kiro | 原生 | native | `kiro-cli acp` | Windows（3.5.0） | 是 | 是 | 是 | 是 | handshake | unverified |
+| OpenCode | 原生 | native | `opencode acp` | Windows（2.3.0） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
+| Codex | 桥接 | bridge | `codex-acp` | 未安装 | 未验证 | 未验证 | 未验证 | 未验证 | documented | unverified |
+| Claude Code | 桥接 | bridge | `claude-agent-acp` | 未安装 | 未验证 | 未验证 | 未验证 | 未验证 | documented | unverified |
+| Grok | 原生 | native | `grok agent stdio` | Windows（1.0.77） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
+| Pi | 桥接 | bridge | `pi-acp`（运行 PATH 上的 `pi`） | 未安装 | 未验证 | 未验证 | 未验证 | 未验证 | documented | unverified |
+| oh-my-pi | 原生 | native | `omp acp` | Windows（19.2.1） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
+| Cursor | 原生 CLI | native | `cursor-agent acp` | 未安装 | 未验证 | 未验证 | 未验证 | 未验证 | documented | unverified |
+| Kimi Code | 原生 | native | `kimi acp`（仅 2.x） | Windows（2.7.0） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
+| Qoder CN | 原生 | native | `qoderclicn --acp` | Windows（1.1.94） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
+| ZCode | 社区桥接 | bridge | `zcode-acp`（PyPI，Python 3.9+） | 未安装 | 未验证 | 未验证 | 未验证 | 未验证 | documented | unverified |
+| DeepSeek Harness | 原生 | native | `dsh acp` | 未安装 | 未验证 | 未验证 | 未验证 | 未验证 | documented | unverified |
+| CodeBuddy | 原生 | native | `codebuddy --acp` | Windows（2.187.0） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
+| MiMo Code | 原生 | native | `mimo acp` | Windows（0.1.15） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
+| MiniMax Code | 原生 | native | `mcode acp` | Windows（0.6.13） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
+| Cline | 原生 | native | `cline --acp` | 未安装 | 未验证 | 未验证 | 未验证 | 未验证 | documented | unverified |
+| Devin | 原生 | native | `devin acp` | Windows（3000.12.57） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
+| Command Code | 原生 | native | `cmdc acp`（Windows）/ `cmd acp` | Windows（1.88.0） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
+| Antigravity | 厂商组件 | vendor | `agy_acp_server` | 组件未安装 | 未验证 | 未验证 | 未验证 | 未验证 | documented | unverified |
+| Kiro | 原生 | native | `kiro-cli acp` | Windows（3.5.0） | 声明 | 声明 | 声明 | loadSession 声明 | handshake | unverified |
+
+**「会话／授权／停止／恢复」四列记录的是来源，不是已核实的行为。** 只有 handshake 行的前三列写了「声明」，意思是本轮握手确实收到了对应能力声明；documented 行全部是「未验证」，只来自上游注册表与文档。「恢复」列任何一行都**没有**写成「是」或「已核实」：`loadSession 声明` 只说明该 agent 在握手时报告了加载能力，本机从未真正加载过一个原生会话，恢复结果、恢复后的首轮与失败文案都还没有实证记录（T3 复核也指出恢复失败文案与实际关闭新会话的行为不一致，见文末限制）。把这些声明当成「已核实的恢复」会直接违反 R8 的记录要求。
 
 MiniMax Code 与 Devin 的握手返回 `loadSession: true` 但 `sessionCapabilities` 未列出 `resume`；适配器按「声明了才记账」处理，恢复能力仍要在真实会话里确认。
 
@@ -197,9 +199,55 @@ MiniMax Code 与 Devin 的握手返回 `loadSession: true` 但 `sessionCapabilit
 
 ## 未完成与限制
 
-- **真实交互（第 3 步）全部未做**：本轮未运行任何模型对话，因此没有一项是 `supported`；授权弹窗、停止、恢复、多轮增量与工具结果都要在 T3/T4 的会话里逐项补齐。
+- **真实交互（第 3 步）全部未做**：T1 只做到握手，T3/T4 只做到合成帧与离线界面验证，没有一项是 `supported`；授权弹窗、停止、恢复、多轮增量与工具结果仍要在真实会话里逐项补齐。
 - **桥接未安装**：codex-acp、claude-agent-acp、pi-acp、zcode-acp、agy_acp_server 在本机都不在场，只有上游文档与注册表依据；安装并握手后应把 evidence 升级为 `handshake`。
 - **仅 Windows**：macOS/Linux 的入口、`agy_acp_server.par`、`--uid=` 参数与 Kiro 的平台包均未验证。
 - **等待时长**：Qoder CN 12–16 秒、CodeBuddy 约 4 秒才回第一帧；共享宿主的初始化超时不能按毫秒级假设设置。
 - **身份边界**：Codex / Claude 桥接必须绑定所选安装（`CODEX_PATH` / `CLAUDE_CODE_EXECUTABLE`），否则会运行桥接自带的那份引擎；解析器已强制这一点，真实运行下的身份一致性仍待实测。
+- **已知限制（T3 复核，非阻断）**：ACP 恢复失败时，界面文案写的是「恢复失败」，但宿主实际已经关闭了原记录并新建了一个会话——文案与真实行为不一致，用户需要按「已新建会话」理解，并会在 T4 之后单独修正。
+- **已知限制（T3 复核，非阻断）**：工作目录预检发生在 ACP 子进程 spawn 之后，而不是之前，因此一个不可用的目录会先留下一次失败的进程启动再报错；这不会误判成功，但诊断顺序与「预检在前」的期望不同。
 - 本记录不含任何凭据、账号或提示词内容；握手只发送 `initialize`，不加载文件、不执行工具。
+
+## 工作台接线与 T4 验收（2026-11-26）
+
+本轮把 T3 的共享宿主接到界面上，只做**离线合成验证**：没有启动任何真实 agent，也没有运行模型对话，因此矩阵里的 19 项状态仍然全部是 `unverified`，下面的记录不是原生平台验收。
+
+### 实际接线
+
+- 设置 → 「终端与启动模式」新增「启动方式」（终端／ACP 对话），与终端类型、普通／YOLO、启动偏好各自独立。行里显示后端返回的实际值；保存失败显示真实原因并给出「重试」，重试仍用同一个选择；后端报告无法识别的已存值按终端显示并给出说明，且读取不会回写。切换只影响之后新建的会话，改回终端仍保留原来的外部终端与自定义命令。
+- 工作台会话是原生对话面板而不是终端（`src/features/sessions/AcpConversation.tsx`）：消息流、流式增量、按 `toolCallId` 归并的工具卡片、绑定本次请求的授权卡、停止（`stopping`）与轮次结果（可继续／限额／拒绝／取消／断开／失败／未知）。侧栏、标题、任务状态与「等你处理」入口都由共享列表给出：待授权按 `approval` 计入需要人处理，运行中的轮次算工作，结束的会话没有退出码可显示。
+- 会话状态由 `src/features/sessions/acpSession.ts` 的纯函数折叠：快照整体替换，增量按消息 id 追加，工具按调用 id 合并，授权按 `requestId` 增删，序号已在视图中应用过的事件不会重放；通知有界且不进入消息流。切换标签、分屏与重新挂载时用 `list_acp_sessions` / `acp_session` 补齐切换期间的输出，两个会话的内容互不串台。
+- 首条提示只发一次：原生宿主在会话建立后提交 `initial_prompt`，界面从不再调用 `acp_prompt` 重发首条（用例直接断言 `acp_prompt` 未被调用）。
+- 快捷输入与中断按会话类型路由：选中的是对话时，工作台输入框把文本交给 `acp_prompt`（不走 PTY 写入、不包装 bracketed paste、不准备终端秘密引用），中断按钮调用 `acp_cancel`；终端会话仍走原来的写入路径。
+- 启动入口：工具、项目卡片、工作台新建与托盘最近项目都走同一选择；`workbenchSessionId` 现在同时识别 `session_started` 与 `acp_started`，因此从首页或托盘打开的对话会聚焦到同一个工作台会话。历史恢复与旧记录仍按原方式（终端）继续。新建会话对话框在 ACP 时显示所选 CLI 与实际工作目录，并停用该入口无法表达的 YOLO 选项（后端同样会拒绝）。
+- 失败恢复：对话框与面板都显示适配器的具体原因（缺桥接、YOLO 不可表达、Agent／会话参数不支持、项目模型覆盖等），并提供「新开一个对话」与「改用终端在此目录启动」两条明确路径，后者复用已创建的工作树与目录。
+
+### 离线验证
+
+| 检查 | 命令 | 结果 |
+| --- | --- | --- |
+| 前端类型检查与构建 | `npm run build` | 通过 |
+| Node 单测（含新增折叠测试） | `npm run test:unit` | 303 tests / 297 passed / 6 skipped / 0 failed |
+| 新增折叠测试 | `node --test tests/native/acp-session.test.mjs` | 8 passed |
+| 合成 IPC 界面用例 | `node scripts/test-ui.mjs workbench-acp.spec.ts` | 6 passed |
+| 工作台截图 | `node scripts/verify-ui-captures.mjs --skip-build --only workbench` | 见「截图」一节 |
+
+新增界面用例在 `tests/ui/workbench-acp.spec.ts`，合成 IPC 在 `tests/ui/acpMock.ts`，覆盖：设置里选择 ACP（含保存失败与无法识别的已存值）、从工作台新建以 ACP 启动、首条提示只发一次、流式增量与重复序号去重、工具卡片按调用 id 归并、授权卡只回答自己的请求、停止与 `stopping`、失败原因与同目录终端回退、两个会话切换时的内容隔离、760px 窄窗口无横向溢出。
+
+### 截图
+
+工作台 ACP 对话面板与设置行由 `scripts/capture-product-ux.mjs`（`scripts/verify-ui-captures.mjs` 批量入口）生成，是浏览器合成 IPC 的图库，不是原生窗口。这些 PNG 按仓库现有约定不纳入版本控制，重跑同一条命令即可再生成：
+
+- 设置「启动方式」（深/浅两套）：`docs/verification/product-ui-ux/pages/settings-launch-{light,dark}-1360.png`，命令 `node scripts/verify-ui-captures.mjs --skip-build --only pages`
+- ACP 对话（默认图库里的一张）：`docs/verification/product-ui-ux/workbench/workbench-acp-conversation-dark-1360.png`，命令 `node scripts/verify-ui-captures.mjs --skip-build --only workbench`
+- ACP 对话、授权卡、停止中与 720px 窄窗口的完整一组：`docs/verification/product-ui-ux/workbench-acp/`，命令 `CLIORA_CAPTURE_OUT=docs/verification/product-ui-ux/workbench-acp node scripts/capture-workbench.mjs --only 'workbench-acp-*' --size all --theme all`（需要先运行 `npm run dev -- --port 14736`）
+
+抓图不移动也不遮挡 Cliora 窗口；脚本自带的检查确认无横向溢出、无页面错误，这些图片仍不是本机原生验收。
+
+抓图不移动也不遮挡 Cliora 窗口；这些图片不是本机原生验收。
+
+### 未实证
+
+- **真实 agent 对话仍未运行**：上面所有面板行为都由合成帧驱动，没有一个真实 ACP 会话被启动过。授权弹窗的实际文案、停止后 agent 的真实反应、工具结果的实际形态都还只有协议侧依据。
+- **恢复未实证**：原生会话加载、恢复失败后的关闭行为、恢复后再发首轮都还没有实测（另见文末限制）。
+- **仅 Windows**：合成验证在 Windows 上用 Chromium 跑；macOS/Linux 的界面与宿主行为未验证。

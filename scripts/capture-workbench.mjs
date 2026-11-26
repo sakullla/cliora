@@ -124,8 +124,8 @@ async function installWindowChrome(page, chrome) {
   }, chrome);
 }
 
-async function install(page, initialTheme, empty = false, remoteState = null, promptFailure = null, directoryMode = null, writeRecovery = false) {
-  await page.addInitScript(({ theme, transcripts, blank, language, remoteState, promptFailure, directoryMode, writeRecovery }) => {
+async function install(page, initialTheme, empty = false, remoteState = null, promptFailure = null, directoryMode = null, writeRecovery = false, acpMode = null) {
+  await page.addInitScript(({ theme, transcripts, blank, language, remoteState, promptFailure, directoryMode, writeRecovery, acpMode }) => {
     try { localStorage.setItem('cliora:language', language); } catch { /* the first document may not expose storage yet */ }
     const names = { codex: 'Codex', claude_code: 'Claude Code', grok: 'Grok', pi: 'Pi', open_code: 'OpenCode' };
     const facet = { state: 'available', reason: '' };
@@ -165,6 +165,40 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
     // this init script: the fixture lives in storage, not in a global.
     let restoreFixture = null;
     try { restoreFixture = JSON.parse(localStorage.getItem('capture:restore') ?? 'null'); } catch { /* optional */ }
+    // One ACP conversation fixture. It is a snapshot plus ordered increments, exactly the
+    // shape the shared host publishes; nothing here spawns an agent.
+    const acpFixture = acpMode ? [{
+      id: 'acp1', toolId: 'codex', projectId: 'cliora', directory: 'C:\\Projects\\cliora', mode: 'normal', interaction: 'acp',
+      state: acpMode === 'stopping' ? 'stopping' : acpMode === 'permission' ? 'waiting_permission' : 'ready',
+      nativeSessionId: 'native-acp-1', resume: 'none',
+      messages: [
+        { id: 'm1', role: 'user', text: '把终端工具栏的间距改成令牌相加，并跑一次样式检查。', truncated: false },
+        { id: 'm2', role: 'thought', text: '先确认工具栏当前的间距来源，再改令牌，避免再写死像素值。', truncated: false },
+        { id: 'm3', role: 'agent', text: '我先读工具栏样式和令牌定义，确认间距现在来自哪里。', truncated: false },
+        { id: 'm4', role: 'agent', text: '间距来自两处固定像素值：工具栏内边距和按钮之间的 gap。改成 --space-1 与 --space-2 相加后，深浅主题与 760px 窄窗口都不再溢出。', truncated: false },
+      ],
+      tools: [
+        { callId: 'c1', title: 'read_file', status: 'completed', detail: 'src/features/sessions/SessionWorkbench.module.css' },
+        { callId: 'c2', title: 'edit_file', status: 'completed', detail: 'src/features/sessions/SessionWorkbench.module.css' },
+        { callId: 'c3', title: 'run_command', status: acpMode === 'stopping' ? 'in_progress' : 'completed', detail: 'node --test tests/native/style-tokens.test.mjs' },
+      ],
+      permissions: acpMode === 'permission' ? [{
+        requestId: 'r1', turnId: 'turn-2', title: '运行 npm run verify',
+        detail: '在 C:\\Projects\\cliora 执行 Node 测试与 Playwright 用例',
+        options: [
+          { optionId: 'allow-once', name: '允许一次', kind: 'allow_once' },
+          { optionId: 'allow-always', name: '总是允许', kind: 'allow_always' },
+          { optionId: 'reject', name: '拒绝', kind: 'reject_once' },
+        ],
+      }] : [],
+      diagnostics: acpMode === 'stopping' ? ['agent 标准错误：正在结束本轮（已脱敏）'] : [],
+      lastTurnReason: acpMode === 'stopping' ? '' : 'end_turn',
+      seq: 24,
+    }] : null;
+    if (acpMode) {
+      localStorage.setItem('cliora:workbench-selected', 'acp1');
+      localStorage.setItem('cliora:remote-target', 'local');
+    }
     Object.assign(window, {
       isTauri: true,
       __releaseRestore: null,
@@ -208,7 +242,11 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
             return null;
           }
           if (command === 'save_remote_project') { const saved = { ...args.project, id: args.project.id || 'remote-created', updatedAt: Date.now() }; remoteProjects.splice(0, remoteProjects.length, ...remoteProjects.filter((item) => item.id !== saved.id), saved); return saved; }
-          if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_launch_settings') return { selected: 'workbench', terminals: [{ id: 'workbench', label: '工作台', available: true }], cliMode: 'normal', projectMode: 'normal', interaction: acpMode ? 'acp' : 'terminal' };
+          // ACP conversations come from the shared host, not from the PTY list.
+          if (command === 'list_acp_sessions') return acpFixture ? acpFixture.map((item) => ({ ...item })) : [];
+          if (command === 'acp_session') return acpFixture?.find((item) => item.id === args.sessionId) ?? null;
+          if (command === 'acp_prompt' || command === 'acp_cancel' || command === 'acp_respond_permission' || command === 'acp_close') return null;
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
           // Saved records for the per-record restore scenes; absent means "nothing to restore".
@@ -320,7 +358,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
     r1: b64('\u001b]0;远程项目 · 独立会话 A\u0007\u001b[36mPi · synthetic SSH terminal\u001b[0m\r\n\r\n  工作目录 /srv/project\r\n  远端身份 cliora-same-directory-a\r\n\r\n  同一目录的其他会话独立运行，输入属于当前选中会话。\r\n\r\n> '),
     r2: b64('\u001b]0;远程项目 · 独立会话 B\u0007Pi · synthetic SSH terminal\r\n\r\n  工作目录 /srv/project\r\n  远端身份 cliora-same-directory-b\r\n\r\n> '),
     r3: b64('\u001b]0;远程项目 · 独立会话 C\u0007Pi · synthetic SSH terminal\r\n\r\n  工作目录 /srv/project\r\n  远端身份 cliora-same-directory-c\r\n\r\n> '),
-  }, blank: empty, language: english ? 'en' : 'zh', remoteState, promptFailure, directoryMode, writeRecovery });
+  }, blank: empty, language: english ? 'en' : 'zh', remoteState, promptFailure, directoryMode, writeRecovery, acpMode });
 }
 
 const manifest = [];
@@ -328,7 +366,7 @@ const manifest = [];
 // the manifest, gallery and README are always written and the exit code is 1.
 const runErrors = [];
 let browser = null;
-async function shot(name, theme, width, run, empty = false, remoteState = null, promptFailure = null, directoryMode = null, writeRecovery = false, chrome = null) {
+async function shot(name, theme, width, run, empty = false, remoteState = null, promptFailure = null, directoryMode = null, writeRecovery = false, chrome = null, acpMode = null) {
   if (curated && !name.startsWith('workbench-remote-stream-')) {
     const scene = name.slice(0, -`-${theme}-${width}`.length);
     const index = defaultScenes.indexOf(scene);
@@ -343,11 +381,17 @@ async function shot(name, theme, width, run, empty = false, remoteState = null, 
   try {
     page = await browser.newPage({ viewport: { width, height: Math.max(720, Math.round(width * 0.66)) }, deviceScaleFactor: Number(process.env.CLIORA_CAPTURE_SCALE ?? 1), locale: process.env.CLIORA_CAPTURE_LOCALE ?? 'zh-CN', colorScheme: theme === 'dark' ? 'dark' : 'light', reducedMotion: 'reduce', ...(chrome ? { userAgent: chromeAgents[chrome] } : {}) });
     page.on('pageerror', (error) => errors.push(String(error)));
-    await install(page, theme, empty, remoteState, promptFailure, directoryMode, writeRecovery);
+    await install(page, theme, empty, remoteState, promptFailure, directoryMode, writeRecovery, acpMode);
     if (chrome) await installWindowChrome(page, chrome);
     await page.goto(previewUrl);
     await page.getByRole('navigation', { name: copy('页面', 'Pages') }).getByRole('button', { name: copy('工作台', 'Workbench'), exact: true }).click();
-    if (remoteState) {
+    if (acpMode) {
+      // A conversation is a native panel, not an xterm: wait for its own content.
+      const panel = page.locator('[data-acp="true"][data-pane-session="acp1"]');
+      await panel.waitFor();
+      await panel.locator('[data-role="agent"]').first().waitFor();
+      await expect(panel.getByRole('button', { name: copy('发送', 'Send'), exact: true })).toBeVisible();
+    } else if (remoteState) {
       const tab = page.locator('[role="tab"][data-session-id="r1"]');
       await tab.click();
       await expect(tab).toHaveAttribute('aria-selected', 'true');
@@ -389,7 +433,7 @@ if (!widths.length || widths.some((width) => ![1360, 900, 720, 640].includes(wid
 const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
 // Routine desktop review: one example of each distinct primary surface. The
 // exhaustive platform/error/large-list variants remain opt-in via --full/--only.
-const defaultScenes = ['workbench-active', 'workbench-worktrees-many', 'workbench-ended', 'workbench-composer',
+const defaultScenes = ['workbench-active', 'workbench-acp-conversation', 'workbench-worktrees-many', 'workbench-ended', 'workbench-composer',
   'workbench-dialog', 'workbench-task-dialog', 'workbench-task-states', 'workbench-restore-mixed',
   'workbench-remote-disconnected', 'workbench-empty'];
 const curated = !process.argv.includes('--full') && !process.argv.includes('--only');
@@ -565,6 +609,13 @@ for (const width of widths) {
       nativePlatform: 'unverified', note: 'Fixed workload observations; browser GC/DOM counters are not native CPU/memory or long-duration leak acceptance.' };
   }, false, 'connected');
   await shot('workbench-active-' + theme + '-' + width, theme, width);
+  // An ACP conversation is a native chat pane, not a terminal: streaming text, tool cards
+  // merged by call id, the turn's own result, and a stop that reports "stopping".
+  for (const mode of ['conversation', 'permission', 'stopping']) {
+    await shot('workbench-acp-' + mode + '-' + theme + '-' + width, theme, width, null, false, null, null, null, false, null, mode);
+  }
+  // The conversation keeps its composer and message order at the narrowest supported width.
+  if (width <= 720) await shot('workbench-acp-narrow-' + theme + '-' + width, theme, width, null, false, null, null, null, false, null, 'conversation');
   // The task comes first; the context it will use is a compact summary under it, and the
   // worktree base, branch and setup command stay folded until they are needed.
   await shot('workbench-task-dialog-' + theme + '-' + width, theme, width, async (page) => {

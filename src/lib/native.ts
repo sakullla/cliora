@@ -652,7 +652,7 @@ export const acp = {
 
 /** How a local new session starts. Independent of the terminal type and of YOLO. */
 export const setLaunchInteraction = (mode: InteractionMode) =>
-  command<LaunchSettings>('set_launch_interaction', { mode });
+  command<LaunchSettings>('set_launch_interaction', { mode }).then((next) => { notifyLaunchSettings(next); return next; });
 
 /** Subscribe to streamed conversation events. The caller filters by session id. */
 export async function onAcpEvent(listener: (event: AcpEvent) => void): Promise<() => void> {
