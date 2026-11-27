@@ -34,7 +34,7 @@ impl Session {
     /// is resolved again after a wait: a target that moved while the card was
     /// open is refused instead of served. A target of the wrong kind (a device,
     /// a pipe, a directory) is refused before anyone is asked.
-    fn approve_path(
+    pub(super) fn approve_path(
         &self,
         kind: AccessKind,
         expect: Expect,

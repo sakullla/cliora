@@ -252,6 +252,13 @@ pub struct LaunchEnvelope {
     pub task_text: Option<String>,
     #[serde(default)]
     pub worktree: WorktreeLaunchOptions,
+    /// The agent's own session to continue in a new ACP conversation (an
+    /// entry of `acp_native_sessions`). The host prefers `session/resume`,
+    /// then `session/load`; a resume that cannot happen starts a new session
+    /// and says so, without sending the first prompt. Absent keeps a plain
+    /// launch.
+    #[serde(default)]
+    pub resume_native_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -292,8 +299,33 @@ impl From<LaunchRequest> for LaunchEnvelope {
             worktree_intent: WorktreeIntent::Given,
             task_text: None,
             worktree: WorktreeLaunchOptions::default(),
+            resume_native_id: None,
         }
     }
+}
+
+/// The native session a conversation launch continues, after checking the
+/// request can carry it: a conversation (an explicit terminal is refused, an
+/// absent interaction becomes a conversation), never with a CLI session id, a
+/// latest-session resume or a new worktree.
+fn conversation_resume(envelope: &mut LaunchEnvelope) -> Result<Option<String>, LaunchPlanError> {
+    let Some(native) = envelope.resume_native_id.as_deref().map(str::trim) else { return Ok(None) };
+    let refuse = |message: &str| Err(LaunchPlanError::new(LaunchStage::Tool, message.into()));
+    if native.is_empty() || native.chars().count() > 500 || native.chars().any(char::is_control) {
+        return refuse("要恢复的原生会话编号无效");
+    }
+    if envelope.request.session_id.is_some() || envelope.request.resume_latest {
+        return refuse("恢复 ACP 原生会话不能同时指定终端会话或恢复最近会话");
+    }
+    if envelope.worktree_intent != WorktreeIntent::Given {
+        return refuse("恢复 ACP 原生会话不能新建工作树");
+    }
+    match envelope.request.interaction {
+        Some(InteractionMode::Terminal) => return refuse("恢复 ACP 原生会话只能以 ACP 对话启动"),
+        Some(InteractionMode::Acp) => {}
+        None => envelope.request.interaction = Some(InteractionMode::Acp),
+    }
+    Ok(Some(native.to_owned()))
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1411,12 +1443,23 @@ pub fn plan_envelope_with_progress(
     envelope: LaunchEnvelope,
     progress: &mut dyn FnMut(crate::git_worktree::WorktreeProgress),
 ) -> Result<LaunchPlan, LaunchPlanError> {
+    let mut envelope = envelope;
+    let resume = conversation_resume(&mut envelope)?;
     let worktree = WorktreeLaunch {
         intent: envelope.worktree_intent,
         task_text: envelope.task_text,
         options: envelope.worktree,
     };
-    plan_with_stage_for(db, registry, home, envelope.request, worktree, progress)
+    let mut plan = plan_with_stage_for(db, registry, home, envelope.request, worktree, progress)?;
+    if let Some(native) = resume {
+        // The planner fell back to a terminal (a desktop app, for instance):
+        // a protocol session id means nothing there.
+        if plan.interaction != InteractionMode::Acp {
+            return Err(LaunchPlanError::new(LaunchStage::Tool, "此启动不是 ACP 对话，不能恢复原生会话".into()));
+        }
+        plan.resume_native_id = Some(native);
+    }
+    Ok(plan)
 }
 
 fn plan_with_stage_for(
@@ -3311,6 +3354,7 @@ mod installed_desktop_launch {
             worktree_intent: WorktreeIntent::Preference,
             task_text: None,
             worktree: WorktreeLaunchOptions::default(),
+            resume_native_id: None,
         };
         let isolated = plan_envelope(&db, &registry, temp.path(), base(false)).unwrap();
         assert_ne!(isolated.directory, canonical);
@@ -3333,6 +3377,7 @@ mod installed_desktop_launch {
             worktree_intent: WorktreeIntent::Preference,
             task_text: Some("feat: hello?".into()),
             worktree: WorktreeLaunchOptions::default(),
+            resume_native_id: None,
         }).unwrap();
         assert_eq!(resumed.directory, canonical);
         assert!(resumed.cli_args.iter().any(|arg| arg == "--continue"));
@@ -3404,6 +3449,7 @@ mod installed_desktop_launch {
             worktree_intent: intent,
             task_text: Some("feat: hello?".into()),
             worktree: WorktreeLaunchOptions::default(),
+            resume_native_id: None,
         };
         let bare = plan_envelope(&db, &registry, temp.path(), envelope(WorktreeIntent::Preference, false)).unwrap();
         assert_ne!(bare.directory, canonical);
@@ -3453,6 +3499,7 @@ mod installed_desktop_launch {
             worktree_intent: WorktreeIntent::Preference,
             task_text: Some("feat: hello?".into()),
             worktree: WorktreeLaunchOptions::default(),
+            resume_native_id: None,
         }).unwrap();
         assert_eq!(resumed.directory, canonical);
         assert!(resumed.cli_args.iter().any(|arg| arg == "--continue"));
@@ -3502,6 +3549,7 @@ mod installed_desktop_launch {
             worktree_intent: WorktreeIntent::Preference,
             task_text: None,
             worktree: WorktreeLaunchOptions::default(),
+            resume_native_id: None,
         };
         let stayed = plan_envelope(&db, &registry, temp.path(), envelope.clone()).unwrap();
         assert_eq!(stayed.directory, canonical);
@@ -3659,6 +3707,7 @@ mod installed_desktop_launch {
             worktree_intent: WorktreeIntent::Explicit,
             task_text: Some("feat: hello?".into()),
             worktree: options,
+            resume_native_id: None,
         }
     }
 
@@ -3796,3 +3845,67 @@ mod tests;
 #[cfg(test)]
 #[path = "../../tests/launch/remote.rs"]
 mod remote_tests;
+
+#[cfg(test)]
+mod conversation_resume_tests {
+    use super::*;
+
+    fn envelope() -> LaunchEnvelope {
+        LaunchEnvelope {
+            request: LaunchRequest {
+                tool_id: "open_code".into(),
+                project_id: None,
+                session_id: None,
+                directory: None,
+                initial_prompt: None,
+                mode: LaunchMode::Normal,
+                resume_latest: false,
+                remote_intent: None,
+                agent: None,
+                session_options: None,
+                interaction: None,
+            },
+            worktree_intent: WorktreeIntent::Given,
+            task_text: None,
+            worktree: WorktreeLaunchOptions::default(),
+            resume_native_id: None,
+        }
+    }
+
+    #[test]
+    fn a_native_resume_is_a_conversation_launch_only() {
+        // Absent: nothing changes.
+        let mut plain = envelope();
+        assert_eq!(conversation_resume(&mut plain).unwrap(), None);
+        assert_eq!(plain.request.interaction, None);
+
+        // Present: an absent interaction becomes a conversation.
+        let mut resumed = envelope();
+        resumed.resume_native_id = Some(" native-7 ".into());
+        assert_eq!(conversation_resume(&mut resumed).unwrap().as_deref(), Some("native-7"));
+        assert_eq!(resumed.request.interaction, Some(InteractionMode::Acp));
+
+        // It arrives on the IPC request beside the ordinary fields.
+        let parsed: LaunchEnvelope = serde_json::from_value(serde_json::json!({
+            "toolId": "open_code", "projectId": null, "sessionId": null, "mode": "normal",
+            "interaction": "acp", "resumeNativeId": "native-8",
+        }))
+        .unwrap();
+        assert_eq!(parsed.resume_native_id.as_deref(), Some("native-8"));
+
+        for refuse in [
+            |envelope: &mut LaunchEnvelope| envelope.request.interaction = Some(InteractionMode::Terminal),
+            |envelope: &mut LaunchEnvelope| envelope.request.session_id = Some("cli-1".into()),
+            |envelope: &mut LaunchEnvelope| envelope.request.resume_latest = true,
+            |envelope: &mut LaunchEnvelope| envelope.worktree_intent = WorktreeIntent::Explicit,
+            |envelope: &mut LaunchEnvelope| envelope.resume_native_id = Some("  ".into()),
+            |envelope: &mut LaunchEnvelope| envelope.resume_native_id = Some("a
+b".into()),
+        ] {
+            let mut request = envelope();
+            request.resume_native_id = Some("native-9".into());
+            refuse(&mut request);
+            assert!(conversation_resume(&mut request).is_err());
+        }
+    }
+}

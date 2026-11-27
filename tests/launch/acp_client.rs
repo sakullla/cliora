@@ -82,6 +82,7 @@ fn inside_the_directory_reads_are_served_and_writes_are_recorded_with_a_diff() {
     std::fs::write(&file, "one\ntwo\nthree\n").unwrap();
     let file_text = path_text(&file);
     let (io, mut agent) = pair();
+    let (done_tx, done_rx) = channel();
     let worker = std::thread::spawn(move || {
         agent.handshake(false);
         let read = call(&mut agent, 10, "fs/read_text_file", json!({ "sessionId": "session-1", "path": file_text, "line": 2, "limit": 1 }));
@@ -94,6 +95,8 @@ fn inside_the_directory_reads_are_served_and_writes_are_recorded_with_a_diff() {
         // A relative path is refused.
         let relative = call(&mut agent, 13, "fs/read_text_file", json!({ "sessionId": "session-1", "path": "notes.txt" }));
         assert!(relative.get("error").is_some(), "{relative}");
+        // Every request is answered: only now may the session close.
+        let _ = done_tx.send(());
         agent.stay_connected();
     });
     let snapshot = open(spec(directory.path()), io).unwrap();
@@ -113,6 +116,7 @@ fn inside_the_directory_reads_are_served_and_writes_are_recorded_with_a_diff() {
     assert_eq!(diff.new_text, "one\nTWO\nthree\n");
     assert!(!diff.truncated && !diff.previous_omitted);
     assert!(diff.path.ends_with("notes.txt"));
+    done_rx.recv_timeout(Duration::from_secs(10)).unwrap();
     // The read inside the directory stays quiet; only the write is recorded.
     assert_eq!(accesses(&snapshot_of(&snapshot.id)).len(), 1);
     assert!(snapshot_of(&snapshot.id).pending.is_empty());

@@ -27,6 +27,18 @@
 //! - A prompt turn has no fixed deadline: it ends with the agent's own answer,
 //!   the agent's exit or the user's stop. Every other request keeps the
 //!   configured timeout.
+//! - An agent that answers session/new with auth_required leaves the session
+//!   waiting for a login (`auth_required`) instead of failing it; a login
+//!   through `authenticate` then creates (or resumes) the session. Cliora never
+//!   reads or stores the credentials.
+//! - An elicitation form (`elicitation`) is bound like an authorization card:
+//!   answered at most once, withdrawn with a cancel on stop, turn end or
+//!   session end.
+//! - A prompt's attachments (`prompt`) follow the agent's prompt capabilities;
+//!   a file outside the directory needs the same approval as an agent's read.
+//!   The project file list (`files`) and the native session history
+//!   (`history`) never leave the session directory or the declared
+//!   capabilities.
 //! - A prompt body may hold a cliora-secret reference. The host never resolves
 //!   it: the agent reaches the secret broker through the local session token,
 //!   exactly like the terminal launch. No protocol body is logged here, and
@@ -35,13 +47,17 @@
 pub mod access;
 pub mod capabilities;
 pub mod client_fs;
+pub mod elicitation;
+pub mod files;
+pub mod history;
+pub mod prompt;
 pub mod terminal;
 pub mod timeline;
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
@@ -61,10 +77,13 @@ pub use capabilities::{
     AcpSessionCapabilities, AcpSessionConfig, AcpSessionInfo, AcpUsage, LEGACY_MODEL_CONFIG_ID,
 };
 pub use access::{AccessAnswer, AccessKind};
+pub use files::AcpFileList;
+pub use history::{AcpNativeSession, AcpNativeSessionPage};
+pub use prompt::AcpAttachment;
 pub use terminal::{AcpTerminal, AcpTerminalExit};
 pub use timeline::{
-    AcpAccess, AcpFileDiff, AcpMessage, AcpNotice, AcpPermissionOption, AcpPermissionRequest, AcpSubagent,
-    AcpTimelineItem, AcpToolCall, AcpToolContent, AcpToolLocation, AcpTurnEnd,
+    AcpAccess, AcpAttachmentLabel, AcpElicitation, AcpFileDiff, AcpMessage, AcpNotice, AcpPermissionOption,
+    AcpPermissionRequest, AcpSubagent, AcpTimelineItem, AcpToolCall, AcpToolContent, AcpToolLocation, AcpTurnEnd,
 };
 use timeline::Timeline;
 
@@ -80,6 +99,75 @@ const MAX_DIAGNOSTIC_CHARS: usize = 500;
 /// The kind recorded for a permission option the agent sent without one. It
 /// matches no allow or reject kind, so nothing approves it automatically.
 pub const UNKNOWN_PERMISSION_KIND: &str = "unknown";
+/// The protocol's "authentication required" error code.
+pub const AUTH_REQUIRED_CODE: i64 = -32000;
+/// An `authenticate` request may wait for the user to finish a login the agent
+/// opened (a browser, a device code), so it waits at least this long.
+const AUTH_TIMEOUT_FLOOR: Duration = Duration::from_secs(300);
+
+/// A failed protocol request: the agent's error code when it sent one (none
+/// for a timeout or an exit) and a redacted message.
+#[derive(Clone, Debug)]
+pub(crate) struct RpcError {
+    pub code: Option<i64>,
+    pub message: String,
+}
+
+impl RpcError {
+    fn local(message: impl Into<String>) -> Self {
+        Self { code: None, message: message.into() }
+    }
+}
+
+/// A reentrant lock that orders one session's publications (see
+/// `Session::order`). Reentrant because a change may notice, settle and
+/// publish while it already holds the order.
+#[derive(Default)]
+struct Order {
+    owner: Mutex<(Option<std::thread::ThreadId>, usize)>,
+    free: Condvar,
+}
+
+struct OrderGuard<'a>(&'a Order);
+
+impl Order {
+    fn lock(&self) -> OrderGuard<'_> {
+        let me = std::thread::current().id();
+        let mut owner = guard(&self.owner);
+        loop {
+            match owner.0 {
+                None => {
+                    *owner = (Some(me), 1);
+                    break;
+                }
+                Some(holder) if holder == me => {
+                    owner.1 += 1;
+                    break;
+                }
+                Some(_) => owner = self.free.wait(owner).unwrap_or_else(|error| error.into_inner()),
+            }
+        }
+        OrderGuard(self)
+    }
+}
+
+impl Drop for OrderGuard<'_> {
+    fn drop(&mut self) {
+        let mut owner = guard(&self.0.owner);
+        owner.1 = owner.1.saturating_sub(1);
+        if owner.1 == 0 {
+            owner.0 = None;
+            self.0.free.notify_one();
+        }
+    }
+}
+
+/// Why establishing the protocol session did not finish.
+enum SetupError {
+    /// The agent wants the user to log in first; the session waits for that.
+    AuthRequired(String),
+    Failed(String),
+}
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
 static SESSIONS: LazyLock<Mutex<HashMap<String, Arc<Session>>>> =
@@ -173,17 +261,22 @@ pub struct AcpSessionSnapshot {
     pub mode: LaunchMode,
     /// Always acp: a snapshot only exists for a conversation session.
     pub interaction: &'static str,
-    /// One of starting, ready, running, stopping, waiting_permission, closed or
-    /// failed. "stopping" is a turn the user stopped that has not reported its
-    /// own result yet.
+    /// One of starting, auth_required, ready, running, stopping,
+    /// waiting_permission, closed or failed. "stopping" is a turn the user
+    /// stopped that has not reported its own result yet; "auth_required" waits
+    /// for the user to log in with one of `agent.authMethods`.
     pub state: &'static str,
     pub native_session_id: Option<String>,
-    /// One of none, unsupported, loaded or failed.
+    /// One of none, unsupported, loaded (replayed through session/load),
+    /// resumed (session/resume, no replay) or failed.
     pub resume: &'static str,
+    /// Why the session still needs a login: the agent's own answer, or the
+    /// reason the last authentication failed. None once logged in.
+    pub auth_error: Option<String>,
     /// Everything the conversation produced, in arrival order.
     pub timeline: Vec<AcpTimelineItem>,
-    /// Request ids still waiting for the user's answer: authorization cards
-    /// and out-of-directory approval cards.
+    /// Request ids still waiting for the user's answer: authorization cards,
+    /// out-of-directory approval cards and elicitation forms.
     pub pending: Vec<String>,
     /// Access categories (read, write, execute) the user allowed for the rest
     /// of this session. YOLO is the session's mode, not a grant.
@@ -362,11 +455,30 @@ pub(crate) struct Session {
     diagnostics: Mutex<Vec<String>>,
     last_turn_reason: Mutex<&'static str>,
     seq: AtomicU64,
+    /// Orders state changes, their seq and their events (see `order`).
+    order: Order,
     writer: Mutex<Option<Box<dyn Write + Send>>>,
     #[allow(clippy::type_complexity)]
     shutdown: Mutex<Option<Box<dyn FnMut() + Send>>>,
-    requests: Mutex<HashMap<u64, Sender<Result<Value, String>>>>,
+    requests: Mutex<HashMap<u64, Sender<Result<Value, RpcError>>>>,
     next_request: AtomicU64,
+    /// Why the session still needs a login (see the snapshot field).
+    auth_error: Mutex<Option<String>>,
+    /// The native session the launch asked to continue; kept so a login can
+    /// retry it.
+    resume_target: Option<String>,
+    /// The launch's first prompt until it has been submitted (or dropped
+    /// because the requested resume did not happen).
+    initial_prompt: Mutex<Option<String>>,
+    /// A session mode to switch to once the session exists (YOLO entries).
+    yolo_mode: Option<String>,
+    /// A session/load is replaying history: chunks without a message id are
+    /// distinct history messages, not increments of the latest one.
+    replaying: AtomicBool,
+    /// Elicitation forms still waiting for an answer.
+    elicitations: Mutex<Vec<elicitation::PendingElicitation>>,
+    /// The project files offered to `@` references, briefly cached.
+    files: Mutex<Option<files::FileIndex>>,
     turn: Mutex<Option<Turn>>,
     timeout: Duration,
     /// The local secret-broker approval scope. Keeping this guard alive is what
@@ -414,10 +526,18 @@ impl Session {
             diagnostics: Mutex::new(Vec::new()),
             last_turn_reason: Mutex::new(""),
             seq: AtomicU64::new(0),
+            order: Order::default(),
             writer: Mutex::new(Some(writer)),
             shutdown: Mutex::new(shutdown),
             requests: Mutex::new(HashMap::new()),
             next_request: AtomicU64::new(0),
+            auth_error: Mutex::new(None),
+            resume_target: spec.resume_native_id.clone(),
+            initial_prompt: Mutex::new(spec.initial_prompt.clone()),
+            yolo_mode: spec.yolo_mode.clone(),
+            replaying: AtomicBool::new(false),
+            elicitations: Mutex::new(Vec::new()),
+            files: Mutex::new(None),
             turn: Mutex::new(None),
             timeout: spec.timeout,
             secret_session: Mutex::new(secret_session),
@@ -430,15 +550,34 @@ impl Session {
         }
     }
 
+    /// Hold the session's publication order. A change that the view learns
+    /// through a delta holds it from the change to the emit, and a snapshot
+    /// holds it while it is read and emitted. So a snapshot contains exactly
+    /// the changes whose events carry a lower seq, and events leave in seq
+    /// order. Reentrant on one thread; never taken while a state lock is held,
+    /// and never held across a wait for the agent or the user.
+    fn order(&self) -> OrderGuard<'_> {
+        self.order.lock()
+    }
+
+    /// Emit the whole conversation. The snapshot carries the seq of its own
+    /// event, read under the publication order.
     fn publish(&self) {
-        self.emit_update(AcpUpdate::Snapshot { snapshot: Box::new(self.snapshot()) });
+        let _order = self.order();
+        let mut snapshot = self.snapshot();
+        let seq = self.next_seq();
+        snapshot.seq = seq;
+        emit(AcpEvent { session_id: self.id.clone(), seq, update: AcpUpdate::Snapshot { snapshot: Box::new(snapshot) } });
     }
 
     fn next_seq(&self) -> u64 {
         self.seq.fetch_add(1, Ordering::SeqCst) + 1
     }
 
+    /// Emit one delta. The caller that changed state for it holds `order()`
+    /// across the change and this call.
     fn emit_update(&self, update: AcpUpdate) {
+        let _order = self.order();
         emit(AcpEvent { session_id: self.id.clone(), seq: self.next_seq(), update });
     }
 
@@ -446,14 +585,19 @@ impl Session {
         let mut ids: Vec<String> =
             guard(&self.permissions).iter().map(|pending| pending.request_id.clone()).collect();
         ids.extend(self.access_pending_ids());
+        ids.extend(self.elicitation_pending_ids());
         ids
     }
 
     fn emit_pending(&self) {
+        let _order = self.order();
         self.emit_update(AcpUpdate::Pending { pending: self.pending_ids() });
     }
 
+    /// The whole state, read under the publication order: every change whose
+    /// event has been numbered is in it, none whose event has not.
     fn snapshot(&self) -> AcpSessionSnapshot {
+        let _order = self.order();
         AcpSessionSnapshot {
             id: self.id.clone(),
             tool_id: self.tool_id.clone(),
@@ -464,6 +608,7 @@ impl Session {
             state: *guard(&self.state),
             native_session_id: guard(&self.native_session_id).clone(),
             resume: *guard(&self.resume),
+            auth_error: guard(&self.auth_error).clone(),
             timeline: guard(&self.timeline).items().to_vec(),
             pending: self.pending_ids(),
             grants: guard(&self.grants).list(),
@@ -491,8 +636,16 @@ impl Session {
         if matches!(*guard(&self.state), "closed" | "failed") {
             return;
         }
+        // A session that is still being set up (or waits for a login) keeps
+        // that state: a form answered meanwhile must not make it look ready.
+        if matches!(*guard(&self.state), "starting" | "auth_required") {
+            self.publish();
+            return;
+        }
         let previous = *guard(&self.state);
-        let waiting = !guard(&self.permissions).is_empty() || !guard(&self.accesses).is_empty();
+        let waiting = !guard(&self.permissions).is_empty()
+            || !guard(&self.accesses).is_empty()
+            || !guard(&self.elicitations).is_empty();
         let running = guard(&self.turn).is_some();
         *guard(&self.state) = if waiting {
             "waiting_permission"
@@ -528,6 +681,7 @@ impl Session {
     /// reads it in its place.
     fn notice(&self, level: &'static str, code: &'static str, text: impl Into<String>) {
         let turn_id = self.current_turn_id();
+        let _order = self.order();
         let item = {
             let mut timeline = guard(&self.timeline);
             let id = timeline.auto_id("notice");
@@ -568,7 +722,7 @@ impl Session {
         &self,
         method: &str,
         params: Value,
-    ) -> Result<(u64, std::sync::mpsc::Receiver<Result<Value, String>>), String> {
+    ) -> Result<(u64, std::sync::mpsc::Receiver<Result<Value, RpcError>>), String> {
         let id = self.next_request.fetch_add(1, Ordering::SeqCst) + 1;
         let (sender, receiver) = std::sync::mpsc::channel();
         guard(&self.requests).insert(id, sender);
@@ -583,18 +737,22 @@ impl Session {
     /// One request with the configured deadline. A prompt turn does not use
     /// this: it has no deadline of its own.
     fn request(&self, method: &str, params: Value) -> Result<Value, String> {
-        let (id, receiver) = self.send_request(method, params)?;
-        match receiver.recv_timeout(self.timeout) {
-            Ok(Ok(value)) => Ok(value),
-            Ok(Err(error)) => Err(error),
+        self.request_raw(method, params, self.timeout).map_err(|error| error.message)
+    }
+
+    /// One request with an explicit deadline, keeping the agent's error code.
+    fn request_raw(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, RpcError> {
+        let (id, receiver) = self.send_request(method, params).map_err(RpcError::local)?;
+        match receiver.recv_timeout(timeout) {
+            Ok(result) => result,
             Err(_) => {
                 guard(&self.requests).remove(&id);
-                Err(format!("等待 agent 回应 {method} 超时，请确认该 CLI 支持 ACP"))
+                Err(RpcError::local(format!("等待 agent 回应 {method} 超时，请确认该 CLI 支持 ACP")))
             }
         }
     }
 
-    fn resolve_response(&self, id: u64, result: Result<Value, String>) {
+    fn resolve_response(&self, id: u64, result: Result<Value, RpcError>) {
         if let Some(sender) = guard(&self.requests).remove(&id) {
             let _ = sender.send(result);
         }
@@ -626,7 +784,8 @@ impl Session {
                         .get("message")
                         .and_then(Value::as_str)
                         .unwrap_or("agent 拒绝了该请求");
-                    self.resolve_response(number, Err(redact(message)));
+                    let code = error.get("code").and_then(Value::as_i64);
+                    self.resolve_response(number, Err(RpcError { code, message: redact(message) }));
                 } else {
                     self.resolve_response(number, Ok(value.get("result").cloned().unwrap_or(Value::Null)));
                 }
@@ -664,6 +823,7 @@ impl Session {
     fn handle_request(self: &Arc<Self>, method: &str, id: Value, params: Value) {
         match method {
             "session/request_permission" => self.open_permission(id, params),
+            "elicitation/create" => self.open_elicitation(id, params),
             "fs/read_text_file" | "fs/write_text_file" | "terminal/create" | "terminal/output"
             | "terminal/wait_for_exit" | "terminal/kill" | "terminal/release" => self.serve_client(method, id, params),
             // Only advertised capabilities are served; anything else is refused
@@ -799,16 +959,21 @@ impl Session {
         // reaches the user: an "always" rule could outlive this session.
         if self.yolo {
             if let Some(option) = Self::yolo_option(&options).cloned() {
-                let call = guard(&self.timeline).upsert_tool(subagent.as_deref(), &turn_id, &tool, "工具调用");
-                if let Some(call) = &call {
-                    self.emit_update(AcpUpdate::Tool { call: call.clone() });
-                }
+                let call = {
+                    let _order = self.order();
+                    let call = guard(&self.timeline).upsert_tool(subagent.as_deref(), &turn_id, &tool, "工具调用");
+                    if let Some(call) = &call {
+                        self.emit_update(AcpUpdate::Tool { call: call.clone() });
+                    }
+                    call
+                };
                 let _ = self.answer_permission(&id, json!({ "outcome": "selected", "optionId": option.option_id }));
                 let title = call.map(|call| call.title).unwrap_or_else(|| "工具调用".to_owned());
                 self.notice("info", "yolo_allowed", format!("已自动允许：{title}（{}）", option.name));
                 return;
             }
         }
+        let order = self.order();
         let call = {
             let mut timeline = guard(&self.timeline);
             timeline
@@ -825,6 +990,7 @@ impl Session {
                 })
         };
         let Some(call) = call else {
+            drop(order);
             let _ = self.answer_permission(&id, cancelled_outcome);
             self.diagnostic("授权请求缺少工具调用，已取消");
             return;
@@ -838,6 +1004,7 @@ impl Session {
         });
         self.emit_update(AcpUpdate::Tool { call });
         self.emit_pending();
+        drop(order);
         self.settle_state();
     }
 
@@ -845,6 +1012,7 @@ impl Session {
     /// tool call. The caller publishes the new pending set.
     fn withdraw(&self, pending: PendingPermission) {
         let _ = self.answer_permission(&pending.id, json!({ "outcome": "cancelled" }));
+        let _order = self.order();
         let call = guard(&self.timeline).set_permission(&pending.item_id, None);
         if let Some(call) = call {
             self.emit_update(AcpUpdate::Tool { call });
@@ -870,6 +1038,10 @@ impl Session {
         let update = params.get("update").cloned().unwrap_or(Value::Null);
         let kind = update.get("sessionUpdate").and_then(Value::as_str).unwrap_or_default();
         let child = subagent.as_deref();
+        // Every session update changes state and emits its delta under the
+        // publication order, so a snapshot read meanwhile never holds a change
+        // whose event comes after it. Nothing here waits for anyone.
+        let _order = self.order();
         match kind {
             "agent_message_chunk" => self.append_chunk("agent", &update, child),
             "agent_thought_chunk" => self.append_chunk("thought", &update, child),
@@ -953,8 +1125,20 @@ impl Session {
             return;
         }
         let turn_id = self.current_turn_id();
-        let message_id = update.get("messageId").and_then(Value::as_str);
-        let outcome = guard(&self.timeline).append_chunk(role, message_id, subagent, &turn_id, &text);
+        let outcome = {
+            let mut timeline = guard(&self.timeline);
+            // History replayed by session/load arrives without turns. A replayed
+            // block without a message id is one history message: it gets an id
+            // of its own (role and replay order) instead of continuing the
+            // previous block, so two messages never fold into one.
+            let replayed = match update.get("messageId").and_then(Value::as_str) {
+                Some(_) => None,
+                None if self.replaying.load(Ordering::SeqCst) => Some(timeline.auto_id(&format!("replay-{role}"))),
+                None => None,
+            };
+            let message_id = update.get("messageId").and_then(Value::as_str).or(replayed.as_deref());
+            timeline.append_chunk(role, message_id, subagent, &turn_id, &text)
+        };
         if outcome.text.is_empty() {
             return;
         }
@@ -1059,15 +1243,50 @@ impl Session {
     /// Start one turn. Only one turn may run at a time; a failure to send is
     /// reported to the caller instead of becoming a silent gap. The turn has no
     /// deadline: it ends with the agent's answer, its exit or the user's stop.
-    fn begin_turn(self: &Arc<Self>, text: &str) -> Result<(), String> {
-        if guard(&self.turn).is_some() {
-            return Err("当前轮次尚未结束，请先停止或等待结果".into());
+    fn begin_turn(self: &Arc<Self>, text: &str, attachments: &[AcpAttachment]) -> Result<(), String> {
+        if matches!(*guard(&self.state), "starting" | "auth_required") {
+            return Err("会话尚未建立，请先完成登录或等待连接".into());
         }
-        let turn_id = format!("turn-{}", self.next_seq());
-        *guard(&self.turn) = Some(Turn { id: turn_id.clone(), cancel_requested: false });
-        let prompt_text = text.to_owned();
+        // Images are checked before a turn exists: a refused attachment never
+        // opens a turn the agent will not see.
+        self.check_attachments(attachments)?;
+        let turn_id = {
+            let mut turn = guard(&self.turn);
+            if turn.is_some() {
+                return Err("当前轮次尚未结束，请先停止或等待结果".into());
+            }
+            let turn_id = format!("turn-{}", self.next_seq());
+            *turn = Some(Turn { id: turn_id.clone(), cancel_requested: false });
+            turn_id
+        };
+        // A file outside the directory asks for approval under this turn, so
+        // the turn exists before the files are resolved. Any refusal ends the
+        // turn before anything reached the agent.
+        let built = self.prompt_blocks(text, attachments).and_then(|built| {
+            // A stop that arrived while an attachment waited for approval
+            // ends the turn here: the prompt was never sent.
+            let stopped = guard(&self.turn).as_ref().is_none_or(|turn| turn.id != turn_id || turn.cancel_requested);
+            if stopped {
+                Err("本轮已停止，提示词没有发送".to_string())
+            } else {
+                Ok(built)
+            }
+        });
+        let (blocks, labels) = match built {
+            Ok(built) => built,
+            Err(error) => {
+                {
+                    let mut turn = guard(&self.turn);
+                    if turn.as_ref().is_some_and(|turn| turn.id == turn_id) {
+                        *turn = None;
+                    }
+                }
+                self.settle_state();
+                return Err(error);
+            }
+        };
         {
-            let (text, truncated) = timeline::cap(&prompt_text, timeline::MAX_MESSAGE_CHARS);
+            let (text, truncated) = timeline::cap(text, timeline::MAX_MESSAGE_CHARS);
             guard(&self.timeline).upsert(AcpTimelineItem::Message(AcpMessage {
                 id: format!("{turn_id}-user"),
                 role: "user",
@@ -1075,13 +1294,14 @@ impl Session {
                 truncated,
                 turn_id: turn_id.clone(),
                 subagent: None,
+                attachments: labels,
             }));
         }
         self.settle_state();
         let native = guard(&self.native_session_id).clone().unwrap_or_default();
         let params = json!({
             "sessionId": native,
-            "prompt": [{ "type": "text", "text": prompt_text }],
+            "prompt": blocks,
         });
         // The prompt must be written before this returns: a stop or a second
         // turn issued right after must never overtake it on the wire.
@@ -1100,7 +1320,7 @@ impl Session {
             let reason = match receiver.recv() {
                 Ok(Ok(result)) => stop_reason(result.get("stopReason").and_then(Value::as_str)),
                 Ok(Err(error)) => {
-                    session.notice("error", "", error);
+                    session.notice("error", "", error.message);
                     "disconnected"
                 }
                 Err(_) => "disconnected",
@@ -1133,6 +1353,7 @@ impl Session {
             self.withdraw(pending);
         }
         withdrew |= self.withdraw_accesses(|pending| pending.turn_id == turn_id);
+        withdrew |= self.withdraw_elicitations(|pending| pending.turn_id == turn_id);
         if withdrew {
             self.emit_pending();
         }
@@ -1141,8 +1362,11 @@ impl Session {
             turn_id: turn_id.to_owned(),
             reason,
         });
-        guard(&self.timeline).upsert(item.clone());
-        self.emit_update(AcpUpdate::Item { item });
+        {
+            let _order = self.order();
+            guard(&self.timeline).upsert(item.clone());
+            self.emit_update(AcpUpdate::Item { item });
+        }
         self.settle_state();
     }
 
@@ -1165,6 +1389,7 @@ impl Session {
             self.withdraw(pending);
         }
         withdrew |= self.withdraw_accesses(|_| true);
+        withdrew |= self.withdraw_elicitations(|_| true);
         if withdrew {
             self.emit_pending();
         }
@@ -1200,9 +1425,12 @@ impl Session {
             None => json!({ "outcome": "cancelled" }),
         };
         let written = self.answer_permission(&pending.id, outcome);
-        let call = guard(&self.timeline).set_permission(&pending.item_id, None);
-        if let Some(call) = call {
-            self.emit_update(AcpUpdate::Tool { call });
+        {
+            let _order = self.order();
+            let call = guard(&self.timeline).set_permission(&pending.item_id, None);
+            if let Some(call) = call {
+                self.emit_update(AcpUpdate::Tool { call });
+            }
         }
         self.emit_pending();
         self.settle_state();
@@ -1227,6 +1455,7 @@ impl Session {
             self.publish();
             return Err(format!("切换模式失败：{error}"));
         }
+        let _order = self.order();
         let config = {
             let mut config = guard(&self.config);
             if let Some(modes) = config.modes.as_mut() {
@@ -1292,6 +1521,7 @@ impl Session {
                 return Err(format!("修改配置失败：{error}"));
             }
         };
+        let _order = self.order();
         let config = {
             let mut config = guard(&self.config);
             if method == "session/set_model" {
@@ -1313,6 +1543,9 @@ impl Session {
     /// Final cleanup. Content stays for the view; the connection, its waiting
     /// requests and its authorization cards do not.
     fn exited(&self, exit_code: Option<i32>) {
+        // An open form is answered with a cancel while the connection may
+        // still carry it; after this nothing can answer it.
+        self.withdraw_elicitations(|_| true);
         guard(&self.writer).take();
         if let Some(mut shutdown) = guard(&self.shutdown).take() {
             shutdown();
@@ -1332,7 +1565,7 @@ impl Session {
         }
         let waiting: Vec<u64> = guard(&self.requests).keys().copied().collect();
         for id in waiting {
-            self.resolve_response(id, Err("agent 已退出".into()));
+            self.resolve_response(id, Err(RpcError::local("agent 已退出")));
         }
         if *guard(&self.state) != "failed" {
             *guard(&self.state) = "closed";
@@ -1420,11 +1653,54 @@ pub fn native_session_id(id: &str) -> Option<String> {
     sessions().get(id).and_then(|session| guard(&session.native_session_id).clone())
 }
 
+/// The ids of every conversation the host still holds, live or ended.
+pub fn list_ids() -> Vec<String> {
+    let mut ids: Vec<String> = sessions().keys().cloned().collect();
+    ids.sort();
+    ids
+}
+
+/// Submit one turn of plain text.
 pub fn prompt(id: &str, text: &str) -> Result<(), String> {
-    if text.trim().is_empty() {
+    prompt_with(id, text, &[])
+}
+
+/// Submit one turn: the text and its attachments. An image needs the agent's
+/// image capability; a file inside the session directory is embedded or
+/// linked, one outside it needs the user's approval first.
+pub fn prompt_with(id: &str, text: &str, attachments: &[AcpAttachment]) -> Result<(), String> {
+    if text.trim().is_empty() && attachments.is_empty() {
         return Err("提示词为空".into());
     }
-    lookup(id)?.begin_turn(text)
+    lookup(id)?.begin_turn(text, attachments)
+}
+
+/// Log in with one of the methods the agent declared, then create (or
+/// resume) the protocol session. A failure keeps the session waiting for a
+/// login and records why, so the user can retry.
+pub fn authenticate(id: &str, method_id: &str) -> Result<(), String> {
+    lookup(id)?.authenticate(method_id)
+}
+
+/// Answer an open elicitation form once: accept (with content), decline or
+/// cancel. A late or repeated answer is refused.
+pub fn respond_elicitation(id: &str, request_id: &str, action: &str, content: Option<&Value>) -> Result<(), String> {
+    lookup(id)?.respond_elicitation(request_id, action, content)
+}
+
+/// Files inside the session directory, as relative paths, for `@` references.
+pub fn list_files(id: &str, query: &str, limit: usize) -> Result<AcpFileList, String> {
+    lookup(id)?.list_files(query, limit)
+}
+
+/// One page of the agent's own session history for this directory.
+pub fn native_sessions(id: &str, cursor: Option<&str>) -> Result<AcpNativeSessionPage, String> {
+    lookup(id)?.native_sessions(cursor)
+}
+
+/// Remove one native session from the agent's history.
+pub fn delete_native_session(id: &str, native_id: &str) -> Result<(), String> {
+    lookup(id)?.delete_native_session(native_id)
 }
 
 pub fn cancel(id: &str) -> Result<(), String> {
@@ -1546,72 +1822,200 @@ fn open_with(
             let names: Vec<&str> = agent.auth_methods.iter().map(|method| method.id.as_str()).collect();
             session.diagnostic(&format!("该 agent 声明了认证方式：{}", names.join(", ")));
         }
-        let load_supported = agent.load_session;
         *guard(&session.agent) = agent;
-        let cwd = crate::launch::terminal_path(&spec.directory)?;
-        let mut resumed = false;
-        if let Some(native) = spec.resume_native_id.as_deref() {
-            if load_supported {
-                match session.request(
-                    "session/load",
-                    json!({ "sessionId": native, "cwd": cwd, "mcpServers": [] }),
-                ) {
-                    Ok(result) => {
-                        capabilities::apply_session_setup(&mut guard(&session.config), &result);
-                        *guard(&session.native_session_id) = Some(native.to_owned());
-                        *guard(&session.resume) = "loaded";
-                        resumed = true;
-                    }
-                    Err(error) => {
-                        *guard(&session.resume) = "failed";
-                        session.diagnostic(&format!("恢复原会话失败：{error}"));
-                        session.notice(
-                            "warning",
-                            "resume_failed",
-                            "无法恢复原会话，已新建一段会话；首条提示不会自动重发",
-                        );
-                    }
-                }
-            } else {
-                *guard(&session.resume) = "unsupported";
-                session.notice("info", "resume_unsupported", "该 agent 不支持恢复原会话，已新建一段会话");
-            }
-        }
-        if !resumed {
-            let result = session.request("session/new", json!({ "cwd": cwd, "mcpServers": [] }))?;
-            let native = result
-                .get("sessionId")
-                .and_then(Value::as_str)
-                .ok_or("agent 未返回会话编号，无法继续对话")?
-                .to_owned();
-            capabilities::apply_session_setup(&mut guard(&session.config), &result);
-            *guard(&session.native_session_id) = Some(native);
-        }
         Ok(())
     })();
-
     if let Err(error) = handshake {
         session.fail(&error);
         abandon(&session);
         return Err(error);
     }
-    *guard(&session.state) = "ready";
-    session.publish();
-    // A YOLO entry that declares a mode switches to it before the first turn.
-    // A refusal is reported, and the host still approves on the client side.
-    if let Some(mode) = spec.yolo_mode.as_deref() {
-        if let Err(error) = session.set_mode(mode) {
-            session.notice("warning", "yolo_mode_failed", format!("未能切换到 YOLO 模式：{error}"));
+    match session.establish() {
+        Ok(resumed) => {
+            if let Err(error) = session.become_ready(resumed) {
+                session.fail(&error);
+                abandon(&session);
+                return Err(error);
+            }
         }
-    }
-    if let Some(prompt) = spec.initial_prompt.clone() {
-        if let Err(error) = session.begin_turn(&prompt) {
+        // The agent wants a login first. That is not a failed start: the
+        // session stays, lists the agent's methods and waits for the user.
+        Err(SetupError::AuthRequired(reason)) => session.require_auth(reason),
+        Err(SetupError::Failed(error)) => {
             session.fail(&error);
             abandon(&session);
             return Err(error);
         }
     }
     Ok(session.snapshot())
+}
+
+impl Session {
+    /// Whether a failed session request means "log in first": the protocol's
+    /// auth_required code, or — for session/new only — any error the agent
+    /// returned while it declares login methods.
+    fn needs_login(&self, error: &RpcError, any_error_counts: bool) -> bool {
+        error.code == Some(AUTH_REQUIRED_CODE)
+            || (any_error_counts && error.code.is_some() && !guard(&self.agent).auth_methods.is_empty())
+    }
+
+    /// Create the protocol session, or continue the one the launch named.
+    /// `session/resume` (no replay) is preferred when the agent declares it,
+    /// then `session/load` (history replay). A resume that cannot happen falls
+    /// back to a new session and says so. Returns whether the requested
+    /// session was continued.
+    fn establish(&self) -> Result<bool, SetupError> {
+        let cwd = crate::launch::terminal_path(&self.directory).map_err(SetupError::Failed)?;
+        let agent = guard(&self.agent).clone();
+        if let Some(native) = self.resume_target.as_deref() {
+            let method = if agent.session_capabilities.resume {
+                Some(("session/resume", "resumed"))
+            } else if agent.load_session {
+                Some(("session/load", "loaded"))
+            } else {
+                None
+            };
+            match method {
+                Some((method, outcome)) => {
+                    // The replay that answers a load names this session: the
+                    // id is known before the first replayed update arrives, so
+                    // another session's frames are still told apart.
+                    *guard(&self.native_session_id) = Some(native.to_owned());
+                    self.replaying.store(method == "session/load", Ordering::SeqCst);
+                    let result = self.request_raw(
+                        method,
+                        json!({ "sessionId": native, "cwd": cwd, "mcpServers": [] }),
+                        self.timeout,
+                    );
+                    self.replaying.store(false, Ordering::SeqCst);
+                    match result {
+                        Ok(result) => {
+                            capabilities::apply_session_setup(&mut guard(&self.config), &result);
+                            *guard(&self.resume) = outcome;
+                            return Ok(true);
+                        }
+                        Err(error) => {
+                            *guard(&self.native_session_id) = None;
+                            if self.needs_login(&error, false) {
+                                return Err(SetupError::AuthRequired(error.message));
+                            }
+                            *guard(&self.resume) = "failed";
+                            self.diagnostic(&format!("恢复原会话失败：{}", error.message));
+                            self.notice(
+                                "warning",
+                                "resume_failed",
+                                "无法恢复原会话，已新建一段会话；首条提示不会自动重发",
+                            );
+                        }
+                    }
+                }
+                None => {
+                    *guard(&self.resume) = "unsupported";
+                    self.notice("info", "resume_unsupported", "该 agent 不支持恢复原会话，已新建一段会话");
+                }
+            }
+        }
+        let result = match self.request_raw("session/new", json!({ "cwd": cwd, "mcpServers": [] }), self.timeout) {
+            Ok(result) => result,
+            Err(error) if self.needs_login(&error, true) => return Err(SetupError::AuthRequired(error.message)),
+            Err(error) => return Err(SetupError::Failed(error.message)),
+        };
+        let native = result
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| SetupError::Failed("agent 未返回会话编号，无法继续对话".into()))?
+            .to_owned();
+        capabilities::apply_session_setup(&mut guard(&self.config), &result);
+        *guard(&self.native_session_id) = Some(native);
+        Ok(false)
+    }
+
+    /// The session exists: it accepts prompts. A declared YOLO mode is
+    /// switched to, then the launch's first prompt is submitted — unless the
+    /// launch asked to continue a session that did not come back, in which
+    /// case the prompt is dropped rather than sent into a different one.
+    fn become_ready(self: &Arc<Self>, resumed: bool) -> Result<(), String> {
+        *guard(&self.auth_error) = None;
+        *guard(&self.state) = "ready";
+        self.publish();
+        // A YOLO entry that declares a mode switches to it before the first
+        // turn. A refusal is reported, and the host still approves on the
+        // client side.
+        if let Some(mode) = self.yolo_mode.as_deref() {
+            if let Err(error) = self.set_mode(mode) {
+                self.notice("warning", "yolo_mode_failed", format!("未能切换到 YOLO 模式：{error}"));
+            }
+        }
+        let Some(prompt) = guard(&self.initial_prompt).take() else { return Ok(()) };
+        if self.resume_target.is_some() && !resumed {
+            self.notice("info", "prompt_not_sent", "原会话没有恢复，首条提示没有发送");
+            return Ok(());
+        }
+        self.begin_turn(&prompt, &[])
+    }
+
+    /// Wait for a login. The snapshot lists the agent's methods; the reason is
+    /// kept for the view.
+    fn require_auth(&self, reason: String) {
+        if matches!(*guard(&self.state), "closed" | "failed") {
+            return;
+        }
+        self.diagnostic(&format!("agent 要求先登录：{reason}"));
+        *guard(&self.auth_error) = Some(reason);
+        *guard(&self.state) = "auth_required";
+        self.notice("warning", "auth_required", "该 agent 需要先登录，请选择一种登录方式");
+        self.publish();
+    }
+
+    /// Log in through the agent with a declared method, then establish the
+    /// session the launch wanted. Only an `agent` method is answered through
+    /// the protocol; a terminal method runs in a terminal instead.
+    fn authenticate(self: &Arc<Self>, method_id: &str) -> Result<(), String> {
+        let method = guard(&self.agent)
+            .auth_methods
+            .iter()
+            .find(|method| method.id == method_id)
+            .cloned()
+            .ok_or("该登录方式不在 agent 声明的方式中")?;
+        if method.kind != "agent" {
+            return Err("该登录方式需要在终端中完成，请使用「用终端登录」".into());
+        }
+        {
+            let mut state = guard(&self.state);
+            if *state != "auth_required" {
+                return Err("该会话当前不需要登录".into());
+            }
+            *state = "starting";
+        }
+        self.publish();
+        let timeout = self.timeout.max(AUTH_TIMEOUT_FLOOR);
+        if let Err(error) = self.request_raw("authenticate", json!({ "methodId": method_id }), timeout) {
+            return Err(self.auth_failed(format!("登录失败：{}", error.message)));
+        }
+        match self.establish() {
+            Ok(resumed) => {
+                self.notice("info", "authenticated", format!("已通过「{}」登录", method.name));
+                self.become_ready(resumed)
+            }
+            Err(SetupError::AuthRequired(reason)) => Err(self.auth_failed(format!("登录后 agent 仍要求登录：{reason}"))),
+            Err(SetupError::Failed(reason)) => Err(self.auth_failed(format!("登录后仍无法建立会话：{reason}"))),
+        }
+    }
+
+    /// A login that did not work: the session keeps waiting for one, and the
+    /// reason is kept for the view. Returns the reason for the caller.
+    fn auth_failed(&self, reason: String) -> String {
+        {
+            let mut state = guard(&self.state);
+            if !matches!(*state, "closed" | "failed") {
+                *state = "auth_required";
+            }
+        }
+        *guard(&self.auth_error) = Some(reason.clone());
+        self.diagnostic(&reason);
+        self.publish();
+        reason
+    }
 }
 
 /// Give up on a session that never became usable: drop it from the registry,
@@ -1814,14 +2218,16 @@ fn interpreter_program() -> PathBuf {
     PathBuf::from("/bin/sh")
 }
 
-/// Wait until the session has no active turn. Tests use it so an assertion
-/// never reads a half-finished turn.
+/// Wait until the session has no active turn and has settled its state after
+/// the last one. Tests use it so an assertion never reads a half-finished
+/// turn: the turn is cleared before its end is recorded and the state settles.
 #[cfg(test)]
 pub(crate) fn wait_until_idle(id: &str, timeout: Duration) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
     loop {
         let session = lookup(id)?;
-        if guard(&session.turn).is_none() {
+        let settled = !matches!(*guard(&session.state), "running" | "stopping");
+        if guard(&session.turn).is_none() && settled {
             return Ok(());
         }
         if Instant::now() > deadline {
@@ -1842,3 +2248,7 @@ mod timeline_tests;
 #[cfg(test)]
 #[path = "../../../tests/launch/acp_client.rs"]
 mod client_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/launch/acp_session_ops.rs"]
+mod session_ops_tests;

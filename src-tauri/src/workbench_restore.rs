@@ -96,6 +96,16 @@ pub fn forget(db: &Database, id: &str) -> Result<(), String> {
     db.with_connection(|conn| conn.execute("DELETE FROM app_settings WHERE key=?1", [format!("{PREFIX}{id}")]).map(|_| ()).map_err(|error| error.to_string()))
 }
 
+/// The user closed a conversation tab: end the agent and drop its restore
+/// record, so a restart does not bring the tab back. The record is dropped
+/// even when the host no longer holds the conversation; the close error is
+/// still reported.
+pub fn close_conversation(db: &Database, id: &str) -> Result<(), String> {
+    let closed = crate::acp::close(id);
+    forget(db, id)?;
+    closed
+}
+
 pub fn list(db: &Database) -> Result<Vec<SavedSession>, String> {
     db.with_connection(|conn| {
         let mut statement = conn.prepare("SELECT value FROM app_settings WHERE substr(key,1,?1)=?2 ORDER BY key").map_err(|error| error.to_string())?;
@@ -110,9 +120,12 @@ pub fn list(db: &Database) -> Result<Vec<SavedSession>, String> {
 /// Save the stop boundary before update/relaunch tears down
 /// processes. Explicitly ended tabs are removed by close_workbench_session.
 pub fn checkpoint(db: &Database) -> Result<(), String> {
-    let live: HashMap<_, _> = crate::session_host::list().into_iter().map(|session| (session.id.clone(), session)).collect();
+    // Terminal tabs and conversation tabs are both open tabs: each one gets
+    // its stop boundary, whichever host owns it.
+    let mut live: HashSet<String> = crate::session_host::list().into_iter().map(|session| session.id).collect();
+    live.extend(crate::acp::list_ids());
     for mut saved in list(db)? {
-        if live.contains_key(&saved.id) {
+        if live.contains(&saved.id) {
             saved.stopped_at = Some(now());
             // Keep the launch directory: native history records that directory,
             // while OSC 7 may have moved the live terminal elsewhere since then.
@@ -503,7 +516,12 @@ fn restore_items(
 fn conversation_resume_failure(resume: &str, native: Option<&str>) -> Option<String> {
     let fresh = native.map(|id| format!("（新会话 {id}）")).unwrap_or_default();
     match resume {
-        "loaded" => None,
+        // A replayed load and a resume without replay both continue the
+        // original conversation.
+        "loaded" | "resumed" => None,
+        "auth_required" => Some(
+            "该 agent 需要先登录才能恢复原会话；原记录已保留，登录后可重试".to_string(),
+        ),
         // The old record stays; the user can retry later or fall back to the
         // terminal, and the first prompt is never resent automatically.
         "unsupported" => Some(format!(
@@ -574,6 +592,8 @@ fn restore_conversation_items(
             // itself negotiated continues the old conversation; a fresh session
             // must not take over the old record and report success.
             let resume = match crate::acp::snapshot(&id) {
+                // A session that waits for a login has continued nothing yet.
+                Ok(snapshot) if snapshot.state == "auth_required" => ("auth_required", None),
                 Ok(snapshot) => (snapshot.resume, snapshot.native_session_id),
                 Err(error) => {
                     let _ = crate::acp::close(&id);
@@ -806,6 +826,8 @@ mod tests {
     #[test]
     fn only_a_loaded_conversation_counts_as_a_restore() {
         assert!(conversation_resume_failure("loaded", Some("native-1")).is_none());
+        assert!(conversation_resume_failure("resumed", Some("native-1")).is_none(), "session/resume 同样延续原会话");
+        assert!(conversation_resume_failure("auth_required", None).unwrap().contains("登录"));
         let unsupported = conversation_resume_failure("unsupported", Some("fresh-1")).unwrap();
         assert!(unsupported.contains("不支持"), "{unsupported}");
         assert!(unsupported.contains("原记录已保留"), "{unsupported}");

@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import type { AcpSessionSnapshot } from '../../src/types/acp';
+import type { AcpNativeSession, AcpSessionSnapshot } from '../../src/types/acp';
 
 /**
  * Synthetic native IPC for the ACP conversation surface. Nothing here spawns a CLI,
@@ -26,6 +26,14 @@ type Config = {
   sessions?: Array<Record<string, unknown>>;
   /** The terminal launch's own YOLO arguments; defaults to available. */
   yoloAvailable?: boolean;
+  /** acp_authenticate rejects with this reason. */
+  failAuth?: string | null;
+  /** acp_list_files answers from these relative paths (substring match). */
+  files?: string[];
+  /** acp_native_sessions answers these pages in order (cursor `page-N`). */
+  nativeSessions?: AcpNativeSession[][];
+  /** acp_native_sessions rejects with this reason (an agent without session/list). */
+  nativeSessionsError?: string | null;
 };
 
 /** The host's own snapshot shape: the mock never invents a field the host lacks. */
@@ -44,6 +52,13 @@ export async function installAcpMock(page: Page, config: Config = {}) {
       interactionSaves: [] as string[],
       launches: [] as Array<Record<string, unknown>>,
       prompts: [] as Array<[string, string]>,
+      attachments: [] as Array<[string, unknown[]]>,
+      authentications: [] as Array<[string, string]>,
+      failAuth: config.failAuth ?? null,
+      elicitationAnswers: [] as Array<[string, string, string, unknown]>,
+      fileQueries: [] as Array<[string, string, number]>,
+      historyQueries: [] as Array<[string, string | null]>,
+      deletions: [] as Array<[string, string]>,
       modes: [] as Array<[string, string]>,
       configs: [] as Array<[string, string, unknown]>,
       failSetting: null as string | null,
@@ -124,7 +139,27 @@ export async function installAcpMock(page: Page, config: Config = {}) {
           if (command === 'list_worktree_ledger') return [];
           if (command === 'list_acp_sessions') return conversations;
           if (command === 'acp_session') return find(args.sessionId) ?? null;
-          if (command === 'acp_prompt') { state.prompts.push([args.sessionId, args.text]); return null; }
+          if (command === 'acp_prompt') { state.prompts.push([args.sessionId, args.text]); state.attachments.push([args.sessionId, args.attachments ?? []]); return null; }
+          if (command === 'acp_authenticate') {
+            state.authentications.push([args.sessionId, args.methodId]);
+            if (state.failAuth) throw { message: state.failAuth };
+            return null;
+          }
+          if (command === 'acp_respond_elicitation') { state.elicitationAnswers.push([args.sessionId, args.requestId, args.action, args.content ?? null]); return null; }
+          if (command === 'acp_list_files') {
+            state.fileQueries.push([args.sessionId, args.query ?? '', args.limit ?? 50]);
+            const query = String(args.query ?? '').toLowerCase();
+            const files = (config.files ?? []).filter((path) => path.toLowerCase().includes(query)).slice(0, Number(args.limit ?? 50));
+            return { files, truncated: false, source: 'git' };
+          }
+          if (command === 'acp_native_sessions') {
+            state.historyQueries.push([args.sessionId, args.cursor ?? null]);
+            if (config.nativeSessionsError) throw { message: config.nativeSessionsError };
+            const pages = config.nativeSessions ?? [[]];
+            const index = args.cursor ? Number(String(args.cursor).replace('page-', '')) : 0;
+            return { sessions: pages[index] ?? [], nextCursor: index + 1 < pages.length ? `page-${index + 1}` : null };
+          }
+          if (command === 'acp_delete_native_session') { state.deletions.push([args.sessionId, args.nativeId]); return null; }
           if (command === 'acp_cancel') { state.cancels.push(args.sessionId); return null; }
           if (command === 'acp_respond_permission') { state.answers.push([args.sessionId, args.requestId, args.optionId ?? null]); return null; }
           if (command === 'acp_respond_access') { state.accessAnswers.push([args.sessionId, args.accessId, args.decision]); return null; }
@@ -158,7 +193,7 @@ export async function installAcpMock(page: Page, config: Config = {}) {
             const id = 'a1';
             const snapshot: Snapshot = {
               id, toolId: String(request.toolId), projectId: (request.projectId as string | null) ?? null, directory: 'C:/work',
-              mode: request.mode === 'yolo' ? 'yolo' : 'normal', interaction: 'acp', state: 'running', nativeSessionId: 'native-1', resume: 'none',
+              mode: request.mode === 'yolo' ? 'yolo' : 'normal', interaction: 'acp', state: 'running', nativeSessionId: (request.resumeNativeId as string | null) ?? 'native-1', resume: request.resumeNativeId ? 'resumed' : 'none', authError: null,
               timeline: [{ kind: 'message', id: 'turn-0-user', role: 'user', text: 'first prompt', truncated: false, turnId: 'turn-0', subagent: null }],
               pending: [], grants: [], terminals: [], plan: [], commands: [], config: { modes: null, options: [], models: null },
               info: { title: null, updatedAt: null, usage: null },
@@ -180,7 +215,7 @@ export async function installAcpMock(page: Page, config: Config = {}) {
 export function snapshot(overrides: Partial<Snapshot> & { id: string }): Snapshot {
   return {
     toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', interaction: 'acp', state: 'ready',
-    nativeSessionId: 'native-1', resume: 'none', timeline: [], pending: [], grants: [], terminals: [], plan: [], commands: [],
+    nativeSessionId: 'native-1', resume: 'none', authError: null, timeline: [], pending: [], grants: [], terminals: [], plan: [], commands: [],
     config: { modes: null, options: [], models: null }, info: { title: null, updatedAt: null, usage: null },
     agent: { protocolVersion: 1, agentInfo: null, promptCapabilities: { image: false, audio: false, embeddedContext: false }, sessionCapabilities: { list: false, resume: false, delete: false, close: false }, loadSession: false, authMethods: [] },
     diagnostics: [], lastTurnReason: '', seq: 1,

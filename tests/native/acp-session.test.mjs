@@ -3,7 +3,10 @@ import { test } from 'node:test';
 import {
   acpCardAnswerable,
   acpIsLive,
+  acpNeedsLogin,
   acpOpenAccesses,
+  acpOpenElicitations,
+  acpProtocolLoginMethods,
   acpPendingCount,
   acpResumeKey,
   acpRow,
@@ -19,7 +22,7 @@ import { launchInteraction, preferredYoloAvailable } from '../../src/types/nativ
 function snapshot(overrides = {}) {
   return {
     id: 'a1', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', interaction: 'acp',
-    state: 'ready', nativeSessionId: 'native-1', resume: 'none', timeline: [], pending: [], grants: [], terminals: [], plan: [], commands: [],
+    state: 'ready', nativeSessionId: 'native-1', resume: 'none', authError: null, timeline: [], pending: [], grants: [], terminals: [], plan: [], commands: [],
     config: { modes: null, options: [], models: null }, info: { title: null, updatedAt: null, usage: null },
     agent: {
       protocolVersion: 1, agentInfo: null, promptCapabilities: { image: false, audio: false, embeddedContext: false },
@@ -271,4 +274,67 @@ test('every launch entry point reads YOLO from the interaction the launch will a
   const undeclared = { ...tool, yoloAvailable: true, acp: { state: 'supported', entry: { executable: 'cline', args: [], origin: 'native' } } };
   assert.equal(preferredYoloAvailable(undeclared, acp), false);
   assert.equal(preferredYoloAvailable(undeclared, acp, { resume: true }), true);
+});
+
+test('an elicitation form is an item in place and counts as pending only while open', () => {
+  const schema = { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] };
+  const form = (decision, requestId) => ({
+    kind: 'elicitation', id: 'elicitation-3', message: '怎么称呼你？', requestedSchema: schema, toolCallId: null,
+    decision, requestId, turnId: 'turn-1', subagent: null,
+  });
+  const begun = applyAcpEvent(start({ state: 'running' }), chunk(2, 'm1', '先问一下'));
+  const asked = applyAcpEvents(begun, [
+    { sessionId: 'a1', seq: 3, kind: 'item', item: form('pending', 'elicitation-3-request') },
+    { sessionId: 'a1', seq: 4, kind: 'pending', pending: ['elicitation-3-request'] },
+  ]);
+  assert.deepEqual(ids(asked), ['message:m1', 'elicitation:elicitation-3']);
+  assert.equal(acpPendingCount(asked.snapshot), 1);
+  assert.deepEqual(acpOpenElicitations(asked.snapshot).map((item) => item.id), ['elicitation-3']);
+  assert.equal(acpCardAnswerable(asked.snapshot, 'elicitation-3-request'), true);
+  // Answered (or withdrawn): replaced in place, no longer open or answerable.
+  const answered = applyAcpEvents(asked, [
+    { sessionId: 'a1', seq: 5, kind: 'item', item: form('withdrawn', null) },
+    { sessionId: 'a1', seq: 6, kind: 'pending', pending: [] },
+  ]);
+  assert.deepEqual(ids(answered), ['message:m1', 'elicitation:elicitation-3']);
+  assert.equal(answered.snapshot.timeline[1].decision, 'withdrawn');
+  assert.deepEqual(acpOpenElicitations(answered.snapshot), []);
+  assert.equal(acpCardAnswerable(answered.snapshot, 'elicitation-3-request'), false);
+  // A replayed older event never reopens it.
+  const replayed = applyAcpEvent(answered, { sessionId: 'a1', seq: 3, kind: 'item', item: form('pending', 'elicitation-3-request') });
+  assert.equal(replayed.snapshot.timeline[1].decision, 'withdrawn');
+});
+
+test('a session waiting for a login offers only protocol methods and reads as waiting', () => {
+  const waiting = start({
+    state: 'auth_required', nativeSessionId: null, authError: 'Authentication required',
+    agent: { ...snapshot().agent, authMethods: [
+      { id: 'login', name: '浏览器登录', description: null, type: 'agent' },
+      { id: 'tty', name: '终端登录', description: null, type: 'terminal' },
+    ] },
+  });
+  assert.equal(acpNeedsLogin(waiting.snapshot), true);
+  assert.equal(acpIsLive(waiting.snapshot), true);
+  assert.equal(acpTurnActive(waiting.snapshot), false);
+  assert.deepEqual(acpProtocolLoginMethods(waiting.snapshot).map((method) => method.id), ['login']);
+  assert.equal(acpStateKey('auth_required'), 'sessions.acpStateWaiting');
+  const ready = applyAcpEvent(waiting, { sessionId: 'a1', seq: 2, kind: 'snapshot', snapshot: snapshot({ seq: 2 }) });
+  assert.equal(acpNeedsLogin(ready.snapshot), false);
+  assert.equal(ready.snapshot.authError, null);
+});
+
+test('a resume without replay reads as the same restored conversation', () => {
+  assert.equal(acpResumeKey('resumed'), acpResumeKey('loaded'));
+  assert.equal(acpResumeKey('none'), null);
+});
+
+test('a user message keeps its attachment labels and a chunk-created message has none', () => {
+  const labels = [{ type: 'file', name: 'src/main.rs', delivery: 'embedded' }, { type: 'image', name: 'image/png', delivery: null }];
+  const sent = applyAcpEvent(start(), {
+    sessionId: 'a1', seq: 2, kind: 'item',
+    item: { kind: 'message', id: 'turn-2-user', role: 'user', text: '看看', truncated: false, turnId: 'turn-2', subagent: null, attachments: labels },
+  });
+  assert.deepEqual(sent.snapshot.timeline[0].attachments, labels);
+  const replied = applyAcpEvent(sent, chunk(3, 'm9', '好的'));
+  assert.equal(replied.snapshot.timeline[1].attachments, undefined);
 });

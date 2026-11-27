@@ -127,6 +127,7 @@ impl Session {
 
     /// Record an access in the timeline and return its item.
     fn record_access(&self, entry: AcpAccess) -> AcpTimelineItem {
+        let _order = self.order();
         let item = AcpTimelineItem::Access(entry);
         guard(&self.timeline).upsert(item.clone());
         self.emit_update(AcpUpdate::Item { item: item.clone() });
@@ -160,6 +161,7 @@ impl Session {
 
     /// Attach the diff a write produced to its access record.
     pub(super) fn attach_diff(&self, item_id: &str, diff: AcpFileDiff) {
+        let _order = self.order();
         if let Some(mut entry) = self.access_entry(item_id) {
             entry.diff = Some(diff);
             self.record_access(entry);
@@ -267,6 +269,7 @@ impl Session {
             AccessAnswer::Deny => "denied",
             AccessAnswer::Withdrawn => "withdrawn",
         };
+        let _order = self.order();
         if let Some(mut entry) = self.access_entry(&id) {
             entry.decision = decision;
             entry.request_id = None;

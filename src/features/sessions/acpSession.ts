@@ -183,6 +183,23 @@ export function acpOpenAccesses(snapshot: AcpSessionSnapshot) {
     item.kind === 'access' && item.decision === 'pending' && !!item.requestId && snapshot.pending.includes(item.requestId));
 }
 
+/** The open elicitation forms, in timeline order. */
+export function acpOpenElicitations(snapshot: AcpSessionSnapshot) {
+  return snapshot.timeline.filter((item): item is Extract<AcpTimelineItem, { kind: 'elicitation' }> =>
+    item.kind === 'elicitation' && item.decision === 'pending' && !!item.requestId && snapshot.pending.includes(item.requestId));
+}
+
+/** The conversation waits for a login: the composer gives way to the login methods. */
+export function acpNeedsLogin(snapshot: AcpSessionSnapshot): boolean {
+  return snapshot.state === 'auth_required';
+}
+
+/** The login methods the host can answer through the protocol (type 'agent'); a
+ *  terminal method is offered as "log in from a terminal" instead. */
+export function acpProtocolLoginMethods(snapshot: AcpSessionSnapshot) {
+  return (snapshot.agent?.authMethods ?? []).filter((method) => method.type === 'agent');
+}
+
 /** The terminal a tool call's terminal content names, if the view holds it. */
 export function acpTerminal(snapshot: AcpSessionSnapshot, terminalId: string): AcpTerminal | null {
   return (snapshot.terminals ?? []).find((terminal) => terminal.terminalId === terminalId) ?? null;
@@ -212,6 +229,9 @@ export function acpTurnKey(reason: AcpSessionSnapshot['lastTurnReason']): string
 export function acpStateKey(state: AcpSessionSnapshot['state']): string {
   switch (state) {
     case 'starting': return 'sessions.acpStateStarting';
+    // Waiting for a login is waiting for this person, worded as such until the
+    // login panel brings its own wording.
+    case 'auth_required': return 'sessions.acpStateWaiting';
     case 'ready': return 'sessions.acpStateReady';
     case 'running': return 'sessions.acpStateRunning';
     case 'stopping': return 'sessions.acpStateStopping';
@@ -225,7 +245,9 @@ export function acpStateKey(state: AcpSessionSnapshot['state']): string {
  *  the host has not made. */
 export function acpResumeKey(resume: AcpSessionSnapshot['resume']): string | null {
   switch (resume) {
-    case 'loaded': return 'sessions.acpResumeLoaded';
+    // A resume without replay continues the same conversation as a replayed load.
+    case 'loaded':
+    case 'resumed': return 'sessions.acpResumeLoaded';
     case 'failed': return 'sessions.acpResumeFailed';
     case 'unsupported': return 'sessions.acpResumeUnsupported';
     default: return null;

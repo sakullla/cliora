@@ -12,7 +12,7 @@ import type { AgentSnapshot, AgentRequest, AgentResult, PluginTarget, PluginRequ
 import type { Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, MemoryAggregate, MemoryReadRequest, MemoryReadResult, MemoryDelete, MemoryDocument, MemoryEnable, MemoryList, MemorySave, MemoryTarget, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
 import type { InteractionMode, LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, SavedWorkbenchSession, TerminalId, TrayStatus, TwiglaneFeedbackPreview, TwiglaneFeedbackSendOutcome, TwiglaneLinkOutcome, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchGitContext, WorkbenchWorktree, WorkbenchReplay, WorkbenchSession, WorkbenchTerminalSize, RemoteSessionIndexEntry, WorktreeBase, WorktreeBasePreview, WorktreeCleanupReport, WorktreeLedgerEntry, WorktreeMenuStatus, WorktreePrepareCommand } from '../types/launch';
-import type { AcpAccessKind, AcpEvent, AcpSessionSnapshot } from '../types/acp';
+import type { AcpAccessKind, AcpAttachment, AcpEvent, AcpFileList, AcpNativeSessionPage, AcpSessionSnapshot } from '../types/acp';
 import type { LibraryDraft, LibraryItem, LibraryTitle, LibraryKind } from '../types/library';
 import type { ScriptAccessOptions, NewSecretExecutor, PromptSecret, PromptSecretPage, PromptSecretReference, SecretAuditEntry, SecretBrokerStatus, SecretCliContext, SecretExecutor, SecretGrant, SecretInstallation, SecretInstallationKind, SecretMcpState, SecretMcpTarget } from '../types/secrets';
 import type { McpDefinition, McpDraft, McpDraftPreview, McpDraftTargetRequest, McpCommitResult, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpStore, NativeRuleFile, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue, SkillManifest, SkillFileListing, SkillFilePreview } from '../types/resources';
@@ -489,7 +489,7 @@ export const native = {
       // preparing one there would describe a mechanism the host never runs. Callers that
       // submit a first prompt resolve the interaction explicitly ('acp' or 'terminal');
       // an absent value keeps the historical terminal preparation.
-      if (request.initialPrompt && !request.remoteIntent && request.interaction !== 'acp') {
+      if (request.initialPrompt && !request.remoteIntent && request.interaction !== 'acp' && !request.resumeNativeId) {
         request = { ...request, initialPrompt: await localSessionPrompt(request.initialPrompt) };
       }
       result = request.workspaceId && request.repositoryId
@@ -648,7 +648,25 @@ export const acpEventName = 'cliora:acp-event';
 export const acp = {
   list: () => command<AcpSessionSnapshot[]>('list_acp_sessions'),
   session: (sessionId: string) => command<AcpSessionSnapshot>('acp_session', { sessionId }),
-  prompt: (sessionId: string, text: string) => command<void>('acp_prompt', { sessionId, text }),
+  /** Submit one turn. Attachments: images only when the agent declared the image
+   *  capability; a file outside the session directory waits for its approval card,
+   *  so the call resolves once that card is answered. */
+  prompt: (sessionId: string, text: string, attachments: AcpAttachment[] = []) => command<void>('acp_prompt', { sessionId, text, attachments }),
+  /** Log in with one of snapshot.agent.authMethods (type 'agent' only; a terminal
+   *  method runs in a terminal). Rejects with the reason and leaves the session
+   *  waiting for a login. */
+  authenticate: (sessionId: string, methodId: string) => command<void>('acp_authenticate', { sessionId, methodId }),
+  /** Answer an elicitation form once. Accepted content is checked against the
+   *  schema again; a refusal keeps the form open. */
+  respondElicitation: (sessionId: string, requestId: string, action: 'accept' | 'decline' | 'cancel', content: Record<string, unknown> | null = null) =>
+    command<void>('acp_respond_elicitation', { sessionId, requestId, action, content }),
+  /** Files inside the session directory for `@` references (relative paths only). */
+  listFiles: (sessionId: string, query = '', limit = 50) => command<AcpFileList>('acp_list_files', { sessionId, query, limit }),
+  /** One page of the agent's own session history; rejects with the reason when the
+   *  agent did not declare session listing. */
+  nativeSessions: (sessionId: string, cursor: string | null = null) => command<AcpNativeSessionPage>('acp_native_sessions', { sessionId, cursor }),
+  /** Delete one listed native session (declared capability only). */
+  deleteNativeSession: (sessionId: string, nativeId: string) => command<void>('acp_delete_native_session', { sessionId, nativeId }),
   cancel: (sessionId: string) => command<void>('acp_cancel', { sessionId }),
   respondPermission: (sessionId: string, requestId: string, optionId: string | null = null) =>
     command<void>('acp_respond_permission', { sessionId, requestId, optionId }),

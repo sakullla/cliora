@@ -9,7 +9,8 @@ import { test } from 'node:test';
 
 const read = (path) => readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8');
 
-const rust = ['src-tauri/src/acp/mod.rs', 'src-tauri/src/acp/timeline.rs', 'src-tauri/src/acp/capabilities.rs', 'src-tauri/src/acp/access.rs', 'src-tauri/src/acp/client_fs.rs', 'src-tauri/src/acp/terminal.rs'].map(read).join('\n');
+const rust = ['mod', 'timeline', 'capabilities', 'access', 'client_fs', 'terminal', 'elicitation', 'prompt', 'files', 'history']
+  .map((name) => read(`src-tauri/src/acp/${name}.rs`)).join('\n');
 const commandsRs = read('src-tauri/src/commands.rs');
 const libRs = read('src-tauri/src/lib.rs');
 const typesTs = read('src/types/acp.ts');
@@ -186,7 +187,8 @@ test('every ACP command exists in the host, its registration, the IPC wrapper, t
   const mocked = sorted([...mockTs.matchAll(/command === '(\w+)'/g)].map((match) => match[1]).filter(isAcp));
   const captured = sorted([...captureMjs.matchAll(/command === '(\w+)'/g)].map((match) => match[1]).filter(isAcp));
   assert.ok(rustCommands.includes('acp_set_mode') && rustCommands.includes('acp_set_config'), rustCommands.join(', '));
-  for (const name of ['acp_respond_access', 'acp_revoke_grants', 'acp_kill_terminal']) assert.ok(rustCommands.includes(name), `missing ${name}`);
+  for (const name of ['acp_respond_access', 'acp_revoke_grants', 'acp_kill_terminal', 'acp_authenticate', 'acp_respond_elicitation',
+    'acp_list_files', 'acp_native_sessions', 'acp_delete_native_session']) assert.ok(rustCommands.includes(name), `missing ${name}`);
   assert.deepEqual(registered, rustCommands, 'lib.rs registration differs from commands.rs');
   assert.deepEqual(wrapped, rustCommands, 'src/lib/native.ts differs from commands.rs');
   assert.deepEqual(mocked, rustCommands, 'tests/ui/acpMock.ts differs from commands.rs');
@@ -201,6 +203,24 @@ test('every ACP command exists in the host, its registration, the IPC wrapper, t
     const sent = sorted((call[1] ?? '').split(',').map((part) => part.split(':')[0].trim()).filter(Boolean));
     assert.deepEqual(sent, params, `${name} arguments differ`);
   }
+});
+
+test('a prompt attachment has the same variants and fields on both sides', () => {
+  const rustVariants = rustEnum('AcpAttachment');
+  const at = typesTs.indexOf('export type AcpAttachment =');
+  assert.notEqual(at, -1, 'missing TS AcpAttachment');
+  const source = typesTs.slice(at, typesTs.indexOf(';\n\n', at) + 1);
+  const tsVariants = new Map([...source.matchAll(/\| \{ type: '(\w+)';([^}]*)\}/g)]
+    .map((match) => [match[1], sorted([...match[2].matchAll(/(\w+)\??:/g)].map((field) => field[1]))]));
+  assert.deepEqual(sorted(tsVariants.keys()), sorted(rustVariants.keys()), 'attachment types differ');
+  for (const [type, fields] of rustVariants) assert.deepEqual(tsVariants.get(type), fields, `attachment ${type} fields differ`);
+});
+
+test('the launch request carries resumeNativeId in Rust and TypeScript', () => {
+  const launchRs = read('src-tauri/src/launch.rs');
+  const launchTs = read('src/types/launch.ts');
+  assert.match(block(launchRs, 'pub struct LaunchEnvelope {'), /pub resume_native_id: Option<String>/);
+  assert.match(launchTs, /resumeNativeId\?: string \| null/);
 });
 
 test('the mock and the capture fixture build snapshots with exactly the host fields', () => {

@@ -17,6 +17,72 @@ export type AcpMessage = {
   turnId: string;
   /** The child session this message belongs to; null for the conversation's own. */
   subagent: string | null;
+  /** What the user attached to a prompt, as labels only; absent when nothing was attached. */
+  attachments?: AcpAttachmentLabel[];
+};
+
+/** One attachment of a user prompt as the timeline shows it. Image data and file
+ *  contents never enter the snapshot. */
+export type AcpAttachmentLabel = {
+  type: 'image' | 'file';
+  /** A file's path relative to the session directory (or as given), or an image's media type. */
+  name: string;
+  /** How a file reached the agent: its text embedded, or a link; null for an image. */
+  delivery: 'embedded' | 'link' | null;
+};
+
+/** One attachment sent with acp_prompt. An image is accepted only when the agent
+ *  declared promptCapabilities.image (at most 8, 5 MiB each, PNG/JPEG/GIF/WebP); a
+ *  file is absolute or relative to the session directory, and one outside it waits
+ *  for an approval card. */
+export type AcpAttachment =
+  | { type: 'image'; mimeType: string; dataBase64: string }
+  | { type: 'file'; path: string };
+
+/** One field of an elicitation form: the restricted JSON Schema primitives. */
+export type AcpElicitationField = {
+  type: 'string' | 'number' | 'integer' | 'boolean' | 'array';
+  title?: string;
+  description?: string;
+  default?: unknown;
+  /** string: plain choices; titled choices use oneOf/anyOf with const. */
+  enum?: string[];
+  oneOf?: Array<{ const: string; title?: string }>;
+  anyOf?: Array<{ const: string; title?: string }>;
+  format?: string;
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  maximum?: number;
+  /** array (multi-select): the allowed items. */
+  items?: { type?: 'string'; enum?: string[]; oneOf?: Array<{ const: string; title?: string }>; anyOf?: Array<{ const: string; title?: string }> };
+  minItems?: number;
+  maxItems?: number;
+};
+
+/** The flat object schema an elicitation form asks for. */
+export type AcpElicitationSchema = {
+  type?: 'object';
+  properties: Record<string, AcpElicitationField>;
+  required?: string[];
+};
+
+/** How an elicitation form was decided. 'withdrawn': a stop, the end of the turn
+ *  that asked, or the end of the session took it away and the agent got a cancel. */
+export type AcpElicitationDecision = 'pending' | 'accepted' | 'declined' | 'cancelled' | 'withdrawn';
+
+/** A structured question the agent asked (form mode). The answer is never retained. */
+export type AcpElicitation = {
+  id: string;
+  message: string;
+  requestedSchema: AcpElicitationSchema;
+  /** The tool call this question belongs to, when the agent named one. */
+  toolCallId: string | null;
+  decision: AcpElicitationDecision;
+  /** The id to answer with acp_respond_elicitation while pending; null once decided. */
+  requestId: string | null;
+  turnId: string;
+  subagent: string | null;
 };
 
 /** One piece of tool output, as the protocol typed it. An image keeps only its type. */
@@ -141,7 +207,8 @@ export type AcpTimelineItem =
   | ({ kind: 'notice' } & AcpNotice)
   | ({ kind: 'turn' } & AcpTurnEnd)
   | ({ kind: 'subagent' } & AcpSubagent)
-  | ({ kind: 'access' } & AcpAccess);
+  | ({ kind: 'access' } & AcpAccess)
+  | ({ kind: 'elicitation' } & AcpElicitation);
 
 /** How a terminal's command ended. */
 export type AcpTerminalExit = {
@@ -280,7 +347,8 @@ export type AcpAgentDescriptor = {
   authMethods: AcpAuthMethod[];
 };
 
-export type AcpSessionState = 'starting' | 'ready' | 'running' | 'stopping' | 'waiting_permission' | 'closed' | 'failed';
+/** 'auth_required' waits for the user to log in with one of agent.authMethods. */
+export type AcpSessionState = 'starting' | 'auth_required' | 'ready' | 'running' | 'stopping' | 'waiting_permission' | 'closed' | 'failed';
 
 /** Full state of one conversation, for a view that mounts later. */
 export type AcpSessionSnapshot = {
@@ -293,11 +361,16 @@ export type AcpSessionSnapshot = {
   /** 'stopping' is a turn the user stopped that has not reported its own result yet. */
   state: AcpSessionState;
   nativeSessionId: string | null;
-  resume: 'none' | 'unsupported' | 'loaded' | 'failed';
+  /** 'loaded' replayed history through session/load; 'resumed' continued it through
+   *  session/resume without a replay. */
+  resume: 'none' | 'unsupported' | 'loaded' | 'resumed' | 'failed';
+  /** Why the session still needs a login: the agent's answer or the last failed
+   *  login. Null once logged in. */
+  authError: string | null;
   /** Everything the conversation produced, in arrival order. */
   timeline: AcpTimelineItem[];
-  /** Request ids still waiting for the user's answer: authorization cards and
-   *  out-of-directory approval cards. */
+  /** Request ids still waiting for the user's answer: authorization cards,
+   *  out-of-directory approval cards and elicitation forms. */
   pending: string[];
   /** Categories the user allowed for the rest of this session. YOLO is the
    *  session's mode, not a grant. */
@@ -332,3 +405,29 @@ export type AcpUpdate =
   | { kind: 'terminalOutput'; terminalId: string; text: string; dropped: number; truncated: boolean; exitStatus: AcpTerminalExit | null; released: boolean };
 
 export type AcpEvent = { sessionId: string; seq: number } & AcpUpdate;
+
+/** Files inside the session directory for `@` references. */
+export type AcpFileList = {
+  /** Relative paths with `/` separators, best matches first. */
+  files: string[];
+  /** The directory holds more files than were indexed. */
+  truncated: boolean;
+  source: 'git' | 'walk';
+};
+
+/** One session in the agent's own history. */
+export type AcpNativeSession = {
+  /** What LaunchRequest.resumeNativeId continues. */
+  nativeId: string;
+  title: string | null;
+  updatedAt: string | null;
+  cwd: string | null;
+  /** The conversation the list was asked from. */
+  current: boolean;
+};
+
+/** One page of the agent's session history; nextCursor is null on the last page. */
+export type AcpNativeSessionPage = {
+  sessions: AcpNativeSession[];
+  nextCursor: string | null;
+};

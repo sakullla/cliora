@@ -176,7 +176,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
     const acpFixture = acpMode ? [{
       id: 'acp1', toolId: 'codex', projectId: 'cliora', directory: 'C:\\Projects\\cliora', mode: 'normal', interaction: 'acp',
       state: acpMode === 'stopping' ? 'stopping' : acpMode === 'permission' ? 'waiting_permission' : 'ready',
-      nativeSessionId: 'native-acp-1', resume: 'none',
+      nativeSessionId: 'native-acp-1', resume: 'none', authError: null,
       timeline: [
         acpMessage('m1', 'user', '把终端工具栏的间距改成令牌相加，并跑一次样式检查。'),
         acpMessage('m2', 'thought', '先确认工具栏当前的间距来源，再改令牌，避免再写死像素值。'),
@@ -269,7 +269,10 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
           // ACP conversations come from the shared host, not from the PTY list.
           if (command === 'list_acp_sessions') return acpFixture ? acpFixture.map((item) => ({ ...item })) : [];
           if (command === 'acp_session') return acpFixture?.find((item) => item.id === args.sessionId) ?? null;
-          if (command === 'acp_prompt' || command === 'acp_cancel' || command === 'acp_respond_permission' || command === 'acp_respond_access' || command === 'acp_revoke_grants' || command === 'acp_kill_terminal' || command === 'acp_set_mode' || command === 'acp_set_config' || command === 'acp_close') return null;
+          if (command === 'acp_prompt' || command === 'acp_cancel' || command === 'acp_respond_permission' || command === 'acp_respond_access' || command === 'acp_revoke_grants' || command === 'acp_kill_terminal' || command === 'acp_set_mode' || command === 'acp_set_config' || command === 'acp_close'
+            || command === 'acp_authenticate' || command === 'acp_respond_elicitation' || command === 'acp_delete_native_session') return null;
+          if (command === 'acp_list_files') return { files: ['src/features/sessions/SessionWorkbench.module.css', 'src/features/sessions/AcpConversation.tsx'], truncated: false, source: 'git' };
+          if (command === 'acp_native_sessions') return { sessions: [], nextCursor: null };
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
           // Saved records for the per-record restore scenes; absent means "nothing to restore".

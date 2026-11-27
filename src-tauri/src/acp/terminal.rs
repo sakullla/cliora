@@ -170,11 +170,12 @@ fn append_bounded(output: &mut String, text: &str, limit: usize) -> usize {
 
 /// Decode a byte stream incrementally. Output is read as UTF-8: an incomplete
 /// trailing sequence waits for the next read. On Windows, many console programs
-/// (cmd built-ins among them) write in the system ANSI code page instead, so
+/// (cmd built-ins among them) write in the console (OEM) code page instead, so
 /// the first invalid UTF-8 sequence switches the rest of the stream to that
-/// code page (`fallback`); a lead byte split across reads waits for its second
-/// byte. Without a fallback (other platforms, or a UTF-8 system code page)
-/// invalid bytes become U+FFFD.
+/// code page (`fallback`, see `console_fallback`); a lead byte split across
+/// reads waits for its second byte. Text already read as UTF-8 before the
+/// switch is kept as it was, not decoded again. Without a fallback (other
+/// platforms, or a UTF-8 code page) invalid bytes become U+FFFD.
 struct TextStream {
     carry: Vec<u8>,
     fallback: Option<u32>,
@@ -237,13 +238,32 @@ impl TextStream {
     }
 }
 
-/// The code page console programs fall back to: the system ANSI code page,
-/// unless that is UTF-8 already.
+/// The code page a console program writing into a pipe most likely used: the
+/// console output code page when there is a console, else the OEM code page
+/// (what a new console starts with, and what cmd built-ins write), else the
+/// ANSI code page. None when the choice is UTF-8 already.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn pick_code_page(console_output: u32, oem: u32, ansi: u32) -> Option<u32> {
+    let chosen = [console_output, oem, ansi].into_iter().find(|code_page| *code_page != 0)?;
+    (chosen != 65001).then_some(chosen)
+}
+
 #[cfg(windows)]
 fn console_fallback() -> Option<u32> {
-    // SAFETY: GetACP takes no arguments and only reads process state.
-    let code_page = unsafe { windows_sys::Win32::Globalization::GetACP() };
-    (code_page != 65001).then_some(code_page)
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetConsoleOutputCP() -> u32;
+    }
+    // SAFETY: these take no arguments and only read process state;
+    // GetConsoleOutputCP returns 0 when the process has no console.
+    let (console, oem, ansi) = unsafe {
+        (
+            GetConsoleOutputCP(),
+            windows_sys::Win32::Globalization::GetOEMCP(),
+            windows_sys::Win32::Globalization::GetACP(),
+        )
+    };
+    pick_code_page(console, oem, ansi)
 }
 
 #[cfg(not(windows))]
@@ -554,6 +574,9 @@ impl Session {
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let state = {
+            // The publication order comes before the terminal lock: the event
+            // is emitted while both are held.
+            let _order = self.order();
             let mut terminals = guard(&self.terminals);
             // The session may have ended while the command started.
             if guard(&self.writer).is_none() || terminals.live() >= MAX_TERMINALS {
@@ -636,6 +659,7 @@ impl Session {
         if text.is_empty() {
             return;
         }
+        let _order = self.order();
         let mut terminals = guard(&self.terminals);
         let Some(entry) = terminals.get_mut(id) else { return };
         let limit = entry.limit;
@@ -658,6 +682,7 @@ impl Session {
 
     fn terminal_exited(&self, id: &str, exit: AcpTerminalExit) {
         {
+            let _order = self.order();
             let mut terminals = guard(&self.terminals);
             let Some(entry) = terminals.get_mut(id) else { return };
             if entry.state.exit_status.is_none() {
@@ -738,6 +763,7 @@ impl Session {
             tree.close();
         }
         {
+            let _order = self.order();
             let mut terminals = guard(&self.terminals);
             if let Some(entry) = terminals.get_mut(id) {
                 let update = AcpUpdate::TerminalOutput {

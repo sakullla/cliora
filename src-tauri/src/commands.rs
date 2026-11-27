@@ -3806,9 +3806,49 @@ pub fn list_acp_sessions() -> Vec<crate::acp::AcpSessionSnapshot> {
     crate::acp::list()
 }
 
+/// Submit one turn with its attachments. A file outside the session directory
+/// waits for the user's approval card, so this runs off the main thread.
 #[tauri::command]
-pub fn acp_prompt(session_id: String, text: String) -> Result<(), ApiError> {
-    crate::acp::prompt(&session_id, &text).map_err(native_error)
+pub async fn acp_prompt(session_id: String, text: String, attachments: Option<Vec<crate::acp::AcpAttachment>>) -> Result<(), ApiError> {
+    blocking(move || crate::acp::prompt_with(&session_id, &text, &attachments.unwrap_or_default()).map_err(native_error)).await
+}
+
+/// Log in with one of the agent's declared methods, then create the session.
+/// The agent may wait for the user to finish its own login flow.
+#[tauri::command]
+pub async fn acp_authenticate(session_id: String, method_id: String) -> Result<(), ApiError> {
+    blocking(move || crate::acp::authenticate(&session_id, &method_id).map_err(native_error)).await
+}
+
+/// Answer an elicitation form once: `accept` (with content), `decline` or
+/// `cancel`. A late answer is refused.
+#[tauri::command]
+pub fn acp_respond_elicitation(session_id: String, request_id: String, action: String, content: Option<serde_json::Value>) -> Result<(), ApiError> {
+    crate::acp::respond_elicitation(&session_id, &request_id, &action, content.as_ref()).map_err(native_error)
+}
+
+/// Files inside the conversation's directory for `@` references, relative
+/// paths only, best matches of `query` first.
+#[tauri::command]
+pub async fn acp_list_files(session_id: String, query: Option<String>, limit: Option<u32>) -> Result<crate::acp::AcpFileList, ApiError> {
+    blocking(move || {
+        crate::acp::list_files(&session_id, query.as_deref().unwrap_or_default(), limit.unwrap_or(50) as usize)
+            .map_err(native_error)
+    })
+    .await
+}
+
+/// One page of the agent's own session history for this directory. Refused
+/// with the reason when the agent did not declare session listing.
+#[tauri::command]
+pub async fn acp_native_sessions(session_id: String, cursor: Option<String>) -> Result<crate::acp::AcpNativeSessionPage, ApiError> {
+    blocking(move || crate::acp::native_sessions(&session_id, cursor.as_deref()).map_err(native_error)).await
+}
+
+/// Delete one native session from the agent's history (declared capability only).
+#[tauri::command]
+pub async fn acp_delete_native_session(session_id: String, native_id: String) -> Result<(), ApiError> {
+    blocking(move || crate::acp::delete_native_session(&session_id, &native_id).map_err(native_error)).await
 }
 
 /// Stop the current turn only. The turn stays open until the agent reports its
@@ -3864,9 +3904,15 @@ pub async fn acp_set_config(session_id: String, config_id: String, value: serde_
     blocking(move || crate::acp::set_config(&session_id, &config_id, &value).map_err(native_error)).await
 }
 
+/// Close a conversation for good: the agent ends and its restore record is
+/// forgotten, so a restart does not bring back a tab the user closed.
 #[tauri::command]
-pub fn acp_close(session_id: String) -> Result<(), ApiError> {
-    crate::acp::close(&session_id).map_err(native_error)
+pub async fn acp_close(app: AppHandle, session_id: String) -> Result<(), ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::workbench_restore::close_conversation(&db, &session_id).map_err(native_error)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -4977,6 +5023,7 @@ fn launch_now_reported(
     let worktree_intent = envelope.worktree_intent;
     let task_text = envelope.task_text;
     let worktree_options = envelope.worktree;
+    let resume_native_id = envelope.resume_native_id;
     let project_id = request.project_id.clone();
     let launch_tool_id = request.tool_id.clone();
     let launch_mode = request.mode;
@@ -5034,6 +5081,7 @@ fn launch_now_reported(
                     worktree_intent,
                     task_text,
                     worktree: worktree_options,
+                    resume_native_id,
                 },
                 &mut progress,
             ))

@@ -436,6 +436,10 @@ fn cancel_targets_only_the_current_turn() {
             "id": second["id"],
             "result": { "stopReason": "end_turn" },
         }));
+        // Stay connected: leaving here would close the connection, and the
+        // disconnect could end the turn before its own end_turn result is
+        // recorded.
+        agent.stay_connected();
     });
 
     let snapshot = open(spec(directory.path()), io).unwrap();
@@ -449,8 +453,8 @@ fn cancel_targets_only_the_current_turn() {
     assert_eq!(snapshot_of(&snapshot.id).last_turn_reason, "end_turn");
     // A stop with no running turn is refused rather than sent.
     assert!(cancel(&snapshot.id).is_err());
-    worker.join().unwrap();
     close(&snapshot.id).unwrap();
+    worker.join().unwrap();
 }
 
 #[test]
@@ -703,12 +707,12 @@ fn an_unknown_client_method_is_answered_with_method_not_found() {
     let (io, mut agent) = pair();
     let worker = std::thread::spawn(move || {
         agent.handshake(false);
-        // A method this host does not advertise (elicitation is not served
-        // yet) has to be refused explicitly instead of hanging.
+        // A method this host does not advertise (here, interactive terminal
+        // authentication) has to be refused explicitly instead of hanging.
         agent.send(json!({
             "jsonrpc": "2.0",
             "id": 77,
-            "method": "elicitation/create",
+            "method": "_vendor/open_browser",
             "params": { "sessionId": "session-1" },
         }));
         let reply = agent.next_line();

@@ -47,14 +47,16 @@ pub fn client_info() -> Value {
 /// published once the host serves it. File reads and writes go through
 /// `client_fs` (shared `safe_fs`, approvals outside the session directory),
 /// terminals through `terminal` (no shell, process trees ended with the
-/// session). Elicitation requests are still refused with "method not found",
-/// so they are not advertised. Subagents are served: a child session is
-/// registered, its updates and requests are attributed to it, and nothing is
-/// ever sent for a child.
+/// session). Elicitation is served in form mode only (`elicitation`): a form
+/// card in the timeline, answered once. URL mode would open external pages,
+/// which this client does not do, so it is not advertised. Subagents are
+/// served: a child session is registered, its updates and requests are
+/// attributed to it, and nothing is ever sent for a child.
 pub fn client_capabilities() -> Value {
     json!({
         "fs": { "readTextFile": true, "writeTextFile": true },
         "terminal": true,
+        "elicitation": { "form": {} },
         "subagents": {},
     })
 }

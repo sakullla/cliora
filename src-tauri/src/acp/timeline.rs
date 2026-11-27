@@ -59,6 +59,46 @@ pub struct AcpMessage {
     pub turn_id: String,
     /// The child session this message belongs to; none for the conversation's own.
     pub subagent: Option<String>,
+    /// What the user attached to a prompt, as labels only: the image data and
+    /// the file contents never enter the timeline. Omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<AcpAttachmentLabel>,
+}
+
+/// One attachment of a user prompt, as the timeline shows it.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAttachmentLabel {
+    /// image or file.
+    #[serde(rename = "type")]
+    pub kind: &'static str,
+    /// The file's path relative to the session directory (or as given), or
+    /// the image's media type.
+    pub name: String,
+    /// How a file reached the agent: embedded (its text), link (a reference)
+    /// or none for an image.
+    pub delivery: Option<&'static str>,
+}
+
+/// A structured question the agent asked through `elicitation/create` (form
+/// mode). The schema is kept as the agent sent it (bounded) so the view can
+/// build the form; the answer itself is never retained.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpElicitation {
+    pub id: String,
+    pub message: String,
+    /// The flat object schema of the requested fields.
+    pub requested_schema: Value,
+    /// The tool call this question belongs to, when the agent named one.
+    pub tool_call_id: Option<String>,
+    /// pending, accepted, declined, cancelled or withdrawn (stop, turn end or
+    /// session end took the form away).
+    pub decision: &'static str,
+    /// The id to answer with while pending; none once decided.
+    pub request_id: Option<String>,
+    pub turn_id: String,
+    pub subagent: Option<String>,
 }
 
 /// One piece of tool output, as the protocol typed it.
@@ -213,6 +253,7 @@ pub enum AcpTimelineItem {
     Turn(AcpTurnEnd),
     Subagent(AcpSubagent),
     Access(AcpAccess),
+    Elicitation(AcpElicitation),
 }
 
 impl AcpTimelineItem {
@@ -224,6 +265,7 @@ impl AcpTimelineItem {
             Self::Turn(item) => &item.id,
             Self::Subagent(item) => &item.id,
             Self::Access(item) => &item.id,
+            Self::Elicitation(item) => &item.id,
         }
     }
 
@@ -235,13 +277,17 @@ impl AcpTimelineItem {
             Self::Turn(item) => &item.turn_id,
             Self::Subagent(item) => &item.turn_id,
             Self::Access(item) => &item.turn_id,
+            Self::Elicitation(item) => &item.turn_id,
         }
     }
 
     /// Characters this item holds against the timeline budget.
     fn weight(&self) -> usize {
         match self {
-            Self::Message(item) => chars(&item.text),
+            Self::Message(item) => {
+                chars(&item.text) + item.attachments.iter().map(|label| chars(&label.name)).sum::<usize>()
+            }
+            Self::Elicitation(item) => chars(&item.message) + item.requested_schema.to_string().len(),
             Self::Tool(item) => {
                 chars(&item.title)
                     + item.raw_input.as_deref().map(chars).unwrap_or(0)
@@ -588,6 +634,7 @@ impl Timeline {
             truncated,
             turn_id: turn_id.to_owned(),
             subagent: subagent.map(ToOwned::to_owned),
+            attachments: Vec::new(),
         }));
         ChunkOutcome {
             id,
@@ -624,6 +671,7 @@ impl Timeline {
                 truncated,
                 turn_id: turn_id.to_owned(),
                 subagent: subagent.map(ToOwned::to_owned),
+                attachments: Vec::new(),
             }),
         };
         self.upsert(item.clone());
@@ -715,6 +763,7 @@ impl Timeline {
             // A tool still waiting for an answer is never dropped under its card.
             if matches!(item, AcpTimelineItem::Tool(call) if call.permission.is_some())
                 || matches!(item, AcpTimelineItem::Access(access) if access.request_id.is_some())
+                || matches!(item, AcpTimelineItem::Elicitation(form) if form.request_id.is_some())
             {
                 index += 1;
                 continue;

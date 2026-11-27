@@ -41,6 +41,7 @@ fn kinds(snapshot: &AcpSessionSnapshot) -> Vec<String> {
             AcpTimelineItem::Turn(turn) => format!("turn:{}", turn.reason),
             AcpTimelineItem::Subagent(child) => format!("subagent:{}", child.session_id),
             AcpTimelineItem::Access(access) => format!("access:{}", access.access_kind),
+            AcpTimelineItem::Elicitation(form) => format!("elicitation:{}", form.decision),
         })
         .collect()
 }
@@ -634,7 +635,7 @@ fn initialize_publishes_client_info_and_only_honoured_capabilities_and_keeps_the
     assert_eq!(declared["fs"]["readTextFile"], true, "已实现的文件能力必须声明");
     assert_eq!(declared["fs"]["writeTextFile"], true);
     assert_eq!(declared["terminal"], true);
-    assert!(declared.get("elicitation").is_none(), "未实现的 elicitation 不声明");
+    assert_eq!(declared["elicitation"], json!({ "form": {} }), "elicitation 只声明已实现的表单形式");
     assert_eq!(declared["subagents"], json!({}));
     assert_eq!(created["params"]["mcpServers"], json!([]));
 
