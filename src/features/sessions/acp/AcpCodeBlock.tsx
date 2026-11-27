@@ -25,7 +25,8 @@ export function AcpCodeBlock({ code, language }: { code: string; language: strin
     return () => { live = false; };
   }, [code, language]);
   const current = runs && runs.code === code && runs.language === language ? runs.runs : null;
-  const wrapLabel = wrap ? t('sessions.acpCodeNoWrap') : t('sessions.acpCodeWrap');
+  const wrapLabel = t('sessions.acpCodeWrap');
+  const wrapTitle = wrap ? t('sessions.acpCodeNoWrap') : wrapLabel;
   return <div className={styles.codeBlock} data-acp-code="" data-language={language ?? undefined} data-wrap={wrap || undefined}>
     <div className={styles.codeHead}>
       <span className={styles.codeLanguage}>{language || t('sessions.acpCodePlain')}</span>
@@ -34,8 +35,9 @@ export function AcpCodeBlock({ code, language }: { code: string; language: strin
           type="button"
           className={styles.codeToggle}
           aria-pressed={wrap}
+          aria-label={wrapLabel}
           data-code-wrap={wrap ? 'true' : 'false'}
-          title={wrapLabel}
+          title={wrapTitle}
           onClick={() => setWrap((value) => !value)}
         >
           {wrapLabel}

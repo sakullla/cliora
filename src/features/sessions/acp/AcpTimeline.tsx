@@ -2,7 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, u
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../../components/Icon';
 import type { AcpElicitation, AcpSessionSnapshot, AcpSubagent, AcpTimelineItem } from '../../../types/acp';
-import { acpCardAnswerable, acpIsLive, acpTurnKey } from '../acpSession';
+import { acpCardAnswerable, acpIsLive, acpNeedsLogin, acpTurnKey } from '../acpSession';
 import { AcpAccessCard, type AccessAnswer } from './AcpAccessCard';
 import { AcpElicitationForm, type ElicitationAction } from './AcpElicitationForm';
 import { AcpMessage } from './AcpMessage';
@@ -157,6 +157,8 @@ export const AcpTimeline = forwardRef<AcpTimelineHandle, {
   const last = timeline[timeline.length - 1];
   const running = snapshot.state === 'running';
   const live = acpIsLive(snapshot);
+  const login = acpNeedsLogin(snapshot);
+  const canReuse = live && !login && snapshot.state !== 'starting' && !!onReuseMessage;
   const segments = useMemo(() => groupTimelineItems(timeline), [timeline]);
   const groupByItem = useMemo(() => toolGroupIdByItem(segments), [segments]);
   const resolvedFindGroupId = activeFindGroupId ?? (activeFindItemId ? groupByItem.get(activeFindItemId) ?? null : null);
@@ -285,7 +287,7 @@ export const AcpTimeline = forwardRef<AcpTimelineHandle, {
           message={item}
           toolName={toolName}
           streaming={running && item === last && item.role !== 'user'}
-          canReuse={live && !!onReuseMessage}
+          canReuse={canReuse}
           onReuse={onReuseMessage}
           forceOpen={isFindActive || isLocated}
           searchQuery={searchQuery}
@@ -394,6 +396,16 @@ export const AcpTimeline = forwardRef<AcpTimelineHandle, {
         {snapshot.directory && <p className={styles.emptyDir} title={snapshot.directory}><Icon name="folder" size={12} /><span>{snapshot.directory}</span></p>}
       </div>;
     }
+    if (login) {
+      return <div className={styles.emptyCard} data-acp-empty="auth_required" role="status">
+        <div className={styles.emptyHead}>
+          <span className={styles.emptyLockDot} aria-hidden="true"><Icon name="lock" size={14} /></span>
+          <strong className={styles.emptyTitle}>{t('sessions.acpLoginTitle', { tool: toolName })}</strong>
+        </div>
+        <p className={styles.emptyHint}>{t('sessions.acpLoginHint')}</p>
+        {snapshot.directory && <p className={styles.emptyDir} title={snapshot.directory}><Icon name="folder" size={12} /><span>{snapshot.directory}</span></p>}
+      </div>;
+    }
     if (live) {
       const hasCommands = (snapshot.commands?.length ?? 0) > 0;
       const hasQuickActions = Boolean((hasCommands && onQuickTrigger) || onQuickTrigger || onOpenPromptPicker);
@@ -417,7 +429,17 @@ export const AcpTimeline = forwardRef<AcpTimelineHandle, {
         </div>}
       </div>;
     }
-    return <p className={styles.empty} data-acp-empty="ended">{t('sessions.acpEmpty', { tool: toolName })}</p>;
+    const failed = snapshot.state === 'failed';
+    return <div className={styles.emptyCard} data-acp-empty={snapshot.state} role="status">
+      <div className={styles.emptyHead}>
+        <span className={failed ? styles.emptyFailedDot : styles.emptyEndedDot} aria-hidden="true">
+          <Icon name={failed ? 'alert' : 'info'} size={14} />
+        </span>
+        <strong className={styles.emptyTitle}>{t(failed ? 'sessions.acpFailedTitle' : 'sessions.acpEndedTitle')}</strong>
+      </div>
+      <p className={styles.emptyHint}>{t('sessions.acpEndedHint')}</p>
+      {snapshot.directory && <p className={styles.emptyDir} title={snapshot.directory}><Icon name="folder" size={12} /><span>{snapshot.directory}</span></p>}
+    </div>;
   }
 
   return <div className={styles.timelineFrame}>

@@ -140,21 +140,25 @@ export function AcpDiff({
     setRowLimit(ROW_LIMIT);
   }, [path, oldText, newText]);
 
-  useEffect(() => {
+  const minLimitForSearch = useMemo(() => {
     const trimmed = searchQuery.trim();
-    if (!forceOpen || !trimmed || diff.rows.length <= rowLimit) return;
+    if (!forceOpen || !trimmed || diff.rows.length <= ROW_LIMIT) return ROW_LIMIT;
     const needle = searchCase ? trimmed : trimmed.toLowerCase();
-    const hitIndex = diff.rows.findIndex((row) => {
-      if (row.kind === 'skip') return false;
+    let lastHit = -1;
+    for (let index = diff.rows.length - 1; index >= 0; index -= 1) {
+      const row = diff.rows[index];
+      if (row.kind === 'skip') continue;
       const hay = visibleControls(row.text);
-      return (searchCase ? hay : hay.toLowerCase()).includes(needle);
-    });
-    if (hitIndex >= rowLimit) {
-      setRowLimit(Math.ceil((hitIndex + 1) / ROW_LIMIT) * ROW_LIMIT);
+      if ((searchCase ? hay : hay.toLowerCase()).includes(needle)) {
+        lastHit = index;
+        break;
+      }
     }
-  }, [forceOpen, searchQuery, searchCase, diff.rows, rowLimit]);
+    return lastHit >= ROW_LIMIT ? Math.ceil((lastHit + 1) / ROW_LIMIT) * ROW_LIMIT : ROW_LIMIT;
+  }, [forceOpen, searchQuery, searchCase, diff.rows]);
 
-  const shown = diff.rows.slice(0, rowLimit);
+  const effectiveLimit = Math.max(rowLimit, minLimitForSearch);
+  const shown = diff.rows.slice(0, effectiveLimit);
   const hidden = diff.rows.length - shown.length;
   const heading = label ?? (oldText == null ? t('sessions.acpDiffNew', { path }) : t('sessions.acpDiffEdit', { path }));
   const canOpenPath = !!onOpenPath && !!directory && insideDirectory(directory, path);
@@ -218,7 +222,7 @@ export function AcpDiff({
               type="button"
               className={styles.linkAction}
               data-diff-more=""
-              onClick={() => setRowLimit((current) => current + ROW_LIMIT)}
+              onClick={() => setRowLimit((current) => Math.max(current, effectiveLimit) + ROW_LIMIT)}
             >
               {t('sessions.acpDiffShowMore', { count: hidden })}
             </button>
