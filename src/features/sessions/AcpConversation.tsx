@@ -1,7 +1,7 @@
 import { forwardRef, useImperativeHandle, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import type { AcpAccessKind, AcpAttachment, AcpFileList, AcpNativeSessionPage } from '../../types/acp';
+import type { AcpAccessKind, AcpAttachment, AcpFileList, AcpImageFile, AcpNativeSessionPage, AcpSessionSnapshot } from '../../types/acp';
 import type { AcpConversation as Conversation } from './acpSession';
 import { acpIsLive, acpNeedsLogin, acpResumeKey, acpTurnActive } from './acpSession';
 import type { AccessAnswer } from './acp/AcpAccessCard';
@@ -13,9 +13,20 @@ import { AcpPendingBar } from './acp/AcpPendingBar';
 import { AcpPlan } from './acp/AcpPlan';
 import { AcpSessionBar } from './acp/AcpSessionBar';
 import { AcpTimeline, type AcpTimelineHandle } from './acp/AcpTimeline';
-import { pendingItems } from './acp/acpView';
+import { pendingItems, pendingRequest } from './acp/acpView';
 import workbenchStyles from './SessionWorkbench.module.css';
 import styles from './AcpConversation.module.css';
+
+/** A card or form that belongs to a turn waits for an answer. One raised between
+ *  turns (the user's own dropped image, a subagent) leaves no turn to stop. */
+function turnWaiting(snapshot: AcpSessionSnapshot): boolean {
+  if (snapshot.state !== 'waiting_permission') return false;
+  const pending = new Set(snapshot.pending);
+  return snapshot.timeline.some((item) => {
+    const request = pendingRequest(item);
+    return !!request && pending.has(request) && 'turnId' in item && !!item.turnId;
+  });
+}
 
 /** What the workbench may ask of a mounted conversation: the shared quick input and
  *  a native drop route their attachments here, and the pane menu opens the history. */
@@ -58,12 +69,16 @@ export const AcpConversation = forwardRef<AcpConversationHandle, {
   onLoginTerminal?: () => Promise<void>;
   onRespondElicitation: (requestId: string, action: ElicitationAction, content: Record<string, unknown> | null) => Promise<void>;
   onListFiles: (query: string) => Promise<AcpFileList>;
+  /** Reads a dropped image file for the composer's preview. */
+  onReadImage: (path: string) => Promise<AcpImageFile>;
   onNativeSessions: (cursor: string | null) => Promise<AcpNativeSessionPage>;
   onDeleteNativeSession: (nativeId: string) => Promise<void>;
   /** Opens the chosen native session in a new pane. */
   onResumeNative: (nativeId: string) => Promise<void>;
+  /** Starts a new conversation in the same directory (the pane menu's action). */
+  onNewConversation?: () => Promise<void>;
 }>(function AcpConversation({ conversation, toolName, active, focused = active, pane, header, onSend, onStop, onAnswer, onAnswerAccess, onRevokeGrants, onKillTerminal, onOpenPath, onClose,
-  onSetMode, onSetConfig, onAuthenticate, onLoginTerminal, onRespondElicitation, onListFiles, onNativeSessions, onDeleteNativeSession, onResumeNative }, ref) {
+  onSetMode, onSetConfig, onAuthenticate, onLoginTerminal, onRespondElicitation, onListFiles, onReadImage, onNativeSessions, onDeleteNativeSession, onResumeNative, onNewConversation }, ref) {
   const { t } = useTranslation();
   const snapshot = conversation.snapshot;
   const [pending, setPending] = useState('');
@@ -75,7 +90,7 @@ export const AcpConversation = forwardRef<AcpConversationHandle, {
   const live = acpIsLive(snapshot);
   const login = acpNeedsLogin(snapshot);
   // Waiting for an answer is still inside the turn: the main button stops it.
-  const turnBusy = acpTurnActive(snapshot) || snapshot.state === 'waiting_permission';
+  const turnBusy = acpTurnActive(snapshot) || turnWaiting(snapshot);
   const resumeKey = acpResumeKey(snapshot.resume);
   const placement = pane != null && pane >= 0 ? { gridColumn: pane + 1, gridRow: 1 } : undefined;
   const waiting = pendingItems(snapshot);
@@ -148,10 +163,11 @@ export const AcpConversation = forwardRef<AcpConversationHandle, {
           onStop={() => void run('stop', onStop)}
           onClose={() => void run('close', onClose)}
           onListFiles={onListFiles}
+          onReadImage={onReadImage}
           onSetMode={onSetMode}
           onSetConfig={onSetConfig}
         />}
     </div>
-    {historyOpen && createPortal(<AcpHistoryDialog open={historyOpen} snapshot={snapshot} toolName={toolName} onClose={() => setHistoryOpen(false)} onList={onNativeSessions} onDelete={onDeleteNativeSession} onResume={onResumeNative} />, document.body)}
+    {historyOpen && createPortal(<AcpHistoryDialog open={historyOpen} snapshot={snapshot} toolName={toolName} onClose={() => setHistoryOpen(false)} onList={onNativeSessions} onDelete={onDeleteNativeSession} onResume={onResumeNative} onNewConversation={onNewConversation} />, document.body)}
   </div>;
 });

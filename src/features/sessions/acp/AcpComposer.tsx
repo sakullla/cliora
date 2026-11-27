@@ -2,7 +2,7 @@ import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, use
 import { useTranslation } from 'react-i18next';
 import { highlightRuns } from '../../../components/CommandPalette';
 import { Icon } from '../../../components/Icon';
-import type { AcpAttachment, AcpFileList, AcpSessionSnapshot } from '../../../types/acp';
+import type { AcpAttachment, AcpFileList, AcpImageFile, AcpSessionSnapshot } from '../../../types/acp';
 import { AcpSettings } from './AcpSettings';
 import {
   ACP_IMAGE_BYTES, ACP_IMAGE_LIMIT, ACP_IMAGE_TYPES, attachmentPayload, baseName, insertMention, isImagePath, matchCommands, mentionQuery,
@@ -18,7 +18,8 @@ const COMPACT_WINDOW = 760;
 export type AcpComposerHandle = {
   /** Attach pasted or dropped file objects (images; other files are refused with a reason). */
   addFiles: (files: File[]) => void;
-  /** Attach files by path, as a native drop delivers them. */
+  /** Attach files by path, as a native drop delivers them. An image path, when the
+   *  agent accepts images, is read by the host and becomes an image like a pasted one. */
   addPaths: (paths: string[]) => void;
   /** Send text from another input (the shared quick input) with the tray's attachments.
    *  Rejects with the host's reason; the tray stays as it was. */
@@ -34,13 +35,17 @@ let attachmentSeq = 0;
 const nextAttachmentId = () => `attachment-${Date.now().toString(36)}-${(attachmentSeq += 1)}`;
 
 type FileState = { query: string; files: string[]; truncated: boolean; loading: boolean; error: string };
+/** A dropped image the host is still reading. */
+type ReadingImage = { id: string; name: string; path: string };
 
 /**
  * The conversation's input. Enter sends and Shift+Enter adds a line; while an input
  * method is composing, Enter belongs to the composition. `/` at the start opens the
  * agent's declared commands, `@` looks up files in the session directory and attaches
  * the chosen one. Images are attached by paste or drop only when the agent declared
- * it accepts them. Up and down on an empty input bring back earlier prompts. While a
+ * it accepts them; a desktop drop delivers paths, so the host reads the picture
+ * (with the session directory's approval rules) and it joins the tray like a pasted
+ * one, shown as reading until then. Up and down on an empty input bring back earlier prompts. While a
  * turn runs the draft stays editable and the main button stops the turn; a send that
  * fails keeps the draft and its attachments.
  */
@@ -57,9 +62,11 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   onStop: () => void;
   onClose: () => void;
   onListFiles: (query: string) => Promise<AcpFileList>;
+  /** Reads a dropped image file for its preview (see native acp.readImage). */
+  onReadImage: (path: string) => Promise<AcpImageFile>;
   onSetMode: (modeId: string) => Promise<void>;
   onSetConfig: (configId: string, value: string | boolean) => Promise<void>;
-}>(function AcpComposer({ snapshot, toolName, live, turnBusy, busy, canSend, onSend, onStop, onClose, onListFiles, onSetMode, onSetConfig }, ref) {
+}>(function AcpComposer({ snapshot, toolName, live, turnBusy, busy, canSend, onSend, onStop, onClose, onListFiles, onReadImage, onSetMode, onSetConfig }, ref) {
   const { t } = useTranslation();
   const listId = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -70,6 +77,8 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
+  const [reading, setReading] = useState<ReadingImage[]>([]);
+  const readingRef = useRef<ReadingImage[]>([]);
   const [notices, setNotices] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [sending, setSending] = useState(false);
@@ -155,7 +164,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   async function addFiles(files: File[]) {
     if (!files.length) return;
     const reasons: string[] = [];
-    let images = attachmentsRef.current.filter((item) => item.type === 'image').length;
+    let images = imageCount();
     let tooMany = false;
     const added: ComposerAttachment[] = [];
     for (const file of files) {
@@ -176,20 +185,72 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     if (added.length) setAttachments((current) => [...current, ...added]);
   }
 
+  /** Images in the tray, counting those still being read. */
+  function imageCount(): number {
+    return attachmentsRef.current.filter((item) => item.type === 'image').length + readingRef.current.length;
+  }
+
+  function setReadingImages(next: ReadingImage[]) {
+    readingRef.current = next;
+    setReading(next);
+  }
+
   function addPaths(paths: string[]) {
     const reasons: string[] = [];
-    const known = new Set(attachmentsRef.current.flatMap((item) => (item.type === 'file' ? [item.path] : [])));
+    const known = new Set([
+      ...attachmentsRef.current.flatMap((item) => (item.type === 'file' ? [item.path] : item.source ? [item.source] : [])),
+      ...readingRef.current.map((item) => item.path),
+    ]);
     const added: ComposerAttachment[] = [];
+    const toRead: ReadingImage[] = [];
+    let images = imageCount();
+    let tooMany = false;
     for (const path of paths) {
       if (!path.trim() || known.has(path)) continue;
-      // A dropped picture is still a picture: without the image capability it is
-      // refused for the same reason a pasted one is.
-      if (isImagePath(path) && !imageAllowed) { reasons.push(t('sessions.acpImageUnsupported', { tool: toolName })); continue; }
       known.add(path);
+      if (isImagePath(path)) {
+        // A dropped picture is still a picture: without the image capability it is
+        // refused for the same reason a pasted one is; with it, the host reads it
+        // and it is previewed and sent as an image.
+        if (!imageAllowed) { reasons.push(t('sessions.acpImageUnsupported', { tool: toolName })); continue; }
+        if (images >= ACP_IMAGE_LIMIT) { tooMany = true; continue; }
+        images += 1;
+        toRead.push({ id: nextAttachmentId(), name: baseName(path), path });
+        continue;
+      }
       added.push({ id: nextAttachmentId(), type: 'file', name: baseName(path), path });
     }
+    if (tooMany) reasons.push(t('sessions.acpImageTooMany', { count: ACP_IMAGE_LIMIT }));
     setNotices([...new Set(reasons)]);
     if (added.length) setAttachments((current) => [...current, ...added]);
+    if (toRead.length) {
+      setReadingImages([...readingRef.current, ...toRead]);
+      for (const item of toRead) void readImage(item);
+    }
+  }
+
+  /** Read one dropped image through the host; a failure says why instead of
+   *  attaching the path as a plain file. Removed from the tray meanwhile, the
+   *  result is dropped. */
+  async function readImage(item: ReadingImage) {
+    let image: ComposerAttachment | null = null;
+    let reason = '';
+    try {
+      const file = await onReadImage(item.path);
+      if (!ACP_IMAGE_TYPES.includes(file.mimeType)) reason = t('sessions.acpImageType');
+      else if (file.size > ACP_IMAGE_BYTES) reason = t('sessions.acpImageTooLarge', { name: item.name });
+      else image = { id: item.id, type: 'image', name: file.name || item.name, mimeType: file.mimeType, dataBase64: file.dataBase64, size: file.size, source: item.path };
+    } catch (value) {
+      reason = t('sessions.acpImageReadFailedReason', { name: item.name, reason: errorText(value) });
+    }
+    if (!readingRef.current.some((entry) => entry.id === item.id)) return;
+    setReadingImages(readingRef.current.filter((entry) => entry.id !== item.id));
+    if (image) {
+      const added = image;
+      attachmentsRef.current = [...attachmentsRef.current, added];
+      setAttachments((current) => [...current, added]);
+    }
+    if (reason) setNotices((current) => [...new Set([...current, reason])]);
   }
 
   function attachFile(path: string) {
@@ -200,7 +261,12 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   /** Send, then clear only what was sent: text typed meanwhile stays. */
   async function send(text: string, fromDraft: boolean) {
     const items = attachmentsRef.current;
-    if (!text && !items.length) return;
+    if (!text && !items.length && !readingRef.current.length) return;
+    // A picture still being read would silently miss the prompt.
+    if (readingRef.current.length) {
+      if (fromDraft) return;
+      throw new Error(t('sessions.acpImageReadingBusy'));
+    }
     if (sendingRef.current) {
       if (fromDraft) return;
       throw new Error(t('sessions.acpSendBusy'));
@@ -276,6 +342,12 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
           choose(activeIndex);
           return;
         }
+        // The file lookup has not answered yet: Enter waits for it instead of
+        // sending the bare `@query` without its file.
+        if (mentionOpen && (fileState.loading || fileState.query !== mention?.query) && !fileState.error) {
+          event.preventDefault();
+          return;
+        }
         if (event.key === 'Tab') return;
       }
       if (event.key === 'Escape') {
@@ -309,7 +381,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     }
   }
 
-  const sendable = canSend && !turnBusy && !sending && (!!draft.trim() || attachments.length > 0);
+  const sendable = canSend && !turnBusy && !sending && !reading.length && (!!draft.trim() || attachments.length > 0);
   const activeId = menuItems ? `${listId}-option-${activeIndex}` : undefined;
 
   return <div ref={rootRef} className={styles.composer} data-acp-composer="" data-drag={dragOver || undefined}
@@ -350,13 +422,20 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
             : !fileState.files.length ? <p className={styles.menuEmpty}>{t('sessions.acpFilesEmpty')}</p> : null}
       </div>}
     </div>}
-    {attachments.length > 0 && <ul className={styles.tray} aria-label={t('sessions.acpAttachments')}>
+    {(attachments.length > 0 || reading.length > 0) && <ul className={styles.tray} aria-label={t('sessions.acpAttachments')} aria-busy={reading.length > 0 || undefined}>
       {attachments.map((item) => <li key={item.id} className={styles.trayItem} data-attachment={item.type}>
         {item.type === 'image'
           ? <img className={styles.trayPreview} src={`data:${item.mimeType};base64,${item.dataBase64}`} alt={t('sessions.acpAttachmentImage', { name: item.name })} />
           : <Icon name="file" size={12} />}
         <span className={styles.trayName} title={item.type === 'file' ? item.path : item.name}>{item.name}</span>
         <button type="button" className={styles.trayRemove} aria-label={t('sessions.acpAttachmentRemove', { name: item.name })} title={t('sessions.acpAttachmentRemove', { name: item.name })} onClick={() => setAttachments((current) => current.filter((entry) => entry.id !== item.id))}>
+          <Icon name="close" size={10} />
+        </button>
+      </li>)}
+      {reading.map((item) => <li key={item.id} className={styles.trayItem} data-attachment="reading" title={t('sessions.acpImageReading', { name: item.name })}>
+        <span className={styles.trayReading} role="status" aria-label={t('sessions.acpImageReading', { name: item.name })} />
+        <span className={styles.trayName}>{item.name}</span>
+        <button type="button" className={styles.trayRemove} aria-label={t('sessions.acpAttachmentRemove', { name: item.name })} title={t('sessions.acpAttachmentRemove', { name: item.name })} onClick={() => setReadingImages(readingRef.current.filter((entry) => entry.id !== item.id))}>
           <Icon name="close" size={10} />
         </button>
       </li>)}
@@ -405,7 +484,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     />
     <div className={styles.actions}>
       <AcpSettings config={snapshot.config} compact={compact} disabled={!live || snapshot.state === 'starting'} onSetMode={onSetMode} onSetConfig={onSetConfig} />
-      <span className={styles.hint}>{!live ? t('sessions.acpEnded') : turnBusy ? t('sessions.acpBusyHint') : t('sessions.acpSendHint')}</span>
+      <span className={styles.hint}>{!live ? t('sessions.acpEnded') : turnBusy ? t('sessions.acpBusyHint') : reading.length ? t('sessions.acpImageReadingBusy') : t('sessions.acpSendHint')}</span>
       {!live && <button type="button" className={styles.button} data-variant="quiet" disabled={busy} onClick={onClose}>{t('sessions.acpClose')}</button>}
       {turnBusy && live
         ? <button type="button" className={styles.button} data-variant="stop" disabled={busy || snapshot.state === 'stopping'} onClick={onStop}><Icon name="square" size={12} />{snapshot.state === 'stopping' ? t('sessions.acpStopping') : t('sessions.acpStop')}</button>

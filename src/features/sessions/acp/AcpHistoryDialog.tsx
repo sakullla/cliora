@@ -22,9 +22,9 @@ function when(value: string | null, locale: string): string | null {
  * The agent's own session history for this directory, read through the open
  * conversation. Resuming opens the chosen session in a new pane; deleting asks
  * once more before anything is sent. An agent that did not declare listing gets
- * its reason instead of a list.
+ * its reason instead of a list, and the way forward: a new conversation.
  */
-export function AcpHistoryDialog({ open, snapshot, toolName, onClose, onList, onDelete, onResume }: {
+export function AcpHistoryDialog({ open, snapshot, toolName, onClose, onList, onDelete, onResume, onNewConversation }: {
   open: boolean;
   snapshot: AcpSessionSnapshot;
   toolName: string;
@@ -32,6 +32,8 @@ export function AcpHistoryDialog({ open, snapshot, toolName, onClose, onList, on
   onList: (cursor: string | null) => Promise<AcpNativeSessionPage>;
   onDelete: (nativeId: string) => Promise<void>;
   onResume: (nativeId: string) => Promise<void>;
+  /** Starts a new conversation in the same directory. */
+  onNewConversation?: () => Promise<void>;
 }) {
   const { t, i18n } = useTranslation();
   const capabilities = snapshot.agent?.sessionCapabilities;
@@ -91,6 +93,18 @@ export function AcpHistoryDialog({ open, snapshot, toolName, onClose, onList, on
     } finally { setBusy(''); }
   }
 
+  async function startNew() {
+    if (busy || !onNewConversation) return;
+    setBusy('new');
+    setRowError('');
+    try {
+      await onNewConversation();
+      onClose();
+    } catch (value) {
+      setRowError(errorText(value));
+    } finally { setBusy(''); }
+  }
+
   async function resume(item: AcpNativeSession) {
     if (busy) return;
     setBusy(`resume:${item.nativeId}`);
@@ -103,9 +117,15 @@ export function AcpHistoryDialog({ open, snapshot, toolName, onClose, onList, on
     } finally { setBusy(''); }
   }
 
-  return <GuideDialog open={open} title={t('sessions.acpHistoryTitle', { tool: toolName })} hint={listable ? t('sessions.acpHistoryHint') : undefined} closeDisabled={busy.startsWith('resume:')} onClose={onClose}>
+  return <GuideDialog open={open} title={t('sessions.acpHistoryTitle', { tool: toolName })} hint={listable ? t('sessions.acpHistoryHint') : undefined} closeDisabled={busy.startsWith('resume:') || busy === 'new'} onClose={onClose}>
     <div className={styles.history} data-acp-history="">
-      {!listable ? <p className={styles.historyNote} role="status" data-acp-history-unsupported="">{t('sessions.acpHistoryUnsupported', { tool: toolName })}</p> : <>
+      {!listable ? <>
+        <div className={styles.historyNote} role="status" data-acp-history-unsupported="">
+          <span>{t('sessions.acpHistoryUnsupported', { tool: toolName })}</span>
+          {onNewConversation && <Button size="sm" variant="primary" disabled={!!busy} onClick={() => void startNew()} icon={<Icon name="plus" size={12} />}>{t('sessions.acpNewConversation')}</Button>}
+        </div>
+        {rowError && <p className={styles.historyError} role="alert">{rowError}</p>}
+      </> : <>
         {loadError && <div className={styles.historyNote} role="alert">
           <span>{t('sessions.acpHistoryFailed', { reason: loadError })}</span>
           <Button size="sm" variant="secondary" onClick={() => void load(sessions.length ? cursor : null)}>{t('sessions.acpHistoryRetry')}</Button>

@@ -300,6 +300,10 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
           if (command === 'acp_session') return acpFixture?.find((item) => item.id === args.sessionId) ?? null;
           if (command === 'acp_prompt' || command === 'acp_cancel' || command === 'acp_respond_permission' || command === 'acp_respond_access' || command === 'acp_revoke_grants' || command === 'acp_kill_terminal' || command === 'acp_set_mode' || command === 'acp_set_config' || command === 'acp_close'
             || command === 'acp_authenticate' || command === 'acp_respond_elicitation' || command === 'acp_delete_native_session') return null;
+          // A dropped picture: a tiny PNG the tray previews; one named "reading" stays
+          // in the host's hands so the tray's reading state can be captured.
+          if (command === 'acp_read_image' && String(args.path).includes('reading')) return new Promise(() => {});
+          if (command === 'acp_read_image') return { name: String(args.path).split(/[\\/]/).pop(), mimeType: 'image/png', dataBase64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', size: 70 };
           if (command === 'acp_list_files') return { files: ['src/features/sessions/SessionWorkbench.module.css', 'src/features/sessions/AcpConversation.tsx'], truncated: false, source: 'git' };
           if (command === 'acp_native_sessions') return acpMode === 'composer' ? { sessions: [
             { nativeId: 'native-acp-1', title: '工具栏间距改用令牌', updatedAt: '2026-11-27T08:00:00Z', cwd: 'C:\\Projects\\cliora', current: true },
@@ -403,6 +407,11 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
         const bytes = new TextEncoder().encode(text);
         const data = btoa(String.fromCharCode(...bytes));
         bridge.handlers[bridge.listens['cliora:session-output']]?.({ payload: { sessionId, dataBase64: data } });
+      },
+      /** A native (desktop) drop of paths at a CSS-pixel point. */
+      __drop: (paths, point) => {
+        const scale = window.devicePixelRatio || 1;
+        bridge.handlers[bridge.listens['tauri://drag-drop']]?.({ payload: { type: 'drop', paths, position: { x: point.x * scale, y: point.y * scale } } });
       },
       __bell: (sessionId = 's4') => {
         const data = btoa('\u0007');
@@ -704,6 +713,17 @@ for (const width of widths) {
     await input.pressSequentially(copy('对照截图检查 @Sess', 'Compare with the screenshot @Sess'));
     await acpPanel(page).locator('[data-acp-menu="files"] [role="option"]').first().waitFor();
   }, false, null, null, null, false, null, 'composer');
+  // A desktop drop delivers paths: the image is read by the host and previewed like a
+  // pasted one, a text file becomes a file chip, and a slow read shows as reading. A
+  // native drop needs the desktop webview, so this scene uses the Windows frame.
+  await shot('workbench-acp-drop-' + theme + '-' + width, theme, width, async (page) => {
+    await acpPanel(page).waitFor();
+    const box = await acpPanel(page).boundingBox();
+    await page.evaluate((point) => window.__drop(['C:/Projects/cliora/docs/toolbar.png', 'C:/Projects/cliora/notes.md', 'C:/Projects/cliora/docs/reading-layout.png'], point),
+      { x: box.x + box.width / 2, y: box.y + box.height / 2 });
+    await acpPanel(page).locator('[data-attachment="image"]').waitFor();
+    await acpPanel(page).locator('[data-attachment="reading"]').waitFor();
+  }, false, null, null, null, false, 'windows', 'composer');
   await shot('workbench-acp-login-' + theme + '-' + width, theme, width, async (page) => {
     await acpPanel(page).locator('[data-acp-auth]').waitFor();
   }, false, null, null, null, false, null, 'login');
@@ -718,6 +738,11 @@ for (const width of widths) {
     await acpPanel(page).getByRole('button', { name: copy('历史会话…', 'Session history…'), exact: true }).click();
     await page.locator('[data-acp-history] [data-native-id]').first().waitFor();
   }, false, null, null, null, false, null, 'composer');
+  // An agent without session listing: the reason, and a new conversation instead.
+  await shot('workbench-acp-history-unsupported-' + theme + '-' + width, theme, width, async (page) => {
+    await acpPanel(page).getByRole('button', { name: copy('历史会话…', 'Session history…'), exact: true }).click();
+    await page.locator('[data-acp-history-unsupported]').waitFor();
+  }, false, null, null, null, false, null, 'conversation');
   // The task comes first; the context it will use is a compact summary under it, and the
   // worktree base, branch and setup command stay folded until they are needed.
   await shot('workbench-task-dialog-' + theme + '-' + width, theme, width, async (page) => {

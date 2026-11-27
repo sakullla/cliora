@@ -30,6 +30,9 @@ type Config = {
   failAuth?: string | null;
   /** acp_list_files answers from these relative paths (substring match). */
   files?: string[];
+  /** acp_read_image answers: a path maps to its image or to a refusal reason; any
+   *  other path is refused. */
+  images?: Record<string, { name?: string; mimeType: string; dataBase64: string; size?: number } | string>;
   /** acp_native_sessions answers these pages in order (cursor `page-N`). */
   nativeSessions?: AcpNativeSession[][];
   /** acp_native_sessions rejects with this reason (an agent without session/list). */
@@ -59,6 +62,11 @@ export async function installAcpMock(page: Page, config: Config = {}) {
       failAuth: config.failAuth ?? null,
       elicitationAnswers: [] as Array<[string, string, string, unknown]>,
       fileQueries: [] as Array<[string, string, number]>,
+      imageReads: [] as Array<[string, string]>,
+      /** acp_read_image waits for window.__acpReleaseImage() while set. */
+      holdImage: false,
+      /** acp_list_files waits for window.__acpReleaseFiles() while set. */
+      holdFiles: false,
       historyQueries: [] as Array<[string, string | null]>,
       deletions: [] as Array<[string, string]>,
       modes: [] as Array<[string, string]>,
@@ -106,6 +114,8 @@ export async function installAcpMock(page: Page, config: Config = {}) {
       isTauri: true,
       __acpTest: state,
       __acpEvent: (event: Record<string, unknown>) => emit('cliora:acp-event', event),
+      /** A native (desktop) drop: the webview delivers paths at a physical position. */
+      __acpDrop: (paths: string[], position: { x: number; y: number }) => emit('tauri://drag-drop', { type: 'drop', paths, position }),
       __acpSessionState: (id: string, patch: Record<string, unknown>) => {
         const snapshot = find(id);
         if (snapshot) Object.assign(snapshot, patch);
@@ -113,6 +123,7 @@ export async function installAcpMock(page: Page, config: Config = {}) {
       },
       __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
       __TAURI_INTERNALS__: {
+        metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } },
         transformCallback: (callback: (event: { payload: unknown }) => void) => { bridge.handlers.push(callback); return bridge.handlers.length - 1; },
         invoke: async (command: string, args: Record<string, any> = {}) => {
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: config.theme ?? 'light' }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
@@ -172,7 +183,25 @@ export async function installAcpMock(page: Page, config: Config = {}) {
             state.fileQueries.push([args.sessionId, args.query ?? '', args.limit ?? 50]);
             const query = String(args.query ?? '').toLowerCase();
             const files = (config.files ?? []).filter((path) => path.toLowerCase().includes(query)).slice(0, Number(args.limit ?? 50));
-            return { files, truncated: false, source: 'git' };
+            const answer = { files, truncated: false, source: 'git' };
+            if (state.holdFiles) return new Promise((resolve) => { (window as any).__acpReleaseFiles = () => { state.holdFiles = false; resolve(answer); }; });
+            return answer;
+          }
+          if (command === 'acp_read_image') {
+            state.imageReads.push([args.sessionId, args.path]);
+            const known = (config.images ?? {})[args.path];
+            const answer = () => {
+              if (known === undefined) throw { message: '文件不存在' };
+              if (typeof known === 'string') throw { message: known };
+              const name = known.name ?? String(args.path).split(/[\\/]/).pop();
+              return { name, mimeType: known.mimeType, dataBase64: known.dataBase64, size: known.size ?? Math.floor(known.dataBase64.length * 3 / 4) };
+            };
+            if (state.holdImage) {
+              return new Promise((resolve, reject) => {
+                (window as any).__acpReleaseImage = () => { state.holdImage = false; try { resolve(answer()); } catch (error) { reject(error); } };
+              });
+            }
+            return answer();
           }
           if (command === 'acp_native_sessions') {
             state.historyQueries.push([args.sessionId, args.cursor ?? null]);

@@ -495,3 +495,160 @@ test('allow always is secondary to allow once, the pane shows one state, and a f
   await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'auth_required', pending: [], seq: 3 }));
   await expect(state).toHaveText('需要登录');
 });
+
+/** A desktop drop: the webview delivers paths at a physical position over the pane. */
+async function dropPaths(page: Page, panel: Locator, paths: string[]) {
+  const box = await panel.boundingBox();
+  const point = { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 };
+  await page.evaluate(({ point, paths }) => {
+    const scale = window.devicePixelRatio || 1;
+    (window as any).__acpDrop(paths, { x: point.x * scale, y: point.y * scale });
+  }, { point, paths });
+}
+
+test('a desktop drop of an image path is read by the host, previewed, removable and sent as an image; a refused read says why', async ({ page }) => {
+  await installAcpMock(page, { interaction: 'acp', images: {
+    'C:/work/shot.png': { mimeType: 'image/png', dataBase64: PNG },
+    'C:/work/later.png': { mimeType: 'image/png', dataBase64: PNG },
+    'C:/work/fake.png': '文件内容与扩展名不符，不是有效的图片',
+  }, conversations: [snapshot({ id: 'a1', agent: textAgent })] });
+  await openWorkbench(page);
+  const panel = panelOf(page);
+  const input = inputOf(panel);
+  await expect(input).toBeVisible();
+  const notice = panel.locator('[data-acp-attach-notice]');
+
+  // Text only: the dropped picture is refused before anything is read.
+  await dropPaths(page, panel, ['C:/work/shot.png']);
+  await expect(notice).toContainText('Codex 没有声明图片能力');
+  await expect(panel.locator('[data-attachment]')).toHaveCount(0);
+  expect((await testState(page)).imageReads).toEqual([]);
+
+  // Images declared: the host reads the file; meanwhile the tray says so and nothing is sent.
+  await page.evaluate((agent) => (window as any).__acpSessionState('a1', { agent, seq: 3 }), imageAgent);
+  await page.evaluate(() => { (window as any).__acpTest.holdImage = true; });
+  await dropPaths(page, panel, ['C:/work/shot.png', 'C:/work/notes.md']);
+  const reading = panel.locator('[data-attachment="reading"]');
+  await expect(reading).toHaveCount(1);
+  await expect(reading.getByRole('status', { name: '正在读取图片 shot.png…' })).toBeAttached();
+  await expect(panel.locator('[data-attachment="file"]')).toHaveText('notes.md');
+  expect((await testState(page)).imageReads).toEqual([['a1', 'C:/work/shot.png']]);
+  await input.fill('对照这张截图');
+  await expect(panel.getByRole('button', { name: '发送', exact: true })).toBeDisabled();
+  await input.press('Enter');
+  expect((await testState(page)).prompts).toEqual([]);
+  await page.evaluate(() => (window as any).__acpReleaseImage());
+  await expect(reading).toHaveCount(0);
+  await expect(panel.getByRole('img', { name: '图片 shot.png' })).toHaveAttribute('src', `data:image/png;base64,${PNG}`);
+  // The same file dropped again is not read twice.
+  await dropPaths(page, panel, ['C:/work/shot.png']);
+  await expect(panel.locator('[data-attachment="image"]')).toHaveCount(1);
+  expect((await testState(page)).imageReads).toHaveLength(1);
+
+  // A refused read names the reason instead of attaching a plain file.
+  await dropPaths(page, panel, ['C:/work/fake.png']);
+  await expect(notice).toContainText('无法附加图片 fake.png：文件内容与扩展名不符，不是有效的图片');
+  await expect(panel.locator('[data-attachment]')).toHaveCount(2);
+
+  // A read removed while it runs leaves nothing behind.
+  await page.evaluate(() => { (window as any).__acpTest.holdImage = true; });
+  await dropPaths(page, panel, ['C:/work/later.png']);
+  await expect(reading).toHaveCount(1);
+  await panel.getByRole('button', { name: '移除附件 later.png', exact: true }).click();
+  await expect(reading).toHaveCount(0);
+  await page.evaluate(() => (window as any).__acpReleaseImage());
+  await expect(panel.locator('[data-attachment="image"]')).toHaveCount(1);
+
+  // Sent as an image block next to the file.
+  await panel.getByRole('button', { name: '发送', exact: true }).click();
+  await expect.poll(async () => (await testState(page)).prompts).toEqual([['a1', '对照这张截图']]);
+  expect((await testState(page)).attachments).toEqual([['a1', [{ type: 'file', path: 'C:/work/notes.md' }, { type: 'image', mimeType: 'image/png', dataBase64: PNG }]]]);
+  await expect(panel.locator('[data-attachment]')).toHaveCount(0);
+});
+
+test('Enter while the @ lookup is still running waits for it instead of sending the bare text', async ({ page }) => {
+  await installAcpMock(page, { interaction: 'acp', files: ['src/lib/native.ts'], conversations: [snapshot({ id: 'a1' })] });
+  await openWorkbench(page);
+  const panel = panelOf(page);
+  const input = inputOf(panel);
+  await expect(input).toBeVisible();
+  await page.evaluate(() => { (window as any).__acpTest.holdFiles = true; });
+  await input.pressSequentially('看看 @nat');
+  const files = panel.getByRole('listbox', { name: '会话目录内的文件', exact: true });
+  await expect(files).toContainText('正在查找文件…');
+  await expect.poll(async () => (await testState(page)).fileQueries.length).toBeGreaterThan(0);
+  await input.press('Enter');
+  await expect(input).toHaveValue('看看 @nat');
+  expect((await testState(page)).prompts).toEqual([]);
+  await page.evaluate(() => (window as any).__acpReleaseFiles());
+  await expect(files.getByRole('option')).toHaveText('src/lib/native.ts');
+  await input.press('Enter');
+  await expect(input).toHaveValue('看看 @src/lib/native.ts ');
+  expect((await testState(page)).prompts).toEqual([]);
+});
+
+test('without session listing the history dialog offers a new conversation in the same directory', async ({ page }) => {
+  await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'c1', agent: textAgent, directory: 'C:/work/app', timeline: [agentMessage('m1', '已有对话')] })] });
+  await openWorkbench(page);
+  await panelOf(page, 'c1').getByRole('button', { name: '历史会话…', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Codex 的历史会话' });
+  await expect(dialog.locator('[data-acp-history-unsupported]')).toContainText('Codex 没有声明会话列表能力');
+  await dialog.getByRole('button', { name: '新开一个对话', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect.poll(async () => (await testState(page)).launches.at(-1)).toMatchObject({ toolId: 'codex', interaction: 'acp', directory: 'C:/work/app', sessionId: null, initialPrompt: null });
+  expect((await testState(page)).launches.at(-1).resumeNativeId ?? null).toBeNull();
+  expect((await testState(page)).historyQueries).toEqual([]);
+});
+
+test('the plan keeps the reader\'s fold while the host republishes the same plan, and decides afresh when it changes', async ({ page }) => {
+  const plan = [{ content: '读代码', priority: 'medium', status: 'completed' }, { content: '改代码', priority: 'high', status: 'in_progress' }];
+  await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', plan: plan as any })] });
+  await openWorkbench(page);
+  const panel = panelOf(page);
+  const planBox = panel.locator('[data-acp-plan]');
+  const first = planBox.locator('li').first();
+  await expect(first).toBeVisible();
+  // The reader folds an unfinished plan; snapshots with the same plan (a new array each
+  // time, as the host publishes them) leave it folded.
+  await planBox.locator('summary').click();
+  await expect(first).toBeHidden();
+  await page.evaluate((plan) => (window as any).__acpSessionState('a1', { state: 'running', plan: JSON.parse(JSON.stringify(plan)), seq: 2 }), plan);
+  await expect(panel.getByRole('button', { name: '停止', exact: true })).toBeVisible();
+  await page.evaluate((plan) => (window as any).__acpSessionState('a1', { state: 'ready', plan: JSON.parse(JSON.stringify(plan)), seq: 3 }), plan);
+  await expect(panel.getByRole('button', { name: '发送', exact: true })).toBeVisible();
+  await expect(first).toBeHidden();
+  // A change of the plan opens it again.
+  await page.evaluate(() => (window as any).__acpEvent({ sessionId: 'a1', seq: 4, kind: 'plan', entries: [
+    { content: '读代码', priority: 'medium', status: 'completed' }, { content: '改代码', priority: 'high', status: 'completed' }, { content: '跑测试', priority: 'high', status: 'pending' },
+  ] }));
+  await expect(planBox).toContainText('计划 · 2/3');
+  await expect(first).toBeVisible();
+
+  // A finished plan the reader opened stays open through the same republished plan.
+  const done = [{ content: '读代码', priority: 'medium', status: 'completed' }, { content: '改代码', priority: 'high', status: 'completed' }];
+  await page.evaluate((done) => (window as any).__acpEvent({ sessionId: 'a1', seq: 5, kind: 'plan', entries: done }), done);
+  await expect(planBox).toContainText('计划 · 2/2');
+  await expect(first).toBeHidden();
+  await planBox.locator('summary').click();
+  await expect(first).toBeVisible();
+  await page.evaluate((done) => (window as any).__acpSessionState('a1', { state: 'running', plan: JSON.parse(JSON.stringify(done)), seq: 6 }), done);
+  await expect(panel.getByRole('button', { name: '停止', exact: true })).toBeVisible();
+  await page.evaluate((done) => (window as any).__acpSessionState('a1', { state: 'ready', plan: JSON.parse(JSON.stringify(done)), seq: 7 }), done);
+  await expect(panel.getByRole('button', { name: '发送', exact: true })).toBeVisible();
+  await expect(first).toBeVisible();
+});
+
+test('a form select is as wide as the text field above it', async ({ page }) => {
+  const requestedSchema = { type: 'object', properties: {
+    name: { type: 'string', title: '名称' },
+    color: { type: 'string', title: '颜色', oneOf: [{ const: 'red', title: '红' }, { const: 'blue', title: '蓝' }] },
+  } };
+  const form = { kind: 'elicitation', id: 'e1', message: '补充信息', requestedSchema, toolCallId: null, decision: 'pending', requestId: 'q1', turnId: 'turn-1', subagent: null };
+  await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', state: 'waiting_permission', timeline: [form] as any, pending: ['q1'] })] });
+  await openWorkbench(page);
+  const card = panelOf(page).locator('[data-item-id="e1"]');
+  const text = await card.getByRole('textbox', { name: '名称' }).boundingBox();
+  const select = await card.getByRole('combobox', { name: '颜色' }).boundingBox();
+  expect(Math.abs(text!.width - select!.width)).toBeLessThanOrEqual(1);
+  expect(Math.abs(text!.x - select!.x)).toBeLessThanOrEqual(1);
+});

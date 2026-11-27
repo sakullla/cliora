@@ -10,7 +10,8 @@ const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp)$/i;
 /** One attachment waiting in the composer's tray. Image bytes stay here until the
  *  prompt is sent; the snapshot only ever holds labels. */
 export type ComposerAttachment =
-  | { id: string; type: 'image'; name: string; mimeType: string; dataBase64: string; size: number }
+  /** `source`: the dropped file's path, so the same drop is not read twice. */
+  | { id: string; type: 'image'; name: string; mimeType: string; dataBase64: string; size: number; source?: string }
   | { id: string; type: 'file'; name: string; path: string };
 
 export function attachmentPayload(items: ComposerAttachment[]): AcpAttachment[] {
