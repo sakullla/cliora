@@ -208,6 +208,10 @@ test('the plan follows its updates and disappears when empty; the title and usag
   await expect(panelPlan.locator('li').nth(0)).toHaveAttribute('data-status', 'in_progress');
   await expect(panelPlan.locator('li').nth(0)).toContainText('进行中');
   await expect(panelPlan.locator('li').nth(0)).toContainText('高优先');
+  // Folding an active plan keeps a single-line current step summary in the header.
+  await panelPlan.locator('summary').click();
+  await expect(panelPlan.locator('summary')).toContainText('当前：步骤 1');
+  await panelPlan.locator('summary').click();
   await send(page, { sessionId: 'a1', seq: 3, kind: 'plan', entries: plan(['completed', 'completed', 'in_progress']) });
   await expect(panelPlan).toContainText('计划 · 2/3');
   await expect(panelPlan.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '2');
@@ -215,9 +219,9 @@ test('the plan follows its updates and disappears when empty; the title and usag
   await send(page, { sessionId: 'a1', seq: 4, kind: 'plan', entries: [] });
   await expect(panel.locator('[data-acp-plan]')).toHaveCount(0);
 
-  // A reported title names the pane and the rail; usage shows only once reported.
+  // A reported title names the stage bar and the rail without repeating in the single-pane ACP bar; usage shows only once reported.
   await send(page, { sessionId: 'a1', seq: 5, kind: 'info', info: { title: '重构工具栏间距', updatedAt: null, usage: { used: 12000, size: 200000, cost: null } } });
-  await expect(panel.locator('[data-acp-title]')).toHaveText('重构工具栏间距');
+  await expect(panel.locator('[data-acp-title]')).toHaveCount(0);
   await expect(panel.locator('[data-acp-usage]')).toContainText('20万');
   await expect(page.locator('[data-session-id="a1"]').first()).toContainText('重构工具栏间距');
   await expect(page.getByRole('heading', { name: /重构工具栏间距/ }).first()).toBeVisible();
@@ -279,21 +283,27 @@ test('cards wait near their tool, the pending bar locates them, grants revoke an
   await expect(bar).toHaveCount(0);
 });
 
-test('a YOLO conversation shows its badge and the automatic approvals it recorded', async ({ page }) => {
+test('a YOLO conversation shows its badge without single-pane duplication and records automatic approvals', async ({ page }) => {
   await installAcpMock(page, {
     interaction: 'acp',
-    conversations: [snapshot({
-      id: 'a1', mode: 'yolo', state: 'running',
-      timeline: [
-        { kind: 'access', id: 'access-1', accessKind: 'write', path: 'D:/outside/out.txt', detail: null, decision: 'yolo', requestId: null, diff: null, turnId: 'turn-1', subagent: null } as any,
-        { kind: 'notice', id: 'n1', level: 'info', code: 'yolo_allowed', text: '已自动允许：运行 npm test（允许一次）', turnId: 'turn-1' },
-        { kind: 'access', id: 'access-2', accessKind: 'write', path: 'C:/work/src/a.ts', detail: null, decision: 'inside', requestId: null, diff: { path: 'src/a.ts', oldText: 'a\n', newText: 'b\n', truncated: false, previousOmitted: false }, turnId: 'turn-1', subagent: null } as any,
-      ],
-    })],
+    conversations: [
+      snapshot({
+        id: 'a1', mode: 'yolo', state: 'running',
+        timeline: [
+          { kind: 'access', id: 'access-1', accessKind: 'write', path: 'D:/outside/out.txt', detail: null, decision: 'yolo', requestId: null, diff: null, turnId: 'turn-1', subagent: null } as any,
+          { kind: 'notice', id: 'n1', level: 'info', code: 'yolo_allowed', text: '已自动允许：运行 npm test（允许一次）', turnId: 'turn-1' },
+          { kind: 'access', id: 'access-2', accessKind: 'write', path: 'C:/work/src/a.ts', detail: null, decision: 'inside', requestId: null, diff: { path: 'src/a.ts', oldText: 'a\n', newText: 'b\n', truncated: false, previousOmitted: false }, turnId: 'turn-1', subagent: null } as any,
+        ],
+      }),
+      snapshot({ id: 'a2', mode: 'normal', timeline: [agentMessage('m2', '普通对话')] }),
+    ],
   });
+  await page.setViewportSize({ width: 1360, height: 820 });
   await openWorkbench(page);
   const panel = panelOf(page);
-  await expect(panel.locator('[data-badge="yolo"]')).toContainText('YOLO');
+  // Single pane: stage bar holds the YOLO chip; AcpSessionBar does not duplicate it.
+  await expect(page.getByRole('region', { name: '当前会话' }).locator('header [data-mode="yolo"]')).toBeVisible();
+  await expect(panel.locator('[data-badge="yolo"]')).toHaveCount(0);
   await expect(panel.locator('[data-item-id="access-1"]')).toContainText('已自动允许（YOLO）');
   await expect(panel.locator('[data-item-id="access-1"]')).toContainText('D:/outside/out.txt');
   await expect(panel.locator('[data-item-id="n1"]')).toContainText('已自动允许：运行 npm test');
@@ -302,6 +312,9 @@ test('a YOLO conversation shows its badge and the automatic approvals it recorde
   await expect(wrote).toContainText('Codex 通过 Cliora 写入 src/a.ts');
   await expect(wrote.locator('[data-op="insert"]')).toHaveCount(1);
   await expect(panel.locator('[data-acp-pending]')).toHaveCount(0);
+  // Split view: pane-level YOLO badge appears on the ACP bar so side-by-side panes stay distinct.
+  await page.getByRole('button', { name: '分屏', exact: true }).first().click();
+  await expect(panel.locator('[data-badge="yolo"]')).toContainText('YOLO');
 });
 
 for (const theme of ['light', 'dark'] as const) {
@@ -335,3 +348,119 @@ for (const theme of ['light', 'dark'] as const) {
     await noHorizontalOverflow(page);
   });
 }
+
+test('consecutive completed lightweight tools fold into a summary group and break out when status or content changes', async ({ page }) => {
+  await installAcpMock(page, {
+    interaction: 'acp',
+    conversations: [snapshot({
+      id: 'a1',
+      state: 'running',
+      timeline: [
+        userMessage('u1', '检查配置并搜索用法'),
+        toolItem('g1', { title: '读取 package.json', toolKind: 'read', status: 'completed', locations: [{ path: 'package.json', line: null }] }),
+        toolItem('g2', { title: '读取 tsconfig.json', toolKind: 'read', status: 'completed', locations: [{ path: 'tsconfig.json', line: null }] }),
+        toolItem('g3', { title: '搜索 AcpTimeline', toolKind: 'search', status: 'completed', content: [{ type: 'text', text: '3 matches', truncated: false }] }),
+        agentMessage('m1', '已经看完配置。'),
+        toolItem('solo', { title: '读取 README.md', toolKind: 'read', status: 'completed' }),
+      ],
+    })],
+  });
+  await openWorkbench(page);
+  const panel = panelOf(page);
+
+  // Consecutive completed lightweight tools (>= 2) collapse into one summary group; singleton stays standalone.
+  const group = panel.locator('[data-acp-tool-group]');
+  await expect(group).toHaveCount(1);
+  await expect(group).toContainText('已完成 3 步');
+  await expect(group).toContainText('读取 2');
+  await expect(group).toContainText('搜索 1');
+  await expect(panel.locator('[data-item-id="tool:g1"]')).toHaveCount(0);
+  await expect(panel.locator('[data-item-id="tool:solo"]')).toHaveCount(1);
+
+  // Expanding reveals each original tool card in order.
+  const toggle = group.locator('button[aria-expanded]').first();
+  await expect(toggle).toHaveAccessibleName('展开这 3 条工具步骤');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(toggle).toHaveAccessibleName('收起这 3 条工具步骤');
+  await expect(panel.locator('[data-item-id="tool:g1"]')).toBeVisible();
+  await expect(panel.locator('[data-item-id="tool:g2"]')).toBeVisible();
+  await expect(panel.locator('[data-item-id="tool:g3"]')).toBeVisible();
+
+  // If the middle tool transitions to failed, it breaks out of the group and leaves no 2+ run.
+  await send(page, { sessionId: 'a1', seq: 2, kind: 'tool', call: toolCall('g2', { title: '读取 tsconfig.json', toolKind: 'read', status: 'failed', content: [{ type: 'text', text: '读取失败', truncated: false }] }) });
+  await expect(panel.locator('[data-acp-tool-group]')).toHaveCount(0);
+  await expect(panel.locator('[data-item-id="tool:g2"]')).toContainText('读取失败');
+});
+
+test('code wrap toggle, diff copy/line-numbers/incremental expand, thought preview and user message refill work', async ({ page }) => {
+  await page.addInitScript(() => {
+    const copied: string[] = [];
+    Object.assign(window, { __copied: copied });
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (value: string) => { copied.push(value); } } });
+  });
+  const manyLines = Array.from({ length: 460 }, (_, index) => `line-${index + 1}`).join('\n') + '\n';
+  await installAcpMock(page, {
+    interaction: 'acp',
+    conversations: [snapshot({
+      id: 'a1',
+      state: 'ready',
+      directory: 'C:/work',
+      timeline: [
+        userMessage('u1', '帮我重构工具栏样式'),
+        { kind: 'message', id: 'th1', role: 'thought', text: '先检查现有 token\n再替换像素值', truncated: false, turnId: 'turn-1', subagent: null },
+        agentMessage('m1', '```ts\nconst veryLongVariableName = "hello world";\n```'),
+        toolItem('d1', {
+          title: '更新 src/large.ts',
+          toolKind: 'edit',
+          status: 'in_progress',
+          content: [{ type: 'diff', path: 'src/large.ts', oldText: null, newText: manyLines, truncated: false }],
+        }),
+      ],
+    })],
+  });
+  await page.setViewportSize({ width: 1360, height: 820 });
+  await openWorkbench(page);
+  const panel = panelOf(page);
+
+  // Wide viewport centers timeline content within the 860px reading column.
+  const innerWidth = await panel.locator('[role="log"] > div').first().evaluate((node) => node.getBoundingClientRect().width);
+  expect(innerWidth).toBeLessThanOrEqual(862);
+
+  // Folded thought displays single-line preview and expands cleanly.
+  const thought = panel.locator('[data-item-id="th1"]');
+  await expect(thought.locator('summary')).toContainText('先检查现有 token');
+  await thought.locator('summary').click();
+  await expect(thought).toContainText('再替换像素值');
+
+  // Code block wrap toggle flips aria-pressed and data-wrap.
+  const codeBlock = panel.locator('[data-acp-code]');
+  const wrapBtn = codeBlock.getByRole('button', { name: '自动换行', exact: true });
+  await expect(wrapBtn).toHaveAttribute('aria-pressed', 'false');
+  await wrapBtn.click();
+  await expect(wrapBtn).toHaveAttribute('aria-pressed', 'true');
+  await expect(codeBlock).toHaveAttribute('data-wrap', 'true');
+
+  // Diff renders line numbers, copies updated text, opens inside-directory path, and expands remaining rows incrementally.
+  const diff = panel.locator('[data-item-id="tool:d1"] [data-content="diff"]');
+  await expect(diff.locator('[data-op="insert"]')).toHaveCount(400);
+  await diff.getByRole('button', { name: '复制修改后内容', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__copied.at(-1))).toBe(manyLines);
+  const showMore = diff.getByRole('button', { name: /展开更多行（剩余 60 行）/ });
+  await expect(showMore).toBeVisible();
+  await showMore.click();
+  await expect(diff.locator('[data-op="insert"]')).toHaveCount(460);
+  await expect(showMore).toHaveCount(0);
+
+  // User message refill populates the composer draft without sending; ended conversation hides refill.
+  const userMsg = panel.locator('[data-item-id="u1"]');
+  await userMsg.hover();
+  await userMsg.getByRole('button', { name: '回填到输入框', exact: true }).click();
+  const input = panel.getByRole('textbox', { name: '给 Codex 的消息', exact: true });
+  await expect(input).toHaveValue('帮我重构工具栏样式');
+  await expect(input).toBeFocused();
+  expect(await page.evaluate(() => (window as any).__acpTest.prompts)).toEqual([]);
+
+  await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'closed', seq: 2 }));
+  await expect(userMsg.getByRole('button', { name: '回填到输入框', exact: true })).toHaveCount(0);
+});

@@ -181,7 +181,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
     // 'disconnected' is a conversation whose agent process went away mid-turn.
     // 'access' waits on Cliora's own approval card for a read outside the session
     // directory, while an earlier session grant for writes shows as a revocable badge.
-    const acpState = acpMode === 'stopping' ? 'stopping' : acpMode === 'permission' || acpMode === 'form' || acpMode === 'access' ? 'waiting_permission' : acpMode === 'login' ? 'auth_required'
+    const acpState = acpMode === 'starting' ? 'starting' : acpMode === 'stopping' ? 'stopping' : acpMode === 'permission' || acpMode === 'form' || acpMode === 'access' ? 'waiting_permission' : acpMode === 'login' ? 'auth_required'
       : acpMode === 'disconnected' ? 'closed' : acpMode === 'tools' ? 'running' : 'ready';
     const acpNativeId = acpMode === 'login' ? null : 'native-acp-1';
     const acpAuthError = acpMode === 'login' ? 'agent 要求先登录：没有找到有效的凭据' : null;
@@ -246,7 +246,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
       acpTool('c5', '读取 D:\\shared\\tokens.css', 'read', 'in_progress', { locations: [{ path: 'D:\\shared\\tokens.css', line: null }] }),
       { kind: 'access', id: 'access-r1', accessKind: 'read', path: 'D:\\shared\\tokens.css', detail: null, decision: 'pending', requestId: 'access-r1-request', diff: null, turnId: 'turn-1', subagent: null, userPath: null },
     ];
-    const acpTimeline = acpMode === 'empty' ? [] : acpMode === 'long' ? acpLong() : acpMode === 'tools' ? acpTools() : acpMode === 'yolo' ? acpYolo() : acpMode === 'disconnected' ? acpDisconnected() : acpMode === 'access' ? acpAccess() : null;
+    const acpTimeline = acpMode === 'empty' || acpMode === 'starting' ? [] : acpMode === 'long' ? acpLong() : acpMode === 'tools' ? acpTools() : acpMode === 'yolo' ? acpYolo() : acpMode === 'disconnected' ? acpDisconnected() : acpMode === 'access' ? acpAccess() : null;
     const acpFixture = acpMode ? [{
       id: 'acp1', toolId: 'codex', projectId: 'cliora', directory: 'C:\\Projects\\cliora', mode: acpMode === 'yolo' ? 'yolo' : 'normal', interaction: 'acp',
       state: acpState,
@@ -285,7 +285,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
       pending: acpMode === 'permission' ? ['r1'] : acpMode === 'form' ? ['q1'] : acpMode === 'access' ? ['access-r1-request'] : [],
       grants: acpMode === 'access' ? ['write'] : [],
       terminals: acpTerminals,
-      plan: acpMode === 'empty' || acpMode === 'long' || acpMode === 'yolo' ? [] : acpMode === 'tools' ? [
+      plan: acpMode === 'empty' || acpMode === 'starting' || acpMode === 'long' || acpMode === 'yolo' ? [] : acpMode === 'tools' ? [
         { content: '读取工具栏样式与令牌', priority: 'high', status: 'completed' },
         { content: '把固定像素换成令牌相加', priority: 'high', status: 'completed' },
         { content: '运行样式检查', priority: 'medium', status: 'completed' },
@@ -325,9 +325,21 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
         ] : [],
       },
       diagnostics: acpMode === 'stopping' ? ['agent 标准错误：正在结束本轮（已脱敏）'] : acpMode === 'disconnected' ? ['agent 标准错误：unexpected EOF on stdin（已脱敏）'] : [],
-      lastTurnReason: acpMode === 'stopping' || acpMode === 'empty' || acpMode === 'tools' || acpMode === 'permission' || acpMode === 'access' ? '' : acpMode === 'disconnected' ? 'disconnected' : 'end_turn',
+      lastTurnReason: acpMode === 'starting' || acpMode === 'stopping' || acpMode === 'empty' || acpMode === 'tools' || acpMode === 'permission' || acpMode === 'access' ? '' : acpMode === 'disconnected' ? 'disconnected' : 'end_turn',
       seq: 24,
-    }] : null;
+    }, ...(acpMode === 'split' ? [{
+      id: 'acp2', toolId: 'claude_code', projectId: 'site', directory: 'C:\\Projects\\personal-site', mode: 'yolo', interaction: 'acp',
+      state: 'ready', nativeSessionId: 'native-acp-2', resume: 'none', authError: null,
+      timeline: acpYolo(), pending: [], grants: [], terminals: [], plan: [], commands: [],
+      config: { modes: null, options: [], models: null },
+      info: { title: '分屏 YOLO 对比会话', updatedAt: null, usage: { used: 24100, size: 200000, cost: null } },
+      agent: {
+        protocolVersion: 1, agentInfo: { name: 'claude-acp', title: 'Claude Code', version: '0.2.0' },
+        promptCapabilities: { image: false, audio: false, embeddedContext: false },
+        sessionCapabilities: { list: false, resume: false, delete: false, close: false }, loadSession: false, authMethods: [],
+      },
+      diagnostics: [], lastTurnReason: 'end_turn', seq: 12,
+    }] : [])] : null;
     if (acpMode) {
       localStorage.setItem('cliora:workbench-selected', 'acp1');
       localStorage.setItem('cliora:remote-target', 'local');
@@ -538,9 +550,9 @@ async function shot(name, theme, width, run, empty = false, remoteState = null, 
       // A conversation is a native panel, not an xterm: wait for its own content.
       const panel = page.locator('[data-acp="true"][data-pane-session="acp1"]');
       await panel.waitFor();
-      await panel.locator(acpMode === 'empty' ? '[data-acp-bar]' : '[data-role="agent"]').first().waitFor();
-      // The input, or the login panel standing in for it.
-      await panel.locator('[data-acp-composer], [data-acp-auth]').first().waitFor();
+      await panel.locator(acpMode === 'empty' || acpMode === 'starting' ? '[data-acp-empty]' : '[data-role="agent"]').first().waitFor();
+      // The input, the login panel, or the ended recovery banner standing in for it.
+      await panel.locator('[data-acp-composer], [data-acp-auth], [data-acp-ended]').first().waitFor();
     } else if (remoteState) {
       const tab = page.locator('[role="tab"][data-session-id="r1"]');
       await tab.click();
@@ -763,9 +775,21 @@ for (const width of widths) {
   // merged by call id, the turn's own result, and a stop that reports "stopping".
   // T6 adds a fresh session, a long Markdown conversation, the tool shapes, YOLO and a
   // disconnected agent.
-  for (const mode of ['conversation', 'permission', 'stopping', 'empty', 'long', 'tools', 'yolo', 'disconnected']) {
+  for (const mode of ['conversation', 'permission', 'stopping', 'starting', 'empty', 'long', 'tools', 'yolo', 'disconnected']) {
     await shot('workbench-acp-' + mode + '-' + theme + '-' + width, theme, width, null, false, null, null, null, false, null, mode);
   }
+  await shot('workbench-acp-find-' + theme + '-' + width, theme, width, async (page) => {
+    const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });
+    await stage.getByRole('button', { name: copy('查找对话内容', 'Find in conversation'), exact: true }).click();
+    await stage.getByRole('searchbox', { name: copy('在对话内容中查找…', 'Find in conversation…'), exact: true }).fill('令牌');
+    await page.locator('[data-acp="true"][data-pane-session="acp1"] mark').first().waitFor();
+  }, false, null, null, null, false, null, 'long');
+  if (width >= 1360) await shot('workbench-acp-split-' + theme + '-' + width, theme, width, async (page) => {
+    await page.locator('[data-session-id="acp2"]').first().click({ button: 'right' });
+    await page.getByRole('menuitem', { name: copy('与 Codex 并排显示', 'Show beside Codex'), exact: true }).click();
+    await page.locator('[data-acp="true"][data-pane-session="acp1"]').waitFor({ state: 'visible' });
+    await page.locator('[data-acp="true"][data-pane-session="acp2"]').waitFor({ state: 'visible' });
+  }, false, null, null, null, false, null, 'split');
   // Cliora's own approval card (not the agent's authorization card): a read outside the
   // session directory waits on 允许一次 / 本会话都允许 / 拒绝, and a write category already
   // granted for this session shows as a revocable badge in the session bar.

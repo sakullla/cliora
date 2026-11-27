@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { installPromptFixtureBridge, installRichPromptFixtures } from '../../scripts/capture-prompt-fixtures.mjs';
 import { agentMessage, installAcpMock, openWorkbench, snapshot } from './acpMock';
 
 /**
@@ -437,21 +438,67 @@ test('an agent without session listing explains why instead of listing', async (
   expect((await testState(page)).historyQueries).toEqual([]);
 });
 
-test('the shared quick input routes a pasted image to the conversation and sends it with the text', async ({ page }) => {
-  await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', agent: imageAgent })] });
+test('the unified ACP composer card supports panel-wide drop, explicit @ and image tools, running-turn Enter feedback and Ctrl+Shift+M focus', async ({ page }) => {
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+  await installAcpMock(page, {
+    interaction: 'acp',
+    files: ['src/main.ts', 'src/lib/native.ts'],
+    conversations: [
+      snapshot({ id: 'a1', agent: imageAgent }),
+      snapshot({ id: 'a2', agent: textAgent }),
+    ],
+  });
   await openWorkbench(page);
+  const stage = page.getByRole('region', { name: '当前会话' });
   const panel = panelOf(page);
   await expect(panel).toBeVisible();
-  await page.getByRole('button', { name: '快捷输入', exact: true }).click();
-  const quick = page.getByRole('textbox', { name: /提示词/ }).last();
-  await expect(quick).toBeVisible();
-  await pasteImages(quick, ['clip.png']);
+  // ACP mode hides duplicate top-bar quick-input and interrupt controls and never mounts WorkbenchComposer.
+  await expect(stage.getByRole('button', { name: '快捷输入', exact: true })).toHaveCount(0);
+  await expect(stage.getByRole('button', { name: /发送中断/ })).toHaveCount(0);
+  await expect(panel.locator('[data-acp-composer-card]')).toBeVisible();
+
+  // Ctrl/Cmd+Shift+M focuses the ACP composer directly.
+  await stage.locator('header').click();
+  await page.keyboard.press(`${mod}+Shift+M`);
+  const input = inputOf(panel);
+  await expect(input).toBeFocused();
+
+  // Panel-wide HTML5 drag-over reveals the full-panel drop overlay; dropping attaches the image.
+  const body = panel.locator('[data-acp-body="a1"]');
+  await body.evaluate((node, data) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([Uint8Array.from(atob(data), (char) => char.charCodeAt(0))], 'panel-drop.png', { type: 'image/png' }));
+    node.dispatchEvent(new DragEvent('dragover', { dataTransfer: transfer, bubbles: true, cancelable: true }));
+  }, PNG);
+  await expect(panel.locator('[data-acp-drop-overlay]')).toBeVisible();
+  await dropImage(body, 'clip.png');
+  await expect(panel.locator('[data-acp-drop-overlay]')).toHaveCount(0);
   await expect(panel.locator('[data-attachment="image"]')).toHaveCount(1);
-  await quick.fill('这张图里的报错');
-  await quick.press('Enter');
+
+  // Explicit image picker button follows agent image capability.
+  await expect(panel.locator('[data-acp-attach-image]')).toBeVisible();
+  // Explicit @ button inserts '@' and opens the file lookup menu.
+  await panel.locator('[data-acp-attach-file]').click();
+  await expect(panel.getByRole('listbox', { name: '会话目录内的文件', exact: true })).toBeVisible();
+  await input.press('Escape');
+
+  await input.fill('这张图里的报错');
+  await input.press('Enter');
   await expect.poll(async () => (await testState(page)).prompts).toEqual([['a1', '这张图里的报错']]);
   expect((await testState(page)).attachments).toEqual([['a1', [{ type: 'image', mimeType: 'image/png', dataBase64: PNG }]]]);
   await expect(panel.locator('[data-attachment]')).toHaveCount(0);
+
+  // Pressing Enter while a turn is busy displays lightweight feedback and clears once ready.
+  await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'running', seq: 2 }));
+  await input.fill('下一轮内容');
+  await input.press('Enter');
+  await expect(panel.getByRole('status').filter({ hasText: '当前轮次仍在处理中' })).toBeVisible();
+  await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'ready', seq: 3 }));
+  await expect(panel.getByRole('status').filter({ hasText: '当前轮次仍在处理中' })).toHaveCount(0);
+
+  // A text-only agent hides the image picker button.
+  await page.locator('[data-session-id="a2"]').first().click();
+  await expect(panelOf(page, 'a2').locator('[data-acp-attach-image]')).toHaveCount(0);
 });
 
 test('allow always is secondary to allow once, the pane shows one state, and a finished plan folds to its progress', async ({ page }) => {
@@ -789,4 +836,87 @@ test('a turn the agent answers with an error ends as failed, keeps the session r
   await expect(login).toHaveCount(0);
   await expect(input).toBeEnabled();
   await expect(input).toHaveValue('帮我看看 README');
+});
+
+test('compact prompt picker inside the ACP composer inserts into the draft and restores focus', async ({ page }) => {
+  await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', agent: textAgent })] });
+  await page.addInitScript(installPromptFixtureBridge);
+  await page.addInitScript(installRichPromptFixtures);
+  await openWorkbench(page);
+  const panel = panelOf(page);
+  const input = inputOf(panel);
+  await input.fill('上下文：');
+
+  await panel.locator('[data-acp-prompt-trigger]').click();
+  const picker = page.getByRole('dialog', { name: '查找提示词' });
+  await expect(picker).toBeVisible();
+  await picker.getByRole('radio', { name: '全部提示词', exact: true }).click();
+  await picker.getByRole('textbox', { name: '搜索提示词标题或完整正文' }).fill('项目 B 发布');
+  await picker.getByRole('button', { name: '项目 B 发布', exact: true }).click();
+  await expect(picker.locator('pre')).toHaveText('B-only-secret-scope');
+  await picker.getByRole('button', { name: '插入草稿', exact: true }).click();
+
+  await expect(picker).toHaveCount(0);
+  await expect(input).toHaveValue('上下文：\nB-only-secret-scope');
+  await expect(input).toBeFocused();
+  expect((await testState(page)).prompts).toEqual([]);
+});
+
+test('starting and ready empty states, ended recovery banner and copyable diagnostics work', async ({ page }) => {
+  await page.addInitScript(() => {
+    const copied: string[] = [];
+    Object.assign(window, { __copied: copied });
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (value: string) => { copied.push(value); } } });
+  });
+  await installAcpMock(page, {
+    interaction: 'acp',
+    files: ['README.md'],
+    conversations: [snapshot({
+      id: 'a1',
+      state: 'starting',
+      directory: 'C:/work/app',
+      commands: [{ name: 'review', description: '审查改动', hint: null }],
+    })],
+  });
+  await openWorkbench(page);
+  const panel = panelOf(page);
+
+  // Starting state: shows connecting card and blocks sending.
+  await expect(panel.locator('[data-acp-empty="starting"]')).toContainText('正在连接 Codex…');
+  await expect(panel.getByRole('button', { name: '发送', exact: true })).toHaveCount(0);
+  await inputOf(panel).fill('试着发送');
+  await inputOf(panel).press('Enter');
+  expect((await testState(page)).prompts).toEqual([]);
+  await inputOf(panel).fill('');
+
+  // Ready empty state: shows welcome guidance with quick trigger actions.
+  await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'ready', seq: 2 }));
+  const readyEmpty = panel.locator('[data-acp-empty="ready"]');
+  await expect(readyEmpty).toContainText('Codex 已就绪');
+  await readyEmpty.getByRole('button', { name: '@ 引用文件', exact: true }).click();
+  await expect(inputOf(panel)).toHaveValue('@');
+
+  // Disconnected/ended state: replaces composer with AcpEndedBar and offers copyable diagnostics + recovery actions.
+  await page.evaluate(() => (window as any).__acpSessionState('a1', {
+    state: 'closed',
+    lastTurnReason: 'disconnected',
+    diagnostics: ['agent stderr: unexpected EOF'],
+    seq: 3,
+  }));
+  const ended = panel.locator('[data-acp-ended]');
+  await expect(ended).toBeVisible();
+  await expect(inputOf(panel)).toHaveCount(0);
+  await expect(ended).toContainText('对话已结束');
+
+  const diag = panel.locator('[data-acp-diagnostics]');
+  await expect(diag).toBeVisible();
+  await diag.getByRole('button', { name: '复制诊断信息', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__copied.at(-1))).toBe('agent stderr: unexpected EOF');
+
+  // "改用终端启动" opens a terminal in the same directory; "在同一目录新开对话" launches a fresh ACP conversation.
+  await ended.getByRole('button', { name: '改用终端启动', exact: true }).click();
+  await expect.poll(async () => (await testState(page)).launches.at(-1)).toMatchObject({ toolId: 'codex', interaction: 'terminal', directory: 'C:/work/app', sessionId: null });
+  await page.locator('[data-session-id="a1"]').first().click();
+  await ended.getByRole('button', { name: '在同一目录新开对话', exact: true }).click();
+  await expect.poll(async () => (await testState(page)).launches.at(-1)).toMatchObject({ toolId: 'codex', interaction: 'acp', directory: 'C:/work/app', sessionId: null });
 });

@@ -1242,7 +1242,9 @@
   color: var(--term-fg);
 }
 .terminalInstance[hidden] { display: none; }
-.canvas[data-split] .terminalInstance:not([data-focused]) .terminalBody { opacity: .8; }
+.canvas[data-split] .terminalInstance [data-acp-body] { transition: opacity var(--fast) var(--ease); }
+.canvas[data-split] .terminalInstance:not([data-focused]) .terminalBody,
+.canvas[data-split] .terminalInstance:not([data-focused]) [data-acp-body] { opacity: .8; }
 .canvas[data-split] .terminalInstance[data-focused] .paneHead { box-shadow: inset 0 2px 0 var(--term-accent); }
 .terminalBody { position: relative; display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; min-width: 0; padding: var(--space-3) var(--space-2) var(--space-2) var(--space-5); transition: opacity var(--fast) var(--ease); }
 .terminalHost { position: relative; flex: 1 1 auto; min-height: 0; min-width: 0; overflow: clip; }

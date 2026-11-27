@@ -55,7 +55,9 @@ test('a launch opens a conversation, streams one reply, merges its tool call and
 
   const panel = page.locator('[data-acp="true"][data-pane-session="a1"]');
   await expect(panel).toBeVisible();
-  await expect(panel).toContainText('C:/work');
+  // Single-pane view keeps the directory in the workbench stage bar without repeating it in the ACP bar.
+  await expect(page.getByRole('region', { name: '当前会话' }).locator('header')).toContainText('work');
+  await expect(panel.locator('[data-acp-bar]')).not.toContainText('C:/work');
   await expect(panel).toContainText('first prompt');
   // The launch's own first prompt was submitted natively: nothing is sent again.
   expect(await page.evaluate(() => (window as any).__acpTest.prompts)).toEqual([]);
@@ -106,11 +108,17 @@ test('a launch opens a conversation, streams one reply, merges its tool call and
   await expect(panel.getByText('本轮已停止。')).toBeVisible();
   await expect(panel.getByRole('textbox')).toBeEnabled();
 
-  // The shared quick-input composer routes to the conversation instead of a PTY write.
-  await page.getByRole('button', { name: '快捷输入', exact: true }).click();
-  const composer = page.getByRole('textbox', { name: /给 Codex 的消息|提示词/ }).last();
+  // ACP mode removes duplicate top-bar quick-input and interrupt buttons; Ctrl/Cmd+Shift+M focuses the ACP composer directly.
+  const stage = page.getByRole('region', { name: '当前会话' });
+  await expect(stage.getByRole('button', { name: '快捷输入', exact: true })).toHaveCount(0);
+  await expect(stage.getByRole('button', { name: /发送中断/ })).toHaveCount(0);
+  await stage.locator('header').click();
+  await page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+Shift+M`);
+  const composer = panel.getByRole('textbox', { name: '给 Codex 的消息', exact: true });
+  await expect(composer).toBeFocused();
+  await expect(page.getByRole('textbox', { name: /编写多行内容/ })).toHaveCount(0);
   await composer.fill('继续，先跑一次单测');
-  await composer.press('Control+Enter');
+  await composer.press('Enter');
   await expect.poll(() => page.evaluate(() => (window as any).__acpTest.prompts)).toEqual([['a1', '继续，先跑一次单测']]);
 });
 
@@ -256,7 +264,7 @@ test('replies and tool calls read in arrival order and a tool update stays in it
   // A late chunk for the first reply merges where that reply stands.
   await send({ sessionId: 'a1', seq: 7, kind: 'chunk', messageId: 'r1', role: 'agent', text: '（补充）', truncated: false, turnId: 'turn-1', subagent: null });
 
-  const order = panel.locator('[role="log"] > [data-item-id]');
+  const order = panel.locator('[role="log"] [data-item-id]');
   await expect(order).toHaveCount(4);
   expect(await order.evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-item-id')))).toEqual(['r1', 'tool:A', 'r2', 'tool:B']);
   await expect(order.nth(0)).toContainText('先读 a.ts。（补充）');
@@ -303,4 +311,134 @@ test('an ACP entry without a YOLO declaration keeps YOLO unavailable and says wh
   await dialog.locator('[data-dialog-save]').click();
   const launches = await page.evaluate(() => (window as any).__acpTest.launches);
   expect(launches.at(-1)).toMatchObject({ interaction: 'acp', mode: 'normal' });
+});
+
+test('Ctrl+Shift+F searches ACP conversations, toggles case, auto-expands folded items, updates live and returns focus', async ({ page }) => {
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+  await installAcpMock(page, {
+    interaction: 'acp',
+    conversations: [snapshot({
+      id: 'a1',
+      state: 'ready',
+      timeline: [
+        { kind: 'message', id: 'u1', role: 'user', text: 'Alpha token overview', truncated: false, turnId: 'turn-1', subagent: null },
+        { kind: 'message', id: 'th1', role: 'thought', text: 'Inspect alpha thinking details', truncated: false, turnId: 'turn-1', subagent: null },
+        { kind: 'tool', ...toolCall('r1', { title: '读取 README.md', toolKind: 'read', status: 'completed', content: [{ type: 'text', text: 'plain docs', truncated: false }] }) },
+        { kind: 'tool', ...toolCall('r2', { title: '搜索配置', toolKind: 'search', status: 'completed', content: [{ type: 'text', text: 'ALPHA group hit', truncated: false }] }) },
+        { kind: 'tool', ...toolCall('e1', { title: '修改 config.ts', toolKind: 'edit', status: 'completed', content: [{ type: 'diff', path: 'src/config.ts', oldText: 'old\n', newText: 'alpha diff\n', truncated: false }] }) },
+      ] as any,
+    })],
+  });
+  await openWorkbench(page);
+  const stage = page.getByRole('region', { name: '当前会话' });
+  const panel = page.locator('[data-acp="true"][data-pane-session="a1"]');
+  await expect(panel).toBeVisible();
+  // Two consecutive completed lightweight tools start folded inside one group.
+  await expect(panel.locator('[data-acp-tool-group]')).toHaveCount(1);
+  await expect(panel.locator('[data-item-id="tool:r2"]')).toHaveCount(0);
+
+  await page.keyboard.press(`${mod}+Shift+F`);
+  const search = stage.getByRole('searchbox', { name: '在对话内容中查找…', exact: true });
+  await expect(search).toBeVisible();
+  await expect(search).toBeFocused();
+  await search.fill('alpha');
+  await expect(stage.getByRole('search')).toContainText('1 / 4');
+  await expect(panel.locator('[data-item-id="u1"]')).toHaveAttribute('data-find-hit', 'active');
+
+  // Case sensitivity filters down to exact lowercase 'alpha' occurrences.
+  const caseToggle = stage.getByRole('button', { name: '区分大小写', exact: true });
+  await caseToggle.click();
+  await expect(caseToggle).toHaveAttribute('aria-pressed', 'true');
+  await expect(stage.getByRole('search')).toContainText('1 / 2');
+  await caseToggle.click();
+  await expect(caseToggle).toHaveAttribute('aria-pressed', 'false');
+  await expect(stage.getByRole('search')).toContainText('1 / 4');
+
+  // Stepping into folded thought, folded tool group and folded edit tool auto-expands each one.
+  await search.press('Enter');
+  await expect(stage.getByRole('search')).toContainText('2 / 4');
+  await expect(panel.locator('[data-item-id="th1"]')).toHaveAttribute('data-find-hit', 'active');
+  await expect(panel.locator('[data-item-id="th1"]')).toHaveAttribute('open', '');
+
+  await search.press('Enter');
+  await expect(stage.getByRole('search')).toContainText('3 / 4');
+  const groupedCard = panel.locator('[data-item-id="tool:r2"]');
+  await expect(groupedCard).toBeVisible();
+  await expect(groupedCard).toHaveAttribute('data-find-hit', 'active');
+  await expect(groupedCard.locator('mark').first()).toContainText('ALPHA');
+
+  await search.press('Enter');
+  await expect(stage.getByRole('search')).toContainText('4 / 4');
+  const editCard = panel.locator('[data-item-id="tool:e1"]');
+  await expect(editCard).toHaveAttribute('data-find-hit', 'active');
+  await expect(editCard.locator('[data-content="diff"]')).toBeVisible();
+
+  // Streaming output updates the live match total while find remains open.
+  await page.evaluate(() => (window as any).__acpEvent({
+    sessionId: 'a1', seq: 2, kind: 'chunk', messageId: 'm-live', role: 'agent', text: 'streamed alpha result', truncated: false, turnId: 'turn-2', subagent: null,
+  }));
+  await expect(stage.getByRole('search')).toContainText('4 / 5');
+
+  // Escape closes find, clears highlights and restores focus to the ACP composer.
+  await search.press('Escape');
+  await expect(search).toHaveCount(0);
+  await expect(panel.locator('mark')).toHaveCount(0);
+  await expect(panel.getByRole('textbox', { name: '给 Codex 的消息', exact: true })).toBeFocused();
+});
+
+test('split ACP panes dim unfocused body, show pane-level badges only in split, and keep terminal controls intact', async ({ page }) => {
+  await installAcpMock(page, {
+    interaction: 'acp',
+    sessions: [{ id: 't1', toolId: 'codex', projectId: null, directory: 'C:/term', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() }],
+    conversations: [
+      snapshot({ id: 'a1', mode: 'normal', info: { title: '主对话', updatedAt: null, usage: null }, timeline: [agentMessage('m1', '第一个对话')] }),
+      snapshot({ id: 'a2', mode: 'yolo', info: { title: '分屏 YOLO 对话', updatedAt: null, usage: null }, timeline: [agentMessage('m2', '第二个对话')] }),
+    ],
+  });
+  await page.setViewportSize({ width: 1360, height: 820 });
+  await openWorkbench(page);
+  const stage = page.getByRole('region', { name: '当前会话' });
+  const first = page.locator('[data-acp="true"][data-pane-session="a1"]');
+  const second = page.locator('[data-acp="true"][data-pane-session="a2"]');
+
+  // Single-pane ACP hides duplicate quick-input/interrupt controls and keeps ACP bar clean.
+  await page.locator('[data-session-id="a1"]').first().click();
+  await expect(first).toBeVisible();
+  await expect(stage.getByRole('button', { name: '查找对话内容', exact: true })).toBeVisible();
+  await expect(stage.getByRole('button', { name: '快捷输入', exact: true })).toHaveCount(0);
+  await expect(first.locator('[data-acp-title]')).toHaveCount(0);
+
+  // Switch to YOLO conversation a2 in single pane: YOLO is on the stage bar, not duplicated in AcpSessionBar.
+  await page.locator('[data-session-id="a2"]').first().click();
+  await expect(second).toBeVisible();
+  await expect(stage.locator('header [data-mode="yolo"]')).toBeVisible();
+  await expect(second.locator('[data-badge="yolo"]')).toHaveCount(0);
+  await expect(second.locator('[data-acp-title]')).toHaveCount(0);
+
+  // Enter split view with a1 and a2 side by side: unfocused ACP body dims to 0.8 and pane-level YOLO/title appear in AcpSessionBar.
+  await page.locator('[data-session-id="a1"]').first().click({ button: 'right' });
+  await page.getByRole('menuitem', { name: '与 Codex 并排显示', exact: true }).click();
+  await expect(first).toBeVisible();
+  await expect(second).toBeVisible();
+  await expect(first).toHaveAttribute('data-focused', 'true');
+  await expect(second).not.toHaveAttribute('data-focused', 'true');
+  await expect(second.locator('[data-badge="yolo"]')).toContainText('YOLO');
+  await expect(second.locator('[data-acp-title]')).toHaveText('分屏 YOLO 对话');
+  await expect(first.locator('[data-acp-title]')).toHaveText('主对话');
+  const firstOpacity = await first.locator('[data-acp-body]').evaluate((node) => Number(getComputedStyle(node).opacity));
+  const secondOpacity = await second.locator('[data-acp-body]').evaluate((node) => Number(getComputedStyle(node).opacity));
+  expect(firstOpacity).toBeGreaterThan(0.95);
+  expect(secondOpacity).toBeLessThan(0.9);
+
+  // Clicking the other ACP pane flips focus and dimming.
+  await second.locator('[data-acp-body]').click();
+  await expect(second).toHaveAttribute('data-focused', 'true');
+  await expect(first).not.toHaveAttribute('data-focused', 'true');
+
+  // Exit split and switch to a terminal session: terminal toolbar controls remain intact.
+  await stage.getByRole('button', { name: '分屏', exact: true }).click();
+  await page.locator('[data-session-id="t1"]').first().click();
+  await expect(stage.getByRole('button', { name: '快捷输入', exact: true })).toBeVisible();
+  await expect(stage.getByRole('button', { name: /发送中断/ })).toBeVisible();
+  await expect(stage.getByRole('button', { name: '查找输出', exact: true })).toBeVisible();
 });

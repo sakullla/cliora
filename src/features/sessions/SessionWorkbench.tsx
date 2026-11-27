@@ -43,7 +43,7 @@ import { commandHint, type TerminalCommandState } from './terminalCommandState';
 import { placeParts, railPlace, railTaskTitle } from './railTitle';
 import { uploadDisplayName, useSessionUploads, type SessionUploadTask } from './sessionUploads';
 import uploadStyles from './sessionUploads.module.css';
-import { AcpConversation, type AcpConversationHandle } from './AcpConversation';
+import { AcpConversation, type AcpConversationHandle, type AcpFindMatch } from './AcpConversation';
 import { applyAcpEvent, acpIsLive, acpPendingCount, acpRow, type AcpConversation as AcpConversationState } from './acpSession';
 import type { AcpAttachment, AcpEvent, AcpSessionSnapshot } from '../../types/acp';
 import { WorkbenchComposer } from './WorkbenchComposer';
@@ -57,6 +57,8 @@ import { RemoteSshSettings } from '../settings/GeneralSettings';
 import styles from './SessionWorkbench.module.css';
 
 import { isAcpLaunch, workbenchSessionId, type WorkbenchFailure, type RemoteWorkbenchIntent } from './workbenchLaunch';
+
+type WorkbenchFindMatch = { kind: 'terminal'; match: TerminalMatch } | { kind: 'acp'; match: AcpFindMatch };
 
 function subscribeVisibility(notify: () => void): () => void {
   document.addEventListener('visibilitychange', notify);
@@ -808,12 +810,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState('');
-  const [findMatches, setFindMatches] = useState<TerminalMatch[]>([]);
+  const [findMatches, setFindMatches] = useState<WorkbenchFindMatch[]>([]);
   const [findIndex, setFindIndex] = useState(0);
   const [findRevision, setFindRevision] = useState(0);
   const findInputRef = useRef<HTMLInputElement>(null);
   const findIndexRef = useRef(0);
   const findKeyRef = useRef('');
+  const findSessionRef = useRef<string | null>(null);
   const findRefreshTimer = useRef(0);
 
   const [composerOpen, setComposerOpen] = useState(false);
@@ -1604,6 +1607,24 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   const updateFontSize = useCallback((nextSize: number) => setTerminalFontSize(nextSize), []);
 
+  function focusSession(id: string | null | undefined) {
+    if (!id) return;
+    const conversation = acpHandles.current.get(id);
+    if (conversation) {
+      conversation.focus();
+      return;
+    }
+    handles.current.get(id)?.focus();
+  }
+
+  const scheduleFindRefresh = useCallback((id: string) => {
+    if (id !== selectedIdRef.current || !findOpenRef.current || !findQueryRef.current.trim() || findRefreshTimer.current) return;
+    findRefreshTimer.current = window.setTimeout(() => {
+      findRefreshTimer.current = 0;
+      setFindRevision((current) => current + 1);
+    }, 140);
+  }, []);
+
   function openFind() {
     setAppearanceOpen(false);
     setShortcutsOpen(false);
@@ -1612,11 +1633,18 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
 
   function toggleComposer(target?: boolean) {
+    const currentId = selectedIdRef.current;
+    if (currentId && conversationsRef.current.has(currentId)) {
+      setAppearanceOpen(false);
+      setComposerOpen(false);
+      if (target !== false) requestAnimationFrame(() => acpHandles.current.get(currentId)?.focus());
+      return;
+    }
     const next = target ?? !composerOpen;
     setAppearanceOpen(false);
     setComposerOpen(next);
     if (next) requestAnimationFrame(() => composerInputRef.current?.focus());
-    else if (selectedId) handles.current.get(selectedId)?.focus();
+    else focusSession(selectedId);
   }
 
   const closeAppearance = useCallback(() => setAppearanceOpen(false), []);
@@ -1673,13 +1701,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       setActiveOutputIds((current) => toggleInSet(current, id, isActive));
       if (isActive && !visibleIdsRef.current.includes(id)) setUnreadIds((current) => toggleInSet(current, id, true));
     },
-    outputWritten: (id) => {
-      if (id !== selectedIdRef.current || !findOpenRef.current || !findQueryRef.current.trim() || findRefreshTimer.current) return;
-      findRefreshTimer.current = window.setTimeout(() => {
-        findRefreshTimer.current = 0;
-        setFindRevision((current) => current + 1);
-      }, 140);
-    },
+    outputWritten: (id) => scheduleFindRefresh(id),
     shortcut: (action) => {
       if (action === 'find') openFind();
       else if (action === 'composer') { if (selected?.running) toggleComposer(); }
@@ -1904,24 +1926,50 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }, [selectedLaunchTool, launchMode, resumeLatest, savedInteraction, dialogYolo]);
 
   useEffect(() => {
+    const previousId = findSessionRef.current;
+    if (previousId && previousId !== selectedId) {
+      handles.current.get(previousId)?.revealMatch(null);
+      acpHandles.current.get(previousId)?.revealMatch(null);
+    }
     if (!findOpen || !selectedId || !findQuery.trim()) {
       setFindMatches([]);
       setFindIndex(0);
       findIndexRef.current = 0;
       findKeyRef.current = '';
-      if (selectedId) handles.current.get(selectedId)?.revealMatch(null);
+      findSessionRef.current = null;
+      if (selectedId) {
+        handles.current.get(selectedId)?.revealMatch(null);
+        acpHandles.current.get(selectedId)?.revealMatch(null);
+      }
+      return;
+    }
+    findSessionRef.current = selectedId;
+    const acpHandle = acpHandles.current.get(selectedId);
+    if (acpHandle) {
+      const matches: WorkbenchFindMatch[] = acpHandle.findMatches(findQuery, findCase).map((match) => ({ kind: 'acp', match }));
+      const key = selectedId + '\n' + findQuery + '\n' + findCase;
+      const nextIndex = key === findKeyRef.current ? Math.min(findIndexRef.current, Math.max(0, matches.length - 1)) : 0;
+      findKeyRef.current = key;
+      findIndexRef.current = nextIndex;
+      setFindMatches(matches);
+      setFindIndex(nextIndex);
+      acpHandle.revealMatch(matches[nextIndex]?.kind === 'acp' ? matches[nextIndex].match : null);
       return;
     }
     const handle = handles.current.get(selectedId);
-    if (!handle) return;
-    const matches = handle.findMatches(findQuery, findCase);
+    if (!handle) {
+      setFindMatches([]);
+      setFindIndex(0);
+      return;
+    }
+    const matches: WorkbenchFindMatch[] = handle.findMatches(findQuery, findCase).map((match) => ({ kind: 'terminal', match }));
     const key = selectedId + '\n' + findQuery + '\n' + findCase;
     const nextIndex = key === findKeyRef.current ? Math.min(findIndexRef.current, Math.max(0, matches.length - 1)) : 0;
     findKeyRef.current = key;
     findIndexRef.current = nextIndex;
     setFindMatches(matches);
     setFindIndex(nextIndex);
-    handle.revealMatch(matches[nextIndex] ?? null);
+    handle.revealMatch(matches[nextIndex]?.kind === 'terminal' ? matches[nextIndex].match : null);
   }, [findOpen, findQuery, findCase, selectedId, findRevision]);
 
   useEffect(() => { if (!splitRoom) setSplit(null); }, [splitRoom]);
@@ -3192,12 +3240,20 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     const next = (findIndexRef.current + delta + findMatches.length) % findMatches.length;
     findIndexRef.current = next;
     setFindIndex(next);
-    handles.current.get(selectedId)?.revealMatch(findMatches[next] ?? null);
+    const target = findMatches[next] ?? null;
+    if (!target) {
+      acpHandles.current.get(selectedId)?.revealMatch(null);
+      handles.current.get(selectedId)?.revealMatch(null);
+    } else if (target.kind === 'acp') {
+      acpHandles.current.get(selectedId)?.revealMatch(target.match);
+    } else {
+      handles.current.get(selectedId)?.revealMatch(target.match);
+    }
   }
 
   function closeFind() {
     setFindOpen(false);
-    if (selectedId) handles.current.get(selectedId)?.focus();
+    focusSession(selectedId);
   }
 
   const filteredSessions = useMemo(() => {
@@ -3323,7 +3379,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         return;
       }
       if (current.kind === 'session') document.querySelector<HTMLElement>(`[data-session-id="${CSS.escape(current.sessionId)}"]`)?.focus();
-      else handles.current.get(current.sessionId)?.focus();
+      else focusSession(current.sessionId);
     };
     const close = () => setMenu(null);
     document.addEventListener('mousedown', dismiss);
@@ -3655,7 +3711,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   <small><span className={styles.cleanupPath} title={displayPath(row.worktreePath)}>{shortPath(displayPath(row.worktreePath))}</span>{missing && <span className={styles.cleanupMissing} title={t('sessions.worktreeMissingHint')}>{t('sessions.worktreeMissing')}</span>}{user && <span className={styles.cleanupInUse}>{t('sessions.worktreeInUse', { tool: toolName(user) })}</span>}</small>
                 </span>
                 {/* A running session blocks cleanup; the way out is that session, one click away. */}
-                {user && scopedSessions.some((item) => item.id === user.id) && <Button size="sm" variant="ghost" className={styles.setupJump} title={t('sessions.worktreeGoToSessionHint', { tool: toolName(user) })} icon={<Icon name="arrowUpRight" size={13} />} onClick={() => { setWorktreeSetup(null); setSelectedId(user.id); requestAnimationFrame(() => { if (selectedIdRef.current === user.id) handles.current.get(user.id)?.focus(); }); }}>{t('sessions.worktreeGoToSession')}</Button>}
+                {user && scopedSessions.some((item) => item.id === user.id) && <Button size="sm" variant="ghost" className={styles.setupJump} title={t('sessions.worktreeGoToSessionHint', { tool: toolName(user) })} icon={<Icon name="arrowUpRight" size={13} />} onClick={() => { setWorktreeSetup(null); setSelectedId(user.id); requestAnimationFrame(() => { if (selectedIdRef.current === user.id) focusSession(user.id); }); }}>{t('sessions.worktreeGoToSession')}</Button>}
                 <Button size="sm" variant="ghost" className={styles.setupRemove} aria-label={t('sessions.worktreeCleanupAction', { branch: row.branch })} title={user ? t('sessions.worktreeCleanupRunning', { tool: toolName(user) }) : missing ? t('sessions.worktreeMissingHint') : undefined} disabled={!!cleanupBusy} icon={<Icon name={removing ? 'refresh' : missing ? 'close' : 'trash'} size={13} />} onClick={() => void cleanWorktree(row)}>{removing ? t('sessions.worktreeCleaning') : missing ? t('sessions.worktreeForgetButton') : t('sessions.worktreeCleanupButton')}</Button>
               </li>;
             })}
@@ -3824,10 +3880,19 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         openFind();
         return;
       }
-      if (mod && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'm' && selected?.running) {
-        event.preventDefault();
-        toggleComposer();
-        return;
+      if (mod && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'm' && selectedIdRef.current) {
+        if (conversationsRef.current.has(selectedIdRef.current)) {
+          event.preventDefault();
+          setAppearanceOpen(false);
+          setComposerOpen(false);
+          acpHandles.current.get(selectedIdRef.current)?.focus();
+          return;
+        }
+        if (selected?.running) {
+          event.preventDefault();
+          toggleComposer();
+          return;
+        }
       }
       if (mod && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'd' && selectedIdRef.current) {
         event.preventDefault();
@@ -4090,7 +4155,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setPeekSessionId(null);
     requestAnimationFrame(() => {
       const id = selectedIdRef.current;
-      if (id && !popupOwnsFocus()) handles.current.get(id)?.focus();
+      if (id && !popupOwnsFocus()) focusSession(id);
     });
   }
   function selectSession(id: string, focusTerminal = true) {
@@ -4098,7 +4163,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setSelectedId(id);
     if (focusTerminal) requestAnimationFrame(() => {
       // The frame can run after a menu or dialog has taken the keyboard; it must not take it back.
-      if (selectedIdRef.current === id && !popupOwnsFocus()) handles.current.get(id)?.focus();
+      if (selectedIdRef.current === id && !popupOwnsFocus()) focusSession(id);
     });
   }
   const rail = <SessionRail sessions={railSessions} total={scopedSessions.length} running={runningCount} ended={endedCount} search={railSearch} selectedId={selectedId} narrow={!railDocked} slim={railDocked && railSlim} docked={railDocked} busy={!!busy} canLaunch={terminalTools.length > 0}
@@ -4201,6 +4266,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           // returned yet (a launch, a restore). Unmounting them would replay history into a fresh
           // xterm, and the replay's device queries would be answered into the running CLI.
           const current = stageSession;
+          const currentIsAcp = !!current && !!conversationOf(current.id);
           const tone = current ? sessionTone(current) : 'ended';
           const title = current ? taskTitle(current) : '';
           const elapsed = current ? elapsedOf(current) : '';
@@ -4295,15 +4361,15 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                       <span className={styles.stageAttentionCount}>{stageAttention.length}</span>
                     </button>
                   </span>}
-                  <span className={`${styles.actionGroup} ${styles.runningActions}`} data-running={current.running || undefined} aria-hidden={current.running ? undefined : true}>
+                  {!currentIsAcp && <span className={`${styles.actionGroup} ${styles.runningActions}`} data-running={current.running || undefined} aria-hidden={current.running ? undefined : true}>
                     <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.composerTrigger}`} aria-label={t('sessions.composerShort')} aria-pressed={composerOpen} title={t('sessions.composerShort') + ` (${modLabel}+Shift+M)`} disabled={!current.running} onClick={() => toggleComposer()} icon={<Icon name="pencil" size={14} />}><span className={styles.toolLabel}>{t('sessions.composerShort')}</span></Button>
-                    <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.interruptBtn}`} aria-label={t('sessions.sendInterrupt')} title={t('sessions.sendInterrupt')} disabled={!current.running} onClick={() => void (conversationOf(current.id) ? stopConversation(current.id).catch(() => {}) : sendToSession(current, '\x03'))} icon={<Icon name="ban" size={14} />}><span className={styles.toolLabel}>{t('sessions.interruptShort')}</span></Button>
-                  </span>
+                    <Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.interruptBtn}`} aria-label={t('sessions.sendInterrupt')} title={t('sessions.sendInterrupt')} disabled={!current.running} onClick={() => void sendToSession(current, '\x03')} icon={<Icon name="ban" size={14} />}><span className={styles.toolLabel}>{t('sessions.interruptShort')}</span></Button>
+                  </span>}
                   {/* An ended session's banner owns its recovery actions (continue, write recovery); the toolbar
                       repeats none of them. A live session still reaches write recovery from here. */}
                   {current.running && writeRecoveryNeeded && <span className={styles.actionGroup}><Button variant="ghost" size="sm" className={`${styles.toolButton} ${styles.reattachBtn}`} aria-label={t('common.remoteWrite.open')} title={t('common.remoteWrite.unknown')} disabled={!!busy} onClick={() => requestWriteRecovery(remoteTargetId)} icon={<Icon name="alert" size={14} />}><span className={styles.toolLabel}>{t('common.remoteWrite.open')}</span></Button></span>}
                   <span className={styles.actionGroup}>
-                    <IconButton size="sm" className={styles.toolButton} aria-label={t('sessions.findOutput')} aria-pressed={findOpen} title={t('sessions.findOutput') + ` (${modLabel}+Shift+F)`} onClick={openFind} icon={<Icon name="search" size={15} />} />
+                    <IconButton size="sm" className={styles.toolButton} aria-label={t(currentIsAcp ? 'sessions.acpFindConversation' : 'sessions.findOutput')} aria-pressed={findOpen} title={t(currentIsAcp ? 'sessions.acpFindConversation' : 'sessions.findOutput') + ` (${modLabel}+Shift+F)`} onClick={openFind} icon={<Icon name="search" size={15} />} />
                     {splitRoom && <IconButton size="sm" className={styles.toolButton} data-tool="split" aria-label={t('sessions.splitView')} aria-pressed={!!split} disabled={!split && !canSplit} title={splitLabel + ` (${modLabel}+Shift+D)`} onClick={toggleSplit} icon={<Icon name="columns" size={15} />} />}
                     <IconButton size="sm" className={`${styles.toolButton} ${styles.focusBtn}`} aria-pressed={focusMode} aria-label={focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')} title={(focusMode ? t('sessions.exitFocusMode') : t('sessions.focusMode')) + ' · ' + t('sessions.focusHint')} onClick={() => setFocusMode((value) => !value)} icon={<Icon name={focusMode ? 'minimize' : 'maximize'} size={15} />} />
                     <IconButton size="sm" className={styles.toolButton} aria-label={t('sessions.moreActions')} aria-haspopup="menu" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); openTerminalMenu(current, rect.right, rect.bottom + 6, event.currentTarget); }} onKeyDown={(event) => { if (!menuKey(event)) return; event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openTerminalMenu(current, rect.right, rect.bottom + 6, event.currentTarget); }} icon={<Icon name="more" size={15} />} />
@@ -4360,7 +4426,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
               })()}
               {current && findOpen && <div className={styles.findLayer} data-split={split ? 'true' : undefined} data-pane={split ? split.indexOf(current.id) : undefined}>
                 <div className={styles.findPanel} role="search">
-                  <div className={styles.findField} data-field-frame=""><Icon name="search" size={14} /><input ref={findInputRef} type="search" value={findQuery} placeholder={t('sessions.findPlaceholder')} aria-label={t('sessions.findPlaceholder')} onChange={(event) => setFindQuery(event.target.value)} onKeyDown={(event) => {
+                  <div className={styles.findField} data-field-frame=""><Icon name="search" size={14} /><input ref={findInputRef} type="search" value={findQuery} placeholder={t(currentIsAcp ? 'sessions.acpFindPlaceholder' : 'sessions.findPlaceholder')} aria-label={t(currentIsAcp ? 'sessions.acpFindPlaceholder' : 'sessions.findPlaceholder')} onChange={(event) => setFindQuery(event.target.value)} onKeyDown={(event) => {
                     if (event.key === 'Enter') { event.preventDefault(); stepFindMatch(event.shiftKey ? -1 : 1); }
                     else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind(); }
                   }} /><span className={styles.findCount} data-empty={(findQuery.trim() && !findMatches.length) || undefined}>{!findQuery.trim() ? '' : findMatches.length > 0 ? t('sessions.findMatchCount', { current: findIndex + 1, total: findMatches.length }) : t('sessions.findNoMatch')}</span></div>
@@ -4409,13 +4475,16 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   // and a terminal never receives conversation text.
                   const conversation = conversations.get(session.id);
                   if (conversation) return <AcpConversation key={session.id} ref={(handle) => { if (handle) acpHandles.current.set(session.id, handle); else acpHandles.current.delete(session.id); }}
-                    conversation={conversation} toolName={toolName(session)} active={visible} focused={focused} pane={split ? pane : undefined} header={split && visible ? paneHeader(session) : null} onSend={(text, attachments) => promptConversation(session.id, text, attachments)} onStop={() => stopConversation(session.id)} onAnswer={(requestId, optionId) => answerConversation(session.id, requestId, optionId)}
+                    conversation={conversation} toolName={toolName(session)} active={visible} focused={focused} pane={split ? pane : undefined} header={split && visible ? paneHeader(session) : null}
+                    promptContext={sessionPromptContext(session)} workspaces={businessWorkspaces} dropActive={visible && dropTarget === session.id}
+                    onSend={(text, attachments) => promptConversation(session.id, text, attachments)} onStop={() => stopConversation(session.id)} onAnswer={(requestId, optionId) => answerConversation(session.id, requestId, optionId)}
                     onAnswerAccess={(accessId, decision) => answerConversationAccess(session.id, accessId, decision)} onRevokeGrants={(kinds) => acp.revokeGrants(session.id, kinds)} onKillTerminal={(terminalId) => acp.killTerminal(session.id, terminalId)} onOpenPath={nativeAvailable ? (target) => openConversationPath(session.id, target) : undefined} onClose={() => endSession(session)}
                     onSetMode={(modeId) => acp.setMode(session.id, modeId)} onSetConfig={(configId, value) => acp.setConfig(session.id, configId, value)}
-                    onAuthenticate={(methodId) => acp.authenticate(session.id, methodId)} onLoginTerminal={() => launchInDirectory(session, 'terminal')}
+                    onAuthenticate={(methodId) => acp.authenticate(session.id, methodId)} onLoginTerminal={() => launchInDirectory(session, 'terminal')} onOpenTerminal={() => launchInDirectory(session, 'terminal')}
                     onRespondElicitation={(requestId, action, content) => acp.respondElicitation(session.id, requestId, action, content)}
                     onListFiles={(query) => acp.listFiles(session.id, query, 50)} onReadImage={(path) => acp.readImage(session.id, path)} onNativeSessions={(cursor) => acp.nativeSessions(session.id, cursor)}
-                    onDeleteNativeSession={(nativeId) => acp.deleteNativeSession(session.id, nativeId)} onResumeNative={(nativeId) => resumeNativeConversation(session, nativeId)} onNewConversation={() => launchInDirectory(session, 'acp')} />;
+                    onDeleteNativeSession={(nativeId) => acp.deleteNativeSession(session.id, nativeId)} onResumeNative={(nativeId) => resumeNativeConversation(session, nativeId)} onNewConversation={() => launchInDirectory(session, 'acp')}
+                    onSearchRevision={scheduleFindRefresh} />;
                   return <SessionTerminal key={session.id} sessionId={session.id} toolId={session.toolId} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} suspendInput={!!peekSession && session.id === selectedId} peeking={peeking} keepRendererWarm={renderActive && scopedSessionIds.has(session.id)} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onFilesPaste={(inputs) => uploads.enqueueUpload(session.id, remotePane || null, inputs)} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={TERMINAL_LINE_HEIGHT[density]} scrollSpeed={scrollSpeed} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
                     header={split && visible ? paneHeader(session) : null}
                     overlay={<>
@@ -4449,7 +4518,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   <div className={styles.peekBody} />
                 </div>}
               </div>
-              {current?.running && composerOpen && <WorkbenchComposer active={active} toolId={current.toolId} toolName={toolName(current)} place={placeOf(current)} draft={composerDrafts[current.id] ?? ''} promptContext={sessionPromptContext(current)} promptSourceKey={current.id} workspaces={businessWorkspaces} inputRef={composerInputRef} onChange={updateComposerDraft} onFilesPaste={(files) => { const conversation = acpHandles.current.get(current.id); if (conversation) conversation.addFiles(files); else handles.current.get(current.id)?.pasteFiles(files); }} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
+              {current?.running && !currentIsAcp && composerOpen && <WorkbenchComposer active={active} toolId={current.toolId} toolName={toolName(current)} place={placeOf(current)} draft={composerDrafts[current.id] ?? ''} promptContext={sessionPromptContext(current)} promptSourceKey={current.id} workspaces={businessWorkspaces} inputRef={composerInputRef} onChange={updateComposerDraft} onFilesPaste={(files) => { const conversation = acpHandles.current.get(current.id); if (conversation) conversation.addFiles(files); else handles.current.get(current.id)?.pasteFiles(files); }} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
               {current && <footer className={styles.statusBar}>
                 <span className={styles.statusItem} data-host={remote ? 'remote' : 'local'} title={`${t('common.host.label')}：${hostLabel}${remoteHost ? ` · ${remoteHost.user}@${remoteHost.host}` : ''}`}><Icon name={remote ? 'server' : 'monitor'} size={12} />{hostLabel}</span>
                 {/* Git is one chip: branch name, a worktree glyph when this checkout is a linked worktree,
@@ -4615,7 +4684,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           <button role="menuitem" aria-pressed={arrangement.reviewMarks.includes(session.id)} title={arrangement.reviewMarks.includes(session.id) ? t('sessions.taskClearReviewHint') : t('sessions.taskMarkReviewHint')} onClick={() => toggleReviewMark(session.id)}><Icon name="eye" size={14} /><span>{arrangement.reviewMarks.includes(session.id) ? t('sessions.taskClearReview') : t('sessions.taskMarkReview')}</span>{arrangement.reviewMarks.includes(session.id) && <span className={styles.menuCheck}><Icon name="check" size={14} /></span>}</button>
           <button role="menuitem" title={collapsedIds.has(session.id) ? undefined : t('sessions.taskCollapseHint')} onClick={() => toggleCollapseSession(session.id)}><Icon name="archive" size={14} /><span>{collapsedIds.has(session.id) ? t('sessions.taskRestore') : t('sessions.taskCollapse')}</span></button>
           {peekOffered && session.id !== selectedId && <button role="menuitem" onClick={() => openPeek(session.id)}><Icon name="eye" size={14} /><span>{t('sessions.peekSession')}</span></button>}
-          {splitRoom && menu.besideId && sessions.some((item) => item.id === menu.besideId) && <button role="menuitem" onClick={() => { setPeekSessionId(null); setSelectedId(session.id); setSplit([menu.besideId!, session.id]); }}><Icon name="columns" size={14} /><span>{t('sessions.openBeside', { name: toolName(sessions.find((item) => item.id === menu.besideId)!) })}</span></button>}
+          {splitRoom && menu.besideId && scopedSessions.some((item) => item.id === menu.besideId) && <button role="menuitem" onClick={() => { setPeekSessionId(null); setSelectedId(session.id); setSplit([menu.besideId!, session.id]); }}><Icon name="columns" size={14} /><span>{t('sessions.openBeside', { name: toolName(scopedSessions.find((item) => item.id === menu.besideId)!) })}</span></button>}
           <span className={styles.menuDivider} role="separator" />
           {conversation
             ? <button role="menuitem" disabled={!!busy} onClick={() => void launchInDirectory(session, 'acp')}><Icon name="refresh" size={14} /><span>{t('sessions.acpNewConversation')}</span></button>
