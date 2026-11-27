@@ -217,7 +217,7 @@ fn an_elicitation_form_is_answered_once_validated_and_withdrawn_on_stop_turn_end
         let _ = init_tx.send(initialize);
         let ask = |agent: &Agent, id: u64, mode: &str| {
             let mut params = json!({ "sessionId": "session-1", "message": "怎么称呼你？", "requestedSchema": agent_schema });
-            // An empty mode stands for a request that omits it: that is a form.
+            // An empty mode stands for a request that omits it.
             if !mode.is_empty() {
                 params["mode"] = json!(mode);
             }
@@ -235,14 +235,18 @@ fn an_elicitation_form_is_answered_once_validated_and_withdrawn_on_stop_turn_end
         ask(&agent, 51, "form");
         let answer = agent.next_line();
         assert_eq!(answer, json!({ "jsonrpc": "2.0", "id": 51, "result": { "action": "decline" } }));
-        // No mode at all is still a form.
-        ask(&agent, 52, "");
+        ask(&agent, 52, "form");
         let answer = agent.next_line();
         assert_eq!(answer["result"], json!({ "action": "cancel" }));
         // A mode the client did not advertise is invalid params.
         ask(&agent, 53, "url");
         let answer = agent.next_line();
         assert_eq!(answer["id"], 53);
+        assert_eq!(answer["error"]["code"], -32602);
+        // ACP requires the mode explicitly: an omitted mode is not a form.
+        ask(&agent, 57, "");
+        let answer = agent.next_line();
+        assert_eq!(answer["id"], 57);
         assert_eq!(answer["error"]["code"], -32602);
         // A stop withdraws the open form before the cancel notification.
         ask(&agent, 54, "form");
@@ -467,7 +471,14 @@ fn a_stop_while_an_attachment_waits_for_approval_ends_the_turn_and_sends_nothing
     let (io, mut agent) = pair();
     let worker = std::thread::spawn(move || {
         agent.handshake(false);
-        drain(&mut agent)
+        // The first frame the agent sees after every stop is the later prompt.
+        let prompt = agent.next_line();
+        assert_eq!(prompt["method"], "session/prompt", "{prompt}");
+        assert_eq!(prompt["params"]["prompt"][0]["text"], "再发一次");
+        reply(&agent, &prompt, json!({ "stopReason": "end_turn" }));
+        let mut frames = vec![prompt];
+        frames.extend(drain(&mut agent));
+        frames
     });
     let id = open(spec(&std::fs::canonicalize(&directory).unwrap()), io).unwrap().id;
     let outside = outside.display().to_string();
@@ -501,12 +512,17 @@ fn a_stop_while_an_attachment_waits_for_approval_ends_the_turn_and_sends_nothing
         assert!(cancel(&id).is_err(), "轮次已结束，没有可停止的轮次");
         assert!(respond_access(&id, &card, "once").is_err(), "撤回的卡不再接受回应");
     }
+    // The session accepts the next prompt as usual.
+    prompt(&id, "再发一次").unwrap();
+    wait_until_idle(&id, Duration::from_secs(8)).unwrap();
+    let done = snapshot_of(&id);
+    assert_eq!(done.state, "ready");
+    assert_eq!(done.last_turn_reason, "end_turn");
     close(&id).unwrap();
     let frames = worker.join().unwrap();
-    assert!(
-        frames.iter().all(|frame| frame["method"] != "session/prompt" && frame["method"] != "session/cancel"),
-        "提示没有发出时不发送 prompt 或 cancel：{frames:?}"
-    );
+    assert!(frames.iter().all(|frame| frame["method"] != "session/cancel"), "提示没有发出时不发送 session/cancel：{frames:?}");
+    let prompts = frames.iter().filter(|frame| frame["method"] == "session/prompt").count();
+    assert_eq!(prompts, 1, "只有停止后再发的那条提示到达 agent");
 }
 
 #[test]
