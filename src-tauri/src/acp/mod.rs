@@ -2360,3 +2360,7 @@ mod client_tests;
 #[cfg(test)]
 #[path = "../../../tests/launch/acp_session_ops.rs"]
 mod session_ops_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/launch/acp_live.rs"]
+mod live_tests;

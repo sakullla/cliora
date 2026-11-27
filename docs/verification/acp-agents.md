@@ -7,7 +7,9 @@
 3. **能力声明**（declared）：适配器的静态入口表（`src-tauri/src/adapters/*/mod.rs` 的 `fn acp`，19 项都写了 session/authorization/cancel/resume = true）与握手自报（`loadSession`、`sessionCapabilities`、`authMethods`）。**声明不等于已核实**：它只说明这一方说它支持，没有一次真实调用被观察过。
 4. **真实会话验证**（interactive）：在会话里真正加载一个原生会话、跑完一轮含工具调用的对话，并观察授权、停止与恢复的实际结果。
 
-本次没有任何一项到第 4 步（会产生真实推理费用与账号操作），所以 19 项的 `state` 全部是 `unverified`，没有任何一项写成 `supported`。握手没有保留原始帧转储，下面的逐项摘要就是本轮证据本身；共享契约在 `src-tauri/src/adapters/contract.rs`。
+> 2026-11-27 更新：用户确认推理费用后，对本机可解析的 9 个 agent 做了第 4 步的最小抽样（每个 agent 两个极短提示），结果见文末「真实 agent 抽样（2026-11-27）」。抽样不改变下表与适配器声明：19 项仍是 `unverified`，抽样记录是本轮证据，不是 `supported` 判定。
+
+2026-11-26 那一轮没有任何一项到第 4 步（会产生真实推理费用与账号操作），所以 19 项的 `state` 全部是 `unverified`，没有任何一项写成 `supported`。握手没有保留原始帧转储，下面的逐项摘要就是本轮证据本身；共享契约在 `src-tauri/src/adapters/contract.rs`。
 
 采集环境：Windows 10.0.26300（x64），2026-11-26；命令来自 PATH 与本机安装目录，未启动模型、未读取账号凭据。上游依据取自当日 `https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json`（46 项注册表）与各项目 README。
 
@@ -195,7 +197,7 @@
 
 | 检查 | 命令 | 结果 |
 | --- | --- | --- |
-| ACP 契约与失败样例 | `cargo test --manifest-path src-tauri/Cargo.toml --lib acp` | 29 passed（`acp_host` 20 项 + 适配器 `acp_tests` 9 项，后者为 T1 新增） |
+| ACP 契约与失败样例 | `cargo test --manifest-path src-tauri/Cargo.toml --lib acp` | 29 passed（`acp::tests` 20 项（当时模块名为 `acp_host`）+ 适配器 `acp_tests` 9 项，后者为 T1 新增） |
 | 全量 Rust 测试（不排除） | `cargo test --manifest-path src-tauri/Cargo.toml` | 1761 passed / 12 failed / 36 ignored，12 项失败全部落在 `remote::uploads`（7）、`remote::transactions`（3）、`remote::twiglane_trust`（1）与 `external::tests::twiglane_workspace_handoff_url_is_validated`（1），见下一小节 |
 | 交付原生命令（含排除） | 见「原生命令实际排除的用例」 | 库测试 1746 passed / 0 failed / 36 ignored / 27 filtered out，`twiglane_bridge` 集成二进制 0 passed / 1 filtered / 0 failed |
 | Lint | `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets` | 无警告、无错误 |
@@ -210,7 +212,7 @@
 - `external::tests::twiglane_workspace_handoff_url_is_validated`：本机 Windows 绝对路径断言（`项目清单链接需使用本机绝对路径`）。
 - `src-tauri/tests/twiglane_bridge.rs::desktop_exit_mode_resolves_only_current_enabled_targets_and_rejects_untrusted_uploads`：同一类 known_hosts 环境依赖（临时 `known_hosts` 带空格与多个 trust 文件时，本机解析为 `ambiguous_known_hosts_paths`，未排除时实测 FAILED），交付命令对这一条单独 `--skip`。同文件的 `missing_and_cancelled_session_passwords_do_not_connect` 是 `#[cfg(unix)]`，Windows 下不编译，所以该集成二进制在排除后显示 0 passed / 1 filtered。
 
-本机没有 WSL、没有可用的 SFTP 目标，也没有一份干净的 OpenSSH 配置，因此这些用例只能在具备条件的目标上复核；本候选对 `src-tauri/src/remote`、`src-tauri/src/external.rs` 与 `src-tauri/tests/twiglane_bridge.rs` 零改动。两次运行各自的总数可以对上：库测试共 1809 项。不排除时 1761 passed / 12 failed / 36 ignored / 0 filtered out；交付命令的 `--skip` 按模块前缀过滤 27 项，其中 12 项是本机实测失败的用例、15 项是随同模块前缀一起被排除（整模块排除的范围大于单次失败清单，因此会带走同模块内本机本可通过的用例），1782 项进入运行，其中 1746 passed / 0 failed / 36 ignored，集成二进制 0 passed / 1 filtered。排除只改变了跑哪些用例，没有跳过任何本需求改动的模块（`launch`、`acp_host`、`workbench_restore`、`session_host`、`adapters`、`accounts`）。
+本机没有 WSL、没有可用的 SFTP 目标，也没有一份干净的 OpenSSH 配置，因此这些用例只能在具备条件的目标上复核；本候选对 `src-tauri/src/remote`、`src-tauri/src/external.rs` 与 `src-tauri/tests/twiglane_bridge.rs` 零改动。两次运行各自的总数可以对上：库测试共 1809 项。不排除时 1761 passed / 12 failed / 36 ignored / 0 filtered out；交付命令的 `--skip` 按模块前缀过滤 27 项，其中 12 项是本机实测失败的用例、15 项是随同模块前缀一起被排除（整模块排除的范围大于单次失败清单，因此会带走同模块内本机本可通过的用例），1782 项进入运行，其中 1746 passed / 0 failed / 36 ignored，集成二进制 0 passed / 1 filtered。排除只改变了跑哪些用例，没有跳过任何本需求改动的模块（`launch`、`acp`（原 `acp_host`）、`workbench_restore`、`session_host`、`adapters`、`accounts`）。
 
 新增测试（`tests/adapter/acp-agents.rs`，由 `src-tauri/src/adapters/registry.rs` 以 `#[path]` 引入）：
 
@@ -229,10 +231,10 @@
 - **仅 Windows**：macOS/Linux 的入口、`agy_acp_server.par`、`--uid=` 参数与 Kiro 的平台包均未验证。
 - **等待时长**：Qoder CN 12–16 秒、CodeBuddy 约 4 秒才回第一帧；共享宿主的初始化超时不能按毫秒级假设设置。
 - **身份边界**：Codex / Claude 桥接必须绑定所选安装（`CODEX_PATH` / `CLAUDE_CODE_EXECUTABLE`），否则会运行桥接自带的那份引擎；解析器已强制这一点，真实运行下的身份一致性仍待实测。
-- **恢复失败的实际行为（当前代码，未在真实会话实证）**：ACP 恢复先按协议 `session/load` 接回原会话；当 agent 报不支持、加载失败或没有协商出结果时，恢复流程保留**原记录**，关闭并移除**这次尝试新建的会话**（`acp_host::close` + `forget`），再把失败原因写进恢复结果——面板显示恢复失败，用户可稍后重试，或从原目录新开一个对话。原记录不会被关闭，也不会被新会话顶替。
+- **恢复失败的实际行为（当前代码，未在真实会话实证）**：ACP 恢复先按协议 `session/load` 接回原会话；当 agent 报不支持、加载失败或没有协商出结果时，恢复流程保留**原记录**，关闭并移除**这次尝试新建的会话**（`crate::acp::close` + `forget`），再把失败原因写进恢复结果——面板显示恢复失败，用户可稍后重试，或从原目录新开一个对话。原记录不会被关闭，也不会被新会话顶替。
 - **已知限制（P2，T3 范围内本轮未修）**：恢复失败的说明文案仍写「已在原目录新开一段会话（新会话 id）；原记录已保留，可稍后重试」，而同一分支随即关闭并移除了该会话，界面上给出的新会话编号已不存在。实际结果是「原记录保留、这次尝试的会话不存在」。位置：`src-tauri/src/workbench_restore.rs` 的 `conversation_resume_failure` 与 `restore_conversation_items` 失败分支。文案与行为与代码一致化不在 T1 范围。
-- **ACP 对话中的秘密引用（T4 已统一，非终端路径）**：对话路径**都不做**终端的秘密准备。`src/lib/native.ts` 的 `launchCli` 只在 `request.interaction !== 'acp'` 时对 `initialPrompt` 调用 `localSessionPrompt`；新建会话对话框与资料库启动都显式带上解析后的 `interaction`，因此 ACP 首条提示不再走终端准备。工作台后续提示在对话分支同样跳过准备、原样发送（`src/features/sessions/SessionWorkbench.tsx` 的 `submitComposer`，对话时 `local = false`）。结果是：ACP 对话内 `{{cliora-secret:…}}` 原样发给 agent，宿主当前不解析它（`acp_host` 的本地会话不带授权项），也不会泄露原值；终端路径完全不受影响。
-- **ACP 宿主无秘密授权（T3 复核，P3）**：`src-tauri/src/acp_host.rs` 的模块注释仍按设计意图描述「agent 通过本地会话令牌像终端一样访问 broker」，实际 `spawn_io` 用 `LocalSession::new()`（空授权表），子进程只得到会话令牌、不带授权。注释与行为的对齐属 T3 范围，本轮未改代码。
+- **ACP 对话中的秘密引用（T4 已统一，非终端路径）**：对话路径**都不做**终端的秘密准备。`src/lib/native.ts` 的 `launchCli` 只在 `request.interaction !== 'acp'` 时对 `initialPrompt` 调用 `localSessionPrompt`；新建会话对话框与资料库启动都显式带上解析后的 `interaction`，因此 ACP 首条提示不再走终端准备。工作台后续提示在对话分支同样跳过准备、原样发送（`src/features/sessions/SessionWorkbench.tsx` 的 `submitComposer`，对话时 `local = false`）。结果是：ACP 对话内 `{{cliora-secret:…}}` 原样发给 agent，宿主当前不解析它（`crate::acp` 的本地会话不带授权项），也不会泄露原值；终端路径完全不受影响。
+- **ACP 宿主无秘密授权（T3 复核，P3）**：`src-tauri/src/acp/mod.rs`（原 `src-tauri/src/acp_host.rs`）的模块注释仍按设计意图描述「agent 通过本地会话令牌像终端一样访问 broker」，实际 `spawn_io` 用 `LocalSession::new()`（空授权表），子进程只得到会话令牌、不带授权。注释与行为的对齐属 T3 范围，本轮未改代码。
 - **已知限制（T3 复核，非阻断）**：工作目录预检发生在 ACP 子进程 spawn 之后，而不是之前，因此一个不可用的目录会先留下一次失败的进程启动再报错；这不会误判成功，但诊断顺序与「预检在前」的期望不同。
 - 本记录不含任何凭据、账号或提示词内容；握手只发送 `initialize`，不加载文件、不执行工具。
 
@@ -280,3 +282,121 @@
 - **真实 agent 对话仍未运行**：上面所有面板行为都由合成帧驱动，没有一个真实 ACP 会话被启动过。授权弹窗的实际文案、停止后 agent 的真实反应、工具结果的实际形态都还只有协议侧依据。
 - **恢复未实证**：原生会话加载、恢复失败后的关闭行为、恢复后再发首轮都还没有实测（另见上文「未完成与限制」）。
 - **仅 Windows**：合成验证在 Windows 上用 Chromium 跑；macOS/Linux 的界面与宿主行为未验证。
+
+## 客户端能力、YOLO 与真实 agent 抽样（2026-11-27）
+
+本节记录「ACP 对话体验与客户端能力」一期（T1–T6）交付后的状态。宿主代码已从 `src-tauri/src/acp_host.rs` 拆到 `src-tauri/src/acp/`（`mod.rs`、`timeline.rs`、`capabilities.rs`、`client_fs.rs`、`terminal.rs`、`access.rs`、`elicitation.rs`、`prompt.rs`、`files.rs`、`history.rs`），调用方使用 `crate::acp::*`；目录边界判定是 `src-tauri/src/safe_fs.rs` 的 `safe_fs::resolve_target`（及 `resolve_target_protected`）。上文 2026-11-26 的记录保留原样，只把旧路径改成了现在的位置。
+
+### 新增的客户端能力
+
+`initialize` 现在发送 `clientInfo`，并在 `clientCapabilities` 中声明（`src-tauri/src/acp/capabilities.rs`）：
+
+| 能力 | 声明 | 实现 |
+| --- | --- | --- |
+| 文件 | `fs.readTextFile`、`fs.writeTextFile` = true | `acp/client_fs.rs` 经共享 `safe_fs` 读取（行号与行数）与原子替换写入；目录内写入在时间线记一条带 diff 的 access 记录；目录外读写先出审批卡（允许一次 / 本会话都允许 / 拒绝）；Cliora 自身的应用数据目录在任何授权（含 YOLO）下都拒绝 |
+| 终端 | `terminal` = true | `acp/terminal.rs`：create → output → wait_for_exit → kill / release，输出按 `outputByteLimit` 截断并置 `truncated`；不经过 shell 运行；会话结束时结束进程树（Windows job object，Unix 进程组）；每会话终端数有上限 |
+| 结构化提问 | `elicitation.form`（不声明 url） | `acp/elicitation.rs`：表单进入 pending，accept / decline / cancel 只回答一次；停止、断开或轮次结束后表单失效并回 cancel |
+| 子 agent | `subagents` | `subagent_update` 登记子会话，子会话的更新、授权与客户端请求归属到该子会话 |
+
+`mcpServers` 仍固定为 `[]`（需求 R12 排除项）。
+
+### YOLO：19 个适配器均为 Client 型
+
+适配器契约新增 `AcpEntry.yolo`（`AcpYolo::Client | Args | Mode`，`src-tauri/src/adapters/contract.rs`，TS 侧同步）。19 个 `fn acp` 全部声明 `AcpYolo::Client`（`grep "yolo: Some(AcpYolo::Client)" src-tauri/src/adapters/*/mod.rs` 为 19 处）：YOLO 不改变 agent 的启动参数或模式，由 Cliora 作为客户端自动批准——目录外访问直接放行并记录；`session/request_permission` 只自动选择 `allow_once`（没有 `allow_once` 时选 `allow_always`），没有允许类选项时照常出卡。`launch.rs` 不再拒绝 ACP + YOLO。
+
+### 分散的安全文件实现未迁移
+
+本期只新增共享 `safe_fs` 供 ACP 使用。下列 4 处既有实现（祖先目录符号链接 / reparse 检查、有界读取、包含检查、原子写入）**没有迁移**，仍各自维护，迁移列为后续收敛项（避免顺带改动凭据和事务路径）：
+
+- `src-tauri/src/resources/memory.rs`（reparse 检查、`read_entry_bytes_limited`、词法包含检查）
+- `src-tauri/src/native/transaction.rs`（reparse 检查、非普通文件拒绝、原子写入）
+- `src-tauri/src/accounts/context.rs`（reparse 检查）
+- `src-tauri/src/history/mod.rs`（reparse 检查）
+
+（`plugin_contents.rs` 的 canonicalize + starts_with 包含检查同样未改。）
+
+### 真实 agent 抽样（2026-11-27）
+
+用户确认可以产生少量推理费用后执行。抽样由仓库内的 Rust 测试驱动真实宿主 `crate::acp`：适配器解析入口 → 宿主 spawn → `initialize` → `session/new` → 真实 `session/prompt`；测试在 agent 的 stdio 两侧挂了只记方法名与选项类别的探针，不改变宿主行为。
+
+- 测试：`tests/launch/acp_live.rs`（由 `src-tauri/src/acp/mod.rs` 以 `#[path]` 引入为 `acp::live_tests`），`#[ignore]`，且只在 `CLIORA_LIVE_ACP_TESTS=1` 时运行。
+- 命令：`CLIORA_LIVE_ACP_TESTS=1 CLIORA_LIVE_ACP_AGENTS=all CLIORA_LIVE_ACP_REPORT=<临时目录>/cliora-live-acp-2026-11-27.json cargo test --manifest-path src-tauri/Cargo.toml --lib acp::live_tests -- --ignored --nocapture`（1 passed，100.5 s）；随后对并行运行时未解析到安装的 `qoder_cn,mimo_code,command_code` 串行补跑一次（24 s）。两次运行的 JSON 报告合并保存在 `docs/verification/acp-live-2026-11-27.json`（`agents` 为全量运行，`rerun` 为补跑）。
+- 默认模式：`cargo test … --lib acp::live_tests` 显示 `ignored`；带 `--ignored` 但不设开关时输出 `live ACP sampling skipped: CLIORA_LIVE_ACP_TESTS is not 1` 并直接通过，不启动任何 agent。
+- 每个 agent 两段会话、各一个极短提示，均在新建的临时目录（只含一个 `README.md`）里运行，从不在仓库里运行：
+  1. 普通会话：「读取 README.md 第一行并原样回复」——出现授权卡时测试按用户的方式回答「允许一次」；
+  2. YOLO 会话：「运行 `echo cliora-acp-ok` 并只回复输出」——由宿主自动批准。
+- 报告只保留协议事实（方法名、更新类别、选项类别、≤240 字的回复摘录），不读取、不打印任何凭据；未登录或启动失败的 agent 只记录事实，没有替它登录。
+- 环境：Windows 10.0.26300 x64，Rust 1.99.1，候选基于 `946e75b2`。
+
+#### 结果
+
+「fs 经客户端」「终端经客户端」指 agent 是否向 Cliora 发出 `fs/read_text_file`、`terminal/create`（探针计数），而不是 agent 自己读文件或开进程。「读 / echo」列是回复是否包含期望文本。
+
+| Agent | 版本 | initialize 声明（loadSession · sessionCapabilities · image/embeddedContext · authMethods） | 模式 / 配置项 | session/new | 读 README | echo | 工具卡 / 计划 | fs 经客户端 | 终端经客户端 | 授权请求 | YOLO 自动批准 | 失败与协议不一致 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| oh-my-pi (`omp acp`) | 19.2.1 | true · list/resume/close · ✓/✓ · `agent` | default/plan · mode, model, thinking | 成功（8.2 s） | ✓ | ✓ | 有 / 无 | 是（1 次读取） | 是：create→output×4→wait_for_exit→release，经 `bash.exe -l -c` 退出码 0 | YOLO 1 次 | 1/1 选 `allow_once`（提供 allow_once/allow_always/reject_*） | 无 |
+| Grok (`grok agent stdio`) | 1.0.92 | true · list/resume/close · ✓/✓ · `cached_token`、`grok.com` | 无模式 · model, reasoning_effort | 成功（6.6 s） | ✓ | 回复含 `cliora-acp-ok`，但 6 张执行卡全部失败，**回复没有执行依据** | 有 / 无 | 是（1 次） | 6 次，全部被拒：`command` 是整行命令（`echo cliora-acp-ok`、`pwsh -Command …`），执行器不经 shell | YOLO 2 次 | 2/2 选 `allow_once`（`allow_always` 排在第一位也未被选） | 终端不经 shell 不兼容；`agentInfo` 为空；大量 `_x.ai/*` 通知未处理（仅诊断） |
+| CodeBuddy (`codebuddy --acp`) | 2.187.0 | true · 全部 false · ✓/✓ · `iOA`、`external`、`internal`、`selfhosted` | 7 种模式 · mode, model, thought_level, sandbox, multitask | 成功（20.3 s） | ✓ | ✓（客户端终端被拒后由 agent 自行执行） | 有 / 无 | 是（1 次） | 1 次，被拒（整行命令） | YOLO 1 次 | 1/1 选 `allow_once`（`allow_always` 在前） | 终端不经 shell 不兼容；`agentInfo` 为空 |
+| Kiro (`kiro-cli acp`) | 3.5.0 | true · list/delete/close · ✓/✓ · `aws-builder-id`、`aws-iam-identity-center` | 10 种模式 · mode, model 等 6 项 | 成功（15.2 s） | ✓（终端被拒后改走 fs） | ✗：回复如实说明命令没有运行 | 有 / 无 | 是（1 次） | 普通 1 次、YOLO 2 次，全部被拒（`head -n 1 README.md`、`cmd /c echo …`） | 普通 1 次（测试答「允许一次」）、YOLO 2 次 | 2/2 选 `allow_once` | 终端不经 shell 不兼容；扩展请求 `_kiro/terminal/shell_type` 按未声明能力拒绝 |
+| Devin (`devin acp`) | 3000.12.57 | true · list/delete/close（无 resume）· ✓/✓ · `devin-browser` | accept-edits 等 5 种 · mode, model, thought_level, speed | 成功（2.9 s） | ✓（终端被拒后改用搜索工具） | 回复含 `cliora-acp-ok`，但 4 张执行卡全部失败，**回复没有执行依据** | 有 / 无 | 否 | 普通 2 次、YOLO 4 次，全部被拒（整行命令） | 无 | 未触发（agent 默认模式不询问） | 终端不经 shell 不兼容 |
+| OpenCode (`opencode acp`) | 2.3.0 | true · list/resume/delete/close · ✓/✓ · `opencode-login` | 无模式 · model, effort, mode | 成功（13.5 s） | ✓ | ✓ | 有 / 无 | 否（自行读取） | 否（自行执行） | 无 | 未触发 | 无 |
+| MiniMax Code (`mcode acp`) | 0.6.13 | true · list/resume/close · ✓/✗ · 无 | default/plan · permissionMode, model, thinkingEffort | 成功（14.4 s） | ✓ | ✓ | 有 / 无 | 否 | 否 | 无 | 未触发 | 无 |
+| Kimi Code (`kimi acp`) | 2.7.0 | true · list/resume/delete/close · ✓/✓ · `login` | default/plan/auto/yolo · model, thinking, mode | 成功（4.7 s） | ✗ | ✗ | 无 | 否 | 否 | 无 | 未触发 | 两个提示都被 `session/prompt` 以 “Authentication required: The API Key appears to be invalid or may have expired” 拒绝（本机凭据失效，未替它登录）；宿主把该轮记为 `disconnected`，会话仍为 `ready`，没有转入登录面板（见后续项 F2） |
+| MiMo Code (`mimo acp`) | 0.1.15 | true · list/resume · ✓/✓ · `opencode-login`（自报 OpenCode 0.1.15） | build/plan/compose · model, mode（16 个模型） | 成功（10.7 s） | ✗ | ✗ | 无 | 否 | 否 | 无 | 未触发 | 两轮都立即以 `end_turn` 结束、没有任何回复或工具（只收到 usage 更新）；原因未查明（推测未配置可用模型/提供方），未改动其配置 |
+
+所有成功回复的会话都出现了工具卡；**9 个 agent 都没有为这两个小任务发送 `plan`**，计划的真实形态仍只有合成验证。标题（`session_info_update` 带 title）出现在 Kimi、CodeBuddy、Kiro、Devin；用量出现在除 Grok、Kiro 外的 7 个。
+
+未进入会话的 10 个适配器（启动前由适配器解析给出的原因）：
+
+| Agent | 结果 |
+| --- | --- |
+| Codex 0.172.0 | `dependency-missing`：未找到 `codex-acp` |
+| Claude Code 2.1.332 | `dependency-missing`：未找到 `claude-agent-acp` |
+| Pi 1.6.1 | `dependency-missing`：未找到 `pi-acp` |
+| ZCode 3.19.1 | `dependency-missing`：未找到 `zcode-acp` |
+| DeepSeek Harness | `not-installed`：未找到 `dsh` |
+| Cursor 3.30.14 | `not-installed`：未找到 `cursor-agent` |
+| Cline、Antigravity | 启动探测未发现可用安装 |
+| Qoder CN、Command Code | 启动探测（`probe_registered_launch`，未带自定义路径）两次都报告没有可用安装，而 `qoderclicn --version`（1.1.94）与 `cmdc --version`（1.88.0）单独执行 2–3 s 即返回；MiMo 在 19 路并行时同样未解析、串行补跑时解析成功。原因未查明，列为后续项 F5 |
+
+#### 抽样得到的问题与后续项
+
+- **F1 终端不经 shell，与多数 agent 的用法不兼容（P1 级发现）**：Grok、CodeBuddy、Kiro、Devin 都把整行命令放在 `terminal/create` 的 `command` 字段（`args` 为空），执行器按「不经过 shell」把整行当成程序名，回复「找不到要运行的程序：…（不经过 shell，请给出程序名或完整路径）」。只有 oh-my-pi 显式包了 `bash.exe -l -c`，完整走通。结果是 4/9 个 agent 的客户端终端实际不可用（agent 要么自行执行、要么放弃，Grok 与 Devin 甚至在执行全部失败时给出了期望文本）。是否改为在 `args` 为空时经平台 shell 运行，涉及 ADR-9 的安全取舍，需要单独决定，本期未改。
+- **F2 轮次内的协议错误被记成「连接断开」**：`session/prompt` 返回 JSON-RPC 错误时（Kimi 凭据失效），宿主把轮次原因记为 `disconnected`，界面会显示「与 agent 的连接已断开」，而会话实际仍为 `ready`；轮次内的 auth_required 也没有转到登录面板。应区分 `failed` 与断开，并把认证错误引到登录流程。
+- **F3 回复没有执行依据**：Grok、Devin 在所有执行卡失败时仍回复了期望输出。宿主如实显示失败的工具卡，这是 agent 行为，记录在案。
+- **F4 厂商扩展**：`_x.ai/*`、`_cognition.ai/*`、`_kiro/*`、`_codebuddy.ai/*` 通知只进诊断；`_kiro/terminal/shell_type` 请求按未声明能力拒绝。功能未受影响。
+- **F5 启动探测**：Qoder CN、Command Code 本机可执行但启动探测未发现可用安装；并行时 MiMo 也未解析。需要检查这三个适配器的候选路径与版本身份判定。
+- **F6 MiMo 无回复**：两轮均立即 `end_turn` 且无内容。
+- **YOLO 只用 `allow_once`（已实证）**：6 次自动批准全部选择 `allow_once`，其中 3 次 `allow_always` 排在选项首位也没有被选；没有出现只提供 `allow_always` 的请求，因此「没有 allow_once 时选 allow_always」与「没有允许项时照常出卡」两条分支仍只有单元测试证据。
+- **授权卡（普通会话）**：只有 Kiro 在普通会话里发了授权请求，测试按「允许一次」答复后轮次正常完成；目录外审批卡（access）本轮没有触发（任务都在会话目录内）。
+
+### 已知限制与后续项
+
+1. **已经是 UTF-8 的输出不再二次解码**：终端输出按 UTF-8 增量解码；在 Windows 上遇到第一个非法 UTF-8 序列后，其余部分改按控制台（OEM）代码页解码，但切换前已按 UTF-8 读出的文本保持原样、不再回头重解（`src-tauri/src/acp/terminal.rs`）。一段输出若前半恰好是合法 UTF-8 的代码页字节，这部分会显示为错误字符。
+2. **登录后首个提示失败时，原生会话 id 只在下一次 checkpoint 刷新**：认证成功后建立的原生会话若紧接着的提示失败，`workbench_restore` 记录中的 native id 要到下一次 checkpoint 才更新；在此之前重启恢复会用旧值。
+3. **Unix 路径未在原生平台运行**：safe_fs 的 Unix 设备路径判定与终端按进程组结束只有 `#[cfg(unix)]` 测试，本期只在 Windows 上编译与运行，没有在 macOS/Linux 上实际执行这些测试。
+4. **02 方案文档与代码命名不一致**：`02-technical-solution.md` 仍写 `resolve_within` 与旧的 `acp_host`（以及 `acp_terminal`、`acp_client_fs`）路径；实际代码是 `safe_fs::resolve_target`（`resolve_target_protected`）与 `crate::acp`（`src-tauri/src/acp/`）。本文档已改用实际名称。
+5. **输入法组字与原生拖放只用合成事件验证**：组字期间 Enter 不发送、原生拖入图片与文件都只在 Playwright（Chromium）中以合成事件测试，没有在真实 WebView2 / WKWebView 中验证。
+6. **读图期间刷新会留下 pending 卡**（T5 复核 P3）：拖入目录外图片、审批卡仍在等待时重新加载页面，该卡保持 pending；`withdrawAbandoned` 在 IPC 失败后不重试撤回。
+7. **「手动改名的标题保持不变」无法验证**：工作台没有对 ACP 会话手动改名的功能，T4 的这一项验收无从执行。
+8. **`remote::*` 与 `external::twiglane` 的 12 项环境失败与本次改动无关**：见上文「原生命令实际排除的用例」，本期对这些模块零改动。
+9. 真实抽样暴露的 F1–F6 见上一小节。另外，`acp::tests` 中的 `the_child_receives_its_own_secret_session_token` 与 `frames_split_across_writes_are_reassembled_and_coalesced` 在 `--lib acp::` 并行运行时偶发失败；在未改动的 `946e75b2` 上 5 次运行复现 1 次，单独运行 `acp::tests::` 3 次均通过，属既有的并发脆弱性。
+
+### 截图
+
+ACP 场景由 `scripts/capture-workbench.mjs` 生成（Playwright + 合成 IPC，不是原生验收）。此前已有对话、授权、停止中、窄窗口、输入区、slash、附件、拖入、登录、表单、历史（含不支持）等场景；本期新增：
+
+- 空会话（`empty`）；
+- 长对话（`long`，含代码块、表格、列表与链接）；
+- 工具与 diff（`tools`：读取、搜索、编辑、目录内写入记录、失败的获取、内嵌终端输出与「终止」、进行中的计划与用量；`diff` 展开编辑卡的 diff，并出现「回到最新」）；
+- YOLO 徽标与自动批准记录（`yolo`）；
+- 断开（`disconnected`：agent 退出、轮次原因为断开、诊断与只读输入框）。
+
+| 图库 | 命令 | 结果 |
+| --- | --- | --- |
+| 默认工作台图库（含 `workbench-acp-conversation`、`workbench-acp-tools`） | `node scripts/verify-ui-captures.mjs --only workbench` | passed，12 张，0 项失败（无横向溢出、无页面错误），输出 `docs/verification/product-ui-ux/workbench/` |
+| ACP 全部场景，深浅两套 × 1360 / 720 | 先 `npm run build` 并启动 `vite preview`，再 `CLIORA_PREVIEW_URL=<预览地址> CLIORA_CAPTURE_OUT=docs/verification/product-ui-ux/workbench-acp node scripts/capture-workbench.mjs --only 'workbench-acp-*' --size 1360,720 --theme all` | 70 张（18 个场景 × 深浅 × 两种宽度，窄窗口场景只在 720），0 项横向溢出、0 项页面错误、0 项动作失败，输出 `docs/verification/product-ui-ux/workbench-acp/`（`index.html` 为图库） |
+
+人工抽查了 tools、diff、yolo、empty、long、disconnected、permission、login、slash、attach 在两种主题、1360 与 720 下的画面：长路径和 diff 不撑宽窗格；720 下计划、审批卡与输入区完整可见；断开后输入框显示「对话已结束，不能再输入」。
+
+`docs/verification/*` 按 `.gitignore` 默认不入库；这两个图库目录需要在 `.gitignore` 中显式放行（或 `git add -f`）才会随提交保存。

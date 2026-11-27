@@ -175,14 +175,71 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
     const acpStyles = 'C:\\Projects\\cliora\\src\\features\\sessions\\SessionWorkbench.module.css';
     // T5 input scenes: 'composer' declares commands, modes, options, images and history;
     // 'login' waits for a login; 'form' waits on an elicitation form.
-    const acpState = acpMode === 'stopping' ? 'stopping' : acpMode === 'permission' || acpMode === 'form' ? 'waiting_permission' : acpMode === 'login' ? 'auth_required' : 'ready';
+    // T6 scenes: 'empty' has not been asked anything yet; 'long' is a many-turn
+    // conversation with Markdown; 'tools' shows each tool shape (diff, embedded terminal,
+    // locations, a failure); 'yolo' runs in YOLO with its automatic approvals recorded;
+    // 'disconnected' is a conversation whose agent process went away mid-turn.
+    const acpState = acpMode === 'stopping' ? 'stopping' : acpMode === 'permission' || acpMode === 'form' ? 'waiting_permission' : acpMode === 'login' ? 'auth_required'
+      : acpMode === 'disconnected' ? 'closed' : acpMode === 'tools' ? 'running' : 'ready';
     const acpNativeId = acpMode === 'login' ? null : 'native-acp-1';
     const acpAuthError = acpMode === 'login' ? 'agent 要求先登录：没有找到有效的凭据' : null;
+    const acpEnd = (turnId, reason = 'end_turn') => ({ kind: 'turn', id: turnId + '-end', turnId, reason });
+    const acpTurnMessage = (id, role, text, turnId) => ({ ...acpMessage(id, role, text), turnId });
+    const acpLong = () => {
+      const topics = [
+        ['工具栏的按钮间距从哪里来？', '来自 `SessionWorkbench.module.css` 里两处固定像素值：\n\n- 工具栏内边距 `padding: 6px 10px`\n- 按钮之间的 `gap: 6px`\n\n两处都没有走共享令牌。'],
+        ['换成令牌之后会怎样？', '改成 `--space-1` 与 `--space-2` 相加：\n\n```css\n.toolbar {\n  padding: var(--space-1) calc(var(--space-1) + var(--space-2));\n  gap: calc(var(--space-1) + var(--space-0_5));\n}\n```\n\n深浅主题共用同一组令牌，不需要分别调整。'],
+        ['窄窗口会不会溢出？', '| 宽度 | 改前 | 改后 |\n| --- | --- | --- |\n| 1360 | 正常 | 正常 |\n| 900 | 正常 | 正常 |\n| 720 | 横向溢出 4px | 正常 |\n\n720px 下原来多出的 4px 来自 gap 叠加。'],
+        ['样式检查要怎么跑？', '运行 `node --test tests/native/style-tokens.test.mjs`。它会扫描所有 `*.module.css`，报告没有使用令牌的像素值。参考 [样式令牌说明](https://example.com/tokens)。'],
+        ['顺便看看图标按钮的圆角？', '图标按钮用的是 `--radius-sm`，和输入框一致，这次不用改。'],
+        ['最后汇总一下改动。', '1. 工具栏内边距与 gap 改为令牌相加；\n2. 样式检查通过，没有新的像素值；\n3. 720px 下不再横向溢出。\n\n可以提交了。'],
+      ];
+      return topics.flatMap(([question, answer], index) => {
+        const turn = 'turn-' + (index + 1);
+        return [acpTurnMessage('u' + index, 'user', question, turn), acpTurnMessage('a' + index, 'agent', answer, turn), acpEnd(turn)];
+      });
+    };
+    const acpTools = () => [
+      acpMessage('m1', 'user', '把工具栏间距改成令牌，跑一次样式检查，再看看还有哪些地方写死了像素。'),
+      acpTool('t1', '读取 SessionWorkbench.module.css', 'read', 'completed', { locations: [{ path: acpStyles, line: 86 }, { path: 'D:\\shared\\tokens.css', line: 12 }] }),
+      acpTool('t2', '搜索固定像素值', 'search', 'completed', { content: [{ type: 'text', text: 'src/features/sessions/SessionWorkbench.module.css:86  gap: 6px;\nsrc/features/sessions/SessionWorkbench.module.css:91  padding: 6px 10px;', truncated: false }] }),
+      acpTool('t3', '编辑 SessionWorkbench.module.css', 'edit', 'completed', { locations: [{ path: acpStyles, line: 86 }], content: [{ type: 'diff', path: acpStyles,
+        oldText: '.toolbar {\n  display: flex;\n  padding: 6px 10px;\n  gap: 6px;\n}', newText: '.toolbar {\n  display: flex;\n  padding: var(--space-1) calc(var(--space-1) + var(--space-2));\n  gap: calc(var(--space-1) + var(--space-0_5));\n}', truncated: false }] }),
+      { kind: 'access', id: 'access-w1', accessKind: 'write', path: acpStyles, detail: null, decision: 'inside', requestId: null, turnId: 'turn-1', subagent: null, userPath: null,
+        diff: { path: 'src/features/sessions/SessionWorkbench.module.css', oldText: '  gap: 6px;\n', newText: '  gap: calc(var(--space-1) + var(--space-0_5));\n', truncated: false, previousOmitted: false } },
+      acpTool('t4', '获取样式令牌说明', 'fetch', 'failed', { rawInput: '{"url":"https://example.com/tokens"}', content: [{ type: 'text', text: '请求超时：30 秒内没有响应', truncated: false }] }),
+      acpTool('t5', '运行样式检查', 'execute', 'completed', { rawInput: '{"command":"node --test tests/native/style-tokens.test.mjs"}', content: [{ type: 'terminal', terminalId: 'term-1' }] }),
+      acpMessage('m2', 'agent', '样式检查通过。还剩 `AcpConversation.module.css` 里一处 `margin: 3px`，接着处理。'),
+      acpTool('t6', '运行 npm run build', 'execute', 'in_progress', { rawInput: '{"command":"npm run build"}', content: [{ type: 'terminal', terminalId: 'term-2' }] }),
+    ];
+    const acpTerminals = acpMode === 'tools' ? [
+      { terminalId: 'term-1', command: 'node --test tests/native/style-tokens.test.mjs', cwd: 'C:\\Projects\\cliora', output: '✔ tokens are used for spacing (12ms)\n✔ no raw pixel values (8ms)\nℹ tests 2\nℹ pass 2\nℹ fail 0\n', truncated: false, exitStatus: { exitCode: 0, signal: null }, released: true, subagent: null },
+      { terminalId: 'term-2', command: 'npm run build', cwd: 'C:\\Projects\\cliora', output: '> cliora@0.5.0 build\n> tsc -b && vite build\n\nvite v6 building for production...\ntransforming (812) src/features/sessions/AcpConversation.tsx\n', truncated: false, exitStatus: null, released: false, subagent: null },
+    ] : [];
+    const acpYolo = () => [
+      acpMessage('m1', 'user', '在 D:\\shared 下生成一份令牌报告，然后跑一次测试。'),
+      acpTool('y1', '写入 D:\\shared\\tokens-report.md', 'edit', 'completed', { locations: [{ path: 'D:\\shared\\tokens-report.md', line: null }] }),
+      { kind: 'access', id: 'access-y1', accessKind: 'write', path: 'D:\\shared\\tokens-report.md', detail: null, decision: 'yolo', requestId: null, diff: { path: 'D:\\shared\\tokens-report.md', oldText: null, newText: '# 令牌报告\n\n- 间距：全部使用令牌\n', truncated: false, previousOmitted: false }, turnId: 'turn-1', subagent: null, userPath: null },
+      acpTool('y2', '运行 npm test', 'execute', 'completed', { rawInput: '{"command":"npm test"}' }),
+      { kind: 'notice', id: 'n-yolo', level: 'info', code: 'yolo_allowed', text: '已自动允许：运行 npm test（允许一次）', turnId: 'turn-1' },
+      { kind: 'access', id: 'access-y2', accessKind: 'read', path: 'D:\\shared\\tokens.css', detail: null, decision: 'yolo', requestId: null, diff: null, turnId: 'turn-1', subagent: null, userPath: null },
+      acpMessage('m2', 'agent', '报告已写到 `D:\\shared\\tokens-report.md`，测试全部通过。'),
+      acpEnd('turn-1'),
+    ];
+    const acpDisconnected = () => [
+      acpMessage('m1', 'user', '把终端工具栏的间距改成令牌相加，并跑一次样式检查。'),
+      acpMessage('m3', 'agent', '我先读工具栏样式和令牌定义，确认间距现在来自哪里。'),
+      acpTool('c1', 'read_file', 'read', 'completed', { locations: [{ path: acpStyles, line: 86 }] }),
+      acpTool('c3', 'run_command', 'execute', 'failed', { rawInput: '{"command":"node --test tests/native/style-tokens.test.mjs"}' }),
+      { kind: 'notice', id: 'n-exit', level: 'error', code: '', text: 'agent 进程已退出（退出码 1），连接已断开', turnId: 'turn-1' },
+      acpEnd('turn-1', 'disconnected'),
+    ];
+    const acpTimeline = acpMode === 'empty' ? [] : acpMode === 'long' ? acpLong() : acpMode === 'tools' ? acpTools() : acpMode === 'yolo' ? acpYolo() : acpMode === 'disconnected' ? acpDisconnected() : null;
     const acpFixture = acpMode ? [{
-      id: 'acp1', toolId: 'codex', projectId: 'cliora', directory: 'C:\\Projects\\cliora', mode: 'normal', interaction: 'acp',
+      id: 'acp1', toolId: 'codex', projectId: 'cliora', directory: 'C:\\Projects\\cliora', mode: acpMode === 'yolo' ? 'yolo' : 'normal', interaction: 'acp',
       state: acpState,
       nativeSessionId: acpNativeId, resume: 'none', authError: acpAuthError,
-      timeline: [
+      timeline: acpTimeline ?? [
         acpMessage('m1', 'user', '把终端工具栏的间距改成令牌相加，并跑一次样式检查。'),
         acpMessage('m2', 'thought', '先确认工具栏当前的间距来源，再改令牌，避免再写死像素值。'),
         acpMessage('m3', 'agent', '我先读工具栏样式和令牌定义，确认间距现在来自哪里。'),
@@ -214,8 +271,14 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
       ],
       pending: acpMode === 'permission' ? ['r1'] : acpMode === 'form' ? ['q1'] : [],
       grants: [],
-      terminals: [],
-      plan: [
+      terminals: acpTerminals,
+      plan: acpMode === 'empty' || acpMode === 'long' || acpMode === 'yolo' ? [] : acpMode === 'tools' ? [
+        { content: '读取工具栏样式与令牌', priority: 'high', status: 'completed' },
+        { content: '把固定像素换成令牌相加', priority: 'high', status: 'completed' },
+        { content: '运行样式检查', priority: 'medium', status: 'completed' },
+        { content: '处理剩余的写死像素', priority: 'medium', status: 'in_progress' },
+        { content: '重新构建并截图核对', priority: 'low', status: 'pending' },
+      ] : [
         { content: '读取工具栏样式与令牌', priority: 'high', status: 'completed' },
         { content: '把固定像素换成令牌相加', priority: 'high', status: 'completed' },
         { content: '运行样式检查', priority: 'medium', status: acpMode === 'stopping' ? 'in_progress' : 'completed' },
@@ -233,7 +296,8 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
         ],
         models: { currentModelId: 'gpt-5-codex', availableModels: [{ modelId: 'gpt-5-codex', name: 'GPT-5 Codex', description: null }, { modelId: 'gpt-5-mini', name: 'GPT-5 mini', description: null }] },
       } : { modes: null, options: [], models: null },
-      info: { title: '工具栏间距改用令牌', updatedAt: null, usage: null },
+      info: acpMode === 'empty' ? { title: null, updatedAt: null, usage: null }
+        : { title: '工具栏间距改用令牌', updatedAt: null, usage: acpMode === 'tools' || acpMode === 'long' ? { used: 48200, size: 200000, cost: acpMode === 'tools' ? { amount: 0.0412, currency: 'USD' } : null } : null },
       agent: {
         protocolVersion: 1, agentInfo: { name: 'codex-acp', title: 'Codex', version: '0.1.0' },
         promptCapabilities: { image: acpMode === 'composer', audio: false, embeddedContext: acpMode === 'composer' },
@@ -243,8 +307,8 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
           { id: 'api-key', name: 'API 密钥', description: '设置 OPENAI_API_KEY 后重试', type: 'env_var' },
         ] : [],
       },
-      diagnostics: acpMode === 'stopping' ? ['agent 标准错误：正在结束本轮（已脱敏）'] : [],
-      lastTurnReason: acpMode === 'stopping' ? '' : 'end_turn',
+      diagnostics: acpMode === 'stopping' ? ['agent 标准错误：正在结束本轮（已脱敏）'] : acpMode === 'disconnected' ? ['agent 标准错误：unexpected EOF on stdin（已脱敏）'] : [],
+      lastTurnReason: acpMode === 'stopping' || acpMode === 'empty' || acpMode === 'tools' ? '' : acpMode === 'disconnected' ? 'disconnected' : 'end_turn',
       seq: 24,
     }] : null;
     if (acpMode) {
@@ -457,7 +521,7 @@ async function shot(name, theme, width, run, empty = false, remoteState = null, 
       // A conversation is a native panel, not an xterm: wait for its own content.
       const panel = page.locator('[data-acp="true"][data-pane-session="acp1"]');
       await panel.waitFor();
-      await panel.locator('[data-role="agent"]').first().waitFor();
+      await panel.locator(acpMode === 'empty' ? '[data-acp-bar]' : '[data-role="agent"]').first().waitFor();
       // The input, or the login panel standing in for it.
       await panel.locator('[data-acp-composer], [data-acp-auth]').first().waitFor();
     } else if (remoteState) {
@@ -502,7 +566,7 @@ if (!widths.length || widths.some((width) => ![1360, 900, 720, 640].includes(wid
 const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
 // Routine desktop review: one example of each distinct primary surface. The
 // exhaustive platform/error/large-list variants remain opt-in via --full/--only.
-const defaultScenes = ['workbench-active', 'workbench-acp-conversation', 'workbench-worktrees-many', 'workbench-ended', 'workbench-composer',
+const defaultScenes = ['workbench-active', 'workbench-acp-conversation', 'workbench-acp-tools', 'workbench-worktrees-many', 'workbench-ended', 'workbench-composer',
   'workbench-dialog', 'workbench-task-dialog', 'workbench-task-states', 'workbench-restore-mixed',
   'workbench-remote-disconnected', 'workbench-empty'];
 const curated = !process.argv.includes('--full') && !process.argv.includes('--only');
@@ -680,9 +744,20 @@ for (const width of widths) {
   await shot('workbench-active-' + theme + '-' + width, theme, width);
   // An ACP conversation is a native chat pane, not a terminal: streaming text, tool cards
   // merged by call id, the turn's own result, and a stop that reports "stopping".
-  for (const mode of ['conversation', 'permission', 'stopping']) {
+  // T6 adds a fresh session, a long Markdown conversation, the tool shapes, YOLO and a
+  // disconnected agent.
+  for (const mode of ['conversation', 'permission', 'stopping', 'empty', 'long', 'tools', 'yolo', 'disconnected']) {
     await shot('workbench-acp-' + mode + '-' + theme + '-' + width, theme, width, null, false, null, null, null, false, null, mode);
   }
+  // The edit card's diff sits above the live terminal: scroll back to it, which also
+  // shows "back to latest" while the turn keeps running.
+  await shot('workbench-acp-diff-' + theme + '-' + width, theme, width, async (page) => {
+    const card = page.locator('[data-acp="true"][data-pane-session="acp1"] [data-item-id="tool:t3"]');
+    // A completed call is folded; open it the way a user would.
+    await card.locator('button[aria-expanded]').first().click();
+    await card.locator('[data-op="insert"]').first().waitFor();
+    await card.scrollIntoViewIfNeeded();
+  }, false, null, null, null, false, null, 'tools');
   // The conversation keeps its composer and message order at the narrowest supported width.
   if (width <= 720) await shot('workbench-acp-narrow-' + theme + '-' + width, theme, width, null, false, null, null, null, false, null, 'conversation');
   // The input and session controls: selectors (folded into "⋯" when narrow), the `/`
