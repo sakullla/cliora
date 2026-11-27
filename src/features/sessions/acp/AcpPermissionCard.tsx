@@ -3,9 +3,11 @@ import { Icon } from '../../../components/Icon';
 import type { AcpPermissionRequest } from '../../../types/acp';
 import styles from './acp.module.css';
 
-/** The agent's own options decide the button weight: an allow option is the
- *  primary choice, a reject option stays quiet. */
-function optionVariant(kind: string): 'primary' | 'quiet' {
+/** The agent's own options decide the button weight: allowing this once is the
+ *  primary choice; allowing always is a lasting decision, so it stays secondary
+ *  and is never the easiest button to hit; a reject option stays quiet. */
+function optionVariant(kind: string): 'primary' | 'secondary' | 'quiet' {
+  if (kind === 'allow_always') return 'secondary';
   return kind.startsWith('allow') ? 'primary' : 'quiet';
 }
 

@@ -43,9 +43,9 @@ import { commandHint, type TerminalCommandState } from './terminalCommandState';
 import { placeParts, railPlace, railTaskTitle } from './railTitle';
 import { uploadDisplayName, useSessionUploads, type SessionUploadTask } from './sessionUploads';
 import uploadStyles from './sessionUploads.module.css';
-import { AcpConversation } from './AcpConversation';
+import { AcpConversation, type AcpConversationHandle } from './AcpConversation';
 import { applyAcpEvent, acpIsLive, acpPendingCount, acpRow, type AcpConversation as AcpConversationState } from './acpSession';
-import type { AcpEvent, AcpSessionSnapshot } from '../../types/acp';
+import type { AcpAttachment, AcpEvent, AcpSessionSnapshot } from '../../types/acp';
 import { WorkbenchComposer } from './WorkbenchComposer';
 import { PromptPicker } from './PromptPicker';
 import { TerminalAppearance } from './TerminalAppearance';
@@ -1165,6 +1165,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const writers = useRef(new Map<string, (chunk: OutputChunk) => void>());
   const pending = useRef(new PendingTerminalOutput());
   const handles = useRef(new Map<string, TerminalHandle>());
+  /** Mounted conversations: the quick input, a native drop and the pane menu reach them here. */
+  const acpHandles = useRef(new Map<string, AcpConversationHandle>());
 
   const pasteAttachmentPaths = useCallback(async (sessionId: string, paths: string[]) => {
     const session = sessionsRef.current.find((item) => item.id === sessionId);
@@ -2761,8 +2763,28 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   /** One prompt in an existing conversation. The launch's own first prompt was already
    *  submitted by the native host, so nothing here resends it. */
-  async function promptConversation(sessionId: string, text: string) {
-    await acp.prompt(sessionId, text);
+  async function promptConversation(sessionId: string, text: string, attachments: AcpAttachment[] = []) {
+    await acp.prompt(sessionId, text, attachments);
+  }
+
+  /** Continue one of the agent's own sessions in a new pane: the same tool, directory and
+   *  project, as a conversation that resumes (or loads) that native session. */
+  async function resumeNativeConversation(session: WorkbenchSession, nativeId: string) {
+    const result = await native.launchCli({
+      toolId: session.toolId,
+      projectId: session.projectId,
+      sessionId: null,
+      mode: session.mode,
+      directory: session.directory || null,
+      worktreeIntent: 'given',
+      initialPrompt: null,
+      resumeLatest: false,
+      interaction: 'acp',
+      resumeNativeId: nativeId,
+    });
+    if (result.warnings?.length) setNotice(result.warnings.join('\n'));
+    const opened = await adoptLaunchResult(result);
+    if (opened) { onFailure(null); selectPendingSession(opened); }
   }
 
   /** Withdraw the turn: pending authorizations are withdrawn by the host until the turn
@@ -2811,6 +2833,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     try { await closeConversationNow(session.id); }
     catch (value) { setActionError(formatFailure(value, t('sessions.closeFailed'), t('sessions.closeNext'))); }
     finally { setBusy(''); }
+  }
+
+  /** A saved record as the session the same-directory recoveries start from. */
+  function restoreRowSession(saved: SavedWorkbenchSession): WorkbenchSession {
+    return { id: saved.id, toolId: saved.toolId, projectId: saved.projectId, directory: saved.directory, mode: saved.mode, running: false, exitCode: null };
   }
 
   /**
@@ -2898,7 +2925,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       // A control byte is not text: with no composer text there is nothing to send.
       if (!text.replace(/[\u0000-\u001f]/g, '').trim()) return false;
       try {
-        await acp.prompt(session.id, text);
+        // A mounted conversation sends its attachment tray along (files pasted into the
+        // quick input land there); otherwise the text goes alone.
+        const handle = acpHandles.current.get(session.id);
+        if (handle) await handle.submitText(text);
+        else await acp.prompt(session.id, text);
         return true;
       } catch (error) {
         setActionError(formatFailure(error, t('sessions.acpRetryFailed'), t('sessions.failureHint')));
@@ -3863,6 +3894,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           if (!id) return;
           const handle = handles.current.get(id);
           const droppedPaths = (payload.paths ?? []).filter((path) => path.trim());
+          // A conversation attaches dropped files to its next prompt instead of uploading them.
+          const conversation = acpHandles.current.get(id);
+          if (conversation && droppedPaths.length) { setSelectedId(id); conversation.addPaths(droppedPaths); return; }
           if (!handle || !droppedPaths.length) return;
           setSelectedId(id);
           const session = sessionsRef.current.find((item) => item.id === id);
@@ -4108,6 +4142,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                 ? <div className={styles.restoreRowActions}>
                   {row.candidates.length > 0 && <Button variant="primary" size="sm" disabled={rowBusy} onClick={() => { setRestoreChoice({ session: row.saved, detail: row.detail, candidates: row.candidates }); setRestoreChoiceError(''); }}>{t('sessions.chooseRestore')}</Button>}
                   <Button size="sm" disabled={rowBusy} icon={<Icon name="refresh" size={13} />} onClick={() => void retryRestoreRow(row)}>{t('sessions.retryRestore')}</Button>
+                  {/* A conversation that did not come back (it may need a login first) can start
+                      afresh in the same directory, or log in from a terminal there; the record
+                      stays so the restore can be retried afterwards. */}
+                  {row.saved.interaction === 'acp' && <>
+                    <Button size="sm" disabled={rowBusy || !!busy} data-restore-reopen="" icon={<Icon name="plus" size={13} />} onClick={() => void launchInDirectory(restoreRowSession(row.saved), 'acp')}>{t('sessions.acpRestoreReopen')}</Button>
+                    <Button size="sm" disabled={rowBusy || !!busy} data-restore-terminal="" icon={<Icon name="terminal" size={13} />} onClick={() => void launchInDirectory(restoreRowSession(row.saved), 'terminal')}>{t('sessions.acpRestoreTerminal')}</Button>
+                  </>}
                   <Button size="sm" disabled={rowBusy} onClick={() => forgetRestoreRow(row.saved.id)}>{t('sessions.dismissRestore')}</Button>
                 </div>
                 // A row that is still waiting keeps a visible exit: a record native never answers
@@ -4367,8 +4408,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   // A conversation renders its own panel: its content never reaches an xterm,
                   // and a terminal never receives conversation text.
                   const conversation = conversations.get(session.id);
-                  if (conversation) return <AcpConversation key={session.id} conversation={conversation} toolName={toolName(session)} active={visible} focused={focused} pane={split ? pane : undefined} header={split && visible ? paneHeader(session) : null} onSend={(text) => promptConversation(session.id, text)} onStop={() => stopConversation(session.id)} onAnswer={(requestId, optionId) => answerConversation(session.id, requestId, optionId)}
-                    onAnswerAccess={(accessId, decision) => answerConversationAccess(session.id, accessId, decision)} onRevokeGrants={(kinds) => acp.revokeGrants(session.id, kinds)} onKillTerminal={(terminalId) => acp.killTerminal(session.id, terminalId)} onOpenPath={nativeAvailable ? (target) => openConversationPath(session.id, target) : undefined} onClose={() => endSession(session)} />;
+                  if (conversation) return <AcpConversation key={session.id} ref={(handle) => { if (handle) acpHandles.current.set(session.id, handle); else acpHandles.current.delete(session.id); }}
+                    conversation={conversation} toolName={toolName(session)} active={visible} focused={focused} pane={split ? pane : undefined} header={split && visible ? paneHeader(session) : null} onSend={(text, attachments) => promptConversation(session.id, text, attachments)} onStop={() => stopConversation(session.id)} onAnswer={(requestId, optionId) => answerConversation(session.id, requestId, optionId)}
+                    onAnswerAccess={(accessId, decision) => answerConversationAccess(session.id, accessId, decision)} onRevokeGrants={(kinds) => acp.revokeGrants(session.id, kinds)} onKillTerminal={(terminalId) => acp.killTerminal(session.id, terminalId)} onOpenPath={nativeAvailable ? (target) => openConversationPath(session.id, target) : undefined} onClose={() => endSession(session)}
+                    onSetMode={(modeId) => acp.setMode(session.id, modeId)} onSetConfig={(configId, value) => acp.setConfig(session.id, configId, value)}
+                    onAuthenticate={(methodId) => acp.authenticate(session.id, methodId)} onLoginTerminal={() => launchInDirectory(session, 'terminal')}
+                    onRespondElicitation={(requestId, action, content) => acp.respondElicitation(session.id, requestId, action, content)}
+                    onListFiles={(query) => acp.listFiles(session.id, query, 50)} onNativeSessions={(cursor) => acp.nativeSessions(session.id, cursor)}
+                    onDeleteNativeSession={(nativeId) => acp.deleteNativeSession(session.id, nativeId)} onResumeNative={(nativeId) => resumeNativeConversation(session, nativeId)} />;
                   return <SessionTerminal key={session.id} sessionId={session.id} toolId={session.toolId} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} suspendInput={!!peekSession && session.id === selectedId} peeking={peeking} keepRendererWarm={renderActive && scopedSessionIds.has(session.id)} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onFilesPaste={(inputs) => uploads.enqueueUpload(session.id, remotePane || null, inputs)} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={TERMINAL_LINE_HEIGHT[density]} scrollSpeed={scrollSpeed} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
                     header={split && visible ? paneHeader(session) : null}
                     overlay={<>
@@ -4402,7 +4449,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   <div className={styles.peekBody} />
                 </div>}
               </div>
-              {current?.running && composerOpen && <WorkbenchComposer active={active} toolId={current.toolId} toolName={toolName(current)} place={placeOf(current)} draft={composerDrafts[current.id] ?? ''} promptContext={sessionPromptContext(current)} promptSourceKey={current.id} workspaces={businessWorkspaces} inputRef={composerInputRef} onChange={updateComposerDraft} onFilesPaste={(files) => handles.current.get(current.id)?.pasteFiles(files)} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
+              {current?.running && composerOpen && <WorkbenchComposer active={active} toolId={current.toolId} toolName={toolName(current)} place={placeOf(current)} draft={composerDrafts[current.id] ?? ''} promptContext={sessionPromptContext(current)} promptSourceKey={current.id} workspaces={businessWorkspaces} inputRef={composerInputRef} onChange={updateComposerDraft} onFilesPaste={(files) => { const conversation = acpHandles.current.get(current.id); if (conversation) conversation.addFiles(files); else handles.current.get(current.id)?.pasteFiles(files); }} onSubmit={() => void submitComposer()} onClose={() => toggleComposer(false)} />}
               {current && <footer className={styles.statusBar}>
                 <span className={styles.statusItem} data-host={remote ? 'remote' : 'local'} title={`${t('common.host.label')}：${hostLabel}${remoteHost ? ` · ${remoteHost.user}@${remoteHost.host}` : ''}`}><Icon name={remote ? 'server' : 'monitor'} size={12} />{hostLabel}</span>
                 {/* Git is one chip: branch name, a worktree glyph when this checkout is a linked worktree,
@@ -4559,6 +4606,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
             ? <button role="menuitem" disabled={!!busy} onClick={() => void launchInDirectory(session, 'acp')}><Icon name="refresh" size={14} /><span>{t('sessions.acpNewConversation')}</span></button>
             : <button role="menuitem" disabled={!!busy} title={!session.running ? t('sessions.restartHint') : undefined} onClick={() => void restartOrCloneSession(session, !session.running)}><Icon name={session.running ? 'plus' : 'refresh'} size={14} /><span>{session.running ? t('sessions.cloneSession') : t('sessions.restartSession')}</span></button>}
           {conversation && <button role="menuitem" disabled={!!busy} onClick={() => void launchInDirectory(session, 'terminal')}><Icon name="terminal" size={14} /><span>{t('sessions.acpFallbackTerminal')}</span></button>}
+          {conversation && acpIsLive(conversation) && <button role="menuitem" onClick={() => { selectSession(session.id, false); acpHandles.current.get(session.id)?.openHistory(); }}><Icon name="clock" size={14} /><span>{t('sessions.acpHistoryOpen')}</span></button>}
           {!session.projectId?.startsWith('remote:') && <button role="menuitem" onClick={() => openWorktreeSetup(setupDirectoryOf(session))}><Icon name="gitWorktree" size={14} /><span>{t('sessions.worktreeSetupOpen')}</span>{ledger.length > 0 && <span className={styles.menuCount}>{ledger.length}</span>}</button>}
           <span className={styles.menuDivider} role="separator" />
           <button role="menuitem" data-danger="true" disabled={!!busy} onClick={() => void endSession(session)}><Icon name="close" size={14} /><span>{session.running ? t('sessions.end') : t('sessions.closeTab')}</span></button>

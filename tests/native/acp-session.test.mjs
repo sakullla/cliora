@@ -317,14 +317,15 @@ test('a session waiting for a login offers only protocol methods and reads as wa
   assert.equal(acpIsLive(waiting.snapshot), true);
   assert.equal(acpTurnActive(waiting.snapshot), false);
   assert.deepEqual(acpProtocolLoginMethods(waiting.snapshot).map((method) => method.id), ['login']);
-  assert.equal(acpStateKey('auth_required'), 'sessions.acpStateWaiting');
+  assert.equal(acpStateKey('auth_required'), 'sessions.acpStateLogin');
   const ready = applyAcpEvent(waiting, { sessionId: 'a1', seq: 2, kind: 'snapshot', snapshot: snapshot({ seq: 2 }) });
   assert.equal(acpNeedsLogin(ready.snapshot), false);
   assert.equal(ready.snapshot.authError, null);
 });
 
-test('a resume without replay reads as the same restored conversation', () => {
-  assert.equal(acpResumeKey('resumed'), acpResumeKey('loaded'));
+test('a resume without replay is worded apart from a replayed load', () => {
+  assert.equal(acpResumeKey('resumed'), 'sessions.acpResumeResumed');
+  assert.equal(acpResumeKey('loaded'), 'sessions.acpResumeLoaded');
   assert.equal(acpResumeKey('none'), null);
 });
 

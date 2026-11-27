@@ -229,9 +229,7 @@ export function acpTurnKey(reason: AcpSessionSnapshot['lastTurnReason']): string
 export function acpStateKey(state: AcpSessionSnapshot['state']): string {
   switch (state) {
     case 'starting': return 'sessions.acpStateStarting';
-    // Waiting for a login is waiting for this person, worded as such until the
-    // login panel brings its own wording.
-    case 'auth_required': return 'sessions.acpStateWaiting';
+    case 'auth_required': return 'sessions.acpStateLogin';
     case 'ready': return 'sessions.acpStateReady';
     case 'running': return 'sessions.acpStateRunning';
     case 'stopping': return 'sessions.acpStateStopping';
@@ -246,8 +244,9 @@ export function acpStateKey(state: AcpSessionSnapshot['state']): string {
 export function acpResumeKey(resume: AcpSessionSnapshot['resume']): string | null {
   switch (resume) {
     // A resume without replay continues the same conversation as a replayed load.
-    case 'loaded':
-    case 'resumed': return 'sessions.acpResumeLoaded';
+    case 'loaded': return 'sessions.acpResumeLoaded';
+    // Continued through session/resume: the same conversation, without a replay.
+    case 'resumed': return 'sessions.acpResumeResumed';
     case 'failed': return 'sessions.acpResumeFailed';
     case 'unsupported': return 'sessions.acpResumeUnsupported';
     default: return null;

@@ -17,48 +17,6 @@
 .acpDiagnostics pre { max-height: 96px; margin: var(--space-1) 0 0; overflow: auto; font-family: var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .acpError { margin: 0; color: var(--term-danger); font-size: var(--fs-caption); overflow-wrap: anywhere; }
 
-.acpComposer { display: flex; flex: none; flex-direction: column; gap: var(--space-1); min-width: 0; }
-/* The composer reads in the terminal theme, not the app's global field style. */
-.acpInput,
-.acpInput:focus {
-  min-height: 0; width: 100%; resize: vertical;
-  padding: var(--space-2) var(--space-2_5);
-  border: 1px solid var(--term-frame); border-radius: var(--radius-sm);
-  background: var(--term-well); color: var(--term-fg); caret-color: var(--term-accent);
-  font-size: var(--fs-control); line-height: 1.55;
-  box-shadow: none;
-}
-.acpInput:focus { outline: 2px solid color-mix(in srgb, var(--term-accent) 55%, transparent); outline-offset: -1px; border-color: var(--term-accent); }
-.acpInput::placeholder { color: var(--term-text-3); }
-.acpInput:disabled { color: var(--term-text-3); opacity: 1; }
-.acpActions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); min-width: 0; }
-.acpHint { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--term-text-3); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
-
-.acpButton {
-  display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1);
-  min-height: var(--control-h-sm); padding: 0 var(--space-3);
-  border: 1px solid var(--term-frame); border-radius: var(--radius-sm);
-  background: transparent; color: var(--term-fg);
-  font-size: var(--fs-caption); font-weight: var(--fw-medium); white-space: nowrap; cursor: pointer; box-shadow: none;
-  transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease);
-}
-.acpButton:hover:not(:disabled) { border-color: var(--term-frame); background: var(--term-hover); box-shadow: none; }
-.acpButton:active:not(:disabled) { transform: none; }
-.acpButton:active:not(:disabled) { background: var(--term-press); }
-.acpButton:focus-visible { outline: 2px solid var(--term-accent); outline-offset: 1px; }
-.acpButton:disabled { cursor: not-allowed; opacity: .45; }
-.acpButton[data-variant='primary'] { border-color: var(--term-accent); background: var(--term-accent); color: var(--term-on-accent); font-weight: var(--fw-semibold); }
-.acpButton[data-variant='primary']:hover:not(:disabled) { border-color: var(--term-accent); background: color-mix(in srgb, var(--term-accent) 88%, var(--term-fg)); }
-.acpButton[data-variant='quiet'] { border-color: transparent; color: var(--term-text-2); }
-.acpButton[data-variant='quiet']:hover:not(:disabled) { border-color: transparent; }
-
-/* A narrow pane (720px window, split) drops the side room; every row may wrap. */
-@container acp-body (max-width: 560px) {
-  .acpHint { flex-basis: 100%; white-space: normal; }
-}
 @media (max-width: 760px) {
   .acpBody { padding: var(--space-1_5) var(--space-2) var(--space-2); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .acpButton { transition: none; }
 }

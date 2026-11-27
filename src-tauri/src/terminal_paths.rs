@@ -119,23 +119,34 @@ fn reveal_only(path: &Path) -> bool {
     false
 }
 
-/// The local directory a workbench session resolves paths against: a terminal
-/// session's current directory, or else an ACP conversation's own directory. An
-/// id neither host knows keeps the terminal host's error.
-pub(crate) fn session_directory(session_id: &str) -> Result<Option<PathBuf>, String> {
+/// Resolve a path a session showed: against a terminal session's current
+/// directory, or else an ACP conversation's own directory (an id neither host
+/// knows keeps the terminal host's error). A terminal session opens what its own
+/// output names. An ACP conversation offers only locations inside its directory,
+/// so the resolved target must still lie under that directory once every link
+/// and junction is followed; otherwise it is refused.
+pub(crate) fn resolve_for_session(session_id: &str, home: &Path, value: &str) -> Result<PathBuf, String> {
     match crate::session_host::local_directory(session_id) {
-        Ok(directory) => Ok(directory),
+        Ok(directory) => resolve(directory.as_deref(), home, value),
         Err(error) => match crate::acp::snapshot(session_id) {
-            Ok(snapshot) if !snapshot.directory.trim().is_empty() => Ok(Some(PathBuf::from(snapshot.directory))),
+            Ok(snapshot) if !snapshot.directory.trim().is_empty() => resolve_inside(Path::new(&snapshot.directory), home, value),
             _ => Err(error),
         },
     }
 }
 
-/// Resolve a path a session showed, with the same checks for both session kinds.
-pub(crate) fn resolve_for_session(session_id: &str, home: &Path, value: &str) -> Result<PathBuf, String> {
-    let directory = session_directory(session_id)?;
-    resolve(directory.as_deref(), home, value)
+/// Resolve `value` against `directory` and require the canonical target to lie
+/// under the canonical directory (component-wise; without case on Windows). A
+/// symbolic link or junction inside the directory that points elsewhere is
+/// refused, as is `..` or an absolute path outside it.
+fn resolve_inside(directory: &Path, home: &Path, value: &str) -> Result<PathBuf, String> {
+    let path = resolve(Some(directory), home, value)?;
+    let root = crate::safe_fs::canonical_root(directory)?;
+    if crate::safe_fs::is_protected(&path, &[root]) {
+        Ok(path)
+    } else {
+        Err(format!("该路径不在对话目录内（可能经符号链接或联接点指向别处），不能从对话中打开：{}", path.display()))
+    }
 }
 
 pub(crate) fn open(app: &tauri::AppHandle, session_id: &str, home: &Path, value: &str) -> Result<(), String> {
@@ -252,6 +263,43 @@ mod tests {
         let missing = temp.path().join("missing.md");
         let error = resolve(Some(&session), temp.path(), &missing.to_string_lossy()).unwrap_err();
         assert!(error.contains(&missing.display().to_string()), "{error}");
+    }
+
+    #[test]
+    fn a_conversation_opens_only_paths_that_stay_in_its_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("session");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(root.join("src/a.ts"), "a").unwrap();
+        std::fs::write(outside.join("key.txt"), "k").unwrap();
+        let link = root.join("link");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        #[cfg(windows)]
+        {
+            let status = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&link)
+                .arg(&outside)
+                .stdout(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "无法创建联接点");
+        }
+        // Inside the directory, relative or absolute, a file or a folder: allowed.
+        assert_eq!(resolve_inside(&root, temp.path(), "src/a.ts:3").unwrap(), root.join("src/a.ts").canonicalize().unwrap());
+        assert!(resolve_inside(&root, temp.path(), &root.join("src").display().to_string()).is_ok());
+        // The plain resolver follows the link; a conversation refuses where it lands.
+        assert!(resolve(Some(&root), temp.path(), "link/key.txt").is_ok());
+        let error = resolve_inside(&root, temp.path(), "link/key.txt").unwrap_err();
+        assert!(error.contains("不在对话目录内"), "{error}");
+        assert!(resolve_inside(&root, temp.path(), &link.join("key.txt").display().to_string()).is_err());
+        assert!(resolve_inside(&root, temp.path(), "link").is_err());
+        // `..` and an absolute path outside are refused as well.
+        assert!(resolve_inside(&root, temp.path(), "../outside/key.txt").is_err());
+        assert!(resolve_inside(&root, temp.path(), &outside.join("key.txt").display().to_string()).is_err());
     }
 
     #[cfg(unix)]

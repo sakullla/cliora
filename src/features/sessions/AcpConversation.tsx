@@ -1,11 +1,14 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { forwardRef, useImperativeHandle, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { Icon } from '../../components/Icon';
-import { modLabel } from '../../lib/shortcut';
-import type { AcpAccessKind } from '../../types/acp';
+import type { AcpAccessKind, AcpAttachment, AcpFileList, AcpNativeSessionPage } from '../../types/acp';
 import type { AcpConversation as Conversation } from './acpSession';
-import { acpIsLive, acpResumeKey, acpTurnActive } from './acpSession';
+import { acpIsLive, acpNeedsLogin, acpResumeKey, acpTurnActive } from './acpSession';
 import type { AccessAnswer } from './acp/AcpAccessCard';
+import { AcpAuthPanel } from './acp/AcpAuthPanel';
+import { AcpComposer, type AcpComposerHandle } from './acp/AcpComposer';
+import type { ElicitationAction } from './acp/AcpElicitationForm';
+import { AcpHistoryDialog } from './acp/AcpHistoryDialog';
 import { AcpPendingBar } from './acp/AcpPendingBar';
 import { AcpPlan } from './acp/AcpPlan';
 import { AcpSessionBar } from './acp/AcpSessionBar';
@@ -14,23 +17,28 @@ import { pendingItems } from './acp/acpView';
 import workbenchStyles from './SessionWorkbench.module.css';
 import styles from './AcpConversation.module.css';
 
+/** What the workbench may ask of a mounted conversation: the shared quick input and
+ *  a native drop route their attachments here, and the pane menu opens the history. */
+export type AcpConversationHandle = AcpComposerHandle & { openHistory: () => void };
+
 /**
  * One ACP conversation: a native chat view, not a terminal. The session bar says
  * what the conversation is and how far it may reach; the plan is pinned above the
  * ordered timeline (messages, tool cards with their authorization cards, approval
- * cards and records, notices, turn ends, subagents); "N items wait for you" sits
- * above the composer. The pane frame is the shared session card, so the rail, the
+ * cards, forms and records, notices, turn ends, subagents); "N items wait for you"
+ * sits above the composer, which gives way to the login panel while the agent
+ * waits for a login. The pane frame is the shared session card, so the rail, the
  * title bar, the split and the keyboard menu treat it like any other session.
  */
-export function AcpConversation({ conversation, toolName, active, focused = active, pane, header, onSend, onStop, onAnswer, onAnswerAccess, onRevokeGrants, onKillTerminal, onOpenPath, onClose }: {
+export const AcpConversation = forwardRef<AcpConversationHandle, {
   conversation: Conversation;
   toolName: string;
   active: boolean;
   focused?: boolean;
   pane?: number;
   header?: ReactNode;
-  /** Submits one prompt. The first prompt of a launch was already sent natively. */
-  onSend: (text: string) => Promise<void>;
+  /** Submits one prompt with its attachments. The first prompt of a launch was already sent natively. */
+  onSend: (text: string, attachments: AcpAttachment[]) => Promise<void>;
   onStop: () => Promise<void>;
   /** Answers exactly this request; the card disappears when the host confirms it. */
   onAnswer: (requestId: string, optionId: string | null) => Promise<void>;
@@ -43,36 +51,52 @@ export function AcpConversation({ conversation, toolName, active, focused = acti
   /** Opens a path inside the session directory; absent where nothing can be opened. */
   onOpenPath?: (target: string) => Promise<void>;
   onClose: () => Promise<void>;
-}) {
+  onSetMode: (modeId: string) => Promise<void>;
+  onSetConfig: (configId: string, value: string | boolean) => Promise<void>;
+  onAuthenticate: (methodId: string) => Promise<void>;
+  /** Opens a terminal session in the same directory to log in there. */
+  onLoginTerminal?: () => Promise<void>;
+  onRespondElicitation: (requestId: string, action: ElicitationAction, content: Record<string, unknown> | null) => Promise<void>;
+  onListFiles: (query: string) => Promise<AcpFileList>;
+  onNativeSessions: (cursor: string | null) => Promise<AcpNativeSessionPage>;
+  onDeleteNativeSession: (nativeId: string) => Promise<void>;
+  /** Opens the chosen native session in a new pane. */
+  onResumeNative: (nativeId: string) => Promise<void>;
+}>(function AcpConversation({ conversation, toolName, active, focused = active, pane, header, onSend, onStop, onAnswer, onAnswerAccess, onRevokeGrants, onKillTerminal, onOpenPath, onClose,
+  onSetMode, onSetConfig, onAuthenticate, onLoginTerminal, onRespondElicitation, onListFiles, onNativeSessions, onDeleteNativeSession, onResumeNative }, ref) {
   const { t } = useTranslation();
   const snapshot = conversation.snapshot;
-  const [draft, setDraft] = useState('');
   const [pending, setPending] = useState('');
   const [error, setError] = useState('');
+  const [historyOpen, setHistoryOpen] = useState(false);
   const timelineRef = useRef<AcpTimelineHandle | null>(null);
+  const composerRef = useRef<AcpComposerHandle | null>(null);
   const locateIndex = useRef(0);
   const live = acpIsLive(snapshot);
-  const turnActive = acpTurnActive(snapshot);
+  const login = acpNeedsLogin(snapshot);
+  // Waiting for an answer is still inside the turn: the main button stops it.
+  const turnBusy = acpTurnActive(snapshot) || snapshot.state === 'waiting_permission';
   const resumeKey = acpResumeKey(snapshot.resume);
   const placement = pane != null && pane >= 0 ? { gridColumn: pane + 1, gridRow: 1 } : undefined;
   const waiting = pendingItems(snapshot);
 
-  async function run(key: string, action: () => Promise<void>, after?: () => void) {
+  useImperativeHandle(ref, () => ({
+    addFiles: (files) => composerRef.current?.addFiles(files),
+    addPaths: (paths) => composerRef.current?.addPaths(paths),
+    submitText: (text) => composerRef.current ? composerRef.current.submitText(text) : onSend(text, []),
+    focus: () => composerRef.current?.focus(),
+    openHistory: () => setHistoryOpen(true),
+  }));
+
+  async function run(key: string, action: () => Promise<void>) {
     if (pending) return;
     setPending(key);
     setError('');
     try {
       await action();
-      after?.();
     } catch (value) {
       setError(String((value as { message?: string })?.message ?? value));
     } finally { setPending(''); }
-  }
-
-  function submit() {
-    const text = draft.trim();
-    if (!text) return;
-    void run('send', () => onSend(text), () => setDraft(''));
   }
 
   function locatePending() {
@@ -82,12 +106,12 @@ export function AcpConversation({ conversation, toolName, active, focused = acti
     timelineRef.current?.scrollToItem(waiting[index]);
   }
 
-  const canCompose = live && !turnActive && snapshot.state !== 'starting';
+  const canSend = live && !login && snapshot.state !== 'starting';
 
   return <div className={workbenchStyles.terminalInstance} hidden={!active} style={placement} data-pane-session={snapshot.id} data-acp="true" data-focused={(active && focused) || undefined} data-running={live || undefined}>
     {header}
     <div className={styles.acpBody} data-acp-body={snapshot.id}>
-      <AcpSessionBar snapshot={snapshot} toolName={toolName} onRevoke={onRevokeGrants} />
+      <AcpSessionBar snapshot={snapshot} toolName={toolName} onRevoke={onRevokeGrants} onHistory={() => setHistoryOpen(true)} />
       <AcpPlan entries={snapshot.plan} />
       <AcpTimeline
         ref={timelineRef}
@@ -99,6 +123,7 @@ export function AcpConversation({ conversation, toolName, active, focused = acti
         onAnswerAccess={(accessId, decision) => void run(accessId, () => onAnswerAccess(accessId, decision))}
         onKillTerminal={onKillTerminal}
         onOpenPath={onOpenPath}
+        onRespondElicitation={onRespondElicitation}
       />
       {(resumeKey || snapshot.diagnostics.length > 0) && <div className={styles.acpFooter}>
         {resumeKey && <p className={styles.acpResume} data-resume={snapshot.resume} role="status">{t(resumeKey)}</p>}
@@ -109,28 +134,24 @@ export function AcpConversation({ conversation, toolName, active, focused = acti
       </div>}
       <AcpPendingBar count={waiting.length} onLocate={locatePending} />
       {error && <p className={styles.acpError} role="alert">{error}</p>}
-      <div className={styles.acpComposer}>
-        <textarea
-          className={styles.acpInput}
-          aria-label={t('sessions.acpMessageLabel', { tool: toolName })}
-          placeholder={live ? t('sessions.acpPlaceholder') : t('sessions.acpEndedPlaceholder')}
-          value={draft}
-          rows={3}
-          disabled={!canCompose}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.key !== 'Enter' || event.nativeEvent.isComposing) return;
-            event.preventDefault();
-            submit();
-          }}
-        />
-        <div className={styles.acpActions}>
-          <span className={styles.acpHint}>{canCompose ? t('sessions.acpSendHint', { mod: modLabel }) : live ? t('sessions.acpBusyHint') : t('sessions.acpEnded')}</span>
-          {turnActive && <button type="button" className={styles.acpButton} data-variant="secondary" disabled={!!pending || snapshot.state === 'stopping'} onClick={() => void run('stop', onStop)}><Icon name="square" size={12} />{snapshot.state === 'stopping' ? t('sessions.acpStopping') : t('sessions.acpStop')}</button>}
-          {!live && <button type="button" className={styles.acpButton} data-variant="quiet" disabled={!!pending} onClick={() => void run('close', onClose)}>{t('sessions.acpClose')}</button>}
-          <button type="button" className={styles.acpButton} data-variant="primary" disabled={!canCompose || !draft.trim() || !!pending} onClick={submit}>{t('sessions.acpSend')}</button>
-        </div>
-      </div>
+      {login
+        ? <AcpAuthPanel snapshot={snapshot} toolName={toolName} onAuthenticate={onAuthenticate} onLoginTerminal={onLoginTerminal} />
+        : <AcpComposer
+          ref={composerRef}
+          snapshot={snapshot}
+          toolName={toolName}
+          live={live}
+          turnBusy={turnBusy}
+          busy={!!pending}
+          canSend={canSend}
+          onSend={onSend}
+          onStop={() => void run('stop', onStop)}
+          onClose={() => void run('close', onClose)}
+          onListFiles={onListFiles}
+          onSetMode={onSetMode}
+          onSetConfig={onSetConfig}
+        />}
     </div>
+    {historyOpen && createPortal(<AcpHistoryDialog open={historyOpen} snapshot={snapshot} toolName={toolName} onClose={() => setHistoryOpen(false)} onList={onNativeSessions} onDelete={onDeleteNativeSession} onResume={onResumeNative} />, document.body)}
   </div>;
-}
+});

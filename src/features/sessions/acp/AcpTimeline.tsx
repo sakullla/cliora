@@ -4,6 +4,7 @@ import { Icon } from '../../../components/Icon';
 import type { AcpElicitation, AcpSessionSnapshot, AcpSubagent, AcpTimelineItem } from '../../../types/acp';
 import { acpCardAnswerable, acpTurnKey } from '../acpSession';
 import { AcpAccessCard, type AccessAnswer } from './AcpAccessCard';
+import { AcpElicitationForm, type ElicitationAction } from './AcpElicitationForm';
 import { AcpMessage } from './AcpMessage';
 import { AcpToolCard } from './AcpToolCard';
 import { subagentStateKey, visibleControls } from './acpView';
@@ -60,7 +61,9 @@ export const AcpTimeline = forwardRef<AcpTimelineHandle, {
   onAnswerAccess: (accessId: string, decision: AccessAnswer) => void;
   onKillTerminal: (terminalId: string) => Promise<void>;
   onOpenPath?: (target: string) => Promise<void>;
-}>(function AcpTimeline({ snapshot, toolName, active, busyKey, onAnswer, onAnswerAccess, onKillTerminal, onOpenPath }, ref) {
+  /** Answers one elicitation form; rejects with the host's reason. */
+  onRespondElicitation: (requestId: string, action: ElicitationAction, content: Record<string, unknown> | null) => Promise<void>;
+}>(function AcpTimeline({ snapshot, toolName, active, busyKey, onAnswer, onAnswerAccess, onKillTerminal, onOpenPath, onRespondElicitation }, ref) {
   const { t } = useTranslation();
   const logRef = useRef<HTMLDivElement | null>(null);
   const followRef = useRef(true);
@@ -154,6 +157,9 @@ export const AcpTimeline = forwardRef<AcpTimelineHandle, {
       case 'subagent':
         return <SubagentItem key={item.id} item={item} />;
       case 'elicitation':
+        if (item.decision === 'pending' && item.requestId && snapshot.pending.includes(item.requestId)) {
+          return <AcpElicitationForm key={item.id} item={item} toolName={toolName} answerable={acpCardAnswerable(snapshot, item.requestId)} onRespond={onRespondElicitation} />;
+        }
         return <section key={item.id} className={item.decision === 'pending' ? styles.card : styles.accessRecord} data-item-id={item.id} data-card={item.decision === 'pending' ? 'elicitation' : undefined} data-decision={item.decision} data-request-id={item.requestId ?? undefined} aria-label={t('sessions.acpElicitationTitle', { tool: toolName })}>
           <strong className={styles.cardTitle}><Icon name="info" size={13} />{t('sessions.acpElicitationTitle', { tool: toolName })}</strong>
           <p className={styles.plainText}>{visibleControls(item.message)}</p>

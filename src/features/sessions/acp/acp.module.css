@@ -79,10 +79,6 @@ button.badge:hover:not(:disabled) { border-color: color-mix(in srgb, var(--term-
 button.badge:disabled { cursor: progress; opacity: .6; }
 .badge[data-badge='grant'] { border-color: color-mix(in srgb, var(--term-accent-2) 45%, var(--term-line)); background: color-mix(in srgb, var(--term-accent-2) 10%, transparent); color: var(--term-accent-2); }
 button.badge[data-badge='grant']:hover:not(:disabled) { border-color: color-mix(in srgb, var(--term-accent-2) 45%, var(--term-line)); background: color-mix(in srgb, var(--term-accent-2) 18%, transparent); }
-.stateBadge { padding: 0 var(--space-1_5); border-radius: var(--radius-pill); background: var(--term-hover); color: var(--term-text-2); line-height: 18px; white-space: nowrap; }
-.stateBadge[data-state='running'], .stateBadge[data-state='starting'] { background: color-mix(in srgb, var(--term-success) 16%, transparent); color: var(--term-success); }
-.stateBadge[data-state='waiting_permission'], .stateBadge[data-state='auth_required'], .stateBadge[data-state='stopping'] { background: color-mix(in srgb, var(--term-warning) 18%, transparent); color: var(--term-warning); }
-.stateBadge[data-state='failed'], .stateBadge[data-state='closed'] { background: color-mix(in srgb, var(--term-danger) 14%, transparent); color: var(--term-danger); }
 
 /* Plan. */
 .plan { flex: none; max-height: 34%; min-width: 0; overflow: auto; padding: var(--space-1_5) var(--space-2); border: 1px solid var(--term-line); border-radius: var(--radius-sm); background: var(--term-well); font-size: var(--fs-micro); }

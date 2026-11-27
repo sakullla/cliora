@@ -64,6 +64,10 @@ export async function installAcpMock(page: Page, config: Config = {}) {
       modes: [] as Array<[string, string]>,
       configs: [] as Array<[string, string, unknown]>,
       failSetting: null as string | null,
+      /** acp_prompt rejects with this reason while set (tests set it at run time). */
+      failPrompt: null as string | null,
+      /** acp_prompt waits for window.__acpReleasePrompt(reason?) while set. */
+      holdPrompt: false,
       cancels: [] as string[],
       answers: [] as Array<[string, string, string | null]>,
       accessAnswers: [] as Array<[string, string, string]>,
@@ -142,7 +146,22 @@ export async function installAcpMock(page: Page, config: Config = {}) {
           if (command === 'list_worktree_ledger') return [];
           if (command === 'list_acp_sessions') return conversations;
           if (command === 'acp_session') return find(args.sessionId) ?? null;
-          if (command === 'acp_prompt') { state.prompts.push([args.sessionId, args.text]); state.attachments.push([args.sessionId, args.attachments ?? []]); return null; }
+          if (command === 'acp_prompt') {
+            if (state.failPrompt) throw { message: state.failPrompt };
+            // A prompt whose attachment waits for an approval card: it answers only when
+            // the test releases it (with a reason to reject, as a stop or a denial does).
+            if (state.holdPrompt) {
+              return new Promise((resolve, reject) => {
+                (window as any).__acpReleasePrompt = (reason?: string) => {
+                  state.holdPrompt = false;
+                  if (reason) { reject({ message: reason }); return; }
+                  state.prompts.push([args.sessionId, args.text]); state.attachments.push([args.sessionId, args.attachments ?? []]);
+                  resolve(null);
+                };
+              });
+            }
+            state.prompts.push([args.sessionId, args.text]); state.attachments.push([args.sessionId, args.attachments ?? []]); return null;
+          }
           if (command === 'acp_authenticate') {
             state.authentications.push([args.sessionId, args.methodId]);
             if (state.failAuth) throw { message: state.failAuth };

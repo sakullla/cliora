@@ -173,10 +173,15 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
       turnId: 'turn-1', subagent: null, permission: null, ...extra,
     });
     const acpStyles = 'C:\\Projects\\cliora\\src\\features\\sessions\\SessionWorkbench.module.css';
+    // T5 input scenes: 'composer' declares commands, modes, options, images and history;
+    // 'login' waits for a login; 'form' waits on an elicitation form.
+    const acpState = acpMode === 'stopping' ? 'stopping' : acpMode === 'permission' || acpMode === 'form' ? 'waiting_permission' : acpMode === 'login' ? 'auth_required' : 'ready';
+    const acpNativeId = acpMode === 'login' ? null : 'native-acp-1';
+    const acpAuthError = acpMode === 'login' ? 'agent 要求先登录：没有找到有效的凭据' : null;
     const acpFixture = acpMode ? [{
       id: 'acp1', toolId: 'codex', projectId: 'cliora', directory: 'C:\\Projects\\cliora', mode: 'normal', interaction: 'acp',
-      state: acpMode === 'stopping' ? 'stopping' : acpMode === 'permission' ? 'waiting_permission' : 'ready',
-      nativeSessionId: 'native-acp-1', resume: 'none', authError: null,
+      state: acpState,
+      nativeSessionId: acpNativeId, resume: 'none', authError: acpAuthError,
       timeline: [
         acpMessage('m1', 'user', '把终端工具栏的间距改成令牌相加，并跑一次样式检查。'),
         acpMessage('m2', 'thought', '先确认工具栏当前的间距来源，再改令牌，避免再写死像素值。'),
@@ -196,9 +201,18 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
             ],
           },
         })] : []),
-        ...(acpMode === 'stopping' ? [] : [{ kind: 'turn', id: 'turn-1-end', turnId: 'turn-1', reason: 'end_turn' }]),
+        ...(acpMode === 'stopping' || acpMode === 'form' ? [] : [{ kind: 'turn', id: 'turn-1-end', turnId: 'turn-1', reason: 'end_turn' }]),
+        ...(acpMode === 'form' ? [{
+          kind: 'elicitation', id: 'e1', message: '发布前请补充版本信息。', toolCallId: null, decision: 'pending', requestId: 'q1', turnId: 'turn-1', subagent: null,
+          requestedSchema: { type: 'object', required: ['version', 'channel'], properties: {
+            version: { type: 'string', title: '版本号', description: '例如 0.5.0', minLength: 5 },
+            channel: { type: 'string', title: '发布渠道', oneOf: [{ const: 'stable', title: '稳定版' }, { const: 'beta', title: '测试版' }] },
+            notes: { type: 'array', title: '附带内容', items: { enum: ['更新日志', '迁移说明'] } },
+            notify: { type: 'boolean', title: '完成后通知', default: true },
+          } },
+        }] : []),
       ],
-      pending: acpMode === 'permission' ? ['r1'] : [],
+      pending: acpMode === 'permission' ? ['r1'] : acpMode === 'form' ? ['q1'] : [],
       grants: [],
       terminals: [],
       plan: [
@@ -206,13 +220,28 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
         { content: '把固定像素换成令牌相加', priority: 'high', status: 'completed' },
         { content: '运行样式检查', priority: 'medium', status: acpMode === 'stopping' ? 'in_progress' : 'completed' },
       ],
-      commands: [],
-      config: { modes: null, options: [], models: null },
+      commands: acpMode === 'composer' ? [
+        { name: 'review', description: '审查当前改动', hint: null },
+        { name: 'init', description: '生成 AGENTS.md', hint: '目录' },
+        { name: 'compact', description: '压缩上下文，保留要点', hint: null },
+      ] : [],
+      config: acpMode === 'composer' ? {
+        modes: { currentModeId: 'code', availableModes: [{ id: 'ask', name: '提问', description: null }, { id: 'code', name: '写代码', description: '可以改文件' }] },
+        options: [
+          { id: 'effort', name: '思考强度', description: null, category: 'thought_level', type: 'select', currentValue: 'medium', options: [{ value: 'low', name: '低', description: null, group: null }, { value: 'medium', name: '中', description: null, group: null }, { value: 'high', name: '高', description: null, group: null }] },
+          { id: 'web', name: '联网搜索', description: null, category: null, type: 'boolean', currentValue: true, options: [] },
+        ],
+        models: { currentModelId: 'gpt-5-codex', availableModels: [{ modelId: 'gpt-5-codex', name: 'GPT-5 Codex', description: null }, { modelId: 'gpt-5-mini', name: 'GPT-5 mini', description: null }] },
+      } : { modes: null, options: [], models: null },
       info: { title: '工具栏间距改用令牌', updatedAt: null, usage: null },
       agent: {
         protocolVersion: 1, agentInfo: { name: 'codex-acp', title: 'Codex', version: '0.1.0' },
-        promptCapabilities: { image: false, audio: false, embeddedContext: false },
-        sessionCapabilities: { list: false, resume: false, delete: false, close: false }, loadSession: false, authMethods: [],
+        promptCapabilities: { image: acpMode === 'composer', audio: false, embeddedContext: acpMode === 'composer' },
+        sessionCapabilities: { list: acpMode === 'composer', resume: acpMode === 'composer', delete: acpMode === 'composer', close: false }, loadSession: false,
+        authMethods: acpMode === 'login' ? [
+          { id: 'chatgpt', name: 'ChatGPT 账号', description: '在浏览器里完成登录', type: 'agent' },
+          { id: 'api-key', name: 'API 密钥', description: '设置 OPENAI_API_KEY 后重试', type: 'env_var' },
+        ] : [],
       },
       diagnostics: acpMode === 'stopping' ? ['agent 标准错误：正在结束本轮（已脱敏）'] : [],
       lastTurnReason: acpMode === 'stopping' ? '' : 'end_turn',
@@ -272,7 +301,11 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
           if (command === 'acp_prompt' || command === 'acp_cancel' || command === 'acp_respond_permission' || command === 'acp_respond_access' || command === 'acp_revoke_grants' || command === 'acp_kill_terminal' || command === 'acp_set_mode' || command === 'acp_set_config' || command === 'acp_close'
             || command === 'acp_authenticate' || command === 'acp_respond_elicitation' || command === 'acp_delete_native_session') return null;
           if (command === 'acp_list_files') return { files: ['src/features/sessions/SessionWorkbench.module.css', 'src/features/sessions/AcpConversation.tsx'], truncated: false, source: 'git' };
-          if (command === 'acp_native_sessions') return { sessions: [], nextCursor: null };
+          if (command === 'acp_native_sessions') return acpMode === 'composer' ? { sessions: [
+            { nativeId: 'native-acp-1', title: '工具栏间距改用令牌', updatedAt: '2026-11-27T08:00:00Z', cwd: 'C:\\Projects\\cliora', current: true },
+            { nativeId: 'native-acp-0', title: '修复登录后的恢复提示', updatedAt: '2026-11-26T09:30:00Z', cwd: 'C:\\Projects\\cliora', current: false },
+            { nativeId: 'native-acp-x', title: null, updatedAt: '2026-11-20T16:05:00Z', cwd: 'C:\\Projects\\cliora', current: false },
+          ], nextCursor: 'page-1' } : { sessions: [], nextCursor: null };
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
           // Saved records for the per-record restore scenes; absent means "nothing to restore".
@@ -416,7 +449,8 @@ async function shot(name, theme, width, run, empty = false, remoteState = null, 
       const panel = page.locator('[data-acp="true"][data-pane-session="acp1"]');
       await panel.waitFor();
       await panel.locator('[data-role="agent"]').first().waitFor();
-      await expect(panel.getByRole('button', { name: copy('发送', 'Send'), exact: true })).toBeVisible();
+      // The input, or the login panel standing in for it.
+      await panel.locator('[data-acp-composer], [data-acp-auth]').first().waitFor();
     } else if (remoteState) {
       const tab = page.locator('[role="tab"][data-session-id="r1"]');
       await tab.click();
@@ -642,6 +676,48 @@ for (const width of widths) {
   }
   // The conversation keeps its composer and message order at the narrowest supported width.
   if (width <= 720) await shot('workbench-acp-narrow-' + theme + '-' + width, theme, width, null, false, null, null, null, false, null, 'conversation');
+  // The input and session controls: selectors (folded into "⋯" when narrow), the `/`
+  // menu, an attached image with the `@` file menu, the login panel, a form and history.
+  const acpPanel = (page) => page.locator('[data-acp="true"][data-pane-session="acp1"]');
+  const acpInput = (page) => acpPanel(page).getByRole('textbox', { name: copy('给 Codex 的消息', 'Message to Codex'), exact: true });
+  await shot('workbench-acp-composer-' + theme + '-' + width, theme, width, async (page) => {
+    if (width <= 720) {
+      await acpPanel(page).getByRole('button', { name: copy('会话设置', 'Session settings'), exact: true }).click();
+      await acpPanel(page).getByRole('combobox', { name: copy('模式', 'Mode'), exact: true }).waitFor();
+    }
+  }, false, null, null, null, false, null, 'composer');
+  await shot('workbench-acp-slash-' + theme + '-' + width, theme, width, async (page) => {
+    await acpInput(page).click();
+    await acpInput(page).pressSequentially('/');
+    await acpPanel(page).locator('[data-acp-menu="commands"]').waitFor();
+  }, false, null, null, null, false, null, 'composer');
+  await shot('workbench-acp-attach-' + theme + '-' + width, theme, width, async (page) => {
+    const input = acpInput(page);
+    await input.click();
+    await input.evaluate((node) => {
+      const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([Uint8Array.from(atob(png), (char) => char.charCodeAt(0))], 'toolbar.png', { type: 'image/png' }));
+      node.dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true }));
+    });
+    await acpPanel(page).locator('[data-attachment="image"]').waitFor();
+    await input.pressSequentially(copy('对照截图检查 @Sess', 'Compare with the screenshot @Sess'));
+    await acpPanel(page).locator('[data-acp-menu="files"] [role="option"]').first().waitFor();
+  }, false, null, null, null, false, null, 'composer');
+  await shot('workbench-acp-login-' + theme + '-' + width, theme, width, async (page) => {
+    await acpPanel(page).locator('[data-acp-auth]').waitFor();
+  }, false, null, null, null, false, null, 'login');
+  await shot('workbench-acp-form-' + theme + '-' + width, theme, width, async (page) => {
+    const form = acpPanel(page).locator('[data-card="elicitation"]');
+    await form.waitFor();
+    await form.getByRole('button', { name: copy('提交', 'Submit'), exact: true }).click();
+    await form.getByRole('alert').first().waitFor();
+    await form.scrollIntoViewIfNeeded();
+  }, false, null, null, null, false, null, 'form');
+  await shot('workbench-acp-history-' + theme + '-' + width, theme, width, async (page) => {
+    await acpPanel(page).getByRole('button', { name: copy('历史会话…', 'Session history…'), exact: true }).click();
+    await page.locator('[data-acp-history] [data-native-id]').first().waitFor();
+  }, false, null, null, null, false, null, 'composer');
   // The task comes first; the context it will use is a compact summary under it, and the
   // worktree base, branch and setup command stay folded until they are needed.
   await shot('workbench-task-dialog-' + theme + '-' + width, theme, width, async (page) => {

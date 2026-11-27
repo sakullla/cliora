@@ -12,10 +12,12 @@ import styles from './acp.module.css';
  * does), and whether it runs in YOLO or holds session grants. Each grant is a
  * badge that revokes itself on click; the next access of that kind asks again.
  */
-export function AcpSessionBar({ snapshot, toolName, onRevoke }: {
+export function AcpSessionBar({ snapshot, toolName, onRevoke, onHistory }: {
   snapshot: AcpSessionSnapshot;
   toolName: string;
   onRevoke: (kinds: AcpAccessKind[]) => Promise<void>;
+  /** Opens the agent's own session history; absent when it cannot be read. */
+  onHistory?: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const [revoking, setRevoking] = useState('');
@@ -49,7 +51,10 @@ export function AcpSessionBar({ snapshot, toolName, onRevoke }: {
       {grants.map((kind) => <button key={kind} type="button" className={styles.badge} data-badge="grant" data-grant={kind} disabled={!!revoking} aria-label={t('sessions.acpGrantRevoke', { kind: t(accessKindKey(kind)) })} title={t('sessions.acpGrantRevoke', { kind: t(accessKindKey(kind)) })} onClick={() => revoke(kind)}>
         <Icon name="shield" size={11} />{t('sessions.acpGrant', { kind: t(accessKindKey(kind)) })}<Icon name="close" size={10} />
       </button>)}
-      <span className={styles.stateBadge} data-state={snapshot.state} role="status">{t(acpStateKey(snapshot.state))}</span>
+      {/* The stage bar above shows the session's state; this row keeps it for assistive
+          tech only, so the pane never shows two differently worded states. */}
+      <span className={styles.srOnly} data-acp-state={snapshot.state} role="status">{t(acpStateKey(snapshot.state))}</span>
+      {onHistory && live && <button type="button" className={styles.iconAction} data-acp-history-open="" aria-label={t('sessions.acpHistoryOpen')} title={t('sessions.acpHistoryOpen')} onClick={onHistory}><Icon name="clock" size={13} /></button>}
     </span>
     {error && <p className={styles.error} role="alert">{error}</p>}
   </div>;
