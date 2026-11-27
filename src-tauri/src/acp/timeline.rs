@@ -166,6 +166,44 @@ pub struct AcpSubagent {
     pub turn_id: String,
 }
 
+/// A file change the host made for the agent, kept for the record.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpFileDiff {
+    pub path: String,
+    /// The previous text; none for a new file or when it could not be kept.
+    pub old_text: Option<String>,
+    pub new_text: String,
+    /// One side was cut to the retained budget.
+    pub truncated: bool,
+    /// The file existed but its previous content was too large or not text.
+    pub previous_omitted: bool,
+}
+
+/// One file or command access the host served for the agent: an approval card
+/// while it waits, then the record of how it was decided.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAccess {
+    pub id: String,
+    /// read, write or execute. Named apart from the timeline's own `kind` tag.
+    pub access_kind: &'static str,
+    /// The file, or the working directory of a command, as the user knows it.
+    pub path: String,
+    /// The command line of an execute access.
+    pub detail: Option<String>,
+    /// pending (a card waiting for the user), allowed_once, allowed_session,
+    /// granted (an earlier "allow for this session"), yolo, inside (within the
+    /// session directory), denied or withdrawn.
+    pub decision: &'static str,
+    /// The id to answer while the card is pending; none once decided.
+    pub request_id: Option<String>,
+    /// The change a write made.
+    pub diff: Option<AcpFileDiff>,
+    pub turn_id: String,
+    pub subagent: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum AcpTimelineItem {
@@ -174,6 +212,7 @@ pub enum AcpTimelineItem {
     Notice(AcpNotice),
     Turn(AcpTurnEnd),
     Subagent(AcpSubagent),
+    Access(AcpAccess),
 }
 
 impl AcpTimelineItem {
@@ -184,6 +223,7 @@ impl AcpTimelineItem {
             Self::Notice(item) => &item.id,
             Self::Turn(item) => &item.id,
             Self::Subagent(item) => &item.id,
+            Self::Access(item) => &item.id,
         }
     }
 
@@ -194,6 +234,7 @@ impl AcpTimelineItem {
             Self::Notice(item) => &item.turn_id,
             Self::Turn(item) => &item.turn_id,
             Self::Subagent(item) => &item.turn_id,
+            Self::Access(item) => &item.turn_id,
         }
     }
 
@@ -225,6 +266,15 @@ impl AcpTimelineItem {
                 chars(&item.summary)
                     + item.title.as_deref().map(chars).unwrap_or(0)
                     + item.description.as_deref().map(chars).unwrap_or(0)
+            }
+            Self::Access(item) => {
+                chars(&item.path)
+                    + item.detail.as_deref().map(chars).unwrap_or(0)
+                    + item
+                        .diff
+                        .as_ref()
+                        .map(|diff| diff.old_text.as_deref().map(chars).unwrap_or(0) + chars(&diff.new_text))
+                        .unwrap_or(0)
             }
         }
     }
@@ -663,7 +713,9 @@ impl Timeline {
                 break;
             }
             // A tool still waiting for an answer is never dropped under its card.
-            if matches!(item, AcpTimelineItem::Tool(call) if call.permission.is_some()) {
+            if matches!(item, AcpTimelineItem::Tool(call) if call.permission.is_some())
+                || matches!(item, AcpTimelineItem::Access(access) if access.request_id.is_some())
+            {
                 index += 1;
                 continue;
             }

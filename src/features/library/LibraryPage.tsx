@@ -10,7 +10,7 @@ import { confirmAction, type ConfirmationOptions } from '../../lib/confirm';
 import type { LaunchMode, LaunchSettings, Project } from '../../types/launch';
 import { preferredLaunchMode, worktreeIntentForNewWorkbench } from '../../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../../types/library';
-import type { AdapterDescriptor, Scope } from '../../types/native';
+import { launchYoloSupport, type AdapterDescriptor, type Scope } from '../../types/native';
 import type { PluginTarget, RulePlacement, RuleSyncResult } from '../../types/resources';
 import type { BusinessWorkspace, WorkspaceSelection } from '../../types/workspaces';
 import { FOCUS_REFRESH_INTERVAL, WORKSPACES_CHANGED } from '../../lib/workspaceEvents';
@@ -556,6 +556,12 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     } catch (value) { showError(ruleFailure(value, t('library.page.ruleFailedRetryIcon'))); }
     finally { setBusy(false); }
   }
+  /** YOLO for a launch from the library: a conversation follows its ACP entry's own
+   *  YOLO declaration, a terminal the adapter's YOLO arguments. */
+  function yoloFor(descriptor: AdapterDescriptor | undefined, settings: LaunchSettings | null, desktop = descriptor?.launchForm === 'desktop') {
+    const interaction = !desktop && settings?.interaction === 'acp' && !settings?.interactionError ? 'acp' : 'terminal';
+    return launchYoloSupport(descriptor, interaction).available;
+  }
   function openLaunch(item: LibraryItem) {
     const initialTool = scopedTools[0]?.id ?? '';
     const initialPlace = item.projectId && projects.some((project) => project.id === item.projectId && project.available) ? `project:${item.projectId}` : '__home';
@@ -564,12 +570,12 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     setLaunchText(item.body);
     setLaunchTool(initialTool);
     setLaunchPlace(initialPlace);
-    setLaunchMode(preferredLaunchMode(launchSettings, initialPlace.startsWith('project:') ? 'project' : 'cli', !!descriptor?.yoloAvailable));
+    setLaunchMode(preferredLaunchMode(launchSettings, initialPlace.startsWith('project:') ? 'project' : 'cli', yoloFor(descriptor, launchSettings)));
     setLaunchError('');
     void native.getLaunchSettings().then((settings) => {
       if (!mounted.current) return;
       setLaunchSettings(settings);
-      setLaunchMode(preferredLaunchMode(settings, initialPlace.startsWith('project:') ? 'project' : 'cli', !!descriptor?.yoloAvailable));
+      setLaunchMode(preferredLaunchMode(settings, initialPlace.startsWith('project:') ? 'project' : 'cli', yoloFor(descriptor, settings)));
     }).catch(() => {});
   }
   const businessRepositoryOptions = useMemo(() => {
@@ -608,7 +614,7 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
     // Desktop apps open without a directory, as on the home page.
     const directory = !desktop ? (repoOption?.selection.directory ?? (launchPlace.startsWith('custom:') ? launchPlace.slice('custom:'.length) : null)) : null;
     const settings = await native.getLaunchSettings().catch(() => launchSettings);
-    const mode: LaunchMode = launchMode === 'yolo' && selectedDescriptor?.yoloAvailable ? 'yolo' : 'normal';
+    const mode: LaunchMode = launchMode === 'yolo' && yoloFor(selectedDescriptor, settings, desktop) ? 'yolo' : 'normal';
     const request = { ...(repoOption ? { workspaceId: repoOption.selection.workspaceId, repositoryId: repoOption.selection.repositoryId } : {}), toolId: launchTool, projectId, sessionId: null, mode, directory, initialPrompt: launchText, worktreeIntent: repoOption ? 'given' as const : worktreeIntentForNewWorkbench(settings, { desktop }), agent: selectedDescriptor?.agentLaunchAvailable && launchAgent ? launchAgent : null, interaction: (settings?.interaction ?? launchSettings?.interaction) === 'acp' ? 'acp' as const : null };
     try {
       const result = await native.launchCli(request);
@@ -895,7 +901,8 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
         const selectedDescriptor = scopedTools.find((item) => item.id === launchTool);
         const desktop = selectedDescriptor?.launchForm === 'desktop';
         const inWorkbench = !desktop && launchSettings?.selected === 'workbench';
-        const effectiveMode: LaunchMode = launchMode === 'yolo' && selectedDescriptor?.yoloAvailable ? 'yolo' : 'normal';
+        const yoloAvailable = yoloFor(selectedDescriptor, launchSettings, desktop);
+        const effectiveMode: LaunchMode = launchMode === 'yolo' && yoloAvailable ? 'yolo' : 'normal';
         const submitLabel = launchBusy ? t('library.page.launchStarting') : desktop ? t('library.page.launchSubmitDesktop') : inWorkbench ? t('library.page.launchSubmitWorkbench') : t('library.page.launchSubmit');
         return <div className={styles.editor}>
           {launchError && <div className={styles.error} role="alert">{launchError}</div>}
@@ -903,15 +910,15 @@ export function LibraryPage({ managedTools = [], remoteTargetId = 'local', activ
             <label>CLI<FilterSelect label={t('library.page.launchCli')} value={launchTool} options={toolOptions(scopedTools)} placeholder={t('library.page.noCli')} disabled={!scopedTools.length} searchLabel={t('library.page.searchCli')} onChange={(nextTool) => {
               setLaunchTool(nextTool);
               const nextDesc = scopedTools.find((item) => item.id === nextTool);
-              setLaunchMode(preferredLaunchMode(launchSettings, launchPlace.startsWith('project:') ? 'project' : 'cli', !!nextDesc?.yoloAvailable));
+              setLaunchMode(preferredLaunchMode(launchSettings, launchPlace.startsWith('project:') ? 'project' : 'cli', yoloFor(nextDesc, launchSettings)));
             }} /></label>
             {!desktop && <label>{t('sessions.pickWorkspaceLabel')}<FilterSelect label={t('sessions.pickWorkspaceLabel')} value={launchPlace} options={launchPlaces} searchable searchLabel={t('sessions.searchWorkspace')} onPickFolder={() => void pickLaunchFolder()} pickFolderLabel={t('sessions.pickFolder')} onChange={(nextPlace) => {
               setLaunchPlace(nextPlace);
-              setLaunchMode(preferredLaunchMode(launchSettings, nextPlace.startsWith('project:') ? 'project' : 'cli', !!selectedDescriptor?.yoloAvailable));
+              setLaunchMode(preferredLaunchMode(launchSettings, nextPlace.startsWith('project:') ? 'project' : 'cli', yoloAvailable));
             }} /></label>}
             {!desktop && <div className={styles.launchModeField}><span>{t('sessions.launchModeLabel')}</span><Segmented size="sm" label={t('sessions.launchModeLabel')} value={effectiveMode} onChange={setLaunchMode} options={[
               { value: 'normal', label: t('settings.terminal.modeNormal') },
-              { value: 'yolo', label: t('settings.terminal.modeYolo'), disabled: !selectedDescriptor?.yoloAvailable },
+              { value: 'yolo', label: t('settings.terminal.modeYolo'), disabled: !yoloAvailable },
             ]} /></div>}
             {!desktop && remoteTargetId === 'local' && !!selectedDescriptor?.agentLaunchAvailable && <label>{t('library.page.launchAgentLabel')}<FilterSelect label={t('library.page.launchAgentLabel')} value={launchAgent} searchable searchLabel={t('library.page.searchAgent')} options={[
               { value: '', label: t('library.page.launchAgentNone') },

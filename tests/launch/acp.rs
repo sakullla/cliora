@@ -190,6 +190,8 @@ pub(super) fn spec(directory: &Path) -> AcpStart {
             environment: vec![("FIXTURE_MODE".into(), "acp".into())],
             remove_environment: vec!["FIXTURE_LEAK".into()],
             origin: "bridge",
+            yolo: None,
+            yolo_mode: None,
         },
         environment: Vec::new(),
         remove_environment: Vec::new(),
@@ -198,6 +200,7 @@ pub(super) fn spec(directory: &Path) -> AcpStart {
         initial_prompt: None,
         resume_native_id: None,
         timeout: Duration::from_secs(5),
+        yolo_mode: None,
     }
 }
 
@@ -700,13 +703,13 @@ fn an_unknown_client_method_is_answered_with_method_not_found() {
     let (io, mut agent) = pair();
     let worker = std::thread::spawn(move || {
         agent.handshake(false);
-        // This host does not advertise the file-system capability yet, so a
-        // request for one has to be refused explicitly instead of hanging.
+        // A method this host does not advertise (elicitation is not served
+        // yet) has to be refused explicitly instead of hanging.
         agent.send(json!({
             "jsonrpc": "2.0",
             "id": 77,
-            "method": "fs/read_text_file",
-            "params": { "path": "/etc/hosts" },
+            "method": "elicitation/create",
+            "params": { "sessionId": "session-1" },
         }));
         let reply = agent.next_line();
         assert_eq!(reply["id"], 77);

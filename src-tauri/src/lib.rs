@@ -100,6 +100,7 @@ pub mod secrets;
 pub mod workspaces;
 pub mod remote;
 pub mod resources;
+mod safe_fs;
 pub mod session_host;
 mod session_baseline;
 pub mod workbench_restore;
@@ -411,6 +412,9 @@ pub fn run() {
             commands::acp_prompt,
             commands::acp_cancel,
             commands::acp_respond_permission,
+            commands::acp_respond_access,
+            commands::acp_revoke_grants,
+            commands::acp_kill_terminal,
             commands::acp_set_mode,
             commands::acp_set_config,
             commands::acp_close,

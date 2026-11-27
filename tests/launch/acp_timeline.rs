@@ -40,6 +40,7 @@ fn kinds(snapshot: &AcpSessionSnapshot) -> Vec<String> {
             AcpTimelineItem::Notice(notice) => format!("notice:{}", notice.code),
             AcpTimelineItem::Turn(turn) => format!("turn:{}", turn.reason),
             AcpTimelineItem::Subagent(child) => format!("subagent:{}", child.session_id),
+            AcpTimelineItem::Access(access) => format!("access:{}", access.access_kind),
         })
         .collect()
 }
@@ -55,6 +56,8 @@ fn event_kind(event: &AcpEvent) -> &'static str {
         AcpUpdate::Config { .. } => "config",
         AcpUpdate::Info { .. } => "info",
         AcpUpdate::Pending { .. } => "pending",
+        AcpUpdate::Terminal { .. } => "terminal",
+        AcpUpdate::TerminalOutput { .. } => "terminalOutput",
     }
 }
 
@@ -628,9 +631,9 @@ fn initialize_publishes_client_info_and_only_honoured_capabilities_and_keeps_the
     assert_eq!(initialize["params"]["clientInfo"]["name"], "Cliora");
     assert!(initialize["params"]["clientInfo"]["version"].is_string());
     let declared = &initialize["params"]["clientCapabilities"];
-    assert_eq!(declared["fs"]["readTextFile"], false, "未实现的能力不声明");
-    assert_eq!(declared["fs"]["writeTextFile"], false);
-    assert_eq!(declared["terminal"], false);
+    assert_eq!(declared["fs"]["readTextFile"], true, "已实现的文件能力必须声明");
+    assert_eq!(declared["fs"]["writeTextFile"], true);
+    assert_eq!(declared["terminal"], true);
     assert!(declared.get("elicitation").is_none(), "未实现的 elicitation 不声明");
     assert_eq!(declared["subagents"], json!({}));
     assert_eq!(created["params"]["mcpServers"], json!([]));

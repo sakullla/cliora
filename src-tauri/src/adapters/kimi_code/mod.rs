@@ -122,6 +122,7 @@ impl CliAdapter for KimiCode {
                 version_range_reason: "1.x 是已归档的旧版 Kimi CLI（1.52.0），ACP 会话与配置根与 Kimi Code 不同，不能互相替代；3.x 尚未核对",
                 capabilities: super::AcpCapabilities { session: true, authorization: true, cancel: true, resume: true },
                 rejects_system_program: false,
+                yolo: Some(super::AcpYolo::Client),
             },
         )
     }

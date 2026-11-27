@@ -9,7 +9,7 @@ import { test } from 'node:test';
 
 const read = (path) => readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8');
 
-const rust = ['src-tauri/src/acp/mod.rs', 'src-tauri/src/acp/timeline.rs', 'src-tauri/src/acp/capabilities.rs'].map(read).join('\n');
+const rust = ['src-tauri/src/acp/mod.rs', 'src-tauri/src/acp/timeline.rs', 'src-tauri/src/acp/capabilities.rs', 'src-tauri/src/acp/access.rs', 'src-tauri/src/acp/client_fs.rs', 'src-tauri/src/acp/terminal.rs'].map(read).join('\n');
 const commandsRs = read('src-tauri/src/commands.rs');
 const libRs = read('src-tauri/src/lib.rs');
 const typesTs = read('src/types/acp.ts');
@@ -186,6 +186,7 @@ test('every ACP command exists in the host, its registration, the IPC wrapper, t
   const mocked = sorted([...mockTs.matchAll(/command === '(\w+)'/g)].map((match) => match[1]).filter(isAcp));
   const captured = sorted([...captureMjs.matchAll(/command === '(\w+)'/g)].map((match) => match[1]).filter(isAcp));
   assert.ok(rustCommands.includes('acp_set_mode') && rustCommands.includes('acp_set_config'), rustCommands.join(', '));
+  for (const name of ['acp_respond_access', 'acp_revoke_grants', 'acp_kill_terminal']) assert.ok(rustCommands.includes(name), `missing ${name}`);
   assert.deepEqual(registered, rustCommands, 'lib.rs registration differs from commands.rs');
   assert.deepEqual(wrapped, rustCommands, 'src/lib/native.ts differs from commands.rs');
   assert.deepEqual(mocked, rustCommands, 'tests/ui/acpMock.ts differs from commands.rs');

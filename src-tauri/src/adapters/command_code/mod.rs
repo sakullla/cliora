@@ -114,6 +114,7 @@ impl CliAdapter for CommandCode {
                 version_range_reason: "",
                 capabilities: super::AcpCapabilities { session: true, authorization: true, cancel: true, resume: true },
                 rejects_system_program: true,
+                yolo: Some(super::AcpYolo::Client),
             },
         )
     }

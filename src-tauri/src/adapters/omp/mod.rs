@@ -118,6 +118,7 @@ impl CliAdapter for Omp {
                 version_range_reason: "",
                 capabilities: super::AcpCapabilities { session: true, authorization: true, cancel: true, resume: true },
                 rejects_system_program: false,
+                yolo: Some(super::AcpYolo::Client),
             },
         )
     }

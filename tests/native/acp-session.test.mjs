@@ -3,10 +3,12 @@ import { test } from 'node:test';
 import {
   acpCardAnswerable,
   acpIsLive,
+  acpOpenAccesses,
   acpPendingCount,
   acpResumeKey,
   acpRow,
   acpStateKey,
+  acpTerminal,
   acpTurnActive,
   acpTurnKey,
   applyAcpEvent,
@@ -16,7 +18,7 @@ import {
 function snapshot(overrides = {}) {
   return {
     id: 'a1', toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', interaction: 'acp',
-    state: 'ready', nativeSessionId: 'native-1', resume: 'none', timeline: [], pending: [], plan: [], commands: [],
+    state: 'ready', nativeSessionId: 'native-1', resume: 'none', timeline: [], pending: [], grants: [], terminals: [], plan: [], commands: [],
     config: { modes: null, options: [], models: null }, info: { title: null, updatedAt: null, usage: null },
     agent: {
       protocolVersion: 1, agentInfo: null, promptCapabilities: { image: false, audio: false, embeddedContext: false },
@@ -75,6 +77,7 @@ test('an event already applied, or older than the snapshot, is not replayed', ()
     { kind: 'config', config: { modes: { currentModeId: 'x', availableModes: [] }, options: [], models: null } },
     { kind: 'info', info: { title: 'x', updatedAt: null, usage: null } },
     { kind: 'pending', pending: ['r1'] },
+    { kind: 'terminal', terminal: { terminalId: 't9', command: 'x', cwd: 'C:/work', output: '', truncated: false, exitStatus: null, released: false, subagent: null } },
   ]) {
     assert.equal(applyAcpEvent(once, { sessionId: 'a1', seq: 6, ...event }), once, `${event.kind} 的重复序号必须忽略`);
   }
@@ -195,4 +198,54 @@ test('the rail row, liveness and the wording tables describe only what the host 
   assert.equal(acpResumeKey('loaded'), 'sessions.acpResumeLoaded');
   assert.equal(acpResumeKey('failed'), 'sessions.acpResumeFailed');
   assert.equal(acpResumeKey('unsupported'), 'sessions.acpResumeUnsupported');
+});
+
+function terminal(id, overrides = {}) {
+  return { terminalId: id, command: 'npm test', cwd: 'C:/work', output: '', truncated: false, exitStatus: null, released: false, subagent: null, ...overrides };
+}
+
+function output(seq, terminalId, text, extra = {}) {
+  return { sessionId: 'a1', seq, kind: 'terminalOutput', terminalId, text, dropped: 0, truncated: false, exitStatus: null, released: false, ...extra };
+}
+
+test('terminal output appends in order, drops exactly what the host dropped and reports exit and release', () => {
+  let state = start();
+  state = applyAcpEvent(state, { sessionId: 'a1', seq: 2, kind: 'terminal', terminal: terminal('t1') });
+  state = applyAcpEvent(state, output(3, 't1', 'hello '));
+  state = applyAcpEvent(state, output(4, 't1', 'world'));
+  assert.equal(acpTerminal(state.snapshot, 't1').output, 'hello world');
+  // The host kept a bounded tail: the view drops the same head after appending.
+  state = applyAcpEvent(state, output(5, 't1', '中文!', { dropped: 6, truncated: true }));
+  assert.equal(acpTerminal(state.snapshot, 't1').output, 'world中文!');
+  assert.equal(acpTerminal(state.snapshot, 't1').truncated, true);
+  // A repeated sequence number is not appended twice.
+  assert.equal(applyAcpEvent(state, output(5, 't1', '中文!', { dropped: 6, truncated: true })), state);
+  state = applyAcpEvent(state, output(6, 't1', '', { exitStatus: { exitCode: 0, signal: null }, truncated: true }));
+  assert.deepEqual(acpTerminal(state.snapshot, 't1').exitStatus, { exitCode: 0, signal: null });
+  state = applyAcpEvent(state, output(7, 't1', '', { truncated: true, released: true }));
+  const released = acpTerminal(state.snapshot, 't1');
+  assert.equal(released.released, true);
+  assert.deepEqual(released.exitStatus, { exitCode: 0, signal: null }, '释放不抹掉退出码');
+  assert.equal(released.output, 'world中文!', '释放后输出仍可读');
+  // Output for a terminal the view never saw waits for the next snapshot.
+  state = applyAcpEvent(state, output(8, 'ghost', 'x'));
+  assert.equal(acpTerminal(state.snapshot, 'ghost'), null);
+  assert.equal(state.snapshot.seq, 8);
+  // Terminals never enter the timeline.
+  assert.equal(state.snapshot.timeline.length, 0);
+});
+
+test('an approval card is open only while its request id is pending', () => {
+  const access = { kind: 'access', id: 'access-1', accessKind: 'read', path: 'C:/other/a.txt', detail: null, decision: 'pending', requestId: 'access-1-request', diff: null, turnId: 'turn-1', subagent: null };
+  let state = start({ state: 'running' });
+  state = applyAcpEvent(state, { sessionId: 'a1', seq: 2, kind: 'item', item: access });
+  assert.deepEqual(acpOpenAccesses(state.snapshot), [], '没有进入 pending 的卡不可回答');
+  state = applyAcpEvent(state, { sessionId: 'a1', seq: 3, kind: 'pending', pending: ['access-1-request'] });
+  assert.deepEqual(acpOpenAccesses(state.snapshot).map((item) => item.id), ['access-1']);
+  assert.equal(acpPendingCount(state.snapshot), 1, '审批卡计入等你处理');
+  state = applyAcpEvent(state, { sessionId: 'a1', seq: 4, kind: 'item', item: { ...access, decision: 'allowed_session', requestId: null } });
+  state = applyAcpEvent(state, { sessionId: 'a1', seq: 5, kind: 'pending', pending: [] });
+  assert.deepEqual(acpOpenAccesses(state.snapshot), []);
+  assert.deepEqual(ids(state), ['access:access-1'], '审批记录原位更新，不重复');
+  assert.equal(state.snapshot.timeline[0].decision, 'allowed_session');
 });

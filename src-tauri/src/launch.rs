@@ -1553,16 +1553,6 @@ fn resolve_interaction(
     if request.session_id.is_some() || request.resume_latest {
         return Ok((InteractionMode::Terminal, None));
     }
-    // A YOLO launch asks the CLI to approve every tool itself. The ACP entry
-    // publishes no such switch, and a conversation surfaces approvals as cards,
-    // so silently starting a quiet conversation would lose the mode the user
-    // chose.
-    if request.mode == LaunchMode::Yolo {
-        return Err(LaunchPlanError::new(
-            LaunchStage::Tool,
-            "ACP 对话不能表达 YOLO 自动批准：请在设置中改用终端启动，或改用普通模式".into(),
-        ));
-    }
     if request.agent.is_some() || request.session_options.as_ref().is_some_and(|options| !options.is_empty()) {
         return Err(LaunchPlanError::new(
             LaunchStage::Tool,
@@ -1579,7 +1569,31 @@ fn resolve_interaction(
             };
             LaunchPlanError::new(LaunchStage::Tool, format!("无法以 ACP 对话启动：{reason}"))
         })?;
+    let command = apply_acp_yolo(command, request.mode)?;
     Ok((InteractionMode::Acp, Some(command)))
+}
+
+/// Apply the entry's own YOLO declaration to a conversation launch. A client
+/// form needs nothing extra (the host approves); arguments extend the entry's;
+/// a mode is switched to once the session exists. An entry that declares no
+/// form refuses YOLO with a reason instead of silently starting a conversation
+/// that asks for every approval.
+fn apply_acp_yolo(mut command: AcpCommand, mode: LaunchMode) -> Result<AcpCommand, LaunchPlanError> {
+    if mode != LaunchMode::Yolo {
+        return Ok(command);
+    }
+    match command.yolo {
+        None => Err(LaunchPlanError::new(LaunchStage::Tool, adapters::ACP_YOLO_UNDECLARED.into())),
+        Some(adapters::AcpYolo::Client) => Ok(command),
+        Some(adapters::AcpYolo::Args { args }) => {
+            command.args.extend(args.iter().map(|arg| (*arg).to_owned()));
+            Ok(command)
+        }
+        Some(adapters::AcpYolo::Mode { mode_id }) => {
+            command.yolo_mode = Some(mode_id.to_owned());
+            Ok(command)
+        }
+    }
 }
 
 fn plan_with_stage_at(

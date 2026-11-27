@@ -27,7 +27,7 @@ import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, 
 import { preferredLaunchMode } from '../../types/launch';
 import type { PromptContext } from '../../types/prompts';
 import { inferWorkspaceScope } from '../../lib/workspaceScope';
-import type { AdapterDescriptor } from '../../types/native';
+import { launchYoloSupport, type AdapterDescriptor } from '../../types/native';
 import type { TerminalSemantics } from '../../adapters/contract';
 import type { RemoteProject, RemoteTarget } from '../../types/remote';
 import { SessionTitle, stableTitle } from './SessionTitle';
@@ -1282,6 +1282,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   /** The saved start mode is a conversation this tool cannot open; the dialog says so
    *  and offers the terminal instead of sending a launch the host would refuse. */
   const acpUnavailable = savedInteraction === 'acp' && !launchAcp.usable;
+  /** YOLO for this launch: a conversation reads the ACP entry's own YOLO declaration
+   *  (every registered entry approves on the client side), a terminal the adapter's
+   *  YOLO arguments. */
+  const dialogYolo = useMemo(() => launchYoloSupport(selectedLaunchTool, savedInteraction), [selectedLaunchTool, savedInteraction]);
   const selected = scopedSessions.find((item) => item.id === selectedId) ?? null;
   // Refresh the cheap branch hint while visible; enumerate checkouts only in the open menu.
   // A newly created worktree is read on each opening and while that menu remains visible.
@@ -1890,13 +1894,12 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }, [active, focusToken, focusSessionId, reload, remoteSshEnabled, t]);
 
   useEffect(() => {
-    if (!selectedLaunchTool?.yoloAvailable && launchMode === 'yolo') setLaunchMode('normal');
+    // The dialog keeps only a YOLO choice this launch can express: a conversation's entry
+    // must declare a YOLO form, a terminal launch needs the adapter's YOLO arguments.
+    if (!dialogYolo.available && launchMode === 'yolo') setLaunchMode('normal');
     if (!selectedLaunchTool?.resumeLatestAvailable && resumeLatest) setResumeLatest(false);
-    // A conversation surfaces approvals as cards, so a YOLO flag the ACP entry does not
-    // publish would silently lose the chosen mode. The dialog keeps the choice it can express.
-    if (savedInteraction === 'acp' && launchMode === 'yolo') setLaunchMode('normal');
     if (savedInteraction === 'acp' && resumeLatest) setResumeLatest(false);
-  }, [selectedLaunchTool, launchMode, resumeLatest, savedInteraction]);
+  }, [selectedLaunchTool, launchMode, resumeLatest, savedInteraction, dialogYolo]);
 
   useEffect(() => {
     if (!findOpen || !selectedId || !findQuery.trim()) {
@@ -2305,7 +2308,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   function applyPreferredMode(settings: LaunchSettings | null, target: 'cli' | 'project', toolId: string) {
     launchModeBasis.current = { target, toolId };
     const tool = terminalTools.find((item) => item.id === toolId);
-    setLaunchMode(preferredLaunchMode(settings, target, !!tool?.yoloAvailable));
+    const interaction = settings?.interactionError ? 'terminal' : settings?.interaction === 'acp' ? 'acp' : 'terminal';
+    setLaunchMode(preferredLaunchMode(settings, target, launchYoloSupport(tool, interaction).available));
   }
 
   /**
@@ -2588,7 +2592,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         projectId,
         sessionId: null,
         ...(remoteLaunch ? { remoteIntent: { kind: 'new' as const } } : {}),
-        mode: selectedLaunchTool?.yoloAvailable ? launchMode : 'normal',
+        // A terminal retry or a remote project uses the terminal's YOLO arguments; a
+        // conversation uses its entry's declaration.
+        mode: (fallback === 'terminal' || remoteLaunch ? !!selectedLaunchTool?.yoloAvailable : dialogYolo.available) ? launchMode : 'normal',
         directory,
         ...(promptText ? { initialPrompt: promptText } : {}),
         ...(resume ? { resumeLatest: true } : {}),
@@ -4663,7 +4669,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         </div>}
         <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.launchModeLabel')}</span><div className={styles.modeCards} role="radiogroup" aria-label={t('sessions.launchModeLabel')}>
           <button type="button" role="radio" aria-checked={launchMode === 'normal'} className={styles.modeCard} onClick={() => { launchModeTouched.current = true; setLaunchMode('normal'); }}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="shield" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeNormal')}</strong><small>{t('sessions.modeNormalDesc')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
-          <button type="button" role="radio" aria-checked={launchMode === 'yolo'} disabled={!selectedLaunchTool?.yoloAvailable || savedInteraction === 'acp'} title={savedInteraction === 'acp' ? t('sessions.yoloUnsupportedAcp') : !selectedLaunchTool?.yoloAvailable ? t('sessions.yoloUnsupported') : undefined} className={styles.modeCard} onClick={() => { launchModeTouched.current = true; setLaunchMode('yolo'); }}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="sparkle" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeYolo')}</strong><small>{selectedLaunchTool?.yoloAvailable ? t('sessions.modeYoloDesc') : t('sessions.yoloUnsupported')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
+          {(() => {
+            // A remote project never becomes a conversation: it keeps the terminal's YOLO.
+            const yolo = activeRemoteTarget ? launchYoloSupport(selectedLaunchTool, 'terminal') : dialogYolo;
+            const conversation = !activeRemoteTarget && savedInteraction === 'acp';
+            const unavailable = yolo.reason === 'acp' ? t('sessions.yoloUnsupportedAcp') : t('sessions.yoloUnsupported');
+            return <button type="button" role="radio" aria-checked={launchMode === 'yolo'} disabled={!yolo.available} title={yolo.available ? undefined : unavailable} data-yolo-route={conversation ? 'acp' : 'terminal'} className={styles.modeCard} onClick={() => { launchModeTouched.current = true; setLaunchMode('yolo'); }}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="sparkle" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeYolo')}</strong><small>{!yolo.available ? unavailable : conversation ? t('sessions.modeYoloAcpDesc') : t('sessions.modeYoloDesc')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>;
+          })()}
         </div></div>
         {/* Advanced options fold away; every edited value stays in the dialog's own state. */}
         {/* Only offer the fold when it holds something for this launch. */}

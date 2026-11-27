@@ -204,6 +204,28 @@ impl AcpCapabilities {
     pub const NONE: Self = Self { session: false, authorization: false, cancel: false, resume: false };
 }
 
+/// How an ACP entry expresses YOLO (approve everything without asking).
+///
+/// - `Client`: Cliora approves on the agent's behalf. Every authorization the
+///   agent asks through the protocol is answered with its allow option, and the
+///   host's own out-of-directory approvals are granted automatically. Nothing
+///   upstream has to be verified, because only protocol requests are involved.
+/// - `Args`: extra launch arguments that put the agent itself into YOLO.
+/// - `Mode`: a session mode the host switches to once the session exists.
+///
+/// Cliora also approves on the client side for `Args` and `Mode`, so a request
+/// the native switch still lets through is not left waiting.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum AcpYolo {
+    Client,
+    Args { args: &'static [&'static str] },
+    Mode { mode_id: &'static str },
+}
+
+/// The reason shown when an ACP entry declares no YOLO form.
+pub const ACP_YOLO_UNDECLARED: &str = "此 CLI 的 ACP 入口没有声明 YOLO 方式，请改用普通模式或终端启动";
+
 /// The adapter-owned declaration of one ACP entry point. Everything the shared
 /// host needs is here, so no shared service branches on a CLI id.
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -228,6 +250,10 @@ pub struct AcpEntry {
     /// Windows only: the executable name also names a system program
     /// (`cmd`), so a candidate outside the adapter's own installs is refused.
     pub rejects_system_program: bool,
+    /// How this entry runs a YOLO launch; none means YOLO is unavailable over
+    /// ACP and a YOLO request is refused with `ACP_YOLO_UNDECLARED`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yolo: Option<AcpYolo>,
 }
 
 /// Whether `path` is a Windows system program. `cmd acp` must never be
@@ -424,6 +450,13 @@ pub struct AcpCommand {
     pub environment: Vec<(String, String)>,
     pub remove_environment: Vec<String>,
     pub origin: &'static str,
+    /// The entry's YOLO form, carried to the planner. Not part of the wire shape.
+    #[serde(skip)]
+    pub yolo: Option<AcpYolo>,
+    /// A session mode the host must switch to after the session exists (a
+    /// `Mode` YOLO launch); none otherwise.
+    #[serde(default)]
+    pub yolo_mode: Option<String>,
 }
 
 /// Why an ACP launch cannot start, in the shape the UI reports. `code` is a
@@ -1681,6 +1714,7 @@ pub trait CliAdapter: Sync {
                     version_range_reason: "",
                     capabilities: AcpCapabilities::NONE,
                     rejects_system_program: false,
+                    yolo: None,
                 };
                 found.locate(&directories).map_err(|mut issue| {
                     issue.code = "dependency-missing";
@@ -1738,6 +1772,8 @@ pub trait CliAdapter: Sync {
             environment,
             remove_environment,
             origin: entry.origin.as_str(),
+            yolo: entry.yolo,
+            yolo_mode: None,
         })
     }
     fn launch_args(&self, session: Option<&str>, mode: LaunchMode) -> Result<Vec<String>, String>;

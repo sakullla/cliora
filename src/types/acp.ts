@@ -97,13 +97,72 @@ export type AcpSubagent = {
   turnId: string;
 };
 
+/** What an out-of-directory access does. */
+export type AcpAccessKind = 'read' | 'write' | 'execute';
+
+/** How an access was decided. 'pending' is a card waiting for the user;
+ *  'granted' came from an earlier "allow for this session", 'yolo' from the
+ *  session's YOLO mode, 'inside' from the session directory itself. */
+export type AcpAccessDecision = 'pending' | 'allowed_once' | 'allowed_session' | 'granted' | 'yolo' | 'inside' | 'denied' | 'withdrawn';
+
+/** A file change the host made for the agent. */
+export type AcpFileDiff = {
+  path: string;
+  /** Null for a new file or when the previous content could not be kept. */
+  oldText: string | null;
+  newText: string;
+  truncated: boolean;
+  /** The file existed but its previous content was too large or not text. */
+  previousOmitted: boolean;
+};
+
+/** One file or command access the host served for the agent: an approval card
+ *  while pending, then the record of its decision. */
+export type AcpAccess = {
+  id: string;
+  /** Named apart from the timeline item's own `kind` tag. */
+  accessKind: AcpAccessKind;
+  /** The file, or a command's working directory. */
+  path: string;
+  /** The command line of an execute access. */
+  detail: string | null;
+  decision: AcpAccessDecision;
+  /** The id to answer with acp_respond_access while pending; null once decided. */
+  requestId: string | null;
+  diff: AcpFileDiff | null;
+  turnId: string;
+  subagent: string | null;
+};
+
 /** One ordered timeline entry. Its place is fixed when it first appears. */
 export type AcpTimelineItem =
   | ({ kind: 'message' } & AcpMessage)
   | ({ kind: 'tool' } & AcpToolCall)
   | ({ kind: 'notice' } & AcpNotice)
   | ({ kind: 'turn' } & AcpTurnEnd)
-  | ({ kind: 'subagent' } & AcpSubagent);
+  | ({ kind: 'subagent' } & AcpSubagent)
+  | ({ kind: 'access' } & AcpAccess);
+
+/** How a terminal's command ended. */
+export type AcpTerminalExit = {
+  exitCode: number | null;
+  signal: string | null;
+};
+
+/** One terminal the agent created, with its bounded output tail. */
+export type AcpTerminal = {
+  terminalId: string;
+  command: string;
+  cwd: string;
+  output: string;
+  /** Older output was dropped to stay within the byte limit. */
+  truncated: boolean;
+  /** Null while the command runs. */
+  exitStatus: AcpTerminalExit | null;
+  /** Released by the agent or ended with the session; output stays visible. */
+  released: boolean;
+  subagent: string | null;
+};
 
 export type AcpPlanEntry = {
   content: string;
@@ -237,8 +296,14 @@ export type AcpSessionSnapshot = {
   resume: 'none' | 'unsupported' | 'loaded' | 'failed';
   /** Everything the conversation produced, in arrival order. */
   timeline: AcpTimelineItem[];
-  /** Request ids still waiting for the user's answer. */
+  /** Request ids still waiting for the user's answer: authorization cards and
+   *  out-of-directory approval cards. */
   pending: string[];
+  /** Categories the user allowed for the rest of this session. YOLO is the
+   *  session's mode, not a grant. */
+  grants: AcpAccessKind[];
+  /** Terminals the agent created. */
+  terminals: AcpTerminal[];
   plan: AcpPlanEntry[];
   commands: AcpAvailableCommand[];
   config: AcpSessionConfig;
@@ -262,6 +327,8 @@ export type AcpUpdate =
   | { kind: 'commands'; commands: AcpAvailableCommand[] }
   | { kind: 'config'; config: AcpSessionConfig }
   | { kind: 'info'; info: AcpSessionInfo }
-  | { kind: 'pending'; pending: string[] };
+  | { kind: 'pending'; pending: string[] }
+  | { kind: 'terminal'; terminal: AcpTerminal }
+  | { kind: 'terminalOutput'; terminalId: string; text: string; dropped: number; truncated: boolean; exitStatus: AcpTerminalExit | null; released: boolean };
 
 export type AcpEvent = { sessionId: string; seq: number } & AcpUpdate;

@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::adapters::{
-    AcpCapabilities, AcpCapability, AcpDependency, AcpEntry, AcpEnvironmentPolicy, AcpOrigin,
+    AcpCapabilities, AcpCapability, AcpDependency, AcpEntry, AcpEnvironmentPolicy, AcpOrigin, AcpYolo,
     CliAdapter, InspectionFields, LaunchMode, Registry,
 };
 use crate::credentials::CredentialStore;
@@ -70,6 +70,7 @@ const FIXTURE_ENTRY: AcpEntry = AcpEntry {
     version_range_reason: "fixture 只在 1.x 提供 ACP 入口",
     capabilities: AcpCapabilities { session: true, authorization: true, cancel: true, resume: false },
     rejects_system_program: false,
+    yolo: Some(AcpYolo::Client),
 };
 
 struct AcpFixture;

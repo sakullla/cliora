@@ -44,15 +44,17 @@ pub fn client_info() -> Value {
 }
 
 /// The client capabilities this host can honour today. A capability is only
-/// published once the host serves it: file-system, terminal and elicitation
-/// requests are refused with "method not found" until a later change implements
-/// them, so they are not advertised. Subagents are served: a child session is
+/// published once the host serves it. File reads and writes go through
+/// `client_fs` (shared `safe_fs`, approvals outside the session directory),
+/// terminals through `terminal` (no shell, process trees ended with the
+/// session). Elicitation requests are still refused with "method not found",
+/// so they are not advertised. Subagents are served: a child session is
 /// registered, its updates and requests are attributed to it, and nothing is
 /// ever sent for a child.
 pub fn client_capabilities() -> Value {
     json!({
-        "fs": { "readTextFile": false, "writeTextFile": false },
-        "terminal": false,
+        "fs": { "readTextFile": true, "writeTextFile": true },
+        "terminal": true,
         "subagents": {},
     })
 }

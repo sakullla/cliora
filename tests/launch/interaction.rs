@@ -117,17 +117,20 @@ fn a_conversation_is_chosen_only_for_a_local_new_session() {
     assert_eq!(mode, InteractionMode::Terminal);
     assert!(command.is_none());
 
-    // YOLO asks the CLI to approve every tool by itself. An ACP entry publishes
-    // no such switch and a conversation surfaces approvals as cards, so the
-    // mode is refused instead of silently disappearing.
+    // A YOLO conversation follows the entry's own declaration: OpenCode
+    // declares the client form, so Cliora approves and the entry's arguments
+    // stay exactly the declared ones.
     let mut yolo = request("open_code");
     yolo.mode = LaunchMode::Yolo;
-    let failure = resolve_interaction(
+    let (mode, command) = resolve_interaction(
         &db, &yolo, LaunchForm::Terminal, adapter, home, &installation, Some("2.7.0"),
     )
-    .unwrap_err();
-    assert_eq!(failure.stage, LaunchStage::Tool);
-    assert!(failure.message.contains("YOLO"), "{}", failure.message);
+    .unwrap();
+    assert_eq!(mode, InteractionMode::Acp);
+    let command = command.expect("YOLO 的 ACP 启动必须解析出入口");
+    assert_eq!(command.args, ["acp"]);
+    assert_eq!(command.yolo, Some(crate::adapters::AcpYolo::Client));
+    assert!(command.yolo_mode.is_none());
     // A YOLO terminal launch is unaffected by the stored preference.
     yolo.interaction = Some(InteractionMode::Terminal);
     assert_eq!(
@@ -270,4 +273,56 @@ fn a_version_outside_the_line_is_refused_with_the_shared_wording() {
     )
     .unwrap_err();
     assert!(failure.message.contains(crate::adapters::ACP_VERSION_OUT_OF_RANGE));
+}
+
+#[test]
+fn every_registered_acp_entry_declares_the_client_yolo_form() {
+    // YOLO over ACP is the client form for every agent: Cliora approves through
+    // the protocol, so nothing depends on an unverified upstream switch.
+    let registry = Registry::builtins();
+    let entries: Vec<(&str, crate::adapters::AcpEntry)> = registry
+        .iter()
+        .filter_map(|adapter| adapter.acp().entry.map(|entry| (adapter.id(), entry)))
+        .collect();
+    assert_eq!(entries.len(), 19, "{:?}", entries.iter().map(|(id, _)| *id).collect::<Vec<_>>());
+    for (id, entry) in &entries {
+        assert_eq!(entry.yolo, Some(crate::adapters::AcpYolo::Client), "{id} 必须声明 Client 型 YOLO");
+    }
+    // The registry publishes the declaration, so the UI reads it instead of a CLI id.
+    let descriptors = serde_json::to_value(registry.descriptors()).unwrap();
+    let published = descriptors
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|descriptor| descriptor["acp"]["entry"].is_object())
+        .inspect(|descriptor| assert_eq!(descriptor["acp"]["entry"]["yolo"], serde_json::json!({ "kind": "client" })))
+        .count();
+    assert_eq!(published, 19);
+}
+
+#[test]
+fn a_yolo_conversation_applies_the_entry_declaration_or_states_why_not() {
+    let base = AcpCommand {
+        program: PathBuf::from("agent"),
+        args: vec!["acp".into()],
+        environment: Vec::new(),
+        remove_environment: Vec::new(),
+        origin: "native",
+        yolo: None,
+        yolo_mode: None,
+    };
+    // A normal launch never consults the declaration.
+    assert!(apply_acp_yolo(base.clone(), LaunchMode::Normal).is_ok());
+    // No declaration: the reason is stated, nothing starts.
+    let failure = apply_acp_yolo(base.clone(), LaunchMode::Yolo).unwrap_err();
+    assert_eq!(failure.stage, LaunchStage::Tool);
+    assert_eq!(failure.message, crate::adapters::ACP_YOLO_UNDECLARED);
+    // Arguments extend the entry's own.
+    let with_args = AcpCommand { yolo: Some(crate::adapters::AcpYolo::Args { args: &["--yolo"] }), ..base.clone() };
+    assert_eq!(apply_acp_yolo(with_args, LaunchMode::Yolo).unwrap().args, ["acp", "--yolo"]);
+    // A mode is carried to the host, which switches once the session exists.
+    let with_mode = AcpCommand { yolo: Some(crate::adapters::AcpYolo::Mode { mode_id: "bypass" }), ..base.clone() };
+    let planned = apply_acp_yolo(with_mode, LaunchMode::Yolo).unwrap();
+    assert_eq!(planned.args, ["acp"]);
+    assert_eq!(planned.yolo_mode.as_deref(), Some("bypass"));
 }

@@ -1,4 +1,4 @@
-import type { AcpEvent, AcpSessionSnapshot, AcpTimelineItem, AcpUpdate } from '../../types/acp';
+import type { AcpEvent, AcpSessionSnapshot, AcpTerminal, AcpTimelineItem, AcpUpdate } from '../../types/acp';
 import type { WorkbenchSession } from '../../types/launch';
 
 /** One conversation as the workbench renders it: the native snapshot, folded
@@ -56,6 +56,37 @@ function appendChunk(timeline: AcpTimelineItem[], chunk: ChunkUpdate): AcpTimeli
   if (current.kind !== 'message') return timeline;
   const next = [...timeline];
   next[index] = { ...current, text: current.text + chunk.text, truncated: current.truncated || !!chunk.truncated };
+  return next;
+}
+
+type TerminalOutputUpdate = Extract<AcpUpdate, { kind: 'terminalOutput' }>;
+
+/** Insert a terminal, or replace the one with the same id where it stands. */
+function upsertTerminal(terminals: AcpTerminal[], terminal: AcpTerminal): AcpTerminal[] {
+  const index = terminals.findIndex((entry) => entry.terminalId === terminal.terminalId);
+  if (index < 0) return [...terminals, terminal];
+  const next = [...terminals];
+  next[index] = terminal;
+  return next;
+}
+
+/** Append a terminal's output exactly as the host did: the appended text goes on
+ *  the end, then `dropped` UTF-16 code units leave the head so the view keeps the
+ *  same bounded tail. Exit and release ride on the same event. */
+function applyTerminalOutput(terminals: AcpTerminal[], update: TerminalOutputUpdate): AcpTerminal[] | null {
+  const index = terminals.findIndex((entry) => entry.terminalId === update.terminalId);
+  if (index < 0) return null;
+  const current = terminals[index];
+  const joined = current.output + (typeof update.text === 'string' ? update.text : '');
+  const dropped = Number.isFinite(update.dropped) && update.dropped > 0 ? update.dropped : 0;
+  const next = [...terminals];
+  next[index] = {
+    ...current,
+    output: dropped ? joined.slice(dropped) : joined,
+    truncated: current.truncated || !!update.truncated,
+    exitStatus: update.exitStatus ?? current.exitStatus,
+    released: current.released || !!update.released,
+  };
   return next;
 }
 
@@ -118,6 +149,17 @@ export function applyAcpEvent(current: AcpConversation | undefined, event: AcpEv
       // the host last reported, so a stop still reads as stopping until it answers.
       return { snapshot: { ...base, pending: event.pending } };
     }
+    case 'terminal': {
+      if (!event.terminal || typeof event.terminal.terminalId !== 'string') return current;
+      return { snapshot: { ...base, terminals: upsertTerminal(snapshot.terminals ?? [], event.terminal) } };
+    }
+    case 'terminalOutput': {
+      if (typeof event.terminalId !== 'string') return current;
+      // Output for a terminal the view never saw cannot be placed; the next snapshot
+      // carries it whole.
+      const terminals = applyTerminalOutput(snapshot.terminals ?? [], event);
+      return terminals ? { snapshot: { ...base, terminals } } : { snapshot: base };
+    }
     default:
       return current;
   }
@@ -133,6 +175,17 @@ export function applyAcpEvents(current: AcpConversation | undefined, events: Acp
 /** Requests still waiting for this person. A closed conversation asks nothing. */
 export function acpPendingCount(snapshot: AcpSessionSnapshot): number {
   return acpIsLive(snapshot) ? snapshot.pending.length : 0;
+}
+
+/** The open out-of-directory approval cards, in timeline order. */
+export function acpOpenAccesses(snapshot: AcpSessionSnapshot) {
+  return snapshot.timeline.filter((item): item is Extract<AcpTimelineItem, { kind: 'access' }> =>
+    item.kind === 'access' && item.decision === 'pending' && !!item.requestId && snapshot.pending.includes(item.requestId));
+}
+
+/** The terminal a tool call's terminal content names, if the view holds it. */
+export function acpTerminal(snapshot: AcpSessionSnapshot, terminalId: string): AcpTerminal | null {
+  return (snapshot.terminals ?? []).find((terminal) => terminal.terminalId === terminalId) ?? null;
 }
 
 /** The card is answered once: while a reply is in flight every option is disabled. */

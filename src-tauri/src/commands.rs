@@ -3829,6 +3829,26 @@ pub fn acp_respond_permission(
         .map_err(native_error)
 }
 
+/// Answer an out-of-directory approval card: `once`, `session` (allow that
+/// category for the rest of the session) or `deny`. A late answer is refused.
+#[tauri::command]
+pub fn acp_respond_access(session_id: String, access_id: String, decision: String) -> Result<(), ApiError> {
+    crate::acp::respond_access(&session_id, &access_id, &decision).map_err(native_error)
+}
+
+/// Revoke session grants (`read`, `write`, `execute`); the next access asks again.
+#[tauri::command]
+pub fn acp_revoke_grants(session_id: String, kinds: Vec<String>) -> Result<(), ApiError> {
+    crate::acp::revoke_grants(&session_id, &kinds).map_err(native_error)
+}
+
+/// End a terminal's process tree at the user's request. Waiting for the tree
+/// to drain happens off the main thread.
+#[tauri::command]
+pub async fn acp_kill_terminal(session_id: String, terminal_id: String) -> Result<(), ApiError> {
+    blocking(move || crate::acp::kill_terminal(&session_id, &terminal_id).map_err(native_error)).await
+}
+
 /// Switch the conversation's mode to one the agent declared. The request waits
 /// for the agent's answer off the main thread; a refusal keeps the previous
 /// mode and republishes it.

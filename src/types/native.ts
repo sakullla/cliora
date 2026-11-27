@@ -161,6 +161,10 @@ export type AcpCapabilities = {
   resume: boolean;
 };
 
+/** How an ACP entry runs YOLO: 'client' means Cliora approves through the protocol;
+ *  'args' adds launch arguments; 'mode' switches the session mode once it exists. */
+export type AcpYolo = { kind: 'client' } | { kind: 'args'; args: string[] } | { kind: 'mode'; modeId: string };
+
 /** The adapter-owned declaration of one ACP entry point. */
 export type AcpEntry = {
   executable: string;
@@ -175,6 +179,8 @@ export type AcpEntry = {
   /** Windows only: the name also names a system program, so a candidate
    *  outside the adapter's own installs is refused. */
   rejectsSystemProgram: boolean;
+  /** Absent: YOLO is unavailable over ACP for this entry. */
+  yolo?: AcpYolo;
 };
 
 export type AcpCapability = {
@@ -194,6 +200,20 @@ export type AcpFailureCode =
   | 'identity-unresolved';
 
 export type AcpFailure = { code: AcpFailureCode; reason: string; help: string };
+
+/**
+ * Whether a launch can run in YOLO mode. A conversation follows the ACP entry's own
+ * YOLO declaration; a terminal launch follows the adapter's YOLO arguments. The reason
+ * says which one is missing, so the dialog can explain itself.
+ */
+export function launchYoloSupport(descriptor: AdapterDescriptor | null | undefined, interaction: 'terminal' | 'acp'): { available: boolean; reason: 'terminal' | 'acp' | null } {
+  if (!descriptor) return { available: false, reason: 'terminal' };
+  if (interaction === 'acp' && descriptor.launchForm === 'terminal') {
+    const declared = descriptor.acp?.state !== 'unsupported' && !!descriptor.acp?.entry?.yolo;
+    return { available: declared, reason: declared ? null : 'acp' };
+  }
+  return { available: !!descriptor.yoloAvailable, reason: descriptor.yoloAvailable ? null : 'terminal' };
+}
 
 export type AdapterCatalog = {
   registered: AdapterDescriptor[];

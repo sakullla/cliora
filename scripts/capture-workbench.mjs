@@ -199,6 +199,8 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
         ...(acpMode === 'stopping' ? [] : [{ kind: 'turn', id: 'turn-1-end', turnId: 'turn-1', reason: 'end_turn' }]),
       ],
       pending: acpMode === 'permission' ? ['r1'] : [],
+      grants: [],
+      terminals: [],
       plan: [
         { content: '读取工具栏样式与令牌', priority: 'high', status: 'completed' },
         { content: '把固定像素换成令牌相加', priority: 'high', status: 'completed' },
@@ -267,7 +269,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
           // ACP conversations come from the shared host, not from the PTY list.
           if (command === 'list_acp_sessions') return acpFixture ? acpFixture.map((item) => ({ ...item })) : [];
           if (command === 'acp_session') return acpFixture?.find((item) => item.id === args.sessionId) ?? null;
-          if (command === 'acp_prompt' || command === 'acp_cancel' || command === 'acp_respond_permission' || command === 'acp_set_mode' || command === 'acp_set_config' || command === 'acp_close') return null;
+          if (command === 'acp_prompt' || command === 'acp_cancel' || command === 'acp_respond_permission' || command === 'acp_respond_access' || command === 'acp_revoke_grants' || command === 'acp_kill_terminal' || command === 'acp_set_mode' || command === 'acp_set_config' || command === 'acp_close') return null;
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_workbench_sessions') return sessions.map((item) => ({ ...item }));
           // Saved records for the per-record restore scenes; absent means "nothing to restore".

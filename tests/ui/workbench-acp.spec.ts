@@ -264,3 +264,43 @@ test('replies and tool calls read in arrival order and a tool update stays in it
   await expect(order.nth(3)).toContainText('修改 src/a.ts');
   await expect(panel.locator('[data-item-id="tool:A"]')).toHaveCount(1);
 });
+
+test('a conversation can start in YOLO when its entry declares the client form', async ({ page }) => {
+  // The terminal launch has no YOLO arguments here: the conversation follows its own
+  // ACP declaration instead of the terminal's.
+  await installAcpMock(page, {
+    interaction: 'acp',
+    yoloAvailable: false,
+    acp: { state: 'supported', evidence: 'interactive', reason: '', entry: { executable: 'codex-acp', args: [], origin: 'native', yolo: { kind: 'client' } } },
+  });
+  await openWorkbench(page);
+  await page.getByRole('button', { name: '新建会话', exact: true }).first().click();
+  const dialog = page.getByRole('dialog');
+  const yolo = dialog.locator('[data-yolo-route]');
+  await expect(yolo).toHaveAttribute('data-yolo-route', 'acp');
+  await expect(yolo).toBeEnabled();
+  await expect(yolo).toContainText('由 Cliora 自动批准');
+  await yolo.click();
+  await expect(yolo).toHaveAttribute('aria-checked', 'true');
+  await dialog.locator('[data-dialog-save]').click();
+  const launches = await page.evaluate(() => (window as any).__acpTest.launches);
+  expect(launches.at(-1)).toMatchObject({ toolId: 'codex', interaction: 'acp', mode: 'yolo', sessionId: null });
+  await expect(page.locator('[data-acp="true"][data-pane-session="a1"]')).toBeVisible();
+});
+
+test('an ACP entry without a YOLO declaration keeps YOLO unavailable and says why', async ({ page }) => {
+  await installAcpMock(page, {
+    interaction: 'acp',
+    yoloAvailable: true,
+    acp: { state: 'unverified', evidence: 'handshake', reason: '', entry: { executable: 'codex-acp', args: [], origin: 'native' } },
+  });
+  await openWorkbench(page);
+  await page.getByRole('button', { name: '新建会话', exact: true }).first().click();
+  const dialog = page.getByRole('dialog');
+  const yolo = dialog.locator('[data-yolo-route]');
+  await expect(yolo).toBeDisabled();
+  await expect(yolo).toContainText('没有声明 YOLO 方式');
+  await dialog.locator('[data-dialog-save]').click();
+  const launches = await page.evaluate(() => (window as any).__acpTest.launches);
+  expect(launches.at(-1)).toMatchObject({ interaction: 'acp', mode: 'normal' });
+});

@@ -16,6 +16,11 @@
 //! - Client capabilities are published only when the client can honour them
 //!   (see `capabilities::client_capabilities`). A request for a capability the
 //!   host did not advertise is answered with "method not found".
+//! - File and terminal requests are served inside the session directory; a
+//!   path or working directory outside it needs the user's approval, a session
+//!   grant or YOLO (`access`). Cliora's own data is refused under any grant
+//!   (`crate::safe_fs`). Terminal commands run without a shell as process
+//!   trees the host ends on kill, release and session close (`terminal`).
 //! - A permission request is bound to the live connection, the session (or a
 //!   registered child session) and the turn that asked for it, and is answered
 //!   at most once.
@@ -27,7 +32,10 @@
 //!   exactly like the terminal launch. No protocol body is logged here, and
 //!   only the agent's own redacted standard error is retained.
 
+pub mod access;
 pub mod capabilities;
+pub mod client_fs;
+pub mod terminal;
 pub mod timeline;
 
 use std::collections::HashMap;
@@ -35,7 +43,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, LazyLock, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 #[cfg(test)]
 use std::time::Instant;
@@ -52,9 +60,11 @@ pub use capabilities::{
     AcpImplementation, AcpMode, AcpModel, AcpModels, AcpModes, AcpPlanEntry, AcpPromptCapabilities,
     AcpSessionCapabilities, AcpSessionConfig, AcpSessionInfo, AcpUsage, LEGACY_MODEL_CONFIG_ID,
 };
+pub use access::{AccessAnswer, AccessKind};
+pub use terminal::{AcpTerminal, AcpTerminalExit};
 pub use timeline::{
-    AcpMessage, AcpNotice, AcpPermissionOption, AcpPermissionRequest, AcpSubagent, AcpTimelineItem,
-    AcpToolCall, AcpToolContent, AcpToolLocation, AcpTurnEnd,
+    AcpAccess, AcpFileDiff, AcpMessage, AcpNotice, AcpPermissionOption, AcpPermissionRequest, AcpSubagent,
+    AcpTimelineItem, AcpToolCall, AcpToolContent, AcpToolLocation, AcpTurnEnd,
 };
 use timeline::Timeline;
 
@@ -100,6 +110,9 @@ pub struct AcpStart {
     /// How long one protocol request may wait for its response. A prompt turn
     /// is not a request with a deadline and never uses this.
     pub timeout: Duration,
+    /// A session mode to switch to once the session exists: the entry's
+    /// declared YOLO mode, for a YOLO launch only.
+    pub yolo_mode: Option<String>,
 }
 
 impl AcpStart {
@@ -125,11 +138,13 @@ impl AcpStart {
                     .map(|(name, value)| (name.clone(), value.clone())),
             );
         }
+        let yolo_mode = if plan.mode == LaunchMode::Yolo { command.yolo_mode.clone() } else { None };
         Ok(Self {
             tool_id: plan.tool_id.clone(),
             project_id: plan.project_id.clone(),
             directory: plan.directory.clone(),
             mode: plan.mode,
+            yolo_mode,
             command,
             environment,
             remove_environment,
@@ -167,8 +182,14 @@ pub struct AcpSessionSnapshot {
     pub resume: &'static str,
     /// Everything the conversation produced, in arrival order.
     pub timeline: Vec<AcpTimelineItem>,
-    /// Request ids still waiting for the user's answer.
+    /// Request ids still waiting for the user's answer: authorization cards
+    /// and out-of-directory approval cards.
     pub pending: Vec<String>,
+    /// Access categories (read, write, execute) the user allowed for the rest
+    /// of this session. YOLO is the session's mode, not a grant.
+    pub grants: Vec<&'static str>,
+    /// Terminals the agent created, with their bounded output.
+    pub terminals: Vec<AcpTerminal>,
     /// The agent's current plan; empty when it has none.
     pub plan: Vec<AcpPlanEntry>,
     /// The slash commands the agent currently offers.
@@ -222,6 +243,10 @@ pub enum AcpUpdate {
     Info { info: AcpSessionInfo },
     /// The request ids still waiting for an answer.
     Pending { pending: Vec<String> },
+    /// A terminal the agent created; it replaces the view's copy.
+    Terminal { terminal: AcpTerminal },
+    /// Output appended to a terminal: drop `dropped` UTF-16 code units from the head of (held output + text); exit and release are reported here too.
+    TerminalOutput { terminal_id: String, text: String, dropped: usize, truncated: bool, exit_status: Option<AcpTerminalExit>, released: bool },
 }
 
 /// The streams a session talks to. A subprocess supplies its pipes; a test
@@ -347,6 +372,18 @@ pub(crate) struct Session {
     /// The local secret-broker approval scope. Keeping this guard alive is what
     /// makes a secret reference usable for exactly this session.
     secret_session: Mutex<Option<crate::secrets::session::LocalSession>>,
+    /// A YOLO launch: out-of-directory access and the agent's authorization
+    /// requests are approved by the host.
+    yolo: bool,
+    /// Categories allowed for the rest of this session.
+    grants: Mutex<access::Grants>,
+    /// Out-of-directory approval cards still waiting for an answer.
+    accesses: Mutex<Vec<access::PendingAccess>>,
+    terminals: Mutex<terminal::Terminals>,
+    /// Signalled when a terminal exits or is released.
+    terminal_changed: Condvar,
+    /// The environment a terminal command receives: the agent's own.
+    terminal_environment: ChildEnvironment,
 }
 
 impl Session {
@@ -384,6 +421,12 @@ impl Session {
             turn: Mutex::new(None),
             timeout: spec.timeout,
             secret_session: Mutex::new(secret_session),
+            yolo: spec.mode == LaunchMode::Yolo,
+            grants: Mutex::new(access::Grants::default()),
+            accesses: Mutex::new(Vec::new()),
+            terminals: Mutex::new(terminal::Terminals::default()),
+            terminal_changed: Condvar::new(),
+            terminal_environment: child_environment(spec),
         }
     }
 
@@ -400,7 +443,10 @@ impl Session {
     }
 
     fn pending_ids(&self) -> Vec<String> {
-        guard(&self.permissions).iter().map(|pending| pending.request_id.clone()).collect()
+        let mut ids: Vec<String> =
+            guard(&self.permissions).iter().map(|pending| pending.request_id.clone()).collect();
+        ids.extend(self.access_pending_ids());
+        ids
     }
 
     fn emit_pending(&self) {
@@ -420,6 +466,8 @@ impl Session {
             resume: *guard(&self.resume),
             timeline: guard(&self.timeline).items().to_vec(),
             pending: self.pending_ids(),
+            grants: guard(&self.grants).list(),
+            terminals: guard(&self.terminals).states(),
             plan: guard(&self.plan).clone(),
             commands: guard(&self.commands).clone(),
             config: guard(&self.config).clone(),
@@ -444,7 +492,7 @@ impl Session {
             return;
         }
         let previous = *guard(&self.state);
-        let waiting = !guard(&self.permissions).is_empty();
+        let waiting = !guard(&self.permissions).is_empty() || !guard(&self.accesses).is_empty();
         let running = guard(&self.turn).is_some();
         *guard(&self.state) = if waiting {
             "waiting_permission"
@@ -552,7 +600,7 @@ impl Session {
         }
     }
 
-    fn handle_line(&self, line: &[u8]) {
+    fn handle_line(self: &Arc<Self>, line: &[u8]) {
         let text = match std::str::from_utf8(line) {
             Ok(text) => text.trim(),
             Err(_) => {
@@ -613,9 +661,11 @@ impl Session {
         }
     }
 
-    fn handle_request(&self, method: &str, id: Value, params: Value) {
+    fn handle_request(self: &Arc<Self>, method: &str, id: Value, params: Value) {
         match method {
             "session/request_permission" => self.open_permission(id, params),
+            "fs/read_text_file" | "fs/write_text_file" | "terminal/create" | "terminal/output"
+            | "terminal/wait_for_exit" | "terminal/kill" | "terminal/release" => self.serve_client(method, id, params),
             // Only advertised capabilities are served; anything else is refused
             // explicitly instead of left hanging.
             _ => {
@@ -627,6 +677,50 @@ impl Session {
                 self.diagnostic(&format!("agent 请求了未声明的客户端能力：{method}"));
             }
         }
+    }
+
+    /// Serve one file-system or terminal request on its own worker: an
+    /// approval card or a wait for exit must never stall the protocol reader.
+    /// Each request is answered exactly once, with its result or an error.
+    fn serve_client(self: &Arc<Self>, method: &str, id: Value, params: Value) {
+        let subagent = match self.scope_of(&params) {
+            Scope::Root => None,
+            Scope::Child(child) => Some(child),
+            Scope::Foreign => {
+                self.answer_error(&id, -32602, "该请求不属于本会话");
+                self.diagnostic(&format!("收到其他会话的客户端请求：{method}"));
+                return;
+            }
+        };
+        let session = Arc::clone(self);
+        let method = method.to_owned();
+        std::thread::spawn(move || {
+            let child = subagent.as_deref();
+            let result = match method.as_str() {
+                "fs/read_text_file" => session.read_text_file(child, &params),
+                "fs/write_text_file" => session.write_text_file(child, &params),
+                "terminal/create" => session.create_terminal(child, &params),
+                "terminal/output" => session.terminal_output(&params),
+                "terminal/wait_for_exit" => session.wait_for_exit(&params),
+                "terminal/kill" => params
+                    .get("terminalId")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "缺少参数 terminalId".to_string())
+                    .and_then(|terminal| session.kill_terminal(terminal))
+                    .map(|()| json!({})),
+                "terminal/release" => params
+                    .get("terminalId")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "缺少参数 terminalId".to_string())
+                    .and_then(|terminal| session.release_terminal(terminal))
+                    .map(|()| json!({})),
+                _ => Err("客户端未提供该能力".to_string()),
+            };
+            match result {
+                Ok(value) => session.answer_result(&id, value),
+                Err(error) => session.answer_error(&id, -32603, &error),
+            }
+        });
     }
 
     fn answer_permission(&self, id: &Value, outcome: Value) -> Result<(), String> {
@@ -699,6 +793,21 @@ impl Session {
         }
         if tool.get("toolCallId").and_then(Value::as_str).is_none() {
             tool["toolCallId"] = Value::String(format!("permission-{request_id}"));
+        }
+        // YOLO answers on the agent's own terms: an allow option is picked at
+        // once and the decision is recorded. A request without an allow option
+        // still reaches the user.
+        if self.yolo {
+            if let Some(option) = Self::yolo_option(&options).cloned() {
+                let call = guard(&self.timeline).upsert_tool(subagent.as_deref(), &turn_id, &tool, "工具调用");
+                if let Some(call) = &call {
+                    self.emit_update(AcpUpdate::Tool { call: call.clone() });
+                }
+                let _ = self.answer_permission(&id, json!({ "outcome": "selected", "optionId": option.option_id }));
+                let title = call.map(|call| call.title).unwrap_or_else(|| "工具调用".to_owned());
+                self.notice("info", "yolo_allowed", format!("已自动允许：{title}（{}）", option.name));
+                return;
+            }
         }
         let call = {
             let mut timeline = guard(&self.timeline);
@@ -1019,10 +1128,11 @@ impl Session {
             *permissions = kept;
             dropped
         };
-        let withdrew = !dropped.is_empty();
+        let mut withdrew = !dropped.is_empty();
         for pending in dropped {
             self.withdraw(pending);
         }
+        withdrew |= self.withdraw_accesses(|pending| pending.turn_id == turn_id);
         if withdrew {
             self.emit_pending();
         }
@@ -1050,10 +1160,11 @@ impl Session {
         // for the agent's own result. Whoever clicks a retired card is refused,
         // because it is no longer in the pending list.
         let withdrawn: Vec<PendingPermission> = std::mem::take(&mut *guard(&self.permissions));
-        let withdrew = !withdrawn.is_empty();
+        let mut withdrew = !withdrawn.is_empty();
         for pending in withdrawn {
             self.withdraw(pending);
         }
+        withdrew |= self.withdraw_accesses(|_| true);
         if withdrew {
             self.emit_pending();
         }
@@ -1208,6 +1319,10 @@ impl Session {
         }
         guard(&self.secret_session).take();
         *guard(&self.turn) = None;
+        // Approval cards are refused and every command the agent started ends
+        // with the session: nothing it ran outlives the conversation.
+        self.withdraw_accesses(|_| true);
+        self.close_terminals();
         let dropped: Vec<PendingPermission> = std::mem::take(&mut *guard(&self.permissions));
         {
             let mut timeline = guard(&self.timeline);
@@ -1278,6 +1393,16 @@ fn emit(event: AcpEvent) {
 }
 
 pub fn install(app: AppHandle) {
+    use tauri::Manager;
+    // Cliora's own data (database, credentials, sessions) is never served to
+    // an agent, whatever it was granted.
+    let paths = app.path();
+    for directory in [paths.app_data_dir(), paths.app_local_data_dir(), paths.app_config_dir()]
+        .into_iter()
+        .flatten()
+    {
+        crate::safe_fs::protect(&directory);
+    }
     let _ = APP.set(app);
 }
 
@@ -1311,6 +1436,30 @@ pub fn cancel(id: &str) -> Result<(), String> {
 /// is an error rather than a second protocol reply.
 pub fn respond_permission(id: &str, request_id: &str, option_id: Option<&str>) -> Result<(), String> {
     lookup(id)?.respond(request_id, option_id)
+}
+
+/// Answer an out-of-directory approval card: once, for the rest of the
+/// session (that category), or deny. The card is consumed; a late or repeated
+/// answer is an error.
+pub fn respond_access(id: &str, access_id: &str, decision: &str) -> Result<(), String> {
+    let answer = AccessAnswer::parse(decision).ok_or("未知的审批答复")?;
+    lookup(id)?.respond_access(access_id, answer)
+}
+
+/// Revoke session grants; the next access of each category asks again.
+pub fn revoke_grants(id: &str, kinds: &[String]) -> Result<(), String> {
+    let kinds: Vec<AccessKind> = kinds
+        .iter()
+        .map(|kind| AccessKind::parse(kind).ok_or_else(|| format!("未知的授权类别：{kind}")))
+        .collect::<Result<_, _>>()?;
+    lookup(id)?.revoke_grants(&kinds);
+    Ok(())
+}
+
+/// End a terminal's process tree at the user's request. The terminal stays
+/// readable; the agent sees the exit like any other.
+pub fn kill_terminal(id: &str, terminal_id: &str) -> Result<(), String> {
+    lookup(id)?.kill_terminal(terminal_id)
 }
 
 /// Switch the session mode to one the agent declared.
@@ -1448,6 +1597,13 @@ fn open_with(
     }
     *guard(&session.state) = "ready";
     session.publish();
+    // A YOLO entry that declares a mode switches to it before the first turn.
+    // A refusal is reported, and the host still approves on the client side.
+    if let Some(mode) = spec.yolo_mode.as_deref() {
+        if let Err(error) = session.set_mode(mode) {
+            session.notice("warning", "yolo_mode_failed", format!("未能切换到 YOLO 模式：{error}"));
+        }
+    }
     if let Some(prompt) = spec.initial_prompt.clone() {
         if let Err(error) = session.begin_turn(&prompt) {
             session.fail(&error);
@@ -1587,33 +1743,10 @@ fn spawn_io(spec: &AcpStart) -> Result<(AcpIo, crate::secrets::session::LocalSes
         return Err("ACP 入口程序不存在，请在工具页重新检测安装路径".into());
     }
     let cwd = crate::launch::terminal_path(&spec.directory)?;
-    let mut command = if crate::adapters::acp_needs_command_interpreter(program) {
-        // A batch entry cannot be a process image; the command interpreter runs
-        // it instead, and arguments stay literal through raw_arg.
-        let line = format!(
-            "\"{}\" {}",
-            program.display(),
-            spec.command
-                .args
-                .iter()
-                .map(|arg| format!("\"{}\"", arg.replace('"', "\"\"")))
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
-        let mut interpreter = crate::background_process::command(interpreter_program());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            interpreter.raw_arg(format!("/D /V:OFF /S /C \"{line}\""));
-        }
-        #[cfg(not(windows))]
-        interpreter.arg(line);
-        interpreter
-    } else {
-        let mut command = crate::background_process::command(program);
-        command.args(&spec.command.args);
-        command
-    };
+    // A batch entry cannot be a process image; the command interpreter runs it
+    // instead, and arguments stay literal through raw_arg. Terminal commands
+    // share the same wrapping.
+    let mut command = terminal::program_command(program, &spec.command.args);
     command
         .current_dir(&cwd)
         .stdin(std::process::Stdio::piped())
@@ -1705,3 +1838,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../tests/launch/acp_timeline.rs"]
 mod timeline_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/launch/acp_client.rs"]
+mod client_tests;

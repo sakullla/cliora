@@ -12,7 +12,7 @@ import type { AgentSnapshot, AgentRequest, AgentResult, PluginTarget, PluginRequ
 import type { Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, MemoryAggregate, MemoryReadRequest, MemoryReadResult, MemoryDelete, MemoryDocument, MemoryEnable, MemoryList, MemorySave, MemoryTarget, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
 import type { InteractionMode, LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, SavedWorkbenchSession, TerminalId, TrayStatus, TwiglaneFeedbackPreview, TwiglaneFeedbackSendOutcome, TwiglaneLinkOutcome, TwiglaneReviewState, WorkbenchCodeStatus, WorkbenchGitContext, WorkbenchWorktree, WorkbenchReplay, WorkbenchSession, WorkbenchTerminalSize, RemoteSessionIndexEntry, WorktreeBase, WorktreeBasePreview, WorktreeCleanupReport, WorktreeLedgerEntry, WorktreeMenuStatus, WorktreePrepareCommand } from '../types/launch';
-import type { AcpEvent, AcpSessionSnapshot } from '../types/acp';
+import type { AcpAccessKind, AcpEvent, AcpSessionSnapshot } from '../types/acp';
 import type { LibraryDraft, LibraryItem, LibraryTitle, LibraryKind } from '../types/library';
 import type { ScriptAccessOptions, NewSecretExecutor, PromptSecret, PromptSecretPage, PromptSecretReference, SecretAuditEntry, SecretBrokerStatus, SecretCliContext, SecretExecutor, SecretGrant, SecretInstallation, SecretInstallationKind, SecretMcpState, SecretMcpTarget } from '../types/secrets';
 import type { McpDefinition, McpDraft, McpDraftPreview, McpDraftTargetRequest, McpCommitResult, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpStore, NativeRuleFile, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue, SkillManifest, SkillFileListing, SkillFilePreview } from '../types/resources';
@@ -659,6 +659,14 @@ export const acp = {
    *  `ACP_LEGACY_MODEL_CONFIG` addresses the legacy model list. */
   setConfig: (sessionId: string, configId: string, value: string | boolean) =>
     command<void>('acp_set_config', { sessionId, configId, value }),
+  /** Answer an out-of-directory approval card once: allow this access, allow the
+   *  category for the rest of the session, or deny. A late answer rejects. */
+  respondAccess: (sessionId: string, accessId: string, decision: 'once' | 'session' | 'deny') =>
+    command<void>('acp_respond_access', { sessionId, accessId, decision }),
+  /** Revoke session grants; the next access of each category asks again. */
+  revokeGrants: (sessionId: string, kinds: AcpAccessKind[]) => command<void>('acp_revoke_grants', { sessionId, kinds }),
+  /** End a terminal's whole process tree; its output stays readable. */
+  killTerminal: (sessionId: string, terminalId: string) => command<void>('acp_kill_terminal', { sessionId, terminalId }),
   close: (sessionId: string) => command<void>('acp_close', { sessionId }),
 };
 

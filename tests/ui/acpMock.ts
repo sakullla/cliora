@@ -12,7 +12,7 @@ type AcpDeclaration = {
   state: 'supported' | 'unverified' | 'unsupported';
   evidence?: 'interactive' | 'handshake' | 'documented' | 'none';
   reason?: string;
-  entry?: { executable: string; args: string[]; origin: 'native' | 'vendor' | 'bridge'; dependency?: { name: string; installHint: string }; capabilities?: Record<string, boolean> };
+  entry?: { executable: string; args: string[]; origin: 'native' | 'vendor' | 'bridge'; dependency?: { name: string; installHint: string }; capabilities?: Record<string, boolean>; yolo?: { kind: 'client' } | { kind: 'args'; args: string[] } | { kind: 'mode'; modeId: string } };
 };
 
 type Config = {
@@ -24,6 +24,8 @@ type Config = {
   failInteractionSave?: boolean;
   failLaunch?: string | null;
   sessions?: Array<Record<string, unknown>>;
+  /** The terminal launch's own YOLO arguments; defaults to available. */
+  yoloAvailable?: boolean;
 };
 
 /** The host's own snapshot shape: the mock never invents a field the host lacks. */
@@ -47,6 +49,9 @@ export async function installAcpMock(page: Page, config: Config = {}) {
       failSetting: null as string | null,
       cancels: [] as string[],
       answers: [] as Array<[string, string, string | null]>,
+      accessAnswers: [] as Array<[string, string, string]>,
+      revokes: [] as Array<[string, string[]]>,
+      kills: [] as Array<[string, string]>,
       closes: [] as string[],
       sessions: (config.sessions ?? []) as Array<Record<string, unknown>>,
     };
@@ -91,7 +96,7 @@ export async function installAcpMock(page: Page, config: Config = {}) {
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
           if (command === 'list_cli_adapters') return {
             registered: [{
-              id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true, resumeLatestAvailable: false, projectModelOverride: false,
+              id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: config.yoloAvailable ?? true, resumeLatestAvailable: false, projectModelOverride: false,
               launchForm: 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' },
               resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' },
               acp: acpDeclaration(),
@@ -122,6 +127,9 @@ export async function installAcpMock(page: Page, config: Config = {}) {
           if (command === 'acp_prompt') { state.prompts.push([args.sessionId, args.text]); return null; }
           if (command === 'acp_cancel') { state.cancels.push(args.sessionId); return null; }
           if (command === 'acp_respond_permission') { state.answers.push([args.sessionId, args.requestId, args.optionId ?? null]); return null; }
+          if (command === 'acp_respond_access') { state.accessAnswers.push([args.sessionId, args.accessId, args.decision]); return null; }
+          if (command === 'acp_revoke_grants') { state.revokes.push([args.sessionId, args.kinds]); return null; }
+          if (command === 'acp_kill_terminal') { state.kills.push([args.sessionId, args.terminalId]); return null; }
           if (command === 'acp_set_mode') {
             state.modes.push([args.sessionId, args.modeId]);
             if (state.failSetting) throw { message: state.failSetting };
@@ -150,15 +158,15 @@ export async function installAcpMock(page: Page, config: Config = {}) {
             const id = 'a1';
             const snapshot: Snapshot = {
               id, toolId: String(request.toolId), projectId: (request.projectId as string | null) ?? null, directory: 'C:/work',
-              mode: 'normal', interaction: 'acp', state: 'running', nativeSessionId: 'native-1', resume: 'none',
+              mode: request.mode === 'yolo' ? 'yolo' : 'normal', interaction: 'acp', state: 'running', nativeSessionId: 'native-1', resume: 'none',
               timeline: [{ kind: 'message', id: 'turn-0-user', role: 'user', text: 'first prompt', truncated: false, turnId: 'turn-0', subagent: null }],
-              pending: [], plan: [], commands: [], config: { modes: null, options: [], models: null },
+              pending: [], grants: [], terminals: [], plan: [], commands: [], config: { modes: null, options: [], models: null },
               info: { title: null, updatedAt: null, usage: null },
               agent: { protocolVersion: 1, agentInfo: null, promptCapabilities: { image: false, audio: false, embeddedContext: false }, sessionCapabilities: { list: false, resume: false, delete: false, close: false }, loadSession: false, authMethods: [] },
               diagnostics: [], lastTurnReason: '', seq: 1,
             };
             if (!find(id)) conversations.push(snapshot);
-            return { toolId: request.toolId, projectId: request.projectId ?? null, mode: 'normal', terminal: 'workbench', interaction: 'acp', status: 'acp_started', sessionId: id };
+            return { toolId: request.toolId, projectId: request.projectId ?? null, mode: snapshot.mode, terminal: 'workbench', interaction: 'acp', status: 'acp_started', sessionId: id };
           }
           if (command === 'plugin:event|listen') { bridge.listens[args.event] = args.handler; return args.handler; }
           if (command === 'plugin:event|unlisten') return null;
@@ -172,7 +180,7 @@ export async function installAcpMock(page: Page, config: Config = {}) {
 export function snapshot(overrides: Partial<Snapshot> & { id: string }): Snapshot {
   return {
     toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', interaction: 'acp', state: 'ready',
-    nativeSessionId: 'native-1', resume: 'none', timeline: [], pending: [], plan: [], commands: [],
+    nativeSessionId: 'native-1', resume: 'none', timeline: [], pending: [], grants: [], terminals: [], plan: [], commands: [],
     config: { modes: null, options: [], models: null }, info: { title: null, updatedAt: null, usage: null },
     agent: { protocolVersion: 1, agentInfo: null, promptCapabilities: { image: false, audio: false, embeddedContext: false }, sessionCapabilities: { list: false, resume: false, delete: false, close: false }, loadSession: false, authMethods: [] },
     diagnostics: [], lastTurnReason: '', seq: 1,
