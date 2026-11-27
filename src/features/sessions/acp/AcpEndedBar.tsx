@@ -51,7 +51,7 @@ export function AcpEndedBar({
   const title = t(failed ? 'sessions.acpFailedTitle' : 'sessions.acpEndedTitle');
   const detail = failureReason
     ? visibleControls(failureReason)
-    : disconnected
+    : snapshot.lastTurnReason === 'disconnected'
       ? t('sessions.acpTurnDisconnected')
       : t('sessions.acpEndedHint');
   const disabled = busy || !!action;

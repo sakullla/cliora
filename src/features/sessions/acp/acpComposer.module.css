@@ -36,6 +36,7 @@
 .input:disabled { color: var(--term-text-3); opacity: 1; }
 
 .actions {
+  position: relative;
   display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
   gap: var(--space-1_5) var(--space-2); min-width: 0;
   padding: var(--space-1_5) var(--space-2) var(--space-2);
@@ -143,6 +144,7 @@
 
 /* Selectors: crisp desktop controls with compact summary trigger in narrow panes. */
 .settings { position: relative; display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; gap: var(--space-1); min-width: 0; }
+.settings[data-acp-settings='menu'] { position: static; }
 .settingsInline { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); min-width: 0; }
 .settingsTrigger {
   display: inline-flex; flex: none; align-items: center; gap: var(--space-1);
@@ -157,8 +159,8 @@
 .settingsTrigger[aria-expanded='true'] { border-color: var(--term-frame); background: var(--term-hover); color: var(--term-fg); box-shadow: none; }
 .settingsSummary { min-width: 0; max-width: 14ch; overflow: hidden; color: var(--term-fg); text-overflow: ellipsis; white-space: nowrap; }
 .settingsMenu {
-  position: absolute; bottom: 100%; left: 0; z-index: 3; margin-bottom: var(--space-1);
-  display: flex; flex-direction: column; align-items: stretch; gap: var(--space-1_5); width: max-content; max-width: min(320px, calc(100vw - var(--space-6))); padding: var(--space-2_5);
+  position: absolute; bottom: 100%; left: var(--space-2); z-index: 3; margin-bottom: var(--space-1);
+  display: flex; flex-direction: column; align-items: stretch; gap: var(--space-1_5); width: max-content; max-width: min(320px, calc(100% - var(--space-4))); padding: var(--space-2_5);
   border: 1px solid var(--term-float-line); border-radius: var(--radius-sm); background: var(--term-float); box-shadow: 0 10px 28px -12px var(--term-shadow);
 }
 .settingsMenu .setting { display: flex; width: 100%; justify-content: space-between; }

@@ -205,7 +205,7 @@ export const PromptPicker = forwardRef<PromptPickerHandle, {
         <span className={triggerLabelClassName} aria-hidden="true">{label}</span>
       </button>
       {notice && <span role="status" className={styles.pickerNoticeSr}>{notice}</span>}
-      {open && createPortal(dialog, document.body)}
+      {createPortal(dialog, document.body)}
     </span>;
   }
 
