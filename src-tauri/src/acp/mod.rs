@@ -67,6 +67,9 @@ const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 const MAX_DIAGNOSTICS: usize = 40;
 /// Retained text per diagnostic line.
 const MAX_DIAGNOSTIC_CHARS: usize = 500;
+/// The kind recorded for a permission option the agent sent without one. It
+/// matches no allow or reject kind, so nothing approves it automatically.
+pub const UNKNOWN_PERMISSION_KIND: &str = "unknown";
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
 static SESSIONS: LazyLock<Mutex<HashMap<String, Arc<Session>>>> =
@@ -659,7 +662,14 @@ impl Session {
                         Some(AcpPermissionOption {
                             option_id: item.get("optionId").and_then(Value::as_str)?.to_owned(),
                             name: item.get("name").and_then(Value::as_str).unwrap_or("选项").to_owned(),
-                            kind: item.get("kind").and_then(Value::as_str).unwrap_or("allow_once").to_owned(),
+                            // ACP requires a kind on every option. A missing one is
+                            // never guessed as an allow kind: anything that picks
+                            // options by kind (YOLO) must not approve it.
+                            kind: item
+                                .get("kind")
+                                .and_then(Value::as_str)
+                                .unwrap_or(UNKNOWN_PERMISSION_KIND)
+                                .to_owned(),
                         })
                     })
                     .collect()
@@ -672,8 +682,12 @@ impl Session {
             self.notice("warning", "permission_cancelled", "本轮已停止，新的授权请求已取消");
             return;
         }
-        // A child keeps working after its parent's turn ended, so its request
-        // stands on its own; the conversation's own request needs a live turn.
+        // The conversation's own request needs a live turn. A child's request
+        // is accepted without one, because a child keeps working after its
+        // parent's turn ended; such a request carries no turn and stays open
+        // until it is answered, the user stops a turn, or the session ends. A child's request that arrives
+        // during a parent turn carries that turn's id, so it is withdrawn with
+        // the turn's other cards when that turn ends (see finish_turn).
         if options.is_empty() || (turn_id.is_empty() && subagent.is_none()) {
             let _ = self.answer_permission(&id, cancelled_outcome);
             self.notice("warning", "permission_orphaned", "该授权请求不对应进行中的轮次，已取消");

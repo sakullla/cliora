@@ -35,7 +35,7 @@ export type AcpToolLocation = {
 export type AcpPermissionOption = {
   optionId: string;
   name: string;
-  /** The protocol's own option kind, kept as the agent sent it. */
+  /** The protocol's own option kind, kept as the agent sent it; 'unknown' when the agent sent none. */
   kind: string;
 };
 

@@ -251,7 +251,10 @@ fn a_permission_tool_call_merges_into_the_same_tool_item() {
             "params": {
                 "sessionId": "session-1",
                 "toolCall": { "toolCallId": "run-1", "rawInput": { "command": "npm test" }, "locations": [{ "path": "/work" }] },
-                "options": [{ "optionId": "ok", "name": "允许", "kind": "allow_once" }],
+                "options": [
+                    { "optionId": "ok", "name": "允许", "kind": "allow_once" },
+                    { "optionId": "no", "name": "拒绝" },
+                ],
             },
         }));
         let answer = agent.next_line();
@@ -272,6 +275,15 @@ fn a_permission_tool_call_merges_into_the_same_tool_item() {
     assert!(calls[0].raw_input.as_deref().unwrap().contains("npm test"));
     assert_eq!(calls[0].locations, vec![AcpToolLocation { path: "/work".into(), line: None }]);
     assert_eq!(asked.pending, vec!["41".to_string()]);
+    let option_kinds: Vec<&str> = calls[0]
+        .permission
+        .as_ref()
+        .unwrap()
+        .options
+        .iter()
+        .map(|option| option.kind.as_str())
+        .collect();
+    assert_eq!(option_kinds, vec!["allow_once", UNKNOWN_PERMISSION_KIND], "缺少 kind 的选项不能被补成允许");
     let events = events_of(&snapshot.id);
     assert!(events.iter().any(|event| matches!(&event.update, AcpUpdate::Pending { pending } if pending == &vec!["41".to_string()])));
     respond_permission(&snapshot.id, "41", Some("ok")).unwrap();
@@ -314,11 +326,12 @@ fn notices_and_turn_ends_enter_the_timeline() {
 
 #[test]
 fn an_over_budget_timeline_drops_finished_turns_and_says_so() {
-    let mut timeline = Timeline::new(40);
-    timeline.append_chunk("agent", Some("old-1"), None, "turn-1", &"a".repeat(20));
-    timeline.append_chunk("agent", Some("old-2"), None, "turn-1", &"b".repeat(20));
+    // Budget 80, low-water mark 60.
+    let mut timeline = Timeline::new(80);
+    timeline.append_chunk("agent", Some("old-1"), None, "turn-1", &"a".repeat(30));
+    timeline.append_chunk("agent", Some("old-2"), None, "turn-1", &"b".repeat(30));
     assert!(!timeline.trim(Some("turn-2")), "预算内不裁剪");
-    timeline.append_chunk("agent", Some("new-1"), None, "turn-2", &"c".repeat(20));
+    timeline.append_chunk("agent", Some("new-1"), None, "turn-2", &"c".repeat(30));
     assert!(timeline.trim(Some("turn-2")));
     let ids: Vec<&str> = timeline.items().iter().map(AcpTimelineItem::id).collect();
     assert_eq!(ids, vec![TRIMMED_NOTICE_ID, "old-2", "new-1"], "从最旧的已结束轮次开始裁剪");
@@ -339,6 +352,96 @@ fn an_over_budget_timeline_drops_finished_turns_and_says_so() {
         1,
         "省略提示只有一条"
     );
+    // Nothing left to drop: the active turn alone keeps it over budget, and
+    // further growth trims nothing (so nothing is republished).
+    timeline.append_chunk("agent", Some("new-2"), None, "turn-2", "e");
+    assert!(!timeline.trim(Some("turn-2")));
+}
+
+#[test]
+fn a_trim_goes_down_to_the_low_water_mark_so_later_growth_does_not_trim_again() {
+    // Budget 1000, low-water mark 750; 100 finished items of 10 characters.
+    let mut timeline = Timeline::new(1000);
+    for index in 0..100 {
+        timeline.append_chunk("agent", Some(&format!("old-{index}")), None, "turn-1", &"a".repeat(10));
+    }
+    timeline.append_chunk("agent", Some("new"), None, "turn-2", "b");
+    assert!(timeline.trim(Some("turn-2")), "越过预算后裁剪一次");
+    // Down to the low-water mark, plus the one notice that reports the trim.
+    assert!(timeline.weight() <= 750 + 20, "一次裁剪降到低水位，实际 {}", timeline.weight());
+    // A further 200 single-character chunks stay under the budget: none of
+    // them trims again.
+    let trims = (0..200)
+        .filter(|_| {
+            timeline.append_chunk("agent", Some("new"), None, "turn-2", "c");
+            timeline.trim(Some("turn-2"))
+        })
+        .count();
+    assert_eq!(trims, 0, "低水位之上的增长不再触发裁剪");
+}
+
+#[test]
+fn a_grouped_select_keeps_its_nested_choices_within_the_entry_bound() {
+    let nested: Vec<Value> = (0..300).map(|index| json!({ "value": format!("v{index}"), "name": format!("V{index}") })).collect();
+    let option = super::capabilities::parse_config_option(&json!({
+        "id": "model", "name": "模型", "type": "select", "currentValue": "v0",
+        "options": [
+            { "group": "g1", "name": "大组", "options": nested },
+            { "value": "tail", "name": "末尾" },
+        ],
+    }))
+    .unwrap();
+    assert_eq!(option.options.len(), 200, "分组内的选项同样受条目上限约束");
+    assert_eq!(option.options[199].value, "v199");
+}
+
+#[test]
+fn streaming_past_the_budget_republishes_a_bounded_number_of_snapshots() {
+    // The first turn fills the timeline past its budget with many small
+    // messages; the second streams many chunks. Each trim republishes the
+    // whole snapshot, so the trim must leave room instead of shaving one old
+    // item per chunk.
+    const OLD_MESSAGES: usize = 2_100;
+    const OLD_CHARS: usize = 1_000;
+    const CHUNKS: usize = 1_000;
+    const CHUNK_CHARS: usize = 100;
+    let directory = temp_dir();
+    let (io, mut agent) = pair();
+    let worker = std::thread::spawn(move || {
+        agent.handshake(false);
+        let first = agent.next_line();
+        let old = "a".repeat(OLD_CHARS);
+        for index in 0..OLD_MESSAGES {
+            agent.chunk("session-1", &format!("old-{index}"), &old);
+        }
+        reply(&agent, &first, json!({ "stopReason": "end_turn" }));
+        let second = agent.next_line();
+        let piece = "b".repeat(CHUNK_CHARS);
+        for _ in 0..CHUNKS {
+            agent.chunk("session-1", "new", &piece);
+        }
+        reply(&agent, &second, json!({ "stopReason": "end_turn" }));
+        agent.stay_connected();
+    });
+    let snapshot = open(spec(directory.path()), io).unwrap();
+    prompt(&snapshot.id, "一").unwrap();
+    wait_until_idle(&snapshot.id, Duration::from_secs(30)).unwrap();
+    let before = events_of(&snapshot.id).len();
+    prompt(&snapshot.id, "二").unwrap();
+    wait_until_idle(&snapshot.id, Duration::from_secs(30)).unwrap();
+    let events = events_of(&snapshot.id);
+    let second_turn = &events[before..];
+    let chunks = second_turn.iter().filter(|event| event_kind(event) == "chunk").count();
+    assert_eq!(chunks, CHUNKS, "每个片段都以增量事件发出");
+    let snapshots = second_turn.iter().filter(|event| event_kind(event) == "snapshot").count();
+    // The turn's own start and end plus one trim; before the low-water mark
+    // this was one snapshot per ten chunks.
+    assert!(snapshots <= 4, "越过预算后的快照事件必须有上限，实际 {snapshots}");
+    let current = snapshot_of(&snapshot.id);
+    assert_eq!(current.timeline[0].id(), TRIMMED_NOTICE_ID, "裁剪确实发生");
+    assert_eq!(messages(&current).last().unwrap().text.len(), CHUNKS * CHUNK_CHARS);
+    close(&snapshot.id).unwrap();
+    worker.join().unwrap();
 }
 
 #[test]

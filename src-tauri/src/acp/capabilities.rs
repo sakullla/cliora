@@ -282,7 +282,12 @@ pub fn parse_config_option(item: &Value) -> Option<AcpConfigOption> {
                 }
                 if let Some(grouped) = entry.get("options").and_then(Value::as_array) {
                     let header = label(entry.get("name")).or_else(|| label(entry.get("group")));
+                    // A group's choices count against the same bound as
+                    // top-level ones: one group cannot hold an unbounded list.
                     for nested in grouped {
+                        if choices.len() >= MAX_ENTRIES {
+                            break;
+                        }
                         if let Some(choice) = parse_choice(nested, header.as_deref()) {
                             choices.push(choice);
                         }

@@ -7,13 +7,19 @@
 //! tool, another reply and the tool's update read in the order they arrived.
 //!
 //! The timeline is bounded: past its character budget the oldest items of
-//! finished turns are dropped and one notice says so.
+//! finished turns are dropped down to a low-water mark and one notice says so.
+//! Trimming below the budget, not just under it, keeps the full-snapshot
+//! republish that a trim causes rare: the next one waits until the timeline
+//! has grown by a quarter of the budget again (or a turn has ended).
 
 use serde::Serialize;
 use serde_json::Value;
 
 /// Total retained characters across the timeline.
 pub const MAX_TIMELINE_CHARS: usize = 2_000_000;
+/// A trim drops history until the timeline holds at most this share of its
+/// budget, in percent.
+pub const TRIM_LOW_WATER_PERCENT: usize = 75;
 /// Retained text per message. Longer output is truncated once and reported.
 pub const MAX_MESSAGE_CHARS: usize = 200_000;
 /// Retained characters for each side of a diff.
@@ -633,16 +639,21 @@ impl Timeline {
             .unwrap_or_default()
     }
 
-    /// Drop the oldest items of finished turns until the timeline fits its
-    /// budget. Items of the active turn are never dropped. Returns whether
-    /// anything was dropped; the caller then republishes the whole snapshot.
+    /// Once the timeline is over its budget, drop the oldest items of finished
+    /// turns until it is back at the low-water mark. Items of the active turn
+    /// are never dropped; when they alone keep the timeline over budget, later
+    /// calls find nothing to drop and return false until that turn ends.
+    /// Returns whether anything was dropped; the caller then republishes the
+    /// whole snapshot.
     pub fn trim(&mut self, active_turn: Option<&str>) -> bool {
         if self.weight <= self.budget {
             return false;
         }
+        let low_water = self.budget / 100 * TRIM_LOW_WATER_PERCENT
+            + self.budget % 100 * TRIM_LOW_WATER_PERCENT / 100;
         let mut dropped = 0usize;
         let mut index = 0usize;
-        while self.weight > self.budget && index < self.items.len() {
+        while self.weight > low_water && index < self.items.len() {
             let item = &self.items[index];
             if item.id() == TRIMMED_NOTICE_ID {
                 index += 1;
