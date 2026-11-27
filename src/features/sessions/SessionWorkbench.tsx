@@ -44,7 +44,7 @@ import { placeParts, railPlace, railTaskTitle } from './railTitle';
 import { uploadDisplayName, useSessionUploads, type SessionUploadTask } from './sessionUploads';
 import uploadStyles from './sessionUploads.module.css';
 import { AcpConversation, type AcpConversationHandle, type AcpFindMatch } from './AcpConversation';
-import { applyAcpEvent, acpIsLive, acpPendingCount, acpRow, type AcpConversation as AcpConversationState } from './acpSession';
+import { applyAcpEvent, acpIsLive, acpPendingCount, acpRow, acpStateKey, type AcpConversation as AcpConversationState } from './acpSession';
 import type { AcpAttachment, AcpEvent, AcpSessionSnapshot } from '../../types/acp';
 import { WorkbenchComposer } from './WorkbenchComposer';
 import { PromptPicker } from './PromptPicker';
@@ -2111,6 +2111,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       if (conversation.state === 'failed') return 'error';
       // Every waiting card or form asks for this person, whatever the turn state says.
       if (conversation.state === 'waiting_permission' || acpPendingCount(conversation) > 0) return 'bell';
+      if (conversation.state === 'auth_required') return 'warning';
       if (conversation.state === 'running' || conversation.state === 'starting' || conversation.state === 'stopping') return 'live';
       return acpIsLive(conversation) ? 'idle' : 'ended';
     }
@@ -2164,6 +2165,15 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     return taskStateFor(taskEvidenceOf(session));
   }
   function taskLabelOf(session: WorkbenchSession): string {
+    const conversation = conversationOf(session.id);
+    if (conversation) {
+      if (conversation.state === 'starting' || conversation.state === 'stopping' || conversation.state === 'auth_required' || conversation.state === 'failed') {
+        return t(acpStateKey(conversation.state));
+      }
+      if (conversation.state === 'waiting_permission' && acpPendingCount(conversation) === 0) {
+        return t(acpStateKey(conversation.state));
+      }
+    }
     const evidence = taskEvidenceOf(session);
     return t(taskStateLabelKey(taskStateFor(evidence), evidence));
   }
@@ -4072,7 +4082,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       unread: unreadIds.has(session.id),
       task,
       bucket: taskBucketFor(task, evidence),
-      taskLabel: t(taskStateLabelKey(task, evidence)),
+      taskLabel: taskLabelOf(session),
       taskHint: taskHintOf(session),
       command: commandOf(session),
       collapsed: collapsedIds.has(session.id),

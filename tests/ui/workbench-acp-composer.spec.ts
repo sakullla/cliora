@@ -879,29 +879,54 @@ test('starting and ready empty states, ended recovery banner and copyable diagno
     })],
   });
   await openWorkbench(page);
+  const stage = page.getByRole('region', { name: '当前会话' });
+  const stageStatus = stage.locator('header [data-state]');
+  const railRow = page.locator('[data-session-id="a1"]').first();
   const panel = panelOf(page);
 
-  // Starting state: shows connecting card and blocks sending.
+  // Starting state: shows connecting card, blocks sending, and reports "正在连接" (not "等待输入") in stage bar & rail.
   await expect(panel.locator('[data-acp-empty="starting"]')).toContainText('正在连接 Codex…');
+  await expect(stageStatus).toHaveAttribute('title', '正在连接');
+  await expect(stageStatus.locator('[class*="statusLabel"] > span:not([aria-hidden])')).toHaveText('正在连接');
+  await expect(railRow).toContainText('正在连接');
+  await expect(railRow).not.toContainText('等待输入');
   await expect(panel.getByRole('button', { name: '发送', exact: true })).toHaveCount(0);
   await inputOf(panel).fill('试着发送');
   await inputOf(panel).press('Enter');
   expect((await testState(page)).prompts).toEqual([]);
   await inputOf(panel).fill('');
 
+  // Stopping and auth_required states report their own ACP labels rather than falling back to "等待输入".
+  await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'stopping', seq: 2 }));
+  await expect(stageStatus).toHaveAttribute('title', '正在停止');
+  await expect(railRow).toContainText('正在停止');
+  await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'auth_required', seq: 3 }));
+  await expect(stageStatus).toHaveAttribute('title', '需要登录');
+  await expect(railRow).toContainText('需要登录');
+
   // Ready empty state: shows welcome guidance with quick trigger actions.
-  await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'ready', seq: 2 }));
+  await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'ready', seq: 4 }));
   const readyEmpty = panel.locator('[data-acp-empty="ready"]');
   await expect(readyEmpty).toContainText('Codex 已就绪');
+  await expect(stageStatus).toHaveAttribute('title', '等待输入');
   await readyEmpty.getByRole('button', { name: '@ 引用文件', exact: true }).click();
   await expect(inputOf(panel)).toHaveValue('@');
+
+  // Failed state reports "启动失败" (not "已结束") before closed state renders recovery banner.
+  await page.evaluate(() => (window as any).__acpSessionState('a1', {
+    state: 'failed',
+    diagnostics: ['agent stderr: unexpected EOF'],
+    seq: 5,
+  }));
+  await expect(stageStatus).toHaveAttribute('title', '启动失败');
+  await expect(railRow).toContainText('启动失败');
 
   // Disconnected/ended state: replaces composer with AcpEndedBar and offers copyable diagnostics + recovery actions.
   await page.evaluate(() => (window as any).__acpSessionState('a1', {
     state: 'closed',
     lastTurnReason: 'disconnected',
     diagnostics: ['agent stderr: unexpected EOF'],
-    seq: 3,
+    seq: 6,
   }));
   const ended = panel.locator('[data-acp-ended]');
   await expect(ended).toBeVisible();

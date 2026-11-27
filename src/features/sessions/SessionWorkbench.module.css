@@ -1963,6 +1963,7 @@ button.gitChip:disabled { opacity: .55; cursor: default; }
   .stageIcon,
   .terminalInstance,
   .terminalBody,
+  .canvas[data-split] .terminalInstance [data-acp-body],
   .switchTrack,
   .switchTrack i { transition: none; }
 }
