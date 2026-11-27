@@ -649,6 +649,7 @@ export default {
   acpAccessPath: '路径',
   acpAccessCommand: '命令',
   acpAccessOutsideHint: '这次访问超出了会话目录，由 Cliora 审批；读取秘密原值仍需桌面审批。',
+  acpAccessUserHint: '你拖入的图片在会话目录外。允许一次只读取这张图片，不会让 {{tool}} 获得目录外的读取权限。',
   acpAccessOnce: '允许一次',
   acpAccessSession: '本会话都允许{{kind}}',
   acpAccessDeny: '拒绝',

@@ -20,7 +20,9 @@ function decisionIcon(access: AcpAccess): IconName {
 /**
  * One file or command access the host served for the agent. While it waits it is
  * Cliora's own approval card: the operation, the full path or command, and
- * "allow once", "allow for this session" or "deny", answered once. Afterwards it
+ * "allow once", "allow for this session" or "deny", answered once. A card the
+ * user's own drop raised offers only "allow once" and "deny": the user's picture
+ * never widens what the agent may read. Afterwards it
  * is the record of that decision, automatic approvals included; a write keeps the
  * diff of what it changed and says the agent wrote it through Cliora.
  */
@@ -36,16 +38,17 @@ export function AcpAccessCard({ access, toolName, answerable, busy, onAnswer }: 
   const pending = access.decision === 'pending';
   if (pending && answerable && access.requestId) {
     const requestId = access.requestId;
-    return <section className={styles.card} role="group" aria-label={t(accessTitleKey(access.accessKind))} data-item-id={access.id} data-request-id={requestId} data-card="access" data-access-kind={access.accessKind} data-decision={access.decision} data-subagent={access.subagent ?? undefined}>
+    const byUser = access.userPath != null;
+    return <section className={styles.card} role="group" aria-label={t(accessTitleKey(access.accessKind))} data-item-id={access.id} data-request-id={requestId} data-card="access" data-access-kind={access.accessKind} data-decision={access.decision} data-subagent={access.subagent ?? undefined} data-by-user={byUser || undefined}>
       <strong className={styles.cardTitle}><Icon name="shield" size={13} />{t(accessTitleKey(access.accessKind))}</strong>
       <dl className={styles.accessFacts}>
         <dt>{t('sessions.acpAccessPath')}</dt><dd><code>{visibleControls(access.path)}</code></dd>
         {access.detail && <><dt>{t('sessions.acpAccessCommand')}</dt><dd><code>{visibleControls(access.detail)}</code></dd></>}
       </dl>
-      <p className={styles.note}>{t('sessions.acpAccessOutsideHint')}</p>
+      <p className={styles.note}>{byUser ? t('sessions.acpAccessUserHint', { tool: toolName }) : t('sessions.acpAccessOutsideHint')}</p>
       <div className={styles.cardActions}>
         <button type="button" className={styles.action} data-variant="primary" disabled={busy} onClick={() => onAnswer(requestId, 'once')}>{t('sessions.acpAccessOnce')}</button>
-        <button type="button" className={styles.action} data-variant="secondary" disabled={busy} onClick={() => onAnswer(requestId, 'session')}>{t('sessions.acpAccessSession', { kind })}</button>
+        {!byUser && <button type="button" className={styles.action} data-variant="secondary" disabled={busy} onClick={() => onAnswer(requestId, 'session')}>{t('sessions.acpAccessSession', { kind })}</button>}
         <button type="button" className={styles.action} data-variant="quiet" disabled={busy} onClick={() => onAnswer(requestId, 'deny')}>{t('sessions.acpAccessDeny')}</button>
       </div>
     </section>;

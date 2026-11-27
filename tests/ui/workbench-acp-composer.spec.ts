@@ -652,3 +652,58 @@ test('a form select is as wide as the text field above it', async ({ page }) => 
   expect(Math.abs(text!.width - select!.width)).toBeLessThanOrEqual(1);
   expect(Math.abs(text!.x - select!.x)).toBeLessThanOrEqual(1);
 });
+
+test('a dropped outside image waits on its own card without hiding Stop, offers only once or deny, and removing it withdraws the card', async ({ page }) => {
+  const outside = 'D:/outside/shot.png';
+  const later = 'D:/outside/later.png';
+  const card = (id: string, path: string) => ({ kind: 'access', id, accessKind: 'read', path, detail: null, decision: 'pending', requestId: `${id}-request`, diff: null, turnId: '', subagent: null, userPath: path });
+  const running = [userMessage('u1', '跑一会儿'), { ...agentMessage('m1', '正在处理…'), turnId: 'turn-1' }];
+  await installAcpMock(page, { interaction: 'acp', images: {
+    [outside]: { mimeType: 'image/png', dataBase64: PNG },
+    [later]: { mimeType: 'image/png', dataBase64: PNG },
+  }, conversations: [snapshot({ id: 'a1', agent: imageAgent, state: 'running', timeline: running as any })] });
+  await openWorkbench(page);
+  const panel = panelOf(page);
+  await expect(inputOf(panel)).toBeVisible();
+  const stop = panel.getByRole('button', { name: '停止', exact: true });
+  await expect(stop).toBeVisible();
+
+  // The drop during the running turn opens a card of the user's own; the host keeps
+  // the turn running, so the main button still stops it.
+  await page.evaluate(() => { (window as any).__acpTest.holdImage = true; });
+  await dropPaths(page, panel, [outside]);
+  await expect(panel.locator('[data-attachment="reading"]')).toHaveCount(1);
+  await page.evaluate(({ timeline }) => (window as any).__acpSessionState('a1', { state: 'running', timeline, pending: ['access-9-request'], seq: 3 }), { timeline: [...running, card('access-9', outside)] });
+  const approval = panel.locator('[data-card="access"][data-request-id="access-9-request"]');
+  await expect(approval).toBeVisible();
+  await expect(approval).toHaveAttribute('data-by-user', 'true');
+  await expect(approval.getByRole('button', { name: '允许一次', exact: true })).toBeVisible();
+  await expect(approval.getByRole('button', { name: '拒绝', exact: true })).toBeVisible();
+  await expect(approval.getByRole('button')).toHaveCount(2);
+  await expect(approval).toContainText('不会让 Codex 获得目录外的读取权限');
+  await expect(panel.getByText('1 项等你处理')).toBeVisible();
+  await expect(stop).toBeVisible();
+  await expect(panel.getByRole('button', { name: '发送', exact: true })).toHaveCount(0);
+
+  // Removing the picture withdraws its card, so nothing is left waiting.
+  await panel.getByRole('button', { name: '移除附件 shot.png', exact: true }).click();
+  await expect(panel.locator('[data-attachment="reading"]')).toHaveCount(0);
+  await expect.poll(async () => (await testState(page)).accessAnswers).toEqual([['a1', 'access-9-request', 'deny']]);
+  await page.evaluate(() => (window as any).__acpReleaseImage());
+  await expect(panel.locator('[data-attachment]')).toHaveCount(0);
+  await expect(stop).toBeVisible();
+  await stop.click();
+  await expect.poll(async () => (await testState(page)).cancels).toEqual(['a1']);
+
+  // A card published only after its picture was removed is withdrawn too.
+  await page.evaluate(({ timeline }) => (window as any).__acpSessionState('a1', { state: 'ready', timeline, pending: [], seq: 4 }), { timeline: [...running, { ...card('access-9', outside), decision: 'denied', requestId: null }] });
+  await expect(panel.getByRole('button', { name: '发送', exact: true })).toBeVisible();
+  await page.evaluate(() => { (window as any).__acpTest.holdImage = true; });
+  await dropPaths(page, panel, [later]);
+  await expect(panel.locator('[data-attachment="reading"]')).toHaveCount(1);
+  await panel.getByRole('button', { name: '移除附件 later.png', exact: true }).click();
+  await page.evaluate(({ timeline }) => (window as any).__acpSessionState('a1', { state: 'ready', timeline, pending: ['access-10-request'], seq: 5 }), { timeline: [...running, card('access-10', later)] });
+  await expect.poll(async () => (await testState(page)).accessAnswers).toEqual([['a1', 'access-9-request', 'deny'], ['a1', 'access-10-request', 'deny']]);
+  await page.evaluate(() => (window as any).__acpReleaseImage());
+  await expect(panel.locator('[data-attachment]')).toHaveCount(0);
+});

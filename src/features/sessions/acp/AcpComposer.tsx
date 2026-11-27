@@ -64,9 +64,11 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   onListFiles: (query: string) => Promise<AcpFileList>;
   /** Reads a dropped image file for its preview (see native acp.readImage). */
   onReadImage: (path: string) => Promise<AcpImageFile>;
+  /** Withdraws (denies) the approval card a removed dropped image left waiting. */
+  onWithdrawAccess: (requestId: string) => Promise<void>;
   onSetMode: (modeId: string) => Promise<void>;
   onSetConfig: (configId: string, value: string | boolean) => Promise<void>;
-}>(function AcpComposer({ snapshot, toolName, live, turnBusy, busy, canSend, onSend, onStop, onClose, onListFiles, onReadImage, onSetMode, onSetConfig }, ref) {
+}>(function AcpComposer({ snapshot, toolName, live, turnBusy, busy, canSend, onSend, onStop, onClose, onListFiles, onReadImage, onWithdrawAccess, onSetMode, onSetConfig }, ref) {
   const { t } = useTranslation();
   const listId = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -79,6 +81,9 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   attachmentsRef.current = attachments;
   const [reading, setReading] = useState<ReadingImage[]>([]);
   const readingRef = useRef<ReadingImage[]>([]);
+  /** Paths of dropped images removed while the host was still reading them: a card
+   *  their read opened (now or once it is published) is withdrawn. */
+  const abandonedRef = useRef(new Set<string>());
   const [notices, setNotices] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [sending, setSending] = useState(false);
@@ -195,6 +200,31 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     setReading(next);
   }
 
+  /** Remove a dropped image still being read. Its approval card, if the host opened
+   *  one, is withdrawn so nothing is left waiting for a picture nobody wants. */
+  function removeReading(item: ReadingImage) {
+    setReadingImages(readingRef.current.filter((entry) => entry.id !== item.id));
+    abandonedRef.current.add(item.path);
+    withdrawAbandoned();
+  }
+
+  function withdrawAbandoned() {
+    const abandoned = abandonedRef.current;
+    if (!abandoned.size) return;
+    const pending = new Set(snapshot.pending);
+    for (const item of snapshot.timeline) {
+      if (item.kind !== 'access' || item.userPath == null || item.decision !== 'pending' || !item.requestId || !pending.has(item.requestId)) continue;
+      // A path dropped again meanwhile is wanted after all.
+      if (!abandoned.has(item.userPath) || readingRef.current.some((entry) => entry.path === item.userPath)) continue;
+      abandoned.delete(item.userPath);
+      void onWithdrawAccess(item.requestId).catch(() => {});
+    }
+  }
+
+  // The card of a removed image may be published after the removal.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { withdrawAbandoned(); }, [snapshot.timeline, snapshot.pending]);
+
   function addPaths(paths: string[]) {
     const reasons: string[] = [];
     const known = new Set([
@@ -243,7 +273,11 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     } catch (value) {
       reason = t('sessions.acpImageReadFailedReason', { name: item.name, reason: errorText(value) });
     }
-    if (!readingRef.current.some((entry) => entry.id === item.id)) return;
+    if (!readingRef.current.some((entry) => entry.id === item.id)) {
+      // Removed meanwhile: its read is over, so there is no card left to withdraw.
+      abandonedRef.current.delete(item.path);
+      return;
+    }
     setReadingImages(readingRef.current.filter((entry) => entry.id !== item.id));
     if (image) {
       const added = image;
@@ -435,7 +469,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
       {reading.map((item) => <li key={item.id} className={styles.trayItem} data-attachment="reading" title={t('sessions.acpImageReading', { name: item.name })}>
         <span className={styles.trayReading} role="status" aria-label={t('sessions.acpImageReading', { name: item.name })} />
         <span className={styles.trayName}>{item.name}</span>
-        <button type="button" className={styles.trayRemove} aria-label={t('sessions.acpAttachmentRemove', { name: item.name })} title={t('sessions.acpAttachmentRemove', { name: item.name })} onClick={() => setReadingImages(readingRef.current.filter((entry) => entry.id !== item.id))}>
+        <button type="button" className={styles.trayRemove} aria-label={t('sessions.acpAttachmentRemove', { name: item.name })} title={t('sessions.acpAttachmentRemove', { name: item.name })} onClick={() => removeReading(item)}>
           <Icon name="close" size={10} />
         </button>
       </li>)}

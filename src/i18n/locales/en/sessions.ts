@@ -649,6 +649,7 @@ export default {
   acpAccessPath: 'Path',
   acpAccessCommand: 'Command',
   acpAccessOutsideHint: 'This access leaves the session directory, so Cliora asks you; reading a secret value still needs desktop approval.',
+  acpAccessUserHint: 'The image you dropped is outside the session directory. Allow once reads only this image; it does not let {{tool}} read outside the directory.',
   acpAccessOnce: 'Allow once',
   acpAccessSession: 'Allow {{kind}} for this session',
   acpAccessDeny: 'Deny',

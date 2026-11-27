@@ -17,14 +17,18 @@ import { pendingItems, pendingRequest } from './acp/acpView';
 import workbenchStyles from './SessionWorkbench.module.css';
 import styles from './AcpConversation.module.css';
 
-/** A card or form that belongs to a turn waits for an answer. One raised between
- *  turns (the user's own dropped image, a subagent) leaves no turn to stop. */
+/** A card or form that belongs to a turn waits for an answer. The host never
+ *  counts the user's own card (a dropped image) toward waiting_permission: a turn
+ *  stays running, and stoppable, while that card waits. A subagent's card between
+ *  turns may report waiting_permission, but it leaves no turn to stop. */
 function turnWaiting(snapshot: AcpSessionSnapshot): boolean {
   if (snapshot.state !== 'waiting_permission') return false;
   const pending = new Set(snapshot.pending);
   return snapshot.timeline.some((item) => {
     const request = pendingRequest(item);
-    return !!request && pending.has(request) && 'turnId' in item && !!item.turnId;
+    if (!request || !pending.has(request)) return false;
+    if (item.kind === 'access' && item.userPath != null) return false;
+    return 'turnId' in item && !!item.turnId;
   });
 }
 
@@ -164,6 +168,7 @@ export const AcpConversation = forwardRef<AcpConversationHandle, {
           onClose={() => void run('close', onClose)}
           onListFiles={onListFiles}
           onReadImage={onReadImage}
+          onWithdrawAccess={(requestId) => onAnswerAccess(requestId, 'deny')}
           onSetMode={onSetMode}
           onSetConfig={onSetConfig}
         />}
