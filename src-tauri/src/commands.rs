@@ -3843,6 +3843,14 @@ pub async fn acp_list_files(session_id: String, query: Option<String>, limit: Op
     .await
 }
 
+/// Read an image file dropped on the composer for its preview and an image
+/// attachment: declared image capability, PNG/JPEG/GIF/WebP whose header
+/// matches, within the image limit; outside the directory it asks first.
+#[tauri::command]
+pub async fn acp_read_image(session_id: String, path: String) -> Result<crate::acp::AcpImageFile, ApiError> {
+    blocking(move || crate::acp::read_image(&session_id, &path).map_err(native_error)).await
+}
+
 /// One page of the agent's own session history for this directory. Refused
 /// with the reason when the agent did not declare session listing.
 #[tauri::command]

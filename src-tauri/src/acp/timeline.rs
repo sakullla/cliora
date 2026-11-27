@@ -242,6 +242,11 @@ pub struct AcpAccess {
     pub diff: Option<AcpFileDiff>,
     pub turn_id: String,
     pub subagent: Option<String>,
+    /// Set only for a card the user's own action raised (an image dropped on
+    /// the composer): the path as the user gave it. Such a card belongs to no
+    /// turn, does not hold the session in waiting_permission, and is answered
+    /// only once or denied — it never grants the agent anything.
+    pub user_path: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]

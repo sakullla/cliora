@@ -41,10 +41,33 @@ impl Session {
         subagent: Option<&str>,
         requested: &Path,
     ) -> Result<(PathBuf, Option<String>), String> {
+        self.approve(expect, requested, |path| self.authorize_outside(kind, subagent, path, None))
+    }
+
+    /// `approve_path` for the user's own action (a dropped image): YOLO or an
+    /// existing grant still approves it, otherwise a card that belongs to no
+    /// turn and offers only allow once or deny. `user_path` is the path as the
+    /// user gave it.
+    pub(super) fn approve_user_path(
+        &self,
+        kind: AccessKind,
+        expect: Expect,
+        requested: &Path,
+        user_path: &str,
+    ) -> Result<(PathBuf, Option<String>), String> {
+        self.approve(expect, requested, |path| self.authorize_outside_for_user(kind, path, user_path))
+    }
+
+    fn approve(
+        &self,
+        expect: Expect,
+        requested: &Path,
+        authorize: impl FnOnce(&str) -> Result<String, String>,
+    ) -> Result<(PathBuf, Option<String>), String> {
         match safe_fs::resolve_target(&self.directory, requested, expect)? {
             Resolved::Inside(path) => Ok((path, None)),
             Resolved::Outside(path) => {
-                let record = self.authorize_outside(kind, subagent, &safe_fs::display(&path), None)?;
+                let record = authorize(&safe_fs::display(&path))?;
                 let again = safe_fs::resolve_target(&self.directory, requested, expect)?;
                 if again.path() != path {
                     return Err("审批期间路径指向发生变化，已拒绝".into());

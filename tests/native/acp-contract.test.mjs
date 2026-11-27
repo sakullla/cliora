@@ -188,7 +188,7 @@ test('every ACP command exists in the host, its registration, the IPC wrapper, t
   const captured = sorted([...captureMjs.matchAll(/command === '(\w+)'/g)].map((match) => match[1]).filter(isAcp));
   assert.ok(rustCommands.includes('acp_set_mode') && rustCommands.includes('acp_set_config'), rustCommands.join(', '));
   for (const name of ['acp_respond_access', 'acp_revoke_grants', 'acp_kill_terminal', 'acp_authenticate', 'acp_respond_elicitation',
-    'acp_list_files', 'acp_native_sessions', 'acp_delete_native_session']) assert.ok(rustCommands.includes(name), `missing ${name}`);
+    'acp_list_files', 'acp_read_image', 'acp_native_sessions', 'acp_delete_native_session']) assert.ok(rustCommands.includes(name), `missing ${name}`);
   assert.deepEqual(registered, rustCommands, 'lib.rs registration differs from commands.rs');
   assert.deepEqual(wrapped, rustCommands, 'src/lib/native.ts differs from commands.rs');
   assert.deepEqual(mocked, rustCommands, 'tests/ui/acpMock.ts differs from commands.rs');

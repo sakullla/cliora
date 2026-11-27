@@ -24,6 +24,9 @@
 //! - A permission request is bound to the live connection, the session (or a
 //!   registered child session) and the turn that asked for it, and is answered
 //!   at most once.
+//! - A user-raised card with no turn (an outside image the user dropped)
+//!   never holds `waiting_permission`, is withdrawn by Stop or session end,
+//!   and accepts only allow once or deny.
 //! - A prompt turn has no fixed deadline: it ends with the agent's own answer,
 //!   the agent's exit or the user's stop. Every other request keeps the
 //!   configured timeout.
@@ -79,7 +82,7 @@ pub use capabilities::{
 pub use access::{AccessAnswer, AccessKind};
 pub use files::AcpFileList;
 pub use history::{AcpNativeSession, AcpNativeSessionPage};
-pub use prompt::AcpAttachment;
+pub use prompt::{AcpAttachment, AcpImageFile};
 pub use terminal::{AcpTerminal, AcpTerminalExit};
 pub use timeline::{
     AcpAccess, AcpAttachmentLabel, AcpElicitation, AcpFileDiff, AcpMessage, AcpNotice, AcpPermissionOption,
@@ -644,8 +647,10 @@ impl Session {
         guard(&self.turn).as_ref().map(|turn| turn.id.clone()).unwrap_or_default()
     }
 
-    /// The state a live session returns to: a pending card keeps it waiting,
-    /// an active turn keeps it running.
+    /// The state a live session returns to: only a pending card bound to a
+    /// turn (the agent's permission, access or form request) keeps it
+    /// `waiting_permission`; a user-raised card without a turn never does. An
+    /// active turn keeps it running, otherwise it is ready.
     fn settle_state(&self) {
         // Read and decide under the publication order: a stop that marks the
         // session stopping does so under the same order, so whichever runs
@@ -663,8 +668,11 @@ impl Session {
             return;
         }
         let previous = *guard(&self.state);
+        // The user's own card (a dropped image) waits in the pending list but
+        // never masks the turn: a running turn stays running (and stoppable),
+        // an idle session stays ready.
         let waiting = !guard(&self.permissions).is_empty()
-            || !guard(&self.accesses).is_empty()
+            || self.agent_access_waiting()
             || !guard(&self.elicitations).is_empty();
         let running = guard(&self.turn).is_some();
         *guard(&self.state) = if waiting {
@@ -1769,6 +1777,15 @@ pub fn respond_elicitation(id: &str, request_id: &str, action: &str, content: Op
 /// Files inside the session directory, as relative paths, for `@` references.
 pub fn list_files(id: &str, query: &str, limit: usize) -> Result<AcpFileList, String> {
     lookup(id)?.list_files(query, limit)
+}
+
+/// Read an image file the user dropped on the composer, for its preview and an
+/// image block. Inside the session directory it is read directly; outside, the
+/// access rules apply with a card of the user's own (see `access`). Refused
+/// with the reason when the agent did not declare images, the format or header
+/// is wrong, or the file is over the limit.
+pub fn read_image(id: &str, path: &str) -> Result<AcpImageFile, String> {
+    lookup(id)?.read_image(path)
 }
 
 /// One page of the agent's own session history for this directory.

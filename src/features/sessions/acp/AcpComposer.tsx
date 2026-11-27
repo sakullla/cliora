@@ -81,9 +81,14 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   attachmentsRef.current = attachments;
   const [reading, setReading] = useState<ReadingImage[]>([]);
   const readingRef = useRef<ReadingImage[]>([]);
-  /** Paths of dropped images removed while the host was still reading them: a card
-   *  their read opened (now or once it is published) is withdrawn. */
-  const abandonedRef = useRef(new Set<string>());
+  /** Dropped images removed while the host was still reading them, by reading id (in
+   *  drop order) with their path: a card their read opened (now or once it is
+   *  published) is withdrawn. Keyed per reading, so the same path dropped and removed
+   *  twice withdraws both cards. */
+  const abandonedRef = useRef(new Map<string, string>());
+  /** Cards already withdrawn, so a snapshot that still lists one as pending does not
+   *  spend another removed reading on it. */
+  const withdrawnRef = useRef(new Set<string>());
   const [notices, setNotices] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [sending, setSending] = useState(false);
@@ -204,19 +209,28 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
    *  one, is withdrawn so nothing is left waiting for a picture nobody wants. */
   function removeReading(item: ReadingImage) {
     setReadingImages(readingRef.current.filter((entry) => entry.id !== item.id));
-    abandonedRef.current.add(item.path);
+    abandonedRef.current.set(item.id, item.path);
     withdrawAbandoned();
   }
 
   function withdrawAbandoned() {
     const abandoned = abandonedRef.current;
-    if (!abandoned.size) return;
     const pending = new Set(snapshot.pending);
+    const withdrawn = withdrawnRef.current;
+    // Forget withdrawn cards the host no longer lists as pending.
+    for (const id of withdrawn) if (!pending.has(id)) withdrawn.delete(id);
+    if (!abandoned.size) return;
     for (const item of snapshot.timeline) {
       if (item.kind !== 'access' || item.userPath == null || item.decision !== 'pending' || !item.requestId || !pending.has(item.requestId)) continue;
+      if (withdrawn.has(item.requestId)) continue;
       // A path dropped again meanwhile is wanted after all.
-      if (!abandoned.has(item.userPath) || readingRef.current.some((entry) => entry.path === item.userPath)) continue;
-      abandoned.delete(item.userPath);
+      if (readingRef.current.some((entry) => entry.path === item.userPath)) continue;
+      // Cards open in drop order, so the oldest removed reading of this path owns it.
+      let owner: string | null = null;
+      for (const [id, path] of abandoned) if (path === item.userPath) { owner = id; break; }
+      if (owner == null) continue;
+      abandoned.delete(owner);
+      withdrawn.add(item.requestId);
       void onWithdrawAccess(item.requestId).catch(() => {});
     }
   }
@@ -275,7 +289,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     }
     if (!readingRef.current.some((entry) => entry.id === item.id)) {
       // Removed meanwhile: its read is over, so there is no card left to withdraw.
-      abandonedRef.current.delete(item.path);
+      abandonedRef.current.delete(item.id);
       return;
     }
     setReadingImages(readingRef.current.filter((entry) => entry.id !== item.id));

@@ -198,6 +198,10 @@ export type AcpAccess = {
   diff: AcpFileDiff | null;
   turnId: string;
   subagent: string | null;
+  /** Set only for a card the user's own action raised (a dropped image): the path
+   *  as the user gave it. It belongs to no turn, never holds the session in
+   *  waiting_permission, and is answered only once or denied. */
+  userPath: string | null;
 };
 
 /** One ordered timeline entry. Its place is fixed when it first appears. */
@@ -413,6 +417,15 @@ export type AcpFileList = {
   /** The directory holds more files than were indexed. */
   truncated: boolean;
   source: 'git' | 'walk';
+};
+
+/** An image file dropped on the composer, read by the host for its preview and
+ *  sent like a pasted image. */
+export type AcpImageFile = {
+  name: string;
+  mimeType: string;
+  dataBase64: string;
+  size: number;
 };
 
 /** One session in the agent's own history. */

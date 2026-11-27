@@ -9,13 +9,20 @@
 //!   directory needs the same approval as an agent's own read (`access`), and
 //!   Cliora's own data is refused whatever was granted (`safe_fs`).
 //!
+//! - An image file the user drops on the composer (a desktop drop delivers
+//!   paths, not bytes) is read here so the tray can preview it and send it as
+//!   an `image` block like a pasted one: same capability, formats and size
+//!   limit, the file header must match its extension, and a file outside the
+//!   directory needs the same approval.
+//!
 //! The timeline keeps only labels: image data and file contents never enter
 //! the snapshot.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use base64::Engine;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::access::AccessKind;
@@ -70,6 +77,44 @@ fn file_mime(path: &Path) -> Option<&'static str> {
         "pdf" => "application/pdf",
         _ => return None,
     })
+}
+
+/// An image file read for the composer's tray. The view turns it into the
+/// same image attachment a paste produces.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpImageFile {
+    pub name: String,
+    pub mime_type: String,
+    pub data_base64: String,
+    pub size: u64,
+}
+
+/// The image format a file's extension names, among those an agent is sent.
+pub fn image_type_of(path: &Path) -> Option<&'static str> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    Some(match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        _ => return None,
+    })
+}
+
+/// Whether `bytes` start with the header of `mime`.
+pub fn image_header_matches(mime: &str, bytes: &[u8]) -> bool {
+    match mime {
+        "image/png" => bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]),
+        "image/jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
+        "image/gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
+        "image/webp" => bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP",
+        _ => false,
+    }
+}
+
+fn too_large() -> String {
+    format!("图片超过 {} MiB 上限", MAX_IMAGE_BYTES / (1024 * 1024))
 }
 
 /// A `file://` URI for a path the user knows (no verbatim prefix).
@@ -155,17 +200,71 @@ impl Session {
         Ok((blocks, labels))
     }
 
-    /// One file as a content block: embedded text or a link.
-    fn file_block(&self, requested: &str, embed: bool) -> Result<(Value, AcpAttachmentLabel), String> {
+    /// A requested path: absolute, or relative to the session directory.
+    fn requested_path(&self, requested: &str) -> PathBuf {
         let given = Path::new(requested);
         // Relative to the directory as the user knows it: a canonical (verbatim)
         // session directory would not accept a joined `/`-separated path.
         let base = PathBuf::from(safe_fs::display(&self.directory));
-        let requested_path = if given.is_absolute() {
+        if given.is_absolute() {
             given.to_path_buf()
         } else {
             base.join(requested.replace('/', std::path::MAIN_SEPARATOR_STR))
-        };
+        }
+    }
+
+    /// Read an image file the user dropped, for the tray's preview and an
+    /// `image` block. Refused, with the reason, when the agent did not declare
+    /// images, the format is not one an agent is sent, the header does not
+    /// match the extension or the file is over the limit. Everything that can
+    /// be refused is refused before an approval card is opened.
+    pub(super) fn read_image(&self, requested: &str) -> Result<AcpImageFile, String> {
+        if requested.trim().is_empty() {
+            return Err("图片路径为空".into());
+        }
+        if guard(&self.writer).is_none() {
+            return Err("会话已结束".into());
+        }
+        if !guard(&self.agent).prompt_capabilities.image {
+            return Err("该 agent 没有声明接受图片，不能附带图片".into());
+        }
+        let requested_path = self.requested_path(requested);
+        let mime = image_type_of(&requested_path).ok_or("只支持 PNG、JPEG、GIF 或 WebP 图片")?;
+        let failed = |error: String| format!("无法附带图片 {requested}：{error}");
+        // Size first: nobody is asked about a file that would be refused.
+        let target = safe_fs::resolve_target(&self.directory, &requested_path, Expect::File).map_err(failed)?;
+        let size = std::fs::metadata(target.path()).map_err(|error| failed(error.to_string()))?.len();
+        if size > MAX_IMAGE_BYTES as u64 {
+            return Err(too_large());
+        }
+        let (path, _) = self.approve_user_path(AccessKind::Read, Expect::File, &requested_path, requested).map_err(failed)?;
+        let file = std::fs::File::open(&path).map_err(|error| failed(error.to_string()))?;
+        // Bounded: a file that grew after the check is still refused.
+        let mut bytes = Vec::new();
+        file.take(MAX_IMAGE_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|error| failed(error.to_string()))?;
+        if bytes.len() > MAX_IMAGE_BYTES {
+            return Err(too_large());
+        }
+        if bytes.is_empty() {
+            return Err("图片文件为空".into());
+        }
+        if !image_header_matches(mime, &bytes) {
+            return Err("文件内容与扩展名不符，不是有效的图片".into());
+        }
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or(requested).to_owned();
+        Ok(AcpImageFile {
+            name,
+            mime_type: mime.to_owned(),
+            size: bytes.len() as u64,
+            data_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+        })
+    }
+
+    /// One file as a content block: embedded text or a link.
+    fn file_block(&self, requested: &str, embed: bool) -> Result<(Value, AcpAttachmentLabel), String> {
+        let requested_path = self.requested_path(requested);
         let (path, _) = self
             .approve_path(AccessKind::Read, Expect::File, None, &requested_path)
             .map_err(|error| format!("无法附带文件 {requested}：{error}"))?;

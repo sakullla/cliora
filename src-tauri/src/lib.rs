@@ -413,6 +413,7 @@ pub fn run() {
             commands::acp_authenticate,
             commands::acp_respond_elicitation,
             commands::acp_list_files,
+            commands::acp_read_image,
             commands::acp_native_sessions,
             commands::acp_delete_native_session,
             commands::acp_cancel,

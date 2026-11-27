@@ -707,3 +707,40 @@ test('a dropped outside image waits on its own card without hiding Stop, offers 
   await page.evaluate(() => (window as any).__acpReleaseImage());
   await expect(panel.locator('[data-attachment]')).toHaveCount(0);
 });
+
+test('the same outside image dropped and removed twice withdraws both of its cards, each once', async ({ page }) => {
+  const outside = 'D:/outside/twice.png';
+  const card = (id: string) => ({ kind: 'access', id, accessKind: 'read', path: outside, detail: null, decision: 'pending', requestId: `${id}-request`, diff: null, turnId: '', subagent: null, userPath: outside });
+  const base = [userMessage('u1', '看图')];
+  await installAcpMock(page, { interaction: 'acp', images: { [outside]: { mimeType: 'image/png', dataBase64: PNG } },
+    conversations: [snapshot({ id: 'a1', agent: imageAgent, timeline: base as any })] });
+  await openWorkbench(page);
+  const panel = panelOf(page);
+  await expect(inputOf(panel)).toBeVisible();
+  const reading = panel.locator('[data-attachment="reading"]');
+  const remove = panel.getByRole('button', { name: '移除附件 twice.png', exact: true });
+
+  // Dropped, removed, dropped again and removed again while both reads still wait.
+  await page.evaluate(() => { (window as any).__acpTest.holdImage = true; });
+  await dropPaths(page, panel, [outside]);
+  await expect(reading).toHaveCount(1);
+  await remove.click();
+  await expect(reading).toHaveCount(0);
+  await page.evaluate(() => { (window as any).__acpTest.holdImage = true; });
+  await dropPaths(page, panel, [outside]);
+  await expect(reading).toHaveCount(1);
+  await remove.click();
+  await expect(reading).toHaveCount(0);
+  expect((await testState(page)).imageReads).toEqual([['a1', outside], ['a1', outside]]);
+
+  // The first card is withdrawn as soon as it is published.
+  await page.evaluate(({ timeline }) => (window as any).__acpSessionState('a1', { state: 'ready', timeline, pending: ['twice-1-request'], seq: 3 }), { timeline: [...base, card('twice-1')] });
+  await expect.poll(async () => (await testState(page)).accessAnswers).toEqual([['a1', 'twice-1-request', 'deny']]);
+  // A snapshot that still lists the first card next to the second one withdraws the
+  // second, without answering the first again.
+  await page.evaluate(({ timeline }) => (window as any).__acpSessionState('a1', { state: 'ready', timeline, pending: ['twice-1-request', 'twice-2-request'], seq: 4 }), { timeline: [...base, card('twice-1'), card('twice-2')] });
+  await expect.poll(async () => (await testState(page)).accessAnswers).toEqual([['a1', 'twice-1-request', 'deny'], ['a1', 'twice-2-request', 'deny']]);
+  await page.evaluate(() => (window as any).__acpReleaseImage());
+  await expect(panel.locator('[data-attachment]')).toHaveCount(0);
+  expect((await testState(page)).accessAnswers).toHaveLength(2);
+});

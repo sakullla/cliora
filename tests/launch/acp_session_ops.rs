@@ -565,6 +565,270 @@ fn images_need_the_capability_and_stay_within_count_type_and_size() {
     assert!(rest.iter().all(|frame| frame["method"] != "session/prompt"), "被拒绝的图片不发出提示");
 }
 
+/// A session over `directory` whose agent declared (or did not declare)
+/// images and stays connected.
+fn image_session(directory: &Path, image: bool) -> (String, std::thread::JoinHandle<()>) {
+    let (io, mut agent) = pair();
+    let worker = std::thread::spawn(move || {
+        initialize(
+            &mut agent,
+            json!({ "protocolVersion": 1, "agentCapabilities": { "promptCapabilities": { "image": image } } }),
+        );
+        create(&mut agent, "session-1");
+        agent.stay_connected();
+    });
+    (open(spec(directory), io).unwrap().id, worker)
+}
+
+const PNG_BYTES: [u8; 12] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13];
+
+#[test]
+fn a_dropped_image_file_is_read_inside_checked_and_asks_outside_between_turns() {
+    let temp = temp_dir();
+    let directory = temp.path().join("project");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("shot.png"), PNG_BYTES).unwrap();
+    std::fs::write(directory.join("photo.JPG"), [0xff, 0xd8, 0xff, 0xe0, 0, 0x10]).unwrap();
+    std::fs::write(directory.join("fake.png"), "这不是图片").unwrap();
+    std::fs::write(directory.join("jpeg-named.png"), [0xff, 0xd8, 0xff, 0xe0]).unwrap();
+    std::fs::write(directory.join("empty.gif"), []).unwrap();
+    std::fs::write(directory.join("notes.txt"), "text").unwrap();
+    std::fs::write(directory.join("picture.bmp"), b"BM").unwrap();
+    let mut big = PNG_BYTES.to_vec();
+    big.resize(prompt::MAX_IMAGE_BYTES + 1, 0);
+    std::fs::write(directory.join("big.png"), &big).unwrap();
+    std::fs::create_dir_all(directory.join("folder.png")).unwrap();
+    let outside = temp.path().join("outside.png");
+    std::fs::write(&outside, PNG_BYTES).unwrap();
+    let big_outside = temp.path().join("big-outside.png");
+    std::fs::write(&big_outside, &big).unwrap();
+    let (id, worker) = image_session(&std::fs::canonicalize(&directory).unwrap(), true);
+
+    // Inside the directory: read at once, relative or absolute, no card, no turn.
+    let image = read_image(&id, "shot.png").unwrap();
+    assert_eq!(image.name, "shot.png");
+    assert_eq!(image.mime_type, "image/png");
+    assert_eq!(image.size, PNG_BYTES.len() as u64);
+    assert_eq!(image.data_base64, png());
+    let jpeg = read_image(&id, &directory.join("photo.JPG").display().to_string()).unwrap();
+    assert_eq!(jpeg.mime_type, "image/jpeg", "扩展名不区分大小写");
+    let quiet = snapshot_of(&id);
+    assert!(quiet.pending.is_empty() && quiet.timeline.is_empty(), "目录内读取不出卡、不记录");
+    assert_eq!(quiet.state, "ready");
+
+    // Refused with the reason, before anyone is asked.
+    let refused = |path: &str| read_image(&id, path).unwrap_err();
+    assert!(refused("fake.png").contains("扩展名"), "伪造扩展名");
+    assert!(refused("jpeg-named.png").contains("扩展名"), "文件头与扩展名不符");
+    assert!(refused("empty.gif").contains("为空"));
+    assert!(refused("notes.txt").contains("PNG"), "非图片");
+    assert!(refused("picture.bmp").contains("PNG"), "不支持的图片格式");
+    assert!(refused("big.png").contains("MiB"), "超限");
+    assert!(refused("folder.png").contains("普通文件"), "目录");
+    assert!(refused("missing.png").contains("不存在"));
+    assert!(refused(&big_outside.display().to_string()).contains("MiB"), "目录外超限的图片不出卡");
+    assert!(snapshot_of(&id).pending.is_empty(), "会被拒绝的文件不询问用户");
+
+    // Outside: the same approval card, between turns; allowed once, then denied.
+    let outside_text = outside.display().to_string();
+    let read_outside = |path: String| {
+        let (done_tx, done_rx) = channel();
+        let session = id.clone();
+        std::thread::spawn(move || {
+            let _ = done_tx.send(read_image(&session, &path));
+        });
+        done_rx
+    };
+    let done = read_outside(outside_text.clone());
+    let card = wait_for(|| snapshot_of(&id).pending.first().cloned(), "目录外图片的审批卡");
+    let waiting = snapshot_of(&id);
+    // The user's own card waits in the pending list but never makes the
+    // session wait: with no turn it stays ready.
+    assert_eq!(waiting.state, "ready");
+    let access = waiting
+        .timeline
+        .iter()
+        .find_map(|item| match item {
+            AcpTimelineItem::Access(access) => Some(access.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(access.access_kind, "read");
+    assert_eq!(access.decision, "pending");
+    assert!(access.turn_id.is_empty(), "不属于任何轮次");
+    assert_eq!(access.user_path.as_deref(), Some(outside_text.as_str()), "卡片带着用户给出的路径");
+    // Only once or deny: the user's own picture never grants the agent reads.
+    assert!(respond_access(&id, &card, "session").unwrap_err().contains("允许一次"));
+    assert_eq!(snapshot_of(&id).pending, vec![card.clone()], "被拒收的答复不消耗审批卡");
+    respond_access(&id, &card, "once").unwrap();
+    let image = done.recv_timeout(Duration::from_secs(8)).unwrap().unwrap();
+    assert_eq!(image.name, "outside.png");
+    assert_eq!(image.data_base64, png());
+    assert_eq!(snapshot_of(&id).state, "ready");
+    assert!(snapshot_of(&id).grants.is_empty(), "用户的卡不产生本会话授权");
+
+    let done = read_outside(outside_text.clone());
+    let card = wait_for(|| snapshot_of(&id).pending.first().cloned(), "第二张审批卡");
+    respond_access(&id, &card, "deny").unwrap();
+    assert!(done.recv_timeout(Duration::from_secs(8)).unwrap().unwrap_err().contains("拒绝"));
+
+    let serialized = serde_json::to_string(&snapshot_of(&id)).unwrap();
+    assert!(!serialized.contains(&png()), "图片数据不进入快照");
+
+    // Closing the conversation withdraws an open card; the read is refused.
+    let done = read_outside(outside_text);
+    let card = wait_for(|| snapshot_of(&id).pending.first().cloned(), "第三张审批卡");
+    close(&id).unwrap();
+    assert!(done.recv_timeout(Duration::from_secs(8)).unwrap().unwrap_err().contains("撤回"));
+    assert!(respond_access(&id, &card, "once").is_err(), "撤回的卡不再接受回应");
+    assert!(read_image(&id, "shot.png").is_err(), "关闭后不再读取");
+    worker.join().unwrap();
+
+    // Without the image capability nothing is read.
+    let (plain, worker) = image_session(&std::fs::canonicalize(&directory).unwrap(), false);
+    assert!(read_image(&plain, "shot.png").unwrap_err().contains("没有声明"));
+    close(&plain).unwrap();
+    worker.join().unwrap();
+}
+
+fn access_records(snapshot: &AcpSessionSnapshot) -> Vec<AcpAccess> {
+    snapshot
+        .timeline
+        .iter()
+        .filter_map(|item| match item {
+            AcpTimelineItem::Access(access) => Some(access.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Read an image on another thread; the receiver gets the result.
+fn read_image_later(id: &str, path: &str) -> std::sync::mpsc::Receiver<Result<AcpImageFile, String>> {
+    let (done_tx, done_rx) = channel();
+    let session = id.to_owned();
+    let path = path.to_owned();
+    std::thread::spawn(move || {
+        let _ = done_tx.send(read_image(&session, &path));
+    });
+    done_rx
+}
+
+/// A directory with an image outside it: (temp, directory, outside image).
+fn outside_image() -> (tempfile::TempDir, std::path::PathBuf, String) {
+    let temp = temp_dir();
+    let directory = temp.path().join("project");
+    std::fs::create_dir_all(&directory).unwrap();
+    let outside = temp.path().join("outside.png");
+    std::fs::write(&outside, PNG_BYTES).unwrap();
+    let directory = std::fs::canonicalize(&directory).unwrap();
+    (temp, directory, outside.display().to_string())
+}
+
+#[test]
+fn a_dropped_image_card_never_hides_a_running_turn_and_a_stop_withdraws_it() {
+    let (_temp, directory, outside) = outside_image();
+    let (io, mut agent) = pair();
+    let worker = std::thread::spawn(move || {
+        initialize(&mut agent, json!({ "protocolVersion": 1, "agentCapabilities": { "promptCapabilities": { "image": true } } }));
+        create(&mut agent, "session-1");
+        let prompt = agent.next_line();
+        assert_eq!(prompt["method"], "session/prompt", "{prompt}");
+        let cancel = agent.next_line();
+        assert_eq!(cancel["method"], "session/cancel", "{cancel}");
+        reply(&agent, &prompt, json!({ "stopReason": "cancelled" }));
+        agent.stay_connected();
+    });
+    let id = open(spec(&directory), io).unwrap().id;
+    prompt(&id, "跑一会儿").unwrap();
+    wait_for(|| (snapshot_of(&id).state == "running").then_some(()), "轮次进行中");
+
+    // A drop during the running turn: the card waits, the turn stays running.
+    let done = read_image_later(&id, &outside);
+    let card = wait_for(|| snapshot_of(&id).pending.first().cloned(), "拖入图片的审批卡");
+    let current = snapshot_of(&id);
+    assert_eq!(current.state, "running", "用户的卡不遮住进行中的轮次");
+    let access = access_records(&current).pop().unwrap();
+    assert_eq!(access.decision, "pending");
+    assert!(access.turn_id.is_empty());
+    assert_eq!(access.user_path.as_deref(), Some(outside.as_str()));
+    assert!(respond_access(&id, &card, "session").is_err(), "用户的卡不能本会话允许");
+    assert!(snapshot_of(&id).grants.is_empty());
+
+    // The stop ends the turn and withdraws the turn-less card with it.
+    cancel(&id).unwrap();
+    let refused = done.recv_timeout(Duration::from_secs(8)).unwrap().unwrap_err();
+    assert!(refused.contains("撤回"), "{refused}");
+    wait_until_idle(&id, Duration::from_secs(8)).unwrap();
+    let after = snapshot_of(&id);
+    assert_eq!(after.state, "ready");
+    assert!(after.pending.is_empty());
+    assert_eq!(access_records(&after).pop().unwrap().decision, "withdrawn");
+    assert!(respond_access(&id, &card, "once").is_err(), "撤回的卡不再接受回应");
+    close(&id).unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
+fn a_dropped_image_outside_is_read_at_once_under_yolo() {
+    let (_temp, directory, outside) = outside_image();
+    let (io, mut agent) = pair();
+    let worker = std::thread::spawn(move || {
+        initialize(&mut agent, json!({ "protocolVersion": 1, "agentCapabilities": { "promptCapabilities": { "image": true } } }));
+        create(&mut agent, "session-1");
+        agent.stay_connected();
+    });
+    let mut start = spec(&directory);
+    start.mode = LaunchMode::Yolo;
+    let id = open(start, io).unwrap().id;
+    let image = read_image(&id, &outside).unwrap();
+    assert_eq!(image.data_base64, png());
+    let current = snapshot_of(&id);
+    assert!(current.pending.is_empty(), "YOLO 下不出卡");
+    assert!(current.grants.is_empty(), "YOLO 不是本会话授权");
+    let access = access_records(&current).pop().unwrap();
+    assert_eq!(access.decision, "yolo");
+    assert_eq!(access.user_path.as_deref(), Some(outside.as_str()));
+    close(&id).unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
+fn a_dropped_image_outside_is_read_at_once_when_the_agent_already_holds_a_read_grant() {
+    let (_temp, directory, outside) = outside_image();
+    let path = outside.clone();
+    let (io, mut agent) = pair();
+    let worker = std::thread::spawn(move || {
+        initialize(&mut agent, json!({ "protocolVersion": 1, "agentCapabilities": { "promptCapabilities": { "image": true } } }));
+        create(&mut agent, "session-1");
+        let prompt = agent.next_line();
+        // The agent's own read outside: the user allows reads for the session.
+        agent.send(json!({ "jsonrpc": "2.0", "id": 70, "method": "fs/read_text_file", "params": { "sessionId": "session-1", "path": path } }));
+        let read = agent.next_line();
+        assert_eq!(read["id"], 70, "{read}");
+        reply(&agent, &prompt, json!({ "stopReason": "end_turn" }));
+        agent.stay_connected();
+    });
+    let id = open(spec(&directory), io).unwrap().id;
+    prompt(&id, "读一下外面").unwrap();
+    let card = wait_for(|| snapshot_of(&id).pending.first().cloned(), "agent 的审批卡");
+    assert_eq!(snapshot_of(&id).state, "waiting_permission", "agent 的卡照常让会话等待");
+    respond_access(&id, &card, "session").unwrap();
+    wait_until_idle(&id, Duration::from_secs(8)).unwrap();
+    assert_eq!(snapshot_of(&id).grants, vec!["read"]);
+
+    // The grant the agent already holds covers the user's drop: no card.
+    let image = read_image(&id, &outside).unwrap();
+    assert_eq!(image.data_base64, png());
+    let current = snapshot_of(&id);
+    assert!(current.pending.is_empty(), "已有读取授权时不出卡");
+    let access = access_records(&current).pop().unwrap();
+    assert_eq!(access.decision, "granted");
+    assert_eq!(access.user_path.as_deref(), Some(outside.as_str()));
+    assert!(access.turn_id.is_empty());
+    close(&id).unwrap();
+    worker.join().unwrap();
+}
+
 // ---------------------------------------------------------------- files
 
 #[cfg(windows)]

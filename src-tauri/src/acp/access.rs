@@ -15,6 +15,12 @@
 //! cards' withdrawal rules: stopping the turn, the turn ending or the session
 //! ending withdraws it and the agent is refused. An answer for a card that is
 //! no longer pending is rejected.
+//!
+//! A card the user's own action raised (an image dropped on the composer)
+//! belongs to no turn. It does not hold the session in waiting_permission, a
+//! stop or the session's end withdraws it (a turn ending does not), and it is
+//! answered only once or denied: the user's picture never widens what the agent
+//! may read. A session grant the agent already obtained still covers it.
 
 use std::sync::mpsc::{channel, Sender};
 
@@ -113,6 +119,8 @@ pub(crate) struct PendingAccess {
     pub item_id: String,
     pub turn_id: String,
     pub kind: AccessKind,
+    /// Raised by the user's own action, not by the agent.
+    pub by_user: bool,
     pub sender: Sender<AccessAnswer>,
 }
 
@@ -123,6 +131,12 @@ pub const WITHDRAWN: &str = "目录外访问的审批已撤回（轮次已结束
 impl Session {
     pub(super) fn access_pending_ids(&self) -> Vec<String> {
         guard(&self.accesses).iter().map(|pending| pending.request_id.clone()).collect()
+    }
+
+    /// Whether an agent's card waits for an answer. The user's own cards are
+    /// left out: they hold no turn, so they never make the session wait.
+    pub(super) fn agent_access_waiting(&self) -> bool {
+        guard(&self.accesses).iter().any(|pending| !pending.by_user)
     }
 
     /// Record an access in the timeline and return its item.
@@ -155,6 +169,7 @@ impl Session {
             diff: None,
             turn_id: self.current_turn_id(),
             subagent: subagent.map(ToOwned::to_owned),
+            user_path: None,
         });
         id
     }
@@ -178,6 +193,29 @@ impl Session {
         path: &str,
         detail: Option<String>,
     ) -> Result<String, String> {
+        self.authorize(kind, subagent, path, detail, None)
+    }
+
+    /// Decide an access the user's own action asks for outside any turn (an
+    /// image dropped into the composer). YOLO or an existing grant approves it
+    /// at once; otherwise the card belongs to no turn: it is withdrawn by a
+    /// stop or the session's end, never by a turn that happens to end, and it
+    /// offers only allow once or deny. `user_path` is the path as the user gave
+    /// it, so the composer can find (and withdraw) its own card.
+    pub(super) fn authorize_outside_for_user(&self, kind: AccessKind, path: &str, user_path: &str) -> Result<String, String> {
+        self.authorize(kind, None, path, None, Some(user_path))
+    }
+
+    fn authorize(
+        &self,
+        kind: AccessKind,
+        subagent: Option<&str>,
+        path: &str,
+        detail: Option<String>,
+        user_path: Option<&str>,
+    ) -> Result<String, String> {
+        let by_user = user_path.is_some();
+        let user_path = user_path.map(ToOwned::to_owned);
         let automatic = if self.yolo {
             Some("yolo")
         } else if guard(&self.grants).has(kind) {
@@ -186,7 +224,7 @@ impl Session {
             None
         };
         if let Some(decision) = automatic {
-            let turn_id = self.current_turn_id();
+            let turn_id = if by_user { String::new() } else { self.current_turn_id() };
             let id = guard(&self.timeline).auto_id("access");
             self.record_access(AcpAccess {
                 id: id.clone(),
@@ -198,6 +236,7 @@ impl Session {
                 diff: None,
                 turn_id,
                 subagent: subagent.map(ToOwned::to_owned),
+                user_path,
             });
             return Ok(id);
         }
@@ -210,13 +249,13 @@ impl Session {
         // is never opened: no card can outlive the turn that asked for it.
         let opened = {
             let turn = guard(&self.turn);
-            let turn_id = turn.as_ref().map(|turn| turn.id.clone()).unwrap_or_default();
-            let cancelled = turn.as_ref().is_some_and(|turn| turn.cancel_requested);
+            let turn_id = if by_user { String::new() } else { turn.as_ref().map(|turn| turn.id.clone()).unwrap_or_default() };
+            let cancelled = !by_user && turn.as_ref().is_some_and(|turn| turn.cancel_requested);
             let ended = guard(&self.writer).is_none();
             // Like an authorization card, the conversation's own request needs
             // a live turn that was not stopped; a child's may arrive between
-            // turns.
-            if cancelled || ended || (turn_id.is_empty() && subagent.is_none()) {
+            // turns, and so may the user's own.
+            if cancelled || ended || (turn_id.is_empty() && subagent.is_none() && !by_user) {
                 Err(turn_id)
             } else {
                 guard(&self.accesses).push(PendingAccess {
@@ -224,6 +263,7 @@ impl Session {
                     item_id: id.clone(),
                     turn_id: turn_id.clone(),
                     kind,
+                    by_user,
                     sender,
                 });
                 Ok(turn_id)
@@ -242,6 +282,7 @@ impl Session {
                     diff: None,
                     turn_id,
                     subagent: subagent.map(ToOwned::to_owned),
+                    user_path,
                 });
                 return Err(WITHDRAWN.into());
             }
@@ -258,6 +299,7 @@ impl Session {
             diff: None,
             turn_id,
             subagent: subagent.map(ToOwned::to_owned),
+            user_path,
         };
         self.record_access(entry);
         self.emit_pending();
@@ -294,6 +336,11 @@ impl Session {
                 .iter()
                 .position(|item| item.request_id == access_id || item.item_id == access_id)
                 .ok_or("该审批已失效或已回答")?;
+            // The user's own card never grants the agent anything; it stays
+            // pending so a valid answer can still follow.
+            if answer == AccessAnswer::Session && accesses[index].by_user {
+                return Err("这张审批卡只能允许一次或拒绝".into());
+            }
             accesses.remove(index)
         };
         let mut released = Vec::new();
