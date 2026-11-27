@@ -12,6 +12,6 @@ export function AcpPendingBar({ count, onLocate }: { count: number; onLocate: ()
   return <div className={styles.pendingBar} data-acp-pending="">
     <Icon name="bell" size={13} />
     <span className={styles.pendingText}>{t('sessions.acpPendingCount', { count })}</span>
-    <button type="button" className={styles.linkAction} onClick={onLocate}>{t('sessions.acpPendingLocate')}</button>
+    <button type="button" className={styles.pendingLocate} onClick={onLocate}>{t('sessions.acpPendingLocate')}</button>
   </div>;
 }

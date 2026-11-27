@@ -7,18 +7,18 @@ import styles from './acp.module.css';
 
 /**
  * The agent's current plan, pinned above the timeline and foldable: progress as
- * done/total, each entry with its status (icon and word) and priority. A new plan
- * replaces the old one whole; an empty plan hides the panel. A plan whose every
- * entry is done folds to its one-line progress (the reader may open it); any
- * update that brings an unfinished entry opens it again. Only a change of the
- * plan's content decides afresh: the host republishes the same plan with every
- * snapshot (a turn starting, a card opening), and that must not undo the reader's
- * own fold. Nothing here infers that the task itself is done.
+ * done/total, an optional one-line summary of the active step while folded, and
+ * each entry with its status (icon and word) and priority. A new plan replaces
+ * the old one whole; an empty plan hides the panel. A plan whose every entry is
+ * done folds to its one-line progress (the reader may open it); any update that
+ * brings an unfinished entry opens it again. Only a change of the plan's content
+ * decides afresh, so republished snapshots never undo the reader's own fold.
  */
 export function AcpPlan({ entries }: { entries: AcpPlanEntry[] }) {
   const { t } = useTranslation();
   const done = entries.filter((entry) => entry.status === 'completed').length;
   const finished = entries.length > 0 && done === entries.length;
+  const current = entries.find((entry) => entry.status === 'in_progress') ?? null;
   const [open, setOpen] = useState(!finished);
   // What the plan says, not which array carries it.
   const signature = useMemo(() => JSON.stringify(entries.map((entry) => [entry.status, entry.content])), [entries]);
@@ -29,7 +29,10 @@ export function AcpPlan({ entries }: { entries: AcpPlanEntry[] }) {
     <summary className={styles.planHead}>
       <Icon name="chevronRight" size={12} className={styles.disclosure} />
       <Icon name="list" size={12} />
-      <span>{t('sessions.acpPlan', { done, total: entries.length })}</span>
+      <span className={styles.planCount}>{t('sessions.acpPlan', { done, total: entries.length })}</span>
+      {!open && current && <span className={styles.planCurrent} data-acp-plan-current="" title={current.content}>
+        {t('sessions.acpPlanCurrent', { step: current.content })}
+      </span>}
       <span className={styles.planMeter} role="progressbar" aria-label={t('sessions.acpPlanProgress')} aria-valuemin={0} aria-valuemax={entries.length} aria-valuenow={done}>
         <span style={{ width: `${Math.round((done / entries.length) * 100)}%` }} />
       </span>

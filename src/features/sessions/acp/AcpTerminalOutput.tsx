@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from '../../../components/Icon';
 import type { AcpTerminal } from '../../../types/acp';
 import { AcpCopyButton } from './AcpCopyButton';
-import { terminalText } from './acpView';
+import { splitMatchRuns } from './acpSearch';
+import { terminalText, visibleControls } from './acpView';
 import styles from './acp.module.css';
 
 /** How often streamed output repaints. */
@@ -26,16 +27,25 @@ function useThrottled<T>(value: T, interval: number): T {
   return shown;
 }
 
+function renderRuns(text: string, query: string, caseSensitive: boolean) {
+  if (!query.trim()) return text;
+  return splitMatchRuns(text, query, caseSensitive).map((run, index) => run.hit
+    ? <mark key={index} className={styles.findMark}>{run.text}</mark>
+    : run.text);
+}
+
 /**
  * A terminal a tool call embeds: the command, its live output as plain text, and
  * how it ended. While it runs, "Stop" ends its whole process tree through the
  * host; the output stays readable after it ends or is released.
  */
-export function AcpTerminalOutput({ terminalId, terminal, live, onKill }: {
+export function AcpTerminalOutput({ terminalId, terminal, live, onKill, searchQuery = '', searchCase = false }: {
   terminalId: string;
   terminal: AcpTerminal | null;
   live: boolean;
   onKill: (terminalId: string) => Promise<void>;
+  searchQuery?: string;
+  searchCase?: boolean;
 }) {
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
@@ -63,7 +73,7 @@ export function AcpTerminalOutput({ terminalId, terminal, live, onKill }: {
   return <div className={styles.terminal} data-content="terminal" data-terminal-id={terminalId} data-running={running || undefined}>
     <div className={styles.terminalHead}>
       <Icon name="terminal" size={12} />
-      <code className={styles.terminalCommand} title={terminal.cwd}>{terminal.command}</code>
+      <code className={styles.terminalCommand} title={terminal.cwd}>{renderRuns(visibleControls(terminal.command), searchQuery, searchCase)}</code>
       <span className={styles.terminalStatus} data-failed={failed || undefined} role="status">{status}</span>
       <AcpCopyButton text={terminalText(terminal.output)} label={t('sessions.acpCopyOutput')} />
       {running && live && <button type="button" className={styles.action} data-variant="danger" disabled={busy} onClick={() => {
@@ -78,7 +88,7 @@ export function AcpTerminalOutput({ terminalId, terminal, live, onKill }: {
     <pre ref={outputRef} className={styles.terminalOutput} tabIndex={0} aria-label={t('sessions.acpTerminalOutput', { command: terminal.command })} onScroll={(event) => {
       const node = event.currentTarget;
       followRef.current = node.scrollHeight - node.scrollTop - node.clientHeight <= 8;
-    }}>{text || <span className={styles.muted}>{t('sessions.acpTerminalEmpty')}</span>}</pre>
+    }}>{text ? renderRuns(text, searchQuery, searchCase) : <span className={styles.muted}>{t('sessions.acpTerminalEmpty')}</span>}</pre>
     {error && <p className={styles.error} role="alert">{error}</p>}
   </div>;
 }

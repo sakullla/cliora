@@ -24,7 +24,10 @@ export function AcpPermissionCard({ title, request, busy, onAnswer }: {
 }) {
   const { t } = useTranslation();
   return <section className={styles.card} role="group" aria-label={title} data-request-id={request.requestId} data-card="permission">
-    <strong className={styles.cardTitle}><Icon name="shield" size={13} />{t('sessions.acpPermissionTitle')}</strong>
+    <div className={styles.cardHead}>
+      <strong className={styles.cardTitle}><Icon name="shield" size={13} />{t('sessions.acpPermissionTitle')}</strong>
+      <span className={styles.cardTag}>{t('sessions.acpCardPermission')}</span>
+    </div>
     <div className={styles.cardActions}>
       {request.options.map((option) => <button key={option.optionId} type="button" className={styles.action} data-variant={optionVariant(option.kind)} data-option-kind={option.kind} disabled={busy} onClick={() => onAnswer(request.requestId, option.optionId)}>{option.name}</button>)}
       <button type="button" className={styles.action} data-variant="quiet" disabled={busy} onClick={() => onAnswer(request.requestId, null)}>{t('sessions.acpPermissionDismiss')}</button>
