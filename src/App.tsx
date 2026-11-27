@@ -61,7 +61,7 @@ import type { HistorySession } from './types/history';
 import type { Project, TrayRepairTarget, TwiglaneFeedbackPreview, TwiglaneReviewSignal, WorkbenchSession } from './types/launch';
 import { preferredLaunchMode } from './types/launch';
 import type { LibraryTitle, LibraryKind } from './types/library';
-import type { AdapterCatalog } from './types/native';
+import { preferredYoloAvailable, type AdapterCatalog } from './types/native';
 import type { RemoteTarget } from './types/remote';
 
 type Page = 'home' | 'sessions' | 'connections' | 'library' | 'records';
@@ -830,7 +830,8 @@ export default function App() {
     // Like 恢复指定会话, a resume follows the CLI default mode when that CLI has one.
     const resumeToolId = knownToolId ?? paletteSessions.find((item) => item.id === id)?.toolId;
     const settings = await native.getLaunchSettings().catch(() => null);
-    const mode = preferredLaunchMode(settings, 'cli', !!(catalog?.registered ?? []).find((item) => item.id === resumeToolId)?.yoloAvailable);
+    // A resume is a terminal launch even when conversations are preferred.
+    const mode = preferredLaunchMode(settings, 'cli', preferredYoloAvailable((catalog?.registered ?? []).find((item) => item.id === resumeToolId), settings, { resume: true }));
     try {
       const result = await native.resumeHistorySession(id, mode);
       const opened = workbenchSessionId(result);

@@ -9,7 +9,7 @@ import { configurationApplicationState, configurationLiveState, configurationRow
 import { confirmAction } from '../../lib/confirm';
 import { useFillHeight } from '../../lib/fillHeight';
 import { searchShortcutHint } from '../../lib/shortcut';
-import type { AdapterDescriptor, RegisteredProfile, RegisteredToolWorkspace, RegisteredToolContext, Scope, ApplyComparison, MaintenanceProgress, ToolProbe } from '../../types/native';
+import { preferredYoloAvailable, type AdapterDescriptor, type RegisteredProfile, type RegisteredToolWorkspace, type RegisteredToolContext, type Scope, type ApplyComparison, type MaintenanceProgress, type ToolProbe } from '../../types/native';
 import type { ConfigurationDraft, ConfigurationSaveResult, ConfigurationSubject } from '../../types/configuration';
 import type { AccountImpactScope } from '../../types/accounts';
 import type { Project, TrayRepairTarget } from '../../types/launch';
@@ -365,7 +365,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
         if (typeof picked !== 'string') return;
         directory = picked;
       }
-      const request = { toolId, projectId, sessionId: null, ...(projectId ? { remoteIntent: { kind: 'new' as const } } : {}), mode: preferredLaunchMode(settings, 'cli', descriptor?.yoloAvailable ?? false), directory, worktreeIntent: worktreeIntentForNewWorkbench(settings, { desktop, remote: !!projectId }) };
+      const request = { toolId, projectId, sessionId: null, ...(projectId ? { remoteIntent: { kind: 'new' as const } } : {}), mode: preferredLaunchMode(settings, 'cli', preferredYoloAvailable(descriptor, settings, { remote: !!projectId })), directory, worktreeIntent: worktreeIntentForNewWorkbench(settings, { desktop, remote: !!projectId }) };
       const result = await native.launchCli(request);
       const opened = workbenchSessionId(result);
       if (opened) { onWorkbenchSession?.(opened); return; }
@@ -373,7 +373,7 @@ export function ToolWorkspacePage({ managedTools, remoteTargetId = 'local', init
     } catch (failure) {
       if (await failedInWorkbench(desktop)) {
         const settings = await native.getLaunchSettings().catch(() => null);
-        onWorkbenchFailure?.({ detail: errorText(failure), retry: { kind: 'launch', request: { toolId, projectId, sessionId: null, ...(projectId ? { remoteIntent: { kind: 'new' as const } } : {}), mode: preferredLaunchMode(settings, 'cli', descriptor?.yoloAvailable ?? false), directory, worktreeIntent: worktreeIntentForNewWorkbench(settings, { desktop, remote: !!projectId }) } } });
+        onWorkbenchFailure?.({ detail: errorText(failure), retry: { kind: 'launch', request: { toolId, projectId, sessionId: null, ...(projectId ? { remoteIntent: { kind: 'new' as const } } : {}), mode: preferredLaunchMode(settings, 'cli', preferredYoloAvailable(descriptor, settings, { remote: !!projectId })), directory, worktreeIntent: worktreeIntentForNewWorkbench(settings, { desktop, remote: !!projectId }) } } });
         return;
       }
       setError(errorText(failure));

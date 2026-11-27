@@ -794,9 +794,9 @@ impl Session {
         if tool.get("toolCallId").and_then(Value::as_str).is_none() {
             tool["toolCallId"] = Value::String(format!("permission-{request_id}"));
         }
-        // YOLO answers on the agent's own terms: an allow option is picked at
-        // once and the decision is recorded. A request without an allow option
-        // still reaches the user.
+        // YOLO picks an allow-once option at once and records the decision.
+        // A request without one (only allow-always, only rejections) still
+        // reaches the user: an "always" rule could outlive this session.
         if self.yolo {
             if let Some(option) = Self::yolo_option(&options).cloned() {
                 let call = guard(&self.timeline).upsert_tool(subagent.as_deref(), &turn_id, &tool, "工具调用");

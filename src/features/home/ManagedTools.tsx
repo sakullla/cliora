@@ -7,7 +7,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { nativeAvailable, onLaunchSettingsChange } from '../../lib/native';
 import type { LaunchSettings } from '../../types/launch';
 import { preferredLaunchMode, worktreeIntentForNewWorkbench } from '../../types/launch';
-import type { AdapterDescriptor, ApplyComparison, RegisteredToolWorkspace, ToolProbe } from '../../types/native';
+import { preferredYoloAvailable, type AdapterDescriptor, type ApplyComparison, type RegisteredToolWorkspace, type ToolProbe } from '../../types/native';
 import type { RemoteCliProbe } from '../../types/remote';
 import type { WorkspaceOpenIntent } from '../tools/ToolWorkspace';
 import { RowMenu } from '../../components/RowMenu';
@@ -356,7 +356,7 @@ export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', 
           lastLaunchDirectory = picked;
         }
       }
-      const request = { toolId, projectId: remoteProjectId, sessionId: null, ...(remoteProjectId ? { remoteIntent: { kind: 'new' as const } } : {}), mode: preferredLaunchMode(launchSettings, 'cli', !!tool?.yoloAvailable), directory, worktreeIntent: worktreeIntentForNewWorkbench(launchSettings, { desktop, remote: !!remoteProjectId }) };
+      const request = { toolId, projectId: remoteProjectId, sessionId: null, ...(remoteProjectId ? { remoteIntent: { kind: 'new' as const } } : {}), mode: preferredLaunchMode(launchSettings, 'cli', preferredYoloAvailable(tool, launchSettings, { remote: !!remoteProjectId })), directory, worktreeIntent: worktreeIntentForNewWorkbench(launchSettings, { desktop, remote: !!remoteProjectId }) };
       const result = await native.launchCli(request);
       markRecent(toolId);
       const opened = workbenchSessionId(result);
@@ -366,7 +366,7 @@ export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', 
       clearNoticeLater(toolId, notice);
     } catch (error) {
       if (await failedInWorkbench(desktop)) {
-        onWorkbenchFailure?.({ detail: `${t('home.tools.launchFailed', { name: toolName })} ${message(error)}`, retry: { kind: 'launch', request: { toolId, projectId: remoteProjectId, sessionId: null, ...(remoteProjectId ? { remoteIntent: { kind: 'new' as const } } : {}), mode: preferredLaunchMode(launchSettings, 'cli', !!tool?.yoloAvailable), directory: directory ?? null, worktreeIntent: worktreeIntentForNewWorkbench(launchSettings, { desktop, remote: !!remoteProjectId }) } } });
+        onWorkbenchFailure?.({ detail: `${t('home.tools.launchFailed', { name: toolName })} ${message(error)}`, retry: { kind: 'launch', request: { toolId, projectId: remoteProjectId, sessionId: null, ...(remoteProjectId ? { remoteIntent: { kind: 'new' as const } } : {}), mode: preferredLaunchMode(launchSettings, 'cli', preferredYoloAvailable(tool, launchSettings, { remote: !!remoteProjectId })), directory: directory ?? null, worktreeIntent: worktreeIntentForNewWorkbench(launchSettings, { desktop, remote: !!remoteProjectId }) } } });
         setStates((old) => ({ ...old, [toolId]: settle(previous, null) }));
         return;
       }
@@ -493,7 +493,7 @@ export function ManagedTools({ tools, visible = true, remoteTargetId = 'local', 
       const installed = isRemote ? remote?.installed === true : !!workspace?.probe.selectedPath;
       const probeFailed = isRemote ? remote !== undefined && remote?.installed === false : workspace?.probe.installations.some(item => item.status === 'probe_failed');
       const writable = workspace?.probe.nativeWrites.state === 'supported';
-      const launchMode = preferredLaunchMode(launchSettings, 'cli', !!tool.yoloAvailable);
+      const launchMode = preferredLaunchMode(launchSettings, 'cli', preferredYoloAvailable(tool, launchSettings, { remote: isRemote }));
       const desktop = tool.launchForm === 'desktop';
       const rememberedDir = isRemote ? rememberedRemoteDir(remoteTargetId, tool.id) : launchDirectories.get(tool.id);
       const switchTitle = !workspace ? undefined : !writable ? workspace.probe.nativeWrites.reason || t('home.tools.notWritable') : t('home.tools.switchHint');

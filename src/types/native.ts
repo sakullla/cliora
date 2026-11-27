@@ -215,6 +215,30 @@ export function launchYoloSupport(descriptor: AdapterDescriptor | null | undefin
   return { available: !!descriptor.yoloAvailable, reason: descriptor.yoloAvailable ? null : 'terminal' };
 }
 
+/**
+ * The interaction a launch from a shared entry point will actually get, mirroring the
+ * backend: the stored preference applies only to a new local session of a terminal-form
+ * CLI. A resume, a remote session, a desktop app or an unreadable stored value runs as a
+ * terminal.
+ */
+export function launchInteraction(
+  descriptor: AdapterDescriptor | null | undefined,
+  settings: { interaction?: 'terminal' | 'acp'; interactionError?: string | null } | null | undefined,
+  context: { remote?: boolean; resume?: boolean } = {},
+): 'terminal' | 'acp' {
+  if (!descriptor || descriptor.launchForm === 'desktop' || context.remote || context.resume) return 'terminal';
+  return settings?.interaction === 'acp' && !settings.interactionError ? 'acp' : 'terminal';
+}
+
+/** Whether the preferred YOLO mode can apply to such a launch: `launchYoloSupport` for its actual interaction. */
+export function preferredYoloAvailable(
+  descriptor: AdapterDescriptor | null | undefined,
+  settings: { interaction?: 'terminal' | 'acp'; interactionError?: string | null } | null | undefined,
+  context: { remote?: boolean; resume?: boolean } = {},
+): boolean {
+  return launchYoloSupport(descriptor, launchInteraction(descriptor, settings, context)).available;
+}
+
 export type AdapterCatalog = {
   registered: AdapterDescriptor[];
   managedIds: string[];

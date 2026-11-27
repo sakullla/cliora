@@ -294,7 +294,7 @@ fn closing_the_session_withdraws_an_open_card() {
 }
 
 #[test]
-fn yolo_approves_outside_access_and_allow_options_and_still_shows_cards_without_one() {
+fn yolo_approves_outside_access_and_allow_once_and_still_shows_cards_without_one() {
     let workspace = temp_dir();
     let directory = workspace.path().join("project");
     std::fs::create_dir_all(&directory).unwrap();
@@ -328,6 +328,7 @@ fn yolo_approves_outside_access_and_allow_options_and_still_shows_cards_without_
             { "optionId": "no", "name": "拒绝", "kind": "reject_once" },
         ])));
         let first = agent.next_line();
+        // Only allow-always: YOLO never picks it, the user decides.
         agent.send(permission(43, "c2", json!([
             { "optionId": "always", "name": "总是允许", "kind": "allow_always" },
             { "optionId": "no", "name": "拒绝", "kind": "reject_once" },
@@ -348,13 +349,20 @@ fn yolo_approves_outside_access_and_allow_options_and_still_shows_cards_without_
     let snapshot = open(start, io).unwrap();
     assert_eq!(snapshot.mode, LaunchMode::Yolo);
     prompt(&snapshot.id, "全部放行").unwrap();
-    // The third request waits for the user.
-    let card = wait_for(|| snapshot_of(&snapshot.id).pending.into_iter().next(), "没有允许选项时的授权卡");
+    // The second request offers only allow-always: it waits for the user.
+    let card = wait_for(|| snapshot_of(&snapshot.id).pending.into_iter().next(), "只有 allow_always 时的授权卡");
+    assert_eq!(card, "43");
+    respond_permission(&snapshot.id, "43", Some("no")).unwrap();
+    // The third request has no allow option and waits for the user too.
+    let card = wait_for(
+        || snapshot_of(&snapshot.id).pending.into_iter().find(|pending| pending == "44"),
+        "没有允许选项时的授权卡",
+    );
     assert_eq!(card, "44");
     respond_permission(&snapshot.id, "44", Some("no")).unwrap();
     let (first, second, third) = answer_rx.recv_timeout(Duration::from_secs(10)).unwrap();
-    assert_eq!(first["result"]["outcome"], json!({ "outcome": "selected", "optionId": "once" }), "优先 allow_once");
-    assert_eq!(second["result"]["outcome"], json!({ "outcome": "selected", "optionId": "always" }), "没有 allow_once 时选 allow_always");
+    assert_eq!(first["result"]["outcome"], json!({ "outcome": "selected", "optionId": "once" }), "选择 allow_once");
+    assert_eq!(second["result"]["outcome"], json!({ "outcome": "selected", "optionId": "no" }), "YOLO 不回退到 allow_always");
     assert_eq!(third["result"]["outcome"], json!({ "outcome": "selected", "optionId": "no" }));
     wait_until_idle(&snapshot.id, Duration::from_secs(8)).unwrap();
     let current = snapshot_of(&snapshot.id);
@@ -370,7 +378,7 @@ fn yolo_approves_outside_access_and_allow_options_and_still_shows_cards_without_
             _ => None,
         })
         .collect();
-    assert_eq!(notices.len(), 2, "{notices:?}");
+    assert_eq!(notices.len(), 1, "只有 allow_once 被自动允许：{notices:?}");
     assert!(notices[0].contains("工具 c1"), "{}", notices[0]);
     // The auto-approved calls appear as tools, without a card.
     let calls = tools(&current);
@@ -572,6 +580,28 @@ fn terminal_output_past_its_limit_drops_the_oldest_text_on_a_character_boundary(
     assert_eq!(dropped, 3);
     close(&snapshot.id).unwrap();
     worker.join().unwrap();
+}
+
+#[test]
+fn terminal_output_is_utf8_and_falls_back_to_the_system_code_page_on_windows() {
+    use super::terminal::decode_for_tests as decode;
+    // UTF-8, with a character split across reads, stays UTF-8.
+    let utf8 = "中文 ok\n".as_bytes();
+    assert_eq!(decode(Some(936), &[&utf8[..2], &utf8[2..]]), "中文 ok\n");
+    // Without a fallback an invalid byte becomes a replacement character.
+    assert_eq!(decode(None, &[b"a\xffb"]), "a\u{FFFD}b");
+    #[cfg(windows)]
+    {
+        // "中文" in CP936 is D6 D0 CE C4. The first lead byte arrives alone and
+        // first looks like the start of a UTF-8 sequence.
+        let gbk: &[&[u8]] = &[b"dir ", &[0xD6], &[0xD0, 0xCE], &[0xC4, b'\r', b'\n']];
+        assert_eq!(decode(Some(936), gbk), "dir 中文\r\n");
+        // A lead byte left at the very end is still decoded, never dropped.
+        let tail = decode(Some(936), &[&[0xD6, 0xD0, 0xCE]]);
+        assert!(tail.starts_with('中') && tail.chars().count() == 2, "{tail:?}");
+        // A single-byte code page decodes byte by byte.
+        assert_eq!(decode(Some(1252), &[b"caf\xe9"]), "café");
+    }
 }
 
 #[test]

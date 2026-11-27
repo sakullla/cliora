@@ -14,6 +14,7 @@ import {
   applyAcpEvent,
   applyAcpEvents,
 } from '../../src/features/sessions/acpSession.ts';
+import { launchInteraction, preferredYoloAvailable } from '../../src/types/native.ts';
 
 function snapshot(overrides = {}) {
   return {
@@ -248,4 +249,26 @@ test('an approval card is open only while its request id is pending', () => {
   assert.deepEqual(acpOpenAccesses(state.snapshot), []);
   assert.deepEqual(ids(state), ['access:access-1'], '审批记录原位更新，不重复');
   assert.equal(state.snapshot.timeline[0].decision, 'allowed_session');
+});
+
+test('every launch entry point reads YOLO from the interaction the launch will actually get', () => {
+  // The terminal has no YOLO arguments, the ACP entry declares the client form.
+  const tool = { id: 'cline', launchForm: 'terminal', yoloAvailable: false, acp: { state: 'supported', entry: { executable: 'cline', args: ['--acp'], origin: 'native', yolo: { kind: 'client' } } } };
+  const acp = { interaction: 'acp', interactionError: null };
+  const terminal = { interaction: 'terminal', interactionError: null };
+  assert.equal(launchInteraction(tool, acp), 'acp');
+  assert.equal(preferredYoloAvailable(tool, acp), true, '新的本地会话按 ACP 入口的 YOLO 声明');
+  assert.equal(preferredYoloAvailable(tool, terminal), false, '终端启动按终端 YOLO 参数');
+  // A resume and a remote session run in a terminal, as the backend decides.
+  assert.equal(launchInteraction(tool, acp, { resume: true }), 'terminal');
+  assert.equal(preferredYoloAvailable(tool, acp, { resume: true }), false);
+  assert.equal(preferredYoloAvailable(tool, acp, { remote: true }), false);
+  // An unreadable stored preference, a desktop app and a missing tool fall back to the terminal.
+  assert.equal(launchInteraction(tool, { interaction: 'acp', interactionError: 'bad' }), 'terminal');
+  assert.equal(launchInteraction({ ...tool, launchForm: 'desktop' }, acp), 'terminal');
+  assert.equal(preferredYoloAvailable(undefined, acp), false);
+  // An ACP entry without a YOLO declaration keeps YOLO off even when the terminal has it.
+  const undeclared = { ...tool, yoloAvailable: true, acp: { state: 'supported', entry: { executable: 'cline', args: [], origin: 'native' } } };
+  assert.equal(preferredYoloAvailable(undeclared, acp), false);
+  assert.equal(preferredYoloAvailable(undeclared, acp, { resume: true }), true);
 });

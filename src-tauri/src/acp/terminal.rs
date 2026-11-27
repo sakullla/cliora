@@ -11,7 +11,9 @@
 //! resumed; on Unix it leads its own process group. Killing, releasing or
 //! closing the session ends the whole tree. Standard output and standard error
 //! are merged into one bounded buffer that drops its oldest text once it
-//! exceeds the agent's byte limit, always on a character boundary.
+//! exceeds the agent's byte limit, always on a character boundary. Output is
+//! decoded as UTF-8; on Windows a stream that turns out not to be UTF-8 is read
+//! in the system ANSI code page, so cmd output on a Chinese system stays legible.
 
 use std::collections::VecDeque;
 use std::io::Read;
@@ -166,17 +168,34 @@ fn append_bounded(output: &mut String, text: &str, limit: usize) -> usize {
     dropped
 }
 
-/// Decode a byte stream incrementally: an incomplete trailing sequence waits
-/// for the next read, invalid bytes become U+FFFD.
-struct Utf8Stream {
+/// Decode a byte stream incrementally. Output is read as UTF-8: an incomplete
+/// trailing sequence waits for the next read. On Windows, many console programs
+/// (cmd built-ins among them) write in the system ANSI code page instead, so
+/// the first invalid UTF-8 sequence switches the rest of the stream to that
+/// code page (`fallback`); a lead byte split across reads waits for its second
+/// byte. Without a fallback (other platforms, or a UTF-8 system code page)
+/// invalid bytes become U+FFFD.
+struct TextStream {
     carry: Vec<u8>,
+    fallback: Option<u32>,
+    code_page: Option<u32>,
 }
 
-impl Utf8Stream {
+impl TextStream {
+    fn new(fallback: Option<u32>) -> Self {
+        Self { carry: Vec::new(), fallback, code_page: None }
+    }
+
     fn push(&mut self, bytes: &[u8]) -> String {
         self.carry.extend_from_slice(bytes);
         let mut text = String::new();
         loop {
+            if let Some(code_page) = self.code_page {
+                let complete = complete_prefix(code_page, &self.carry);
+                text.push_str(&decode_code_page(code_page, &self.carry[..complete]));
+                self.carry.drain(..complete);
+                return text;
+            }
             match std::str::from_utf8(&self.carry) {
                 Ok(valid) => {
                     text.push_str(valid);
@@ -187,6 +206,11 @@ impl Utf8Stream {
                     let valid = error.valid_up_to();
                     text.push_str(std::str::from_utf8(&self.carry[..valid]).unwrap_or_default());
                     match error.error_len() {
+                        Some(_) if self.fallback.is_some() => {
+                            // Not UTF-8 after all: the rest is in the system code page.
+                            self.carry.drain(..valid);
+                            self.code_page = self.fallback;
+                        }
                         Some(length) => {
                             text.push('\u{FFFD}');
                             self.carry.drain(..valid + length);
@@ -202,10 +226,84 @@ impl Utf8Stream {
     }
 
     fn finish(&mut self) -> String {
-        let rest = String::from_utf8_lossy(&self.carry).into_owned();
+        // What is left over is either a code page tail or a UTF-8 sequence the
+        // stream never completed, which was not UTF-8 after all.
+        let rest = match self.code_page.or(self.fallback) {
+            Some(code_page) if !self.carry.is_empty() => decode_code_page(code_page, &self.carry),
+            _ => String::from_utf8_lossy(&self.carry).into_owned(),
+        };
         self.carry.clear();
         rest
     }
+}
+
+/// The code page console programs fall back to: the system ANSI code page,
+/// unless that is UTF-8 already.
+#[cfg(windows)]
+fn console_fallback() -> Option<u32> {
+    // SAFETY: GetACP takes no arguments and only reads process state.
+    let code_page = unsafe { windows_sys::Win32::Globalization::GetACP() };
+    (code_page != 65001).then_some(code_page)
+}
+
+#[cfg(not(windows))]
+fn console_fallback() -> Option<u32> {
+    None
+}
+
+/// How many leading bytes form whole characters in a (possibly double-byte)
+/// code page: a lead byte without its trail byte waits for the next read.
+#[cfg(windows)]
+fn complete_prefix(code_page: u32, bytes: &[u8]) -> usize {
+    use windows_sys::Win32::Globalization::IsDBCSLeadByteEx;
+    let mut index = 0;
+    while index < bytes.len() {
+        // SAFETY: a plain query on a byte value.
+        let lead = unsafe { IsDBCSLeadByteEx(code_page, bytes[index]) } != 0;
+        if !lead {
+            index += 1;
+        } else if index + 1 < bytes.len() {
+            index += 2;
+        } else {
+            break;
+        }
+    }
+    index
+}
+
+#[cfg(not(windows))]
+fn complete_prefix(_code_page: u32, bytes: &[u8]) -> usize {
+    bytes.len()
+}
+
+#[cfg(windows)]
+fn decode_code_page(code_page: u32, bytes: &[u8]) -> String {
+    use windows_sys::Win32::Globalization::MultiByteToWideChar;
+    if bytes.is_empty() {
+        return String::new();
+    }
+    let Ok(length) = i32::try_from(bytes.len()) else {
+        return String::from_utf8_lossy(bytes).into_owned();
+    };
+    // SAFETY: the input pointer and length describe `bytes`; the first call
+    // only measures, the second writes at most `needed` units into `wide`.
+    unsafe {
+        let needed = MultiByteToWideChar(code_page, 0, bytes.as_ptr(), length, std::ptr::null_mut(), 0);
+        if needed <= 0 {
+            return String::from_utf8_lossy(bytes).into_owned();
+        }
+        let mut wide = vec![0u16; needed as usize];
+        let written = MultiByteToWideChar(code_page, 0, bytes.as_ptr(), length, wide.as_mut_ptr(), needed);
+        if written <= 0 {
+            return String::from_utf8_lossy(bytes).into_owned();
+        }
+        String::from_utf16_lossy(&wide[..written as usize])
+    }
+}
+
+#[cfg(not(windows))]
+fn decode_code_page(_code_page: u32, bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
 }
 
 fn label(text: &str) -> String {
@@ -519,7 +617,7 @@ impl Session {
     }
 
     fn pump_output(&self, id: &str, mut stream: Box<dyn Read + Send>) {
-        let mut decoder = Utf8Stream { carry: Vec::new() };
+        let mut decoder = TextStream::new(console_fallback());
         let mut buffer = [0u8; 8 * 1024];
         loop {
             match stream.read(&mut buffer) {
@@ -703,4 +801,13 @@ impl TreeProbe {
 #[cfg(test)]
 pub(crate) fn bounded_for_tests(output: &mut String, text: &str, limit: usize) -> usize {
     append_bounded(output, text, limit)
+}
+
+/// Decode `chunks` as one stream with an explicit fallback code page.
+#[cfg(test)]
+pub(crate) fn decode_for_tests(fallback: Option<u32>, chunks: &[&[u8]]) -> String {
+    let mut stream = TextStream::new(fallback);
+    let mut text: String = chunks.iter().map(|chunk| stream.push(chunk)).collect();
+    text.push_str(&stream.finish());
+    text
 }

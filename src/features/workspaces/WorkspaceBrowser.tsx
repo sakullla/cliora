@@ -12,7 +12,7 @@ import { Icon } from '../../components/Icon';
 import { FilterSelect } from '../../components/FilterSelect';
 import { SearchField } from '../../components/SearchField';
 import { GuideDialog } from '../../components/GuideDialog';
-import type { AdapterDescriptor } from '../../types/native';
+import { preferredYoloAvailable, type AdapterDescriptor } from '../../types/native';
 import { preferredLaunchMode, type LaunchSettings } from '../../types/launch';
 import type { BusinessWorkspace, WorkspaceCandidate, WorkspaceManifestPreview, WorkspaceRepository } from '../../types/workspaces';
 import i18n from '../../i18n';
@@ -382,7 +382,7 @@ export function WorkspaceBrowser({ tools = [], launchSettings = null, enablePage
     const selection = { workspaceId: current.id, repositoryId: repository.id, directory: path, projectId: available.projectId, label: `${current.name} / ${repository.name}` };
     setLaunching(repository.id);
     await operate(async () => {
-      const result = await native.launchCli({ ...selection, toolId: launchTool, projectId: available.projectId, sessionId: null, mode: preferredLaunchMode(launchSettings, 'project', !!enabledTools.find(tool => tool.id === launchTool)?.yoloAvailable), worktreeIntent: 'given' });
+      const result = await native.launchCli({ ...selection, toolId: launchTool, projectId: available.projectId, sessionId: null, mode: preferredLaunchMode(launchSettings, 'project', preferredYoloAvailable(enabledTools.find(tool => tool.id === launchTool), launchSettings)), worktreeIntent: 'given' });
       if (result.sessionId) onSession?.(result.sessionId);
       else setNotice(t('workspaces.external'));
       if (result.warnings?.length) setNotice(result.warnings.join('\n'));
