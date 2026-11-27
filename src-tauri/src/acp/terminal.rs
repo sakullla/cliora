@@ -26,6 +26,7 @@ use serde_json::{json, Value};
 
 use super::access::AccessKind;
 use super::{guard, AcpUpdate, Session};
+use crate::safe_fs::Expect;
 
 /// Live terminals one session may hold at a time.
 pub const MAX_TERMINALS: usize = 16;
@@ -409,10 +410,18 @@ impl Session {
             .map(|limit| (limit as usize).min(MAX_OUTPUT_BYTES))
             .unwrap_or(DEFAULT_OUTPUT_BYTES);
         let line = command_line(&command, &args);
+        // Refusals that need no answer come first, so the user is never asked
+        // about a command that could not start anyway.
+        if guard(&self.terminals).live() >= MAX_TERMINALS {
+            return Err(format!("每个会话最多同时保留 {MAX_TERMINALS} 个终端，请先释放不再需要的终端"));
+        }
+        if guard(&self.writer).is_none() {
+            return Err("会话已结束".into());
+        }
         let cwd = match params.get("cwd").and_then(Value::as_str).filter(|cwd| !cwd.is_empty()) {
             None => crate::safe_fs::canonical_root(&self.directory)?,
             Some(requested) => {
-                let resolved = crate::safe_fs::resolve_within(&self.directory, Path::new(requested))?;
+                let resolved = crate::safe_fs::resolve_target(&self.directory, Path::new(requested), Expect::Directory)?;
                 let target = resolved.path().to_path_buf();
                 if !resolved.inside() {
                     self.authorize_outside(
@@ -421,7 +430,8 @@ impl Session {
                         &crate::safe_fs::display(&target),
                         Some(label(&line)),
                     )?;
-                    let again = crate::safe_fs::resolve_within(&self.directory, Path::new(requested))?;
+                    let again =
+                        crate::safe_fs::resolve_target(&self.directory, Path::new(requested), Expect::Directory)?;
                     if again.path() != target {
                         return Err("审批期间工作目录指向发生变化，已拒绝".into());
                     }

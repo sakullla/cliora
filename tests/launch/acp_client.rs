@@ -381,6 +381,80 @@ fn yolo_approves_outside_access_and_allow_options_and_still_shows_cards_without_
     worker.join().unwrap();
 }
 
+/// A device, a pipe or a directory outside the session directory is refused
+/// at once: no card is opened and YOLO records no allow for it.
+fn wrong_kind_targets_outside_are_refused_without_a_card(mode: LaunchMode) {
+    let workspace = temp_dir();
+    let directory = workspace.path().join("project");
+    std::fs::create_dir_all(&directory).unwrap();
+    let outside_dir = workspace.path().join("outside-dir");
+    std::fs::create_dir_all(&outside_dir).unwrap();
+    let outside_file = workspace.path().join("outside.txt");
+    std::fs::write(&outside_file, "x").unwrap();
+    let mut reads = vec![path_text(&outside_dir)];
+    let mut writes = vec![path_text(&outside_dir), path_text(&outside_file.join("below-a-file.txt"))];
+    if cfg!(unix) {
+        reads.push("/dev/zero".into());
+        writes.push("/dev/null".into());
+        #[cfg(unix)]
+        {
+            let fifo = workspace.path().join("outside.fifo");
+            assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+            reads.push(path_text(&fifo));
+            writes.push(path_text(&fifo));
+        }
+    }
+    let cwd = path_text(&outside_file);
+    let (command, args) = short_command();
+    let (io, mut agent) = pair();
+    let (done_tx, done_rx) = channel();
+    let worker = std::thread::spawn(move || {
+        agent.handshake(false);
+        let prompt = agent.next_line();
+        let mut id = 300;
+        for path in &reads {
+            id += 1;
+            let reply = call(&mut agent, id, "fs/read_text_file", json!({ "sessionId": "session-1", "path": path }));
+            assert!(reply["error"]["message"].as_str().is_some(), "{path}: {reply}");
+        }
+        for path in &writes {
+            id += 1;
+            let reply = call(&mut agent, id, "fs/write_text_file", json!({ "sessionId": "session-1", "path": path, "content": "x" }));
+            assert!(reply["error"]["message"].as_str().is_some(), "{path}: {reply}");
+        }
+        let terminal = call(&mut agent, 399, "terminal/create", json!({ "sessionId": "session-1", "command": command, "args": args, "cwd": cwd }));
+        assert!(terminal["error"]["message"].as_str().unwrap().contains("目录"), "{terminal}");
+        let _ = done_tx.send(());
+        finish_prompt(&agent, &prompt);
+        agent.stay_connected();
+    });
+    let mut start = spec(&directory);
+    start.mode = mode;
+    let snapshot = open(start, io).unwrap();
+    prompt(&snapshot.id, "访问目录外的特殊目标").unwrap();
+    // Every request is answered without anyone answering a card.
+    done_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+    wait_until_idle(&snapshot.id, Duration::from_secs(8)).unwrap();
+    let current = snapshot_of(&snapshot.id);
+    assert!(accesses(&current).is_empty(), "不应出现审批卡或放行记录：{:?}", accesses(&current));
+    assert!(current.pending.is_empty());
+    assert!(current.terminals.is_empty());
+    assert!(std::fs::read_dir(&outside_dir).unwrap().next().is_none(), "目录不会被当作文件写入");
+    assert_eq!(std::fs::read_to_string(&outside_file).unwrap(), "x");
+    close(&snapshot.id).unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
+fn devices_pipes_and_directories_outside_are_refused_before_any_card() {
+    wrong_kind_targets_outside_are_refused_without_a_card(LaunchMode::Normal);
+}
+
+#[test]
+fn yolo_records_no_allow_for_a_target_that_is_refused_anyway() {
+    wrong_kind_targets_outside_are_refused_without_a_card(LaunchMode::Yolo);
+}
+
 fn short_command() -> (&'static str, Vec<String>) {
     if cfg!(windows) {
         ("cmd", vec!["/C".into(), "echo hello".into()])

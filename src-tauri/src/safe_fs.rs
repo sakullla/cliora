@@ -13,6 +13,9 @@
 //! - Cliora's own data directories (database, credentials, sessions) are
 //!   refused whatever the caller was granted, so no grant — not even YOLO — can
 //!   make a stored secret readable through these primitives.
+//! - `resolve_target` refuses a target of the wrong kind (a device, a pipe, a
+//!   socket, a directory where a file is needed) before the caller asks anyone,
+//!   so that refusal holds under every grant too.
 //! - Reads require a regular file and valid UTF-8 and are bounded; writes are
 //!   atomic replacements in the same directory that keep the original
 //!   permissions and report the previous content for a diff.
@@ -219,13 +222,10 @@ pub fn canonical_root(root: &Path) -> Result<PathBuf, String> {
     std::fs::canonicalize(root).map_err(|error| format!("无法解析会话目录：{error}"))
 }
 
-/// Classify `path` against `root`. Refused paths (bad syntax, device targets,
-/// Cliora's own data) return an error whatever the caller is allowed to do.
-pub fn resolve_within(root: &Path, path: &Path) -> Result<Resolved, String> {
-    resolve_within_protected(root, path, &protected_roots())
-}
-
-/// `resolve_within` with an explicit protected set.
+/// Classify `path` against `root` with an explicit protected set. Refused
+/// paths (bad syntax, device targets, Cliora's own data) return an error
+/// whatever the caller is allowed to do. Callers use `resolve_target`, which
+/// also checks the kind of the target.
 pub fn resolve_within_protected(root: &Path, path: &Path, protected: &[PathBuf]) -> Result<Resolved, String> {
     check_syntax(path)?;
     let root = canonical_root(root)?;
@@ -235,6 +235,65 @@ pub fn resolve_within_protected(root: &Path, path: &Path, protected: &[PathBuf])
         return Err(PROTECTED_MESSAGE.into());
     }
     Ok(if within(&target, &root) { Resolved::Inside(target) } else { Resolved::Outside(target) })
+}
+
+/// What a classified path has to name before anyone is asked about it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Expect {
+    /// An existing regular file (a read).
+    File,
+    /// A regular file, or a new file under an existing directory (a write).
+    FileOrNew,
+    /// An existing directory (a working directory).
+    Directory,
+}
+
+/// Refuse a canonical target that is not what the request needs: a device, a
+/// pipe, a socket, a directory read as a file, a file used as a directory.
+/// This is a hard refusal: it runs before any approval or grant, so the user is
+/// never asked about — and YOLO never records an allow for — a target that
+/// would be refused anyway.
+pub fn check_kind(target: &Path, expect: Expect) -> Result<(), String> {
+    match std::fs::metadata(target) {
+        Ok(metadata) => match expect {
+            Expect::File | Expect::FileOrNew if metadata.is_file() => Ok(()),
+            Expect::Directory if metadata.is_dir() => Ok(()),
+            Expect::Directory => Err("目标不是目录".into()),
+            _ => Err("目标不是普通文件".into()),
+        },
+        Err(error) if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => match expect {
+            Expect::File => Err("文件不存在".into()),
+            Expect::Directory => Err("工作目录不存在".into()),
+            // A new file: the nearest existing ancestor has to be a directory,
+            // so the write can create the missing part under it.
+            Expect::FileOrNew => {
+                for ancestor in target.ancestors().skip(1) {
+                    match std::fs::metadata(ancestor) {
+                        Ok(metadata) if metadata.is_dir() => return Ok(()),
+                        Ok(_) => return Err("上级路径不是目录".into()),
+                        Err(error) if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => continue,
+                        Err(error) => return Err(format!("无法读取上级目录信息：{error}")),
+                    }
+                }
+                Err("无法解析路径：没有可访问的上级目录".into())
+            }
+        },
+        Err(error) => Err(format!("无法读取目标信息：{error}")),
+    }
+}
+
+/// Classify `path` against `root` with the registered protected directories,
+/// refusing a target of the wrong kind before the caller decides anything
+/// about inside or outside.
+pub fn resolve_target(root: &Path, path: &Path, expect: Expect) -> Result<Resolved, String> {
+    resolve_target_protected(root, path, expect, &protected_roots())
+}
+
+/// `resolve_target` with an explicit protected set.
+pub fn resolve_target_protected(root: &Path, path: &Path, expect: Expect, protected: &[PathBuf]) -> Result<Resolved, String> {
+    let resolved = resolve_within_protected(root, path, protected)?;
+    check_kind(resolved.path(), expect)?;
+    Ok(resolved)
 }
 
 /// The file must exist and be a regular file (a link is followed first).

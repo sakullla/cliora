@@ -103,6 +103,51 @@ fn relative_device_and_stream_paths_are_refused() {
 }
 
 #[test]
+fn targets_of_the_wrong_kind_are_refused_before_classification_is_used() {
+    let (temp, root) = root();
+    fs::write(root.join("src/a.ts"), "a").unwrap();
+    fs::write(temp.path().join("outside.txt"), "o").unwrap();
+    fs::create_dir_all(temp.path().join("outside-dir")).unwrap();
+    let file = |path: &Path| resolve_target_protected(&root, path, Expect::File, &[]);
+    let write = |path: &Path| resolve_target_protected(&root, path, Expect::FileOrNew, &[]);
+    let directory = |path: &Path| resolve_target_protected(&root, path, Expect::Directory, &[]);
+    // The right kind resolves as before, inside or outside.
+    assert!(file(&root.join("src/a.ts")).unwrap().inside());
+    assert!(!file(&temp.path().join("outside.txt")).unwrap().inside());
+    assert!(write(&root.join("src/new/b.ts")).unwrap().inside());
+    assert!(!write(&temp.path().join("outside-new.txt")).unwrap().inside());
+    assert!(!directory(&temp.path().join("outside-dir")).unwrap().inside());
+    assert!(directory(&root).unwrap().inside());
+    // A directory is not a file, outside or inside.
+    assert!(file(&temp.path().join("outside-dir")).unwrap_err().contains("普通文件"));
+    assert!(write(&temp.path().join("outside-dir")).unwrap_err().contains("普通文件"));
+    assert!(file(&root.join("src")).is_err());
+    // A file is not a working directory; a missing one is not either.
+    assert!(directory(&temp.path().join("outside.txt")).unwrap_err().contains("目录"));
+    assert!(directory(&temp.path().join("missing-dir")).is_err());
+    // A read needs an existing file; a write may create one, but not under a file.
+    assert!(file(&temp.path().join("missing.txt")).unwrap_err().contains("不存在"));
+    assert!(write(&temp.path().join("outside.txt").join("x")).is_err(), "文件下不能新建文件");
+}
+
+#[cfg(unix)]
+#[test]
+fn devices_and_pipes_are_refused_whatever_the_location() {
+    let (temp, root) = root();
+    for expect in [Expect::File, Expect::FileOrNew, Expect::Directory] {
+        let refused = resolve_target_protected(&root, Path::new("/dev/null"), expect, &[]);
+        assert!(refused.is_err(), "/dev/null 必须拒绝（{expect:?}）");
+    }
+    for (dir, name) in [(temp.path().to_path_buf(), "outside.fifo"), (root.clone(), "inside.fifo")] {
+        let fifo = dir.join(name);
+        let status = std::process::Command::new("mkfifo").arg(&fifo).status().unwrap();
+        assert!(status.success(), "无法创建 FIFO");
+        assert!(resolve_target_protected(&root, &fifo, Expect::File, &[]).unwrap_err().contains("普通文件"));
+        assert!(resolve_target_protected(&root, &fifo, Expect::FileOrNew, &[]).is_err());
+    }
+}
+
+#[test]
 fn reads_require_a_regular_text_file_and_honour_line_and_limit() {
     let (_temp, root) = root();
     let file = root.join("src").join("lines.txt");
@@ -178,9 +223,9 @@ fn the_application_data_directory_is_refused_even_inside_the_root() {
     // And a path that reaches it through `..` is refused, not merely outside.
     let sneaky = root.join("..").join("cliora-data").join("cliora.db");
     assert_eq!(resolve_within_protected(&root, &sneaky, &protected).unwrap_err(), PROTECTED_MESSAGE);
-    // The global registry feeds resolve_within.
+    // The global registry feeds resolve_target.
     protect(&data);
-    assert!(resolve_within(&root, &data.join("cliora.db")).is_err());
+    assert_eq!(resolve_target(&root, &data.join("cliora.db"), Expect::File).unwrap_err(), PROTECTED_MESSAGE);
     assert!(is_protected(&fs::canonicalize(&data).unwrap(), &protected_roots()));
 }
 

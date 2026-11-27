@@ -183,8 +183,8 @@ impl Session {
         } else {
             None
         };
-        let turn_id = self.current_turn_id();
         if let Some(decision) = automatic {
+            let turn_id = self.current_turn_id();
             let id = guard(&self.timeline).auto_id("access");
             self.record_access(AcpAccess {
                 id: id.clone(),
@@ -199,47 +199,64 @@ impl Session {
             });
             return Ok(id);
         }
-        let cancelled = guard(&self.turn).as_ref().is_some_and(|turn| turn.cancel_requested);
-        // Like an authorization card, the conversation's own request needs a
-        // live turn that was not stopped; a child's may arrive between turns.
-        if cancelled || (turn_id.is_empty() && subagent.is_none()) {
-            let id = guard(&self.timeline).auto_id("access");
-            self.record_access(AcpAccess {
-                id,
-                access_kind: kind.as_str(),
-                path: path.to_owned(),
-                detail,
-                decision: "withdrawn",
-                request_id: None,
-                diff: None,
-                turn_id,
-                subagent: subagent.map(ToOwned::to_owned),
-            });
-            return Err(WITHDRAWN.into());
-        }
         let (sender, receiver) = channel();
         let id = guard(&self.timeline).auto_id("access");
         let request_id = format!("{id}-request");
+        // Decide and register under the turn lock. A stop, a turn end or a
+        // session end changes the turn first and withdraws cards after, so it
+        // either finds this card and withdraws it, or ran before and the card
+        // is never opened: no card can outlive the turn that asked for it.
+        let opened = {
+            let turn = guard(&self.turn);
+            let turn_id = turn.as_ref().map(|turn| turn.id.clone()).unwrap_or_default();
+            let cancelled = turn.as_ref().is_some_and(|turn| turn.cancel_requested);
+            let ended = guard(&self.writer).is_none();
+            // Like an authorization card, the conversation's own request needs
+            // a live turn that was not stopped; a child's may arrive between
+            // turns.
+            if cancelled || ended || (turn_id.is_empty() && subagent.is_none()) {
+                Err(turn_id)
+            } else {
+                guard(&self.accesses).push(PendingAccess {
+                    request_id: request_id.clone(),
+                    item_id: id.clone(),
+                    turn_id: turn_id.clone(),
+                    kind,
+                    sender,
+                });
+                Ok(turn_id)
+            }
+        };
+        let turn_id = match opened {
+            Ok(turn_id) => turn_id,
+            Err(turn_id) => {
+                self.record_access(AcpAccess {
+                    id,
+                    access_kind: kind.as_str(),
+                    path: path.to_owned(),
+                    detail,
+                    decision: "withdrawn",
+                    request_id: None,
+                    diff: None,
+                    turn_id,
+                    subagent: subagent.map(ToOwned::to_owned),
+                });
+                return Err(WITHDRAWN.into());
+            }
+        };
+        // An answer that arrives before the card is recorded is kept by the
+        // channel; the record below is then updated with it.
         let entry = AcpAccess {
             id: id.clone(),
             access_kind: kind.as_str(),
             path: path.to_owned(),
             detail,
             decision: "pending",
-            request_id: Some(request_id.clone()),
+            request_id: Some(request_id),
             diff: None,
-            turn_id: turn_id.clone(),
+            turn_id,
             subagent: subagent.map(ToOwned::to_owned),
         };
-        // The card and its pending entry appear together, so an answer can
-        // never race ahead of the card it answers.
-        guard(&self.accesses).push(PendingAccess {
-            request_id,
-            item_id: id.clone(),
-            turn_id,
-            kind,
-            sender,
-        });
         self.record_access(entry);
         self.emit_pending();
         self.settle_state();
@@ -323,14 +340,12 @@ impl Session {
         self.publish();
     }
 
-    /// YOLO answers an authorization request on the agent's own terms: the
-    /// first allow-once option, else the first allow-always option. A request
-    /// without an allow option is left for the user.
+    /// YOLO answers an authorization request with the first allow-once
+    /// option only. An allow-always option is never chosen for the user: the
+    /// agent could persist it as a rule that a later, ordinary session would
+    /// then skip. A request without an allow-once option is left for the user.
     pub(super) fn yolo_option(options: &[super::AcpPermissionOption]) -> Option<&super::AcpPermissionOption> {
-        options
-            .iter()
-            .find(|option| option.kind == "allow_once")
-            .or_else(|| options.iter().find(|option| option.kind == "allow_always"))
+        options.iter().find(|option| option.kind == "allow_once")
     }
 
     /// The error frame a refused client request receives.
