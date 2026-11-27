@@ -1046,7 +1046,7 @@ fn local_cli_recovery_and_deletion_leave_managed_connections_alone() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_environmentless_helper_recovers_only_its_live_workbench_scope() {
-    use crate::{adapters::LaunchMode, launch::{LaunchPlan, TerminalId}, session_host};
+    use crate::{adapters::LaunchMode, launch::{InteractionMode, LaunchPlan, TerminalId}, session_host};
 
     // Run this test binary as the actual Unix socket peer, one process for each
     // read, beneath a shell in place of a workbench CLI. The fixture variables
@@ -1091,7 +1091,8 @@ fn macos_environmentless_helper_recovers_only_its_live_workbench_scope() {
             done
             echo BOTH_READS_COMPLETED"#;
         let plan = LaunchPlan {
-            resume_native_id: None, account_version: None, account_context: None,
+            resume_native_id: None, interaction: InteractionMode::Terminal, acp: None,
+            initial_prompt: None, account_version: None, account_context: None,
             tool_id: "fixture".into(), project_id: None, mode: LaunchMode::Normal,
             executable: "/bin/sh".into(), directory: directory.path().into(),
             cli_args: vec!["-c".into(), script.into(), "fixture-cli".into(),

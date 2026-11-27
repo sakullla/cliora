@@ -756,7 +756,7 @@ fn a_shell_line_on_windows_is_parsed_by_cmd_once() {
 #[cfg(unix)]
 #[test]
 fn a_shell_line_on_unix_runs_through_sh() {
-    let (exit, output, _) = run_shell_line("printf 'cliora %s\n' \"acp ok\" | cat; exit 3");
+    let (exit, output, _) = run_shell_line("printf 'cliora %s\\n' \"acp ok\" | cat; exit 3");
     assert_eq!(exit["result"]["exitCode"], 3, "{exit}");
     assert!(output["result"]["output"].as_str().unwrap().contains("cliora acp ok"), "{output}");
 }

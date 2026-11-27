@@ -268,6 +268,7 @@ fn frames_split_across_writes_are_reassembled_and_coalesced() {
             )
             .as_bytes(),
         );
+        agent.stay_connected();
     });
 
     let snapshot = match open(spec(directory.path()), io) {
@@ -976,13 +977,19 @@ fn a_first_turn_that_cannot_be_sent_removes_the_session() {
 #[test]
 fn the_child_receives_its_own_secret_session_token() {
     let directory = temp_dir();
+    let staging = directory.path().join("token.tmp");
     let output = directory.path().join("token.txt");
     #[cfg(windows)]
     let program = {
         let path = directory.path().join("dump-token.cmd");
         std::fs::write(
             &path,
-            format!("@echo off\r\n> \"{}\" echo %CLIORA_SECRET_SESSION%\r\n", output.display()),
+            format!(
+                "@echo off\r\n> \"{}\" echo %CLIORA_SECRET_SESSION%\r\nmove /y \"{}\" \"{}\" >nul\r\n",
+                staging.display(),
+                staging.display(),
+                output.display(),
+            ),
         )
         .unwrap();
         path
@@ -993,7 +1000,12 @@ fn the_child_receives_its_own_secret_session_token() {
         let path = directory.path().join("dump-token.sh");
         std::fs::write(
             &path,
-            format!("#!/bin/sh\nprintenv CLIORA_SECRET_SESSION > \"{}\"\n", output.display()),
+            format!(
+                "#!/bin/sh\nprintenv CLIORA_SECRET_SESSION > \"{}\" && mv \"{}\" \"{}\"\n",
+                staging.display(),
+                staging.display(),
+                output.display(),
+            ),
         )
         .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -1027,11 +1039,17 @@ fn closing_a_conversation_terminates_the_agents_process_tree() {
     use std::os::unix::fs::PermissionsExt;
 
     let directory = temp_dir();
+    let staging = directory.path().join("descendant.pid.tmp");
     let pid_file = directory.path().join("descendant.pid");
     let script = directory.path().join("agent-tree.sh");
     std::fs::write(
         &script,
-        format!("#!/bin/sh\nsleep 30 &\necho $! > \"{}\"\nwait\n", pid_file.display()),
+        format!(
+            "#!/bin/sh\nsleep 30 &\necho $! > \"{}\" && mv \"{}\" \"{}\"\nwait\n",
+            staging.display(),
+            staging.display(),
+            pid_file.display(),
+        ),
     )
     .unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();

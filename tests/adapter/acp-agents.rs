@@ -374,13 +374,13 @@ fn system_shell_is_never_accepted_as_the_acp_entry() {
         // The declared program is the product alias, so the system shell on
         // PATH cannot be mistaken for the ACP entry.
         assert_eq!(entry.executable, "cmdc");
+        // A directory holding only the system shell yields an explicit reason.
+        let shell = AcpEntry { executable: "cmd", ..entry };
+        let directories = vec![PathBuf::from("C:\\Windows\\System32")];
+        let issue = shell.locate(&directories).expect_err("系统目录不得提供 ACP 入口");
+        assert_eq!(issue.code, "system-program");
+        assert!(issue.reason.contains("cmd acp"), "{}", issue.reason);
     }
-    // A directory holding only the system shell yields an explicit reason.
-    let shell = AcpEntry { executable: "cmd", ..entry };
-    let directories = vec![PathBuf::from("C:\\Windows\\System32")];
-    let issue = shell.locate(&directories).expect_err("系统目录不得提供 ACP 入口");
-    assert_eq!(issue.code, "system-program");
-    assert!(issue.reason.contains("cmd acp"), "{}", issue.reason);
 }
 
 #[test]
