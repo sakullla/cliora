@@ -421,6 +421,22 @@ struct PendingPermission {
 struct Turn {
     id: String,
     cancel_requested: bool,
+    /// How far the prompt got. Changed only under the turn lock, so a stop
+    /// and the turn's own thread agree on who tells the agent to cancel.
+    phase: TurnPhase,
+}
+
+/// Where a turn's prompt stands.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TurnPhase {
+    /// The attachments are being resolved (maybe waiting for an approval):
+    /// nothing reached the agent, and a stop simply ends the turn.
+    Preparing,
+    /// Committed to send: the prompt is being written. A stop now is sent by
+    /// the turn's own thread right after the prompt, never before it.
+    Sending,
+    /// The prompt is on the wire: a stop sends session/cancel itself.
+    Sent,
 }
 
 /// Which session an incoming frame speaks for.
@@ -631,6 +647,10 @@ impl Session {
     /// The state a live session returns to: a pending card keeps it waiting,
     /// an active turn keeps it running.
     fn settle_state(&self) {
+        // Read and decide under the publication order: a stop that marks the
+        // session stopping does so under the same order, so whichever runs
+        // last sees the other's change (the turn gone, or stopping set).
+        let _order = self.order();
         // A closed or failed session never comes back: a late turn result only
         // records its reason.
         if matches!(*guard(&self.state), "closed" | "failed") {
@@ -1256,20 +1276,52 @@ impl Session {
                 return Err("当前轮次尚未结束，请先停止或等待结果".into());
             }
             let turn_id = format!("turn-{}", self.next_seq());
-            *turn = Some(Turn { id: turn_id.clone(), cancel_requested: false });
+            *turn = Some(Turn { id: turn_id.clone(), cancel_requested: false, phase: TurnPhase::Preparing });
             turn_id
         };
+        // The user's message enters the timeline first, so an approval card
+        // its attachment raises stands after the message that caused it. The
+        // labels are provisional until the files are resolved.
+        let message_id = format!("{turn_id}-user");
+        let (capped, truncated) = timeline::cap(text, timeline::MAX_MESSAGE_CHARS);
+        let user_message = |labels: Vec<AcpAttachmentLabel>| {
+            AcpTimelineItem::Message(AcpMessage {
+                id: message_id.clone(),
+                role: "user",
+                text: capped.clone(),
+                truncated,
+                turn_id: turn_id.clone(),
+                subagent: None,
+                attachments: labels,
+            })
+        };
+        let provisional: Vec<AcpAttachmentLabel> = attachments
+            .iter()
+            .map(|attachment| match attachment {
+                AcpAttachment::Image { mime_type, .. } => {
+                    AcpAttachmentLabel { kind: "image", name: mime_type.clone(), delivery: None }
+                }
+                AcpAttachment::File { path } => {
+                    AcpAttachmentLabel { kind: "file", name: path.replace('\\', "/"), delivery: None }
+                }
+            })
+            .collect();
+        guard(&self.timeline).upsert(user_message(provisional));
+        self.settle_state();
         // A file outside the directory asks for approval under this turn, so
         // the turn exists before the files are resolved. Any refusal ends the
         // turn before anything reached the agent.
         let built = self.prompt_blocks(text, attachments).and_then(|built| {
             // A stop that arrived while an attachment waited for approval
-            // ends the turn here: the prompt was never sent.
-            let stopped = guard(&self.turn).as_ref().is_none_or(|turn| turn.id != turn_id || turn.cancel_requested);
-            if stopped {
-                Err("本轮已停止，提示词没有发送".to_string())
-            } else {
-                Ok(built)
+            // ends the turn here: the prompt was never sent. Otherwise the
+            // turn commits to sending, under the same lock a stop checks.
+            let mut turn = guard(&self.turn);
+            match turn.as_mut() {
+                Some(turn) if turn.id == turn_id && !turn.cancel_requested => {
+                    turn.phase = TurnPhase::Sending;
+                    Ok(built)
+                }
+                _ => Err("本轮已停止，提示词没有发送".to_string()),
             }
         });
         let (blocks, labels) = match built {
@@ -1281,22 +1333,13 @@ impl Session {
                         *turn = None;
                     }
                 }
+                // Nothing reached the agent: the message leaves the timeline.
+                guard(&self.timeline).remove(&message_id);
                 self.settle_state();
                 return Err(error);
             }
         };
-        {
-            let (text, truncated) = timeline::cap(text, timeline::MAX_MESSAGE_CHARS);
-            guard(&self.timeline).upsert(AcpTimelineItem::Message(AcpMessage {
-                id: format!("{turn_id}-user"),
-                role: "user",
-                text,
-                truncated,
-                turn_id: turn_id.clone(),
-                subagent: None,
-                attachments: labels,
-            }));
-        }
+        guard(&self.timeline).upsert(user_message(labels));
         self.settle_state();
         let native = guard(&self.native_session_id).clone().unwrap_or_default();
         let params = json!({
@@ -1313,6 +1356,25 @@ impl Session {
                 return Err(error);
             }
         };
+        // A stop that arrived while the prompt was being written left the
+        // cancel to this thread, so it follows the prompt on the wire.
+        let stop_requested = {
+            let mut turn = guard(&self.turn);
+            match turn.as_mut() {
+                Some(turn) if turn.id == turn_id => {
+                    turn.phase = TurnPhase::Sent;
+                    turn.cancel_requested
+                }
+                _ => false,
+            }
+        };
+        if stop_requested {
+            let _ = self.write_value(&json!({
+                "jsonrpc": "2.0",
+                "method": "session/cancel",
+                "params": { "sessionId": native },
+            }));
+        }
         let session = Arc::clone(self);
         std::thread::spawn(move || {
             // No deadline: a long turn is still a turn. The sender is dropped
@@ -1372,13 +1434,14 @@ impl Session {
 
     fn cancel_turn(&self) -> Result<(), String> {
         let native = guard(&self.native_session_id).clone().unwrap_or_default();
-        {
+        let (turn_id, phase) = {
             let mut turn = guard(&self.turn);
             let Some(turn) = turn.as_mut() else {
                 return Err("当前没有进行中的轮次".into());
             };
             turn.cancel_requested = true;
-        }
+            (turn.id.clone(), turn.phase)
+        };
         // A card from this turn cannot be answered any more: the user withdrew
         // the whole turn, so the cards leave the panel now rather than waiting
         // for the agent's own result. Whoever clicks a retired card is refused,
@@ -1393,15 +1456,30 @@ impl Session {
         if withdrew {
             self.emit_pending();
         }
-        self.write_value(&json!({
-            "jsonrpc": "2.0",
-            "method": "session/cancel",
-            "params": { "sessionId": native },
-        }))?;
+        // Only a prompt on the wire is cancelled through the protocol. One
+        // still being prepared never reaches the agent (its thread ends the
+        // turn), and one being written is cancelled by its own thread right
+        // after it.
+        if phase == TurnPhase::Sent {
+            self.write_value(&json!({
+                "jsonrpc": "2.0",
+                "method": "session/cancel",
+                "params": { "sessionId": native },
+            }))?;
+        }
         // The turn stays open until the agent reports its own result: a stop
         // request is not a stop confirmation, so the session shows stopping.
-        *guard(&self.state) = "stopping";
-        self.publish();
+        // That holds only while this same turn is still open: a turn that
+        // already ended (or never sent its prompt and ended above) has
+        // settled, and stopping would never be cleared.
+        {
+            let _order = self.order();
+            let open = guard(&self.turn).as_ref().is_some_and(|turn| turn.id == turn_id);
+            if open && !matches!(*guard(&self.state), "closed" | "failed") {
+                *guard(&self.state) = "stopping";
+            }
+            self.publish();
+        }
         Ok(())
     }
 
@@ -1936,7 +2014,16 @@ impl Session {
     /// case the prompt is dropped rather than sent into a different one.
     fn become_ready(self: &Arc<Self>, resumed: bool) -> Result<(), String> {
         *guard(&self.auth_error) = None;
-        *guard(&self.state) = "ready";
+        {
+            // An agent that exited while the session was being established
+            // stays closed: it never looks ready, and nothing is sent to it.
+            let _order = self.order();
+            let mut state = guard(&self.state);
+            if matches!(*state, "closed" | "failed") {
+                return Ok(());
+            }
+            *state = "ready";
+        }
         self.publish();
         // A YOLO entry that declares a mode switches to it before the first
         // turn. A refusal is reported, and the host still approves on the
@@ -1995,7 +2082,11 @@ impl Session {
         match self.establish() {
             Ok(resumed) => {
                 self.notice("info", "authenticated", format!("已通过「{}」登录", method.name));
-                self.become_ready(resumed)
+                self.become_ready(resumed)?;
+                if matches!(*guard(&self.state), "closed" | "failed") {
+                    return Err("登录后 agent 已退出，会话已结束".into());
+                }
+                Ok(())
             }
             Err(SetupError::AuthRequired(reason)) => Err(self.auth_failed(format!("登录后 agent 仍要求登录：{reason}"))),
             Err(SetupError::Failed(reason)) => Err(self.auth_failed(format!("登录后仍无法建立会话：{reason}"))),

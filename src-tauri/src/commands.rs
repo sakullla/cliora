@@ -3814,10 +3814,15 @@ pub async fn acp_prompt(session_id: String, text: String, attachments: Option<Ve
 }
 
 /// Log in with one of the agent's declared methods, then create the session.
-/// The agent may wait for the user to finish its own login flow.
+/// The agent may wait for the user to finish its own login flow. The restore
+/// record then names the native session the login created.
 #[tauri::command]
-pub async fn acp_authenticate(session_id: String, method_id: String) -> Result<(), ApiError> {
-    blocking(move || crate::acp::authenticate(&session_id, &method_id).map_err(native_error)).await
+pub async fn acp_authenticate(app: AppHandle, session_id: String, method_id: String) -> Result<(), ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        crate::workbench_restore::authenticate_conversation(&db, &session_id, &method_id).map_err(native_error)
+    })
+    .await
 }
 
 /// Answer an elicitation form once: `accept` (with content), `decline` or

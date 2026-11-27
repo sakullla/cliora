@@ -106,6 +106,27 @@ pub fn close_conversation(db: &Database, id: &str) -> Result<(), String> {
     closed
 }
 
+/// Log a conversation in, then record the native session it now has: a
+/// conversation that started by waiting for a login was saved without one, and
+/// a restart could not bring it back otherwise.
+pub fn authenticate_conversation(db: &Database, id: &str, method_id: &str) -> Result<(), String> {
+    crate::acp::authenticate(id, method_id)?;
+    if let Some(native) = crate::acp::native_session_id(id) {
+        record_native_id(db, id, &native)?;
+    }
+    Ok(())
+}
+
+/// Point an existing restore record at the native session the tab now holds.
+/// Only an existing record is updated: a tab closed meanwhile stays forgotten.
+pub fn record_native_id(db: &Database, id: &str, native: &str) -> Result<(), String> {
+    let Some(mut saved) = list(db)?.into_iter().find(|saved| saved.id == id) else { return Ok(()) };
+    if saved.native_id.as_deref() == Some(native) { return Ok(()); }
+    saved.native_id = Some(native.to_owned());
+    let text = serde_json::to_string(&saved).map_err(|error| error.to_string())?;
+    db.with_connection(|conn| conn.execute("UPDATE app_settings SET value=?1 WHERE key=?2", rusqlite::params![text, format!("{PREFIX}{id}")]).map(|_| ()).map_err(|error| error.to_string()))
+}
+
 pub fn list(db: &Database) -> Result<Vec<SavedSession>, String> {
     db.with_connection(|conn| {
         let mut statement = conn.prepare("SELECT value FROM app_settings WHERE substr(key,1,?1)=?2 ORDER BY key").map_err(|error| error.to_string())?;
@@ -127,6 +148,11 @@ pub fn checkpoint(db: &Database) -> Result<(), String> {
     for mut saved in list(db)? {
         if live.contains(&saved.id) {
             saved.stopped_at = Some(now());
+            // A conversation records the native session it holds now: one that
+            // waited for a login, or any later change, still restores.
+            if saved.interaction == crate::launch::InteractionMode::Acp {
+                if let Some(native) = crate::acp::native_session_id(&saved.id) { saved.native_id = Some(native); }
+            }
             // Keep the launch directory: native history records that directory,
             // while OSC 7 may have moved the live terminal elsewhere since then.
             let text = serde_json::to_string(&saved).map_err(|error| error.to_string())?;

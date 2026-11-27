@@ -547,6 +547,18 @@ impl Timeline {
         }
     }
 
+    /// Drop one item. Returns whether it was there.
+    pub fn remove(&mut self, id: &str) -> bool {
+        match self.position(id) {
+            Some(index) => {
+                let item = self.items.remove(index);
+                self.weight = self.weight.saturating_sub(item.weight());
+                true
+            }
+            None => false,
+        }
+    }
+
     /// A fresh id for an item the protocol does not name.
     pub fn auto_id(&mut self, prefix: &str) -> String {
         self.next_auto += 1;

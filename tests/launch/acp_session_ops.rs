@@ -216,10 +216,12 @@ fn an_elicitation_form_is_answered_once_validated_and_withdrawn_on_stop_turn_end
         let initialize = agent.handshake(false);
         let _ = init_tx.send(initialize);
         let ask = |agent: &Agent, id: u64, mode: &str| {
-            agent.send(json!({
-                "jsonrpc": "2.0", "id": id, "method": "elicitation/create",
-                "params": { "sessionId": "session-1", "mode": mode, "message": "怎么称呼你？", "requestedSchema": agent_schema },
-            }));
+            let mut params = json!({ "sessionId": "session-1", "message": "怎么称呼你？", "requestedSchema": agent_schema });
+            // An empty mode stands for a request that omits it: that is a form.
+            if !mode.is_empty() {
+                params["mode"] = json!(mode);
+            }
+            agent.send(json!({ "jsonrpc": "2.0", "id": id, "method": "elicitation/create", "params": params }));
         };
         let prompt = agent.next_line();
         // Accepted, with the submitted content.
@@ -233,7 +235,8 @@ fn an_elicitation_form_is_answered_once_validated_and_withdrawn_on_stop_turn_end
         ask(&agent, 51, "form");
         let answer = agent.next_line();
         assert_eq!(answer, json!({ "jsonrpc": "2.0", "id": 51, "result": { "action": "decline" } }));
-        ask(&agent, 52, "form");
+        // No mode at all is still a form.
+        ask(&agent, 52, "");
         let answer = agent.next_line();
         assert_eq!(answer["result"], json!({ "action": "cancel" }));
         // A mode the client did not advertise is invalid params.
@@ -452,6 +455,58 @@ fn files_inside_are_embedded_or_linked_and_files_outside_need_approval() {
     close(&id).unwrap();
     let rest = worker.join().unwrap();
     assert!(rest.iter().all(|frame| frame["method"] != "session/prompt"), "被拒绝的附件不发出提示");
+}
+
+#[test]
+fn a_stop_while_an_attachment_waits_for_approval_ends_the_turn_and_sends_nothing() {
+    let temp = temp_dir();
+    let directory = temp.path().join("project");
+    std::fs::create_dir_all(&directory).unwrap();
+    let outside = temp.path().join("outside.txt");
+    std::fs::write(&outside, "目录外的内容").unwrap();
+    let (io, mut agent) = pair();
+    let worker = std::thread::spawn(move || {
+        agent.handshake(false);
+        drain(&mut agent)
+    });
+    let id = open(spec(&std::fs::canonicalize(&directory).unwrap()), io).unwrap().id;
+    let outside = outside.display().to_string();
+    // Repeated: the stop and the turn's own thread race to settle the state.
+    for round in 0..20 {
+        let (done_tx, done_rx) = channel();
+        let session = id.clone();
+        let path = outside.clone();
+        std::thread::spawn(move || {
+            let _ = done_tx.send(prompt_with(&session, "看看外面", &[file(path)]));
+        });
+        let card = wait_for(|| snapshot_of(&id).pending.first().cloned(), "目录外附件的审批卡");
+        if round == 0 {
+            // The message that caused the card stands before it.
+            let waiting = snapshot_of(&id);
+            let message = waiting.timeline.iter().position(|item| matches!(item, AcpTimelineItem::Message(message) if message.role == "user")).unwrap();
+            let access = waiting.timeline.iter().position(|item| matches!(item, AcpTimelineItem::Access(_))).unwrap();
+            assert!(message < access, "用户消息在它引起的审批卡之前");
+            let user = messages(&waiting).into_iter().find(|message| message.role == "user").unwrap();
+            assert_eq!(user.attachments.len(), 1);
+            assert_eq!(user.attachments[0].kind, "file");
+        }
+        cancel(&id).unwrap();
+        let stopped = done_rx.recv_timeout(Duration::from_secs(8)).unwrap().unwrap_err();
+        assert!(!stopped.is_empty());
+        wait_until_idle(&id, Duration::from_secs(8)).expect("停止后不会停在 stopping");
+        let after = snapshot_of(&id);
+        assert_eq!(after.state, "ready", "round {round}");
+        assert!(after.pending.is_empty());
+        assert!(!messages(&after).iter().any(|message| message.text == "看看外面"), "没发出的提示不留在时间线");
+        assert!(cancel(&id).is_err(), "轮次已结束，没有可停止的轮次");
+        assert!(respond_access(&id, &card, "once").is_err(), "撤回的卡不再接受回应");
+    }
+    close(&id).unwrap();
+    let frames = worker.join().unwrap();
+    assert!(
+        frames.iter().all(|frame| frame["method"] != "session/prompt" && frame["method"] != "session/cancel"),
+        "提示没有发出时不发送 prompt 或 cancel：{frames:?}"
+    );
 }
 
 #[test]
@@ -815,6 +870,50 @@ fn a_checkpoint_counts_open_conversations_and_closing_one_forgets_its_record() {
     // A conversation the host no longer holds still loses its record.
     assert!(restore::close_conversation(&db, "gone-conversation").is_err());
     assert!(restore::list(&db).unwrap().is_empty());
+}
+
+#[test]
+fn a_conversation_that_logs_in_after_start_records_its_native_session_for_restore() {
+    use crate::workbench_restore as restore;
+    let directory = temp_dir();
+    let db = crate::database::Database::open(&directory.path().join("app.db")).unwrap();
+    let (io, mut agent) = pair();
+    let worker = std::thread::spawn(move || {
+        initialize(&mut agent, json!({ "protocolVersion": 1, "authMethods": [{ "id": "login", "name": "登录" }] }));
+        let new = agent.next_line();
+        refuse(&agent, &new, -32000, "Authentication required");
+        let login = agent.next_line();
+        assert_eq!(login["method"], "authenticate");
+        reply(&agent, &login, json!({}));
+        create(&mut agent, "session-after-login");
+        agent.stay_connected();
+    });
+    let snapshot = open(spec(directory.path()), io).unwrap();
+    assert_eq!(snapshot.state, "auth_required");
+    // Saved the way a launch saves it: no native session yet.
+    let mut record = saved(&snapshot.id, directory.path());
+    record.native_id = snapshot.native_session_id.clone();
+    assert!(record.native_id.is_none());
+    restore::save(&db, &record).unwrap();
+
+    restore::authenticate_conversation(&db, &snapshot.id, "login").unwrap();
+    let records = restore::list(&db).unwrap();
+    assert_eq!(records[0].native_id.as_deref(), Some("session-after-login"), "登录后恢复记录带上原生会话");
+
+    // A checkpoint also brings a stale record up to date.
+    let mut stale = records[0].clone();
+    stale.native_id = None;
+    restore::save(&db, &stale).unwrap();
+    restore::checkpoint(&db).unwrap();
+    let records = restore::list(&db).unwrap();
+    assert_eq!(records[0].native_id.as_deref(), Some("session-after-login"));
+    assert!(records[0].stopped_at.is_some());
+
+    // A tab closed meanwhile is not written back.
+    restore::close_conversation(&db, &snapshot.id).unwrap();
+    restore::record_native_id(&db, &snapshot.id, "session-after-login").unwrap();
+    assert!(restore::list(&db).unwrap().is_empty());
+    worker.join().unwrap();
 }
 
 // ---------------------------------------------------------------- publication order

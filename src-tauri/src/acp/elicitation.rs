@@ -249,7 +249,9 @@ impl Session {
                 return;
             }
         };
-        if params.get("mode").and_then(Value::as_str) != Some("form") {
+        // A request without a mode is a form, as in the MCP elicitation model
+        // ACP mirrors; only an explicit other mode is refused.
+        if !matches!(params.get("mode"), None | Some(Value::Null)) && params.get("mode").and_then(Value::as_str) != Some("form") {
             self.answer_error(&id, -32602, "客户端只支持表单形式的结构化提问");
             self.diagnostic("agent 请求了未声明的结构化提问形式，已拒绝");
             return;
