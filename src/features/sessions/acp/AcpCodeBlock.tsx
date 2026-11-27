@@ -2,8 +2,17 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { HighlightRun } from './acpHighlight';
 import { AcpCopyButton } from './AcpCopyButton';
+import { splitMatchRuns } from './acpSearch';
 import { visibleControls } from './acpView';
 import styles from './acp.module.css';
+
+function renderCodeText(text: string, query: string, caseSensitive: boolean) {
+  const safe = visibleControls(text);
+  if (!query.trim()) return safe;
+  return splitMatchRuns(safe, query, caseSensitive).map((run, index) => run.hit
+    ? <mark key={index} className={styles.findMark}>{run.text}</mark>
+    : run.text);
+}
 
 /**
  * One fenced block of an agent reply: its language, a wrap toggle, a copy
@@ -11,7 +20,17 @@ import styles from './acp.module.css';
  * set of languages, loaded only when a block needs it. Other languages and long
  * blocks stay plain text.
  */
-export function AcpCodeBlock({ code, language }: { code: string; language: string | null }) {
+export function AcpCodeBlock({
+  code,
+  language,
+  searchQuery = '',
+  searchCase = false,
+}: {
+  code: string;
+  language: string | null;
+  searchQuery?: string;
+  searchCase?: boolean;
+}) {
   const { t } = useTranslation();
   const [wrap, setWrap] = useState(false);
   const [runs, setRuns] = useState<{ code: string; language: string | null; runs: HighlightRun[] } | null>(null);
@@ -46,7 +65,9 @@ export function AcpCodeBlock({ code, language }: { code: string; language: strin
       </span>
     </div>
     <pre className={styles.codeBody} data-wrap={wrap || undefined}><code>{current
-      ? current.map((run, index) => run.className ? <span key={index} className={run.className}>{visibleControls(run.text)}</span> : visibleControls(run.text))
-      : visibleControls(code)}</code></pre>
+      ? current.map((run, index) => run.className
+        ? <span key={index} className={run.className}>{renderCodeText(run.text, searchQuery, searchCase)}</span>
+        : renderCodeText(run.text, searchQuery, searchCase))
+      : renderCodeText(code, searchQuery, searchCase)}</code></pre>
   </div>;
 }

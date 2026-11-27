@@ -778,6 +778,8 @@ export default {
   acpAttachImage: '附加图片',
   acpAttachImageHint: '选择图片附加到消息',
   acpBusyEnterHint: '当前轮次仍在处理中，请等待结束后发送，或先点击停止。',
+  acpStartingComposerHint: '正在连接，就绪后即可发送；可先编辑草稿',
+  acpStartingEnterHint: '会话正在连接初始化，就绪后再发送。',
   acpDropHintDetail: '文件作为路径引用附加；支持图片时自动预览',
   acpSettingsSummary: '会话设置：{{summary}}',
   acpFindConversation: '查找对话内容',

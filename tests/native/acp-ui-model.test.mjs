@@ -304,6 +304,7 @@ test('searchAcpTimeline searches all visible timeline items in order with case s
   ];
 
   const snapshot = makeSnapshot(timeline, {
+    pending: ['req-elic'],
     terminals: [
       {
         terminalId: 'term-1',
@@ -396,4 +397,51 @@ test('searchAcpTimeline handles non-overlapping occurrences and splitMatchRuns p
   ]);
   assert.deepEqual(splitMatchRuns('plain text', '   ', false), [{ text: 'plain text', hit: false }]);
   assert.deepEqual(splitMatchRuns('', 'alpha', false), []);
+});
+
+test('searchAcpTimeline ignores hidden schema fields, non-answerable permission options, and trimmed notice raw text', () => {
+  const decidedElic = {
+    kind: 'elicitation',
+    id: 'elic-decided',
+    message: 'Visible message',
+    requestedSchema: {
+      type: 'object',
+      properties: {
+        secretField: { type: 'string', title: 'HiddenNeedleTitle', description: 'HiddenNeedleDesc' },
+      },
+    },
+    toolCallId: null,
+    decision: 'accepted',
+    requestId: null,
+    turnId: 'turn-1',
+    subagent: null,
+  };
+  const stalePermTool = toolItem('stale-perm', {
+    title: 'Run check',
+    permission: {
+      requestId: 'req-old',
+      turnId: 'turn-1',
+      options: [{ optionId: 'o1', name: 'HiddenNeedleOption', kind: 'allow_once' }],
+    },
+  });
+  const trimmedNotice = {
+    kind: 'notice',
+    id: 'notice-trimmed',
+    level: 'info',
+    code: 'trimmed',
+    text: 'HiddenNeedleTrimmedRaw',
+    turnId: 'turn-1',
+  };
+  const liveSnapshot = makeSnapshot([decidedElic, stalePermTool, trimmedNotice], { pending: [] });
+  assert.deepEqual(searchAcpTimeline(liveSnapshot, 'HiddenNeedle', false), []);
+
+  // When the permission request is actually pending in a live session, its option name IS searchable.
+  const activePermSnapshot = makeSnapshot([stalePermTool], { pending: ['req-old'], state: 'waiting_permission' });
+  assert.deepEqual(searchAcpTimeline(activePermSnapshot, 'HiddenNeedleOption', false), [
+    { itemId: 'tool:stale-perm', occurrence: 0 },
+  ]);
+
+  // Once the session closes, stale pending permissions are no longer answerable/visible.
+  const closedPermSnapshot = makeSnapshot([stalePermTool], { pending: ['req-old'], state: 'closed' });
+  assert.deepEqual(searchAcpTimeline(closedPermSnapshot, 'HiddenNeedleOption', false), []);
 });

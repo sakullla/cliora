@@ -580,6 +580,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     }
   }
 
+  const starting = snapshot.state === 'starting';
   const sendable = canSend && !turnBusy && !sending && !reading.length && (!!draft.trim() || attachments.length > 0);
   const activeId = menuItems ? `${listId}-option-${activeIndex}` : undefined;
 
@@ -615,7 +616,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     {error && <p className={styles.error} role="alert">{error}</p>}
     {busyEnterHint && turnBusy && live && <p className={styles.busyFeedback} role="status" data-acp-busy-hint="">
       <Icon name="info" size={12} />
-      <span>{t('sessions.acpBusyEnterHint')}</span>
+      <span>{starting ? t('sessions.acpStartingEnterHint') : t('sessions.acpBusyEnterHint')}</span>
     </p>}
     <div className={styles.composerCard} data-acp-composer-card="">
       {(attachments.length > 0 || reading.length > 0) && <ul className={styles.tray} aria-label={t('sessions.acpAttachments')} aria-busy={reading.length > 0 || undefined}>
@@ -728,7 +729,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
           <AcpSettings config={snapshot.config} compact={compact} disabled={!live || snapshot.state === 'starting'} onSetMode={onSetMode} onSetConfig={onSetConfig} />
         </div>
         <div className={styles.actionsRight}>
-          <span className={styles.hint}>{!live ? t('sessions.acpEnded') : turnBusy ? t('sessions.acpBusyHint') : reading.length ? t('sessions.acpImageReadingBusy') : t('sessions.acpSendHint')}</span>
+          <span className={styles.hint}>{!live ? t('sessions.acpEnded') : starting ? t('sessions.acpStartingComposerHint') : turnBusy ? t('sessions.acpBusyHint') : reading.length ? t('sessions.acpImageReadingBusy') : t('sessions.acpSendHint')}</span>
           {!live && <button type="button" className={styles.button} data-variant="quiet" disabled={busy} onClick={onClose}>{t('sessions.acpClose')}</button>}
           {turnBusy && live
             ? <button type="button" className={styles.button} data-variant="stop" disabled={busy || snapshot.state === 'stopping'} onClick={() => { setBusyEnterHint(false); onStop(); }}><Icon name="square" size={12} />{snapshot.state === 'stopping' ? t('sessions.acpStopping') : t('sessions.acpStop')}</button>

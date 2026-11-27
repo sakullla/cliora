@@ -465,6 +465,19 @@ button.badge[data-badge='grant']:hover:not(:disabled) { border-color: color-mix(
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--term-accent) 65%, transparent);
   background: color-mix(in srgb, var(--term-accent) 6%, transparent);
 }
+.message[data-role='user'][data-find-hit='match'] {
+  box-shadow: none;
+}
+.message[data-role='user'][data-find-hit='match'] .userBubble {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--term-warning) 55%, transparent);
+}
+.message[data-role='user'][data-find-hit='active'] {
+  box-shadow: none;
+  background: none;
+}
+.message[data-role='user'][data-find-hit='active'] .userBubble {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--term-accent) 65%, transparent);
+}
 [data-located] {
   box-shadow: 0 0 0 2px var(--term-accent), 0 0 0 5px color-mix(in srgb, var(--term-accent) 18%, transparent);
   animation: acpLocate 1.4s var(--ease) 1;

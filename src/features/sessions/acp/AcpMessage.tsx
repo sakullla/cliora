@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from 'react';
+import { lazy, Suspense, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../../components/Icon';
 import type { AcpMessage as Message } from '../../../types/acp';
@@ -9,10 +9,6 @@ import { visibleControls } from './acpView';
 import styles from './acp.module.css';
 
 const MarkdownView = lazy(() => import('../../../components/MarkdownView'));
-
-function renderCode(code: string, language: string | null) {
-  return <AcpCodeBlock code={code} language={language} />;
-}
 
 function renderRuns(text: string, query: string, caseSensitive: boolean) {
   const safe = visibleControls(text);
@@ -146,6 +142,17 @@ export function AcpMessage({
     </div>;
   }
 
+  const markdownHighlight = useMemo(
+    () => (searchQuery.trim() ? { query: searchQuery, caseSensitive: searchCase } : undefined),
+    [searchQuery, searchCase],
+  );
+  const renderCode = useMemo(
+    () => (code: string, language: string | null) => (
+      <AcpCodeBlock code={code} language={language} searchQuery={searchQuery} searchCase={searchCase} />
+    ),
+    [searchQuery, searchCase],
+  );
+
   const plain = <p className={styles.plainText}>{renderRuns(message.text, searchQuery, searchCase)}</p>;
   return <div
     className={styles.message}
@@ -161,7 +168,7 @@ export function AcpMessage({
       {copy}
     </div>
     <div className={styles.agentBody}>
-      {message.text ? <Suspense fallback={plain}><MarkdownView text={message.text} tone="terminal" codeBlock={renderCode} /></Suspense> : null}
+      {message.text ? <Suspense fallback={plain}><MarkdownView text={message.text} tone="terminal" codeBlock={renderCode} highlight={markdownHighlight} /></Suspense> : null}
       {truncated}
       {cursor}
     </div>

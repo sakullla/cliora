@@ -48,7 +48,16 @@ function diffSearchTexts(path: string, oldText: string | null, newText: string, 
   return parts;
 }
 
-function toolSearchTexts(call: AcpToolCall, terminalsById: ReadonlyMap<string, AcpTerminal>): string[] {
+export type SearchVisibilityContext = {
+  live: boolean;
+  pendingSet: ReadonlySet<string>;
+};
+
+function toolSearchTexts(
+  call: AcpToolCall,
+  terminalsById: ReadonlyMap<string, AcpTerminal>,
+  visibility?: SearchVisibilityContext,
+): string[] {
   const parts: string[] = [];
   const title = call.title || call.callId;
   if (title) parts.push(visibleControls(title));
@@ -83,8 +92,12 @@ function toolSearchTexts(call: AcpToolCall, terminalsById: ReadonlyMap<string, A
     const target = locationTarget(location.path, location.line);
     if (target) parts.push(visibleControls(target));
   }
-  for (const option of call.permission?.options ?? []) {
-    if (option.name) parts.push(visibleControls(option.name));
+  const permissionVisible = !!call.permission
+    && (!visibility || (visibility.live && visibility.pendingSet.has(call.permission.requestId)));
+  if (permissionVisible) {
+    for (const option of call.permission?.options ?? []) {
+      if (option.name) parts.push(visibleControls(option.name));
+    }
   }
   return parts;
 }
@@ -99,20 +112,29 @@ function accessSearchTexts(access: AcpAccess): string[] {
   return parts;
 }
 
-function elicitationSearchTexts(item: AcpElicitation): string[] {
+function elicitationSearchTexts(item: AcpElicitation, visibility?: SearchVisibilityContext): string[] {
   const parts: string[] = [];
   if (item.message) parts.push(visibleControls(item.message));
-  const properties = item.requestedSchema?.properties ?? {};
-  for (const [name, field] of Object.entries(properties)) {
-    const label = field.title || name;
-    if (label) parts.push(visibleControls(label));
-    if (field.description) parts.push(visibleControls(field.description));
+  const formVisible = item.decision === 'pending'
+    && !!item.requestId
+    && (!visibility || (visibility.live && visibility.pendingSet.has(item.requestId)));
+  if (formVisible) {
+    const properties = item.requestedSchema?.properties ?? {};
+    for (const [name, field] of Object.entries(properties)) {
+      const label = field.title || name;
+      if (label) parts.push(visibleControls(label));
+      if (field.description) parts.push(visibleControls(field.description));
+    }
   }
   return parts;
 }
 
 /** Extract all visible text slices of one timeline item in display order. */
-export function extractItemSearchTexts(item: AcpTimelineItem, terminalsById: ReadonlyMap<string, AcpTerminal>): string[] {
+export function extractItemSearchTexts(
+  item: AcpTimelineItem,
+  terminalsById: ReadonlyMap<string, AcpTerminal>,
+  visibility?: SearchVisibilityContext,
+): string[] {
   switch (item.kind) {
     case 'message': {
       const parts: string[] = [];
@@ -123,10 +145,12 @@ export function extractItemSearchTexts(item: AcpTimelineItem, terminalsById: Rea
       return parts;
     }
     case 'tool':
-      return toolSearchTexts(item, terminalsById);
+      return toolSearchTexts(item, terminalsById, visibility);
     case 'access':
       return accessSearchTexts(item);
     case 'notice':
+      // A `trimmed` notice renders localized copy instead of raw `item.text`.
+      if (item.code === 'trimmed') return [];
       return item.text ? [visibleControls(item.text)] : [];
     case 'subagent': {
       const parts: string[] = [];
@@ -137,7 +161,7 @@ export function extractItemSearchTexts(item: AcpTimelineItem, terminalsById: Rea
       return parts;
     }
     case 'elicitation':
-      return elicitationSearchTexts(item);
+      return elicitationSearchTexts(item, visibility);
     case 'turn':
     default:
       return [];
@@ -189,9 +213,14 @@ export function searchAcpTimeline(snapshot: AcpSessionSnapshot, query: string, c
     terminalsById.set(terminal.terminalId, terminal);
   }
 
+  const visibility: SearchVisibilityContext = {
+    live: snapshot.state !== 'closed' && snapshot.state !== 'failed',
+    pendingSet: new Set(snapshot.pending ?? []),
+  };
+
   const matches: AcpFindMatch[] = [];
   for (const item of timeline) {
-    const texts = extractItemSearchTexts(item, terminalsById);
+    const texts = extractItemSearchTexts(item, terminalsById, visibility);
     if (!texts.length) continue;
     const groupId = groupByItem.get(item.id);
     let occurrence = 0;

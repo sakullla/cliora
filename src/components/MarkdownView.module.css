@@ -63,3 +63,6 @@
 .prose[data-tone='terminal'] .imageNote { border-color: var(--term-line); color: var(--term-text-3); }
 .prose[data-tone='terminal'] .externalLink, .prose[data-tone='terminal'] .wikiLink, .prose[data-tone='terminal'] .fileLink { color: var(--term-accent); text-decoration-color: color-mix(in srgb, var(--term-accent) 45%, transparent); }
 .prose[data-tone='terminal'] .externalLink:hover { color: var(--term-accent); text-decoration-color: currentColor; }
+.findMark { padding: 0 1px; border-radius: var(--radius-2xs); background: color-mix(in srgb, var(--warning) 30%, transparent); color: inherit; }
+.prose[data-tone='terminal'] .findMark { background: color-mix(in srgb, var(--term-warning) 32%, transparent); }
+:global([data-find-hit='active']) .prose[data-tone='terminal'] .findMark { background: color-mix(in srgb, var(--term-accent) 34%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--term-accent) 55%, transparent); }

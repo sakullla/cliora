@@ -778,6 +778,8 @@ export default {
   acpAttachImage: 'Attach image',
   acpAttachImageHint: 'Choose images to attach',
   acpBusyEnterHint: 'A turn is still running. Wait for it to finish before sending, or stop it first.',
+  acpStartingComposerHint: 'Connecting; draft now and send once ready',
+  acpStartingEnterHint: 'The conversation is still connecting. Wait until it is ready to send.',
   acpDropHintDetail: 'Files attach as path references; supported images preview inline',
   acpSettingsSummary: 'Session settings: {{summary}}',
   acpFindConversation: 'Find in conversation',

@@ -891,8 +891,10 @@ test('starting and ready empty states, ended recovery banner and copyable diagno
   await expect(railRow).toContainText('正在连接');
   await expect(railRow).not.toContainText('等待输入');
   await expect(panel.getByRole('button', { name: '发送', exact: true })).toHaveCount(0);
+  await expect(panel.locator('[data-acp-composer]')).toContainText('正在连接，就绪后即可发送；可先编辑草稿');
   await inputOf(panel).fill('试着发送');
   await inputOf(panel).press('Enter');
+  await expect(panel.locator('[data-acp-busy-hint]')).toContainText('会话正在连接初始化，就绪后再发送。');
   expect((await testState(page)).prompts).toEqual([]);
   await inputOf(panel).fill('');
 
