@@ -19,8 +19,13 @@
 //! - File and terminal requests are served inside the session directory; a
 //!   path or working directory outside it needs the user's approval, a session
 //!   grant or YOLO (`access`). Cliora's own data is refused under any grant
-//!   (`crate::safe_fs`). Terminal commands run without a shell as process
-//!   trees the host ends on kill, release and session close (`terminal`).
+//!   (`crate::safe_fs`). A terminal call with arguments, or a single program
+//!   name, runs without a shell; a whole command line with empty arguments
+//!   runs through the system shell (`cmd /D /V:OFF /S /C` on Windows,
+//!   `/bin/sh -c` on Unix) — the ADR-9 revision, user decision 2026-11-27.
+//!   Either way the
+//!   command runs as a process tree the host ends on kill, release and session
+//!   close (`terminal`).
 //! - A permission request is bound to the live connection, the session (or a
 //!   registered child session) and the turn that asked for it, and is answered
 //!   at most once.

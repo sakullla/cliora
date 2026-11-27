@@ -179,7 +179,9 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
     // conversation with Markdown; 'tools' shows each tool shape (diff, embedded terminal,
     // locations, a failure); 'yolo' runs in YOLO with its automatic approvals recorded;
     // 'disconnected' is a conversation whose agent process went away mid-turn.
-    const acpState = acpMode === 'stopping' ? 'stopping' : acpMode === 'permission' || acpMode === 'form' ? 'waiting_permission' : acpMode === 'login' ? 'auth_required'
+    // 'access' waits on Cliora's own approval card for a read outside the session
+    // directory, while an earlier session grant for writes shows as a revocable badge.
+    const acpState = acpMode === 'stopping' ? 'stopping' : acpMode === 'permission' || acpMode === 'form' || acpMode === 'access' ? 'waiting_permission' : acpMode === 'login' ? 'auth_required'
       : acpMode === 'disconnected' ? 'closed' : acpMode === 'tools' ? 'running' : 'ready';
     const acpNativeId = acpMode === 'login' ? null : 'native-acp-1';
     const acpAuthError = acpMode === 'login' ? 'agent 要求先登录：没有找到有效的凭据' : null;
@@ -234,7 +236,17 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
       { kind: 'notice', id: 'n-exit', level: 'error', code: '', text: 'agent 进程已退出（退出码 1），连接已断开', turnId: 'turn-1' },
       acpEnd('turn-1', 'disconnected'),
     ];
-    const acpTimeline = acpMode === 'empty' ? [] : acpMode === 'long' ? acpLong() : acpMode === 'tools' ? acpTools() : acpMode === 'yolo' ? acpYolo() : acpMode === 'disconnected' ? acpDisconnected() : null;
+    // The turn is still running: the approval card waits for an answer, so no turn end yet.
+    const acpAccess = () => [
+      acpMessage('m1', 'user', '对照 D:\\shared 里的共享令牌，把工具栏间距改成令牌相加，并写一份改动说明到 D:\\shared。'),
+      acpMessage('m3', 'agent', '先把改动说明写到共享目录，再读取共享令牌定义核对间距。'),
+      { kind: 'access', id: 'access-w1', accessKind: 'write', path: 'D:\\shared\\toolbar-notes.md', detail: null, decision: 'allowed_session', requestId: null, turnId: 'turn-1', subagent: null, userPath: null,
+        diff: { path: 'D:\\shared\\toolbar-notes.md', oldText: null, newText: '# 工具栏间距\n\n- 改为 --space-1 与 --space-2 相加\n', truncated: false, previousOmitted: false } },
+      acpTool('c1', 'read_file', 'read', 'completed', { locations: [{ path: acpStyles, line: 86 }] }),
+      acpTool('c5', '读取 D:\\shared\\tokens.css', 'read', 'in_progress', { locations: [{ path: 'D:\\shared\\tokens.css', line: null }] }),
+      { kind: 'access', id: 'access-r1', accessKind: 'read', path: 'D:\\shared\\tokens.css', detail: null, decision: 'pending', requestId: 'access-r1-request', diff: null, turnId: 'turn-1', subagent: null, userPath: null },
+    ];
+    const acpTimeline = acpMode === 'empty' ? [] : acpMode === 'long' ? acpLong() : acpMode === 'tools' ? acpTools() : acpMode === 'yolo' ? acpYolo() : acpMode === 'disconnected' ? acpDisconnected() : acpMode === 'access' ? acpAccess() : null;
     const acpFixture = acpMode ? [{
       id: 'acp1', toolId: 'codex', projectId: 'cliora', directory: 'C:\\Projects\\cliora', mode: acpMode === 'yolo' ? 'yolo' : 'normal', interaction: 'acp',
       state: acpState,
@@ -258,7 +270,8 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
             ],
           },
         })] : []),
-        ...(acpMode === 'stopping' || acpMode === 'form' ? [] : [{ kind: 'turn', id: 'turn-1-end', turnId: 'turn-1', reason: 'end_turn' }]),
+        // A turn still waiting on a card or stopping has not ended.
+        ...(acpMode === 'stopping' || acpMode === 'form' || acpMode === 'permission' ? [] : [{ kind: 'turn', id: 'turn-1-end', turnId: 'turn-1', reason: 'end_turn' }]),
         ...(acpMode === 'form' ? [{
           kind: 'elicitation', id: 'e1', message: '发布前请补充版本信息。', toolCallId: null, decision: 'pending', requestId: 'q1', turnId: 'turn-1', subagent: null,
           requestedSchema: { type: 'object', required: ['version', 'channel'], properties: {
@@ -269,8 +282,8 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
           } },
         }] : []),
       ],
-      pending: acpMode === 'permission' ? ['r1'] : acpMode === 'form' ? ['q1'] : [],
-      grants: [],
+      pending: acpMode === 'permission' ? ['r1'] : acpMode === 'form' ? ['q1'] : acpMode === 'access' ? ['access-r1-request'] : [],
+      grants: acpMode === 'access' ? ['write'] : [],
       terminals: acpTerminals,
       plan: acpMode === 'empty' || acpMode === 'long' || acpMode === 'yolo' ? [] : acpMode === 'tools' ? [
         { content: '读取工具栏样式与令牌', priority: 'high', status: 'completed' },
@@ -278,6 +291,10 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
         { content: '运行样式检查', priority: 'medium', status: 'completed' },
         { content: '处理剩余的写死像素', priority: 'medium', status: 'in_progress' },
         { content: '重新构建并截图核对', priority: 'low', status: 'pending' },
+      ] : acpMode === 'access' ? [
+        { content: '写改动说明到共享目录', priority: 'medium', status: 'completed' },
+        { content: '读取共享令牌定义', priority: 'high', status: 'in_progress' },
+        { content: '把固定像素换成令牌相加', priority: 'high', status: 'pending' },
       ] : [
         { content: '读取工具栏样式与令牌', priority: 'high', status: 'completed' },
         { content: '把固定像素换成令牌相加', priority: 'high', status: 'completed' },
@@ -308,7 +325,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
         ] : [],
       },
       diagnostics: acpMode === 'stopping' ? ['agent 标准错误：正在结束本轮（已脱敏）'] : acpMode === 'disconnected' ? ['agent 标准错误：unexpected EOF on stdin（已脱敏）'] : [],
-      lastTurnReason: acpMode === 'stopping' || acpMode === 'empty' || acpMode === 'tools' ? '' : acpMode === 'disconnected' ? 'disconnected' : 'end_turn',
+      lastTurnReason: acpMode === 'stopping' || acpMode === 'empty' || acpMode === 'tools' || acpMode === 'permission' || acpMode === 'access' ? '' : acpMode === 'disconnected' ? 'disconnected' : 'end_turn',
       seq: 24,
     }] : null;
     if (acpMode) {
@@ -749,6 +766,16 @@ for (const width of widths) {
   for (const mode of ['conversation', 'permission', 'stopping', 'empty', 'long', 'tools', 'yolo', 'disconnected']) {
     await shot('workbench-acp-' + mode + '-' + theme + '-' + width, theme, width, null, false, null, null, null, false, null, mode);
   }
+  // Cliora's own approval card (not the agent's authorization card): a read outside the
+  // session directory waits on 允许一次 / 本会话都允许 / 拒绝, and a write category already
+  // granted for this session shows as a revocable badge in the session bar.
+  await shot('workbench-acp-access-' + theme + '-' + width, theme, width, async (page) => {
+    const panel = page.locator('[data-acp="true"][data-pane-session="acp1"]');
+    const card = panel.locator('[data-card="access"][data-decision="pending"]');
+    await card.waitFor();
+    await panel.locator('[data-badge="grant"][data-grant="write"]').waitFor();
+    await card.scrollIntoViewIfNeeded();
+  }, false, null, null, null, false, null, 'access');
   // The edit card's diff sits above the live terminal: scroll back to it, which also
   // shows "back to latest" while the turn keeps running.
   await shot('workbench-acp-diff-' + theme + '-' + width, theme, width, async (page) => {

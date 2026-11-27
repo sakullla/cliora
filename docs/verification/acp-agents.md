@@ -271,7 +271,7 @@
 
 - 设置「启动方式」（深/浅两套）：`docs/verification/product-ui-ux/pages/settings-launch-{light,dark}-1360.png`，命令 `node scripts/verify-ui-captures.mjs --skip-build --only pages`
 - ACP 对话（默认图库里的一张）：`docs/verification/product-ui-ux/workbench/workbench-acp-conversation-dark-1360.png`，命令 `node scripts/verify-ui-captures.mjs --skip-build --only workbench`
-- ACP 对话、授权卡、停止中与 720px 窄窗口的完整一组：`docs/verification/product-ui-ux/workbench-acp/`，命令 `CLIORA_CAPTURE_OUT=docs/verification/product-ui-ux/workbench-acp node scripts/capture-workbench.mjs --only 'workbench-acp-*' --size all --theme all`（需要先运行 `npm run dev -- --port 14736`）
+- ACP 对话、授权卡（agent 发起）、审批卡（Cliora 发起，目录外访问）、停止中与 720px 窄窗口的完整一组：`docs/verification/product-ui-ux/workbench-acp/`，命令 `CLIORA_CAPTURE_OUT=docs/verification/product-ui-ux/workbench-acp node scripts/capture-workbench.mjs --only 'workbench-acp-*' --size all --theme all`（需要先运行 `npm run dev -- --port 14736`）
 
 抓图不移动也不遮挡 Cliora 窗口；脚本自带的检查确认无横向溢出、无页面错误，但这些图片仍不是本机原生验收。
 
@@ -321,7 +321,7 @@
 
 ### YOLO：19 个适配器均为 Client 型
 
-适配器契约新增 `AcpEntry.yolo`（`AcpYolo::Client | Args | Mode`，`src-tauri/src/adapters/contract.rs`，TS 侧同步）。19 个 `fn acp` 全部声明 `AcpYolo::Client`（`grep "yolo: Some(AcpYolo::Client)" src-tauri/src/adapters/*/mod.rs` 为 19 处）：YOLO 不改变 agent 的启动参数或模式，由 Cliora 作为客户端自动批准——目录外访问直接放行并记录；`session/request_permission` 只自动选择 `allow_once`（没有 `allow_once` 时选 `allow_always`），没有允许类选项时照常出卡。`launch.rs` 不再拒绝 ACP + YOLO。
+适配器契约新增 `AcpEntry.yolo`（`AcpYolo::Client | Args | Mode`，`src-tauri/src/adapters/contract.rs`，TS 侧同步）。19 个 `fn acp` 全部声明 `AcpYolo::Client`（`grep "yolo: Some(AcpYolo::Client)" src-tauri/src/adapters/*/mod.rs` 为 19 处）：YOLO 不改变 agent 的启动参数或模式，由 Cliora 作为客户端自动批准——目录外访问直接放行并记录；`session/request_permission` 只自动选择 `allow_once`；**不回退到 `allow_always`**——请求里没有 `allow_once`（只有 `allow_always`，或没有任何允许类选项）时，YOLO 不替用户作答，照常出授权卡等用户选择（`src-tauri/src/acp/access.rs` 的 `yolo_option`；测试 `tests/launch/acp_client.rs` 的 `yolo_approves_outside_access_and_allow_once_and_still_shows_cards_without_one`，断言「YOLO 不回退到 allow_always」）。`launch.rs` 不再拒绝 ACP + YOLO。
 
 ### 分散的安全文件实现未迁移
 
@@ -402,8 +402,8 @@ ADR-9 修订与 F2 修复之后，只对受影响的 5 个 agent 复测一次（
 - **F4 厂商扩展**：`_x.ai/*`、`_cognition.ai/*`、`_kiro/*`、`_codebuddy.ai/*` 通知只进诊断；`_kiro/terminal/shell_type` 请求按未声明能力拒绝。功能未受影响。
 - **F5 启动探测**：Qoder CN、Command Code 本机可执行但启动探测未发现可用安装；并行时 MiMo 也未解析。需要检查这三个适配器的候选路径与版本身份判定。
 - **F6 MiMo 无回复**：两轮均立即 `end_turn` 且无内容。
-- **YOLO 只用 `allow_once`（已实证）**：6 次自动批准全部选择 `allow_once`，其中 3 次 `allow_always` 排在选项首位也没有被选；没有出现只提供 `allow_always` 的请求，因此「没有 allow_once 时选 allow_always」与「没有允许项时照常出卡」两条分支仍只有单元测试证据。
-- **授权卡（普通会话）**：只有 Kiro 在普通会话里发了授权请求，测试按「允许一次」答复后轮次正常完成；目录外审批卡（access）本轮没有触发（任务都在会话目录内）。
+- **YOLO 只用 `allow_once`（已实证）**：6 次自动批准全部选择 `allow_once`，其中 3 次 `allow_always` 排在选项首位也没有被选；没有出现缺少 `allow_once` 的请求，因此「只有 `allow_always` 时不自动选择、照常出授权卡」与「没有允许项时照常出卡」两条分支仍只有单元测试证据（YOLO 不回退到 `allow_always`）。
+- **授权卡（普通会话）**：只有 Kiro 在普通会话里发了授权请求，测试按「允许一次」答复后轮次正常完成；Cliora 的目录外审批卡（access）本轮没有触发（任务都在会话目录内），其真实形态只有合成验证与截图。
 
 ### 已知限制与后续项
 
@@ -413,9 +413,11 @@ ADR-9 修订与 F2 修复之后，只对受影响的 5 个 agent 复测一次（
 4. **02 方案文档与代码命名不一致**：`02-technical-solution.md` 仍写 `resolve_within` 与旧的 `acp_host`（以及 `acp_terminal`、`acp_client_fs`）路径；实际代码是 `safe_fs::resolve_target`（`resolve_target_protected`）与 `crate::acp`（`src-tauri/src/acp/`）。本文档已改用实际名称。
 5. **输入法组字与原生拖放只用合成事件验证**：组字期间 Enter 不发送、原生拖入图片与文件都只在 Playwright（Chromium）中以合成事件测试，没有在真实 WebView2 / WKWebView 中验证。
 6. **读图期间刷新会留下 pending 卡**（T5 复核 P3）：拖入目录外图片、审批卡仍在等待时重新加载页面，该卡保持 pending；`withdrawAbandoned` 在 IPC 失败后不重试撤回。
-7. **「手动改名的标题保持不变」无法验证**：工作台没有对 ACP 会话手动改名的功能，T4 的这一项验收无从执行。
+7. **「手动改名的标题保持不变」无法验证**（R3）：工作台没有对任何会话手动改名的功能，侧栏标题取 `titles.get(id) ?? conversation.info.title`，这一项只因不存在手动名称而成立，验收无从执行。
 8. **`remote::*` 与 `external::twiglane` 的 12 项环境失败与本次改动无关**：见上文「原生命令实际排除的用例」，本期对这些模块零改动。
 9. 真实抽样暴露的 F1–F6 见上一小节，其中 F1、F2 已修复（修复后），F3–F6 仍为后续项。另外，`acp::tests` 中的 `the_child_receives_its_own_secret_session_token` 与 `frames_split_across_writes_are_reassembled_and_coalesced` 在 `--lib acp::` 并行运行时偶发失败；在未改动的 `946e75b2` 上 5 次运行复现 1 次，单独运行 `acp::tests::` 3 次均通过，属既有的并发脆弱性。
+10. **子 agent 条目只有宿主侧测试**（R3）：子会话的更新、授权与客户端请求归属只有 Rust 宿主测试；时间线里可展开的子 agent 条目（`AcpTimeline` 的 `details[data-state]`）有渲染，但没有 Playwright 用例。
+11. **秘密原值的桌面审批没有 ACP 端到端验证**（R10）：ACP 终端只把本会话自己的 `CLIORA_SECRET_SESSION` 令牌传给子进程，取原值仍经未改动的秘密 broker 与其桌面审批；YOLO 不触达 broker。这一结论依赖 broker 与会话令牌的既有设计，本期没有针对 ACP 会话的端到端检查。
 
 ### 截图
 
@@ -425,13 +427,16 @@ ACP 场景由 `scripts/capture-workbench.mjs` 生成（Playwright + 合成 IPC�
 - 长对话（`long`，含代码块、表格、列表与链接）；
 - 工具与 diff（`tools`：读取、搜索、编辑、目录内写入记录、失败的获取、内嵌终端输出与「终止」、进行中的计划与用量；`diff` 展开编辑卡的 diff，并出现「回到最新」）；
 - YOLO 徽标与自动批准记录（`yolo`）；
-- 断开（`disconnected`：agent 退出、轮次原因为断开、诊断与只读输入框）。
+- 断开（`disconnected`：agent 退出、轮次原因为断开、诊断与只读输入框）；
+- 审批卡（`access`，T6 返工新增）：本轮仍在运行（`waiting_permission`、显示「停止」、没有轮次结束条目），一次读取会话目录外文件 `D:\shared\tokens.css` 的 Cliora 审批卡等待「允许一次 / 本会话都允许读取 / 拒绝」，会话栏显示一个已授予、可点击撤销的「本会话已放行写入」徽标，时间线里保留对应的「已允许（本会话）」写入记录与 diff。
+
+两种卡片要分开看：**授权卡**是 agent 通过 `session/request_permission` 发起的，按钮来自 agent 给出的选项（`permission` 场景：允许一次 / 总是允许 / 拒绝）；**审批卡**是 Cliora 作为客户端对会话目录外的读、写或执行发起的，按钮固定为允许一次 / 本会话都允许 / 拒绝（`access` 场景）。此前图库只有授权卡；`permission` 场景也不再在等待中的授权卡下方显示「本轮结束」。
 
 | 图库 | 命令 | 结果 |
 | --- | --- | --- |
 | 默认工作台图库（含 `workbench-acp-conversation`、`workbench-acp-tools`） | `node scripts/verify-ui-captures.mjs --only workbench` | passed，12 张，0 项失败（无横向溢出、无页面错误），输出 `docs/verification/product-ui-ux/workbench/` |
-| ACP 全部场景，深浅两套 × 1360 / 720 | 先 `npm run build` 并启动 `vite preview`，再 `CLIORA_PREVIEW_URL=<预览地址> CLIORA_CAPTURE_OUT=docs/verification/product-ui-ux/workbench-acp node scripts/capture-workbench.mjs --only 'workbench-acp-*' --size 1360,720 --theme all` | 70 张（18 个场景 × 深浅 × 两种宽度，窄窗口场景只在 720），0 项横向溢出、0 项页面错误、0 项动作失败，输出 `docs/verification/product-ui-ux/workbench-acp/`（`index.html` 为图库） |
+| ACP 全部场景，深浅两套 × 1360 / 720 | 先 `npm run build` 并启动 `vite preview`，再 `CLIORA_PREVIEW_URL=<预览地址> CLIORA_CAPTURE_OUT=docs/verification/product-ui-ux/workbench-acp node scripts/capture-workbench.mjs --only 'workbench-acp-*' --size 1360,720 --theme all` | 74 张（19 个场景 × 深浅 × 两种宽度，窄窗口场景只在 720），0 项横向溢出、0 项页面错误、0 项动作失败，输出 `docs/verification/product-ui-ux/workbench-acp/`（`index.html` 为图库）。T6 返工重跑时第一次有 1 项动作超时（`workbench-acp-attach-light-1360` 的 `locator.click`，其余 3 张 attach 正常），立即整组重跑全部通过，图库与清单取自重跑 |
 
-人工抽查了 tools、diff、yolo、empty、long、disconnected、permission、login、slash、attach 在两种主题、1360 与 720 下的画面：长路径和 diff 不撑宽窗格；720 下计划、审批卡与输入区完整可见；断开后输入框显示「对话已结束，不能再输入」。
+人工抽查了 tools、diff、yolo、empty、long、disconnected、permission、login、slash、attach 在两种主题、1360 与 720 下的画面：长路径和 diff 不撑宽窗格；720 下计划、授权卡与输入区完整可见；T6 返工另外人工查看了 `access` 的四张图（深浅 × 1360 / 720）：审批卡的三个按钮「允许一次」「本会话都允许读取」「拒绝」、「本会话已放行写入」徽标、「1 项等你处理」与「停止」均完整可见，720 下没有横向溢出；断开后输入框显示「对话已结束，不能再输入」。
 
-**这两个图库（`product-ui-ux/workbench/` 与 `product-ui-ux/workbench-acp/` 的 70 张 PNG）只保存在本地，不入库**：`docs/verification/*` 按 `.gitignore` 默认忽略，本期没有为它们放行，提交里没有这些图片；需要查看时用上表的命令重新生成。真实抽样报告 `docs/verification/acp-live-2026-11-27.json` 已在 `.gitignore` 中显式放行（`!docs/verification/acp-live-2026-11-27.json`），随提交保存；该报告只含协议事实，不含凭据。
+**这两个图库（`product-ui-ux/workbench/` 的 12 张与 `product-ui-ux/workbench-acp/` 的 74 张 PNG）只保存在本地，不入库**：`docs/verification/*` 按 `.gitignore` 默认忽略，本期没有为它们放行，提交里没有这些图片；需要查看时用上表的命令重新生成。真实抽样报告 `docs/verification/acp-live-2026-11-27.json` 已在 `.gitignore` 中显式放行（`!docs/verification/acp-live-2026-11-27.json`），随提交保存；该报告只含协议事实，不含凭据。
