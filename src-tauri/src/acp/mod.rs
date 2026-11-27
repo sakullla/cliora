@@ -29,11 +29,16 @@
 //!   and accepts only allow once or deny.
 //! - A prompt turn has no fixed deadline: it ends with the agent's own answer,
 //!   the agent's exit or the user's stop. Every other request keeps the
-//!   configured timeout.
+//!   configured timeout. Only the agent's exit (or a closed connection) ends a
+//!   turn as `disconnected`; a JSON-RPC error the agent answers the prompt with
+//!   ends it as `failed`, with the agent's (redacted) reason as a notice, and
+//!   the session stays usable.
 //! - An agent that answers session/new with auth_required leaves the session
 //!   waiting for a login (`auth_required`) instead of failing it; a login
-//!   through `authenticate` then creates (or resumes) the session. Cliora never
-//!   reads or stores the credentials.
+//!   through `authenticate` then creates (or resumes) the session. A prompt
+//!   answered with auth_required waits for a login the same way; that login
+//!   keeps the protocol session it interrupted. Cliora never reads or stores
+//!   the credentials.
 //! - An elicitation form (`elicitation`) is bound like an authorization card:
 //!   answered at most once, withdrawn with a cancel on stop, turn end or
 //!   session end.
@@ -114,11 +119,14 @@ const AUTH_TIMEOUT_FLOOR: Duration = Duration::from_secs(300);
 pub(crate) struct RpcError {
     pub code: Option<i64>,
     pub message: String,
+    /// The agent itself answered with a JSON-RPC error; false for a timeout,
+    /// a write failure or an exit, which the host reports on its own.
+    pub reply: bool,
 }
 
 impl RpcError {
     fn local(message: impl Into<String>) -> Self {
-        Self { code: None, message: message.into() }
+        Self { code: None, message: message.into(), reply: false }
     }
 }
 
@@ -813,7 +821,7 @@ impl Session {
                         .and_then(Value::as_str)
                         .unwrap_or("agent 拒绝了该请求");
                     let code = error.get("code").and_then(Value::as_i64);
-                    self.resolve_response(number, Err(RpcError { code, message: redact(message) }));
+                    self.resolve_response(number, Err(RpcError { code, message: redact(message), reply: true }));
                 } else {
                     self.resolve_response(number, Ok(value.get("result").cloned().unwrap_or(Value::Null)));
                 }
@@ -1386,9 +1394,22 @@ impl Session {
         let session = Arc::clone(self);
         std::thread::spawn(move || {
             // No deadline: a long turn is still a turn. The sender is dropped
-            // or answered with an error when the agent exits.
+            // or answered with a local error when the agent exits; only that
+            // is a lost connection. The agent's own error reply ends the turn
+            // as failed and the session stays usable; an auth_required reply
+            // waits for a login instead, keeping the protocol session.
             let reason = match receiver.recv() {
                 Ok(Ok(result)) => stop_reason(result.get("stopReason").and_then(Value::as_str)),
+                Ok(Err(error)) if error.reply && session.needs_login(&error, false) => {
+                    // Waiting for the login first: the turn's end then
+                    // settles into auth_required, never briefly into ready.
+                    session.require_auth(redact(&error.message));
+                    "failed"
+                }
+                Ok(Err(error)) if error.reply => {
+                    session.notice("error", "prompt_failed", format!("agent 未能完成本轮：{}", redact(&error.message)));
+                    "failed"
+                }
                 Ok(Err(error)) => {
                     session.notice("error", "", error.message);
                     "disconnected"
@@ -1697,7 +1718,7 @@ pub fn turn_reason_text(reason: &str) -> &'static str {
         "refusal" => "agent 拒绝了本轮请求",
         "cancelled" => "本轮已停止",
         "disconnected" => "与 agent 的连接已断开，可新建会话重试",
-        "failed" => "会话初始化失败",
+        "failed" => "agent 返回了错误，本轮未完成，可修改后再次发送",
         "unknown" => "agent 报告了未知的结束原因，本轮已结束，可再次发送",
         _ => "本轮已结束",
     }
@@ -2095,6 +2116,22 @@ impl Session {
         let timeout = self.timeout.max(AUTH_TIMEOUT_FLOOR);
         if let Err(error) = self.request_raw("authenticate", json!({ "methodId": method_id }), timeout) {
             return Err(self.auth_failed(format!("登录失败：{}", error.message)));
+        }
+        // A turn asked for the login: the protocol session already exists and
+        // keeps its conversation, so it is not created again.
+        if guard(&self.native_session_id).is_some() {
+            *guard(&self.auth_error) = None;
+            {
+                let _order = self.order();
+                let mut state = guard(&self.state);
+                if matches!(*state, "closed" | "failed") {
+                    return Err("登录后 agent 已退出，会话已结束".into());
+                }
+                *state = "ready";
+            }
+            self.notice("info", "authenticated", format!("已通过「{}」登录", method.name));
+            self.settle_state();
+            return Ok(());
         }
         match self.establish() {
             Ok(resumed) => {

@@ -1,10 +1,24 @@
 //! The ACP terminal capability: commands an agent runs through the client.
 //!
-//! A command never goes through a shell: the program is resolved on the
-//! planned PATH and started directly, with the agent's own environment (the
-//! same isolation its launch received, its broker session included) plus the
-//! variables the agent passed. A Windows batch file is the one exception and
-//! runs through the command interpreter exactly like an ACP entry does.
+//! A command with arguments, or a single program name, never goes through a
+//! shell: the program is resolved on the planned PATH and started directly,
+//! with the agent's own environment (the same isolation its launch received,
+//! its broker session included) plus the variables the agent passed. A Windows
+//! batch file runs through the command interpreter exactly like an ACP entry
+//! does.
+//!
+//! ADR-9 revision (user decision 2026-11-27): many agents send a whole command
+//! line in `command` with no `args` (`echo ok`, `head -n 1 README.md`). When
+//! `args` is empty, `command` contains whitespace and does not name a program
+//! as a whole, the line runs through the system shell: `cmd /D /V:OFF /S /C
+//! "<line>"` on Windows (the outer quotes are the only ones the host adds, and
+//! `/S` strips exactly them, so the line reaches cmd verbatim and is parsed
+//! once), `/bin/sh -c <line>` on Unix. Everything around the start is the same
+//! for both paths: the out-of-directory approval, YOLO, the environment rules,
+//! the output limit and the process-tree cleanup.
+//!
+//! A `rejects_system_program` entry only concerns the program an ACP entry
+//! resolves to; a terminal's explicit program is resolved as before.
 //!
 //! Every command is a process tree the host can end: on Windows the child is
 //! created suspended, placed in a kill-on-close job object and only then
@@ -387,7 +401,33 @@ fn resolve_program(command: &str, cwd: &Path) -> Result<PathBuf, String> {
             }
         }
     }
-    Err(format!("找不到要运行的程序：{command}（不经过 shell，请给出程序名或完整路径）"))
+    Err(format!("找不到要运行的程序：{command}（单个程序名或带 args 的命令不经过 shell，请给出程序名或完整路径）"))
+}
+
+/// Whether a terminal request is a whole command line for the shell: no
+/// arguments and whitespace inside the command itself.
+fn is_shell_line(command: &str, args: &[String]) -> bool {
+    args.is_empty() && command.trim().chars().any(char::is_whitespace)
+}
+
+/// The process that runs a whole command line through the system shell. The
+/// line is the agent's own; the host adds nothing that cmd or sh would parse
+/// a second time.
+fn shell_command(line: &str) -> Result<std::process::Command, String> {
+    let line = line.trim();
+    if line.is_empty() || line.chars().any(char::is_control) {
+        return Err("命令为空或包含无效字符".into());
+    }
+    let mut shell = crate::background_process::command(super::interpreter_program());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // /S removes the first and the last quote only, which are these two.
+        shell.raw_arg(format!("/D /V:OFF /S /C \"{line}\""));
+    }
+    #[cfg(not(windows))]
+    shell.arg("-c").arg(line);
+    Ok(shell)
 }
 
 /// The process a terminal (or an ACP entry) starts. A Windows batch file runs
@@ -421,14 +461,12 @@ pub(crate) fn program_command(program: &Path, args: &[String]) -> std::process::
 
 /// Start a command as its own process tree.
 fn spawn_tree(
-    program: &Path,
-    args: &[String],
+    mut command: std::process::Command,
     cwd: &Path,
     environment: &super::ChildEnvironment,
     token: Option<&str>,
     extra: &[(String, String)],
 ) -> Result<(Child, Tree), String> {
-    let mut command = program_command(program, args);
     command
         .current_dir(crate::launch::terminal_path(cwd)?)
         .stdin(Stdio::null())
@@ -527,7 +565,9 @@ impl Session {
             .and_then(Value::as_u64)
             .map(|limit| (limit as usize).min(MAX_OUTPUT_BYTES))
             .unwrap_or(DEFAULT_OUTPUT_BYTES);
-        let line = command_line(&command, &args);
+        let shell_line = is_shell_line(&command, &args);
+        // A shell line is shown as the agent sent it.
+        let line = if shell_line { command.trim().to_owned() } else { command_line(&command, &args) };
         // Refusals that need no answer come first, so the user is never asked
         // about a command that could not start anyway.
         if guard(&self.terminals).live() >= MAX_TERMINALS {
@@ -567,9 +607,15 @@ impl Session {
         if guard(&self.writer).is_none() {
             return Err("会话已结束".into());
         }
-        let program = resolve_program(&command, &cwd)?;
+        // A whole line that is not itself a program (a path with spaces is)
+        // runs through the shell; anything else must name a program.
+        let process = match resolve_program(&command, &cwd) {
+            Ok(program) => program_command(&program, &args),
+            Err(_) if shell_line => shell_command(&command)?,
+            Err(error) => return Err(error),
+        };
         let token = guard(&self.secret_session).as_ref().map(|session| session.token().to_owned());
-        let (mut child, tree) = spawn_tree(&program, &args, &cwd, &self.terminal_environment, token.as_deref(), &extra)?;
+        let (mut child, tree) = spawn_tree(process, &cwd, &self.terminal_environment, token.as_deref(), &extra)?;
         let tree = Arc::new(tree);
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();

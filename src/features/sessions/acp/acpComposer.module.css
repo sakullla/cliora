@@ -7,6 +7,7 @@
 
 /* Composer. */
 .composer { position: relative; display: flex; flex: none; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.composer[hidden] { display: none; }
 .composer[data-drag] .input { border-color: var(--term-accent); border-style: dashed; }
 .input,
 .input:focus {

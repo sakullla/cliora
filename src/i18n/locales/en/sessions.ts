@@ -588,7 +588,7 @@ export default {
   acpTurnRefusal: 'The agent refused this turn.',
   acpTurnCancelled: 'The turn was stopped.',
   acpTurnDisconnected: 'The connection to the agent closed; close this and retry from the same directory.',
-  acpTurnFailed: 'The session failed to initialize.',
+  acpTurnFailed: 'The agent answered with an error and this turn did not complete (the reason is shown above). Edit the prompt and send it again.',
   acpTurnUnknown: 'The agent ended the turn with an unrecognized reason; you can send again.',
   acpResumeLoaded: 'The previous native session was loaded.',
   acpResumeFailed: 'The previous native session was not loaded; a new conversation was created and nothing was replayed.',

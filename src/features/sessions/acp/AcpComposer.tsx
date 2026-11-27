@@ -47,7 +47,10 @@ type ReadingImage = { id: string; name: string; path: string };
  * (with the session directory's approval rules) and it joins the tray like a pasted
  * one, shown as reading until then. Up and down on an empty input bring back earlier prompts. While a
  * turn runs the draft stays editable and the main button stops the turn; a send that
- * fails keeps the draft and its attachments.
+ * fails keeps the draft and its attachments, and so does a turn the agent answers with
+ * an error (its end reads `failed`): the prompt and its attachments come back into an
+ * empty input. While the agent waits for a login the composer stays mounted but
+ * hidden, so what it holds survives the login.
  */
 export const AcpComposer = forwardRef<AcpComposerHandle, {
   snapshot: AcpSessionSnapshot;
@@ -68,7 +71,9 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   onWithdrawAccess: (requestId: string) => Promise<void>;
   onSetMode: (modeId: string) => Promise<void>;
   onSetConfig: (configId: string, value: string | boolean) => Promise<void>;
-}>(function AcpComposer({ snapshot, toolName, live, turnBusy, busy, canSend, onSend, onStop, onClose, onListFiles, onReadImage, onWithdrawAccess, onSetMode, onSetConfig }, ref) {
+  /** The login panel stands in for the input; the draft is kept meanwhile. */
+  hidden?: boolean;
+}>(function AcpComposer({ snapshot, toolName, live, turnBusy, busy, canSend, onSend, onStop, onClose, onListFiles, onReadImage, onWithdrawAccess, onSetMode, onSetConfig, hidden = false }, ref) {
   const { t } = useTranslation();
   const listId = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -100,6 +105,11 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   const fileSeq = useRef(0);
   const [sent, setSent] = useState<string[]>([]);
   const historyIndex = useRef<number | null>(null);
+  const snapshotRef = useRef(snapshot);
+  snapshotRef.current = snapshot;
+  /** The prompt last sent from here, until its turn ends, with the turn ends that
+   *  existed before it was sent. */
+  const awaitingRef = useRef<{ text: string; items: ComposerAttachment[]; before: Set<string> } | null>(null);
   const [compact, setCompact] = useState(false);
   const [dragOver, setDragOver] = useState(false);
 
@@ -235,6 +245,30 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     }
   }
 
+  function turnEndIds(): Set<string> {
+    return new Set(snapshotRef.current.timeline.filter((item) => item.kind === 'turn').map((item) => item.id));
+  }
+
+  /** The sent prompt's turn has ended: one the agent answered with an error gives
+   *  the prompt and its attachments back to an input that is still empty. */
+  function restoreFailedPrompt() {
+    const awaiting = awaitingRef.current;
+    if (!awaiting) return;
+    const ended = snapshotRef.current.timeline.find((item) => item.kind === 'turn' && !awaiting.before.has(item.id));
+    if (!ended || ended.kind !== 'turn') return;
+    awaitingRef.current = null;
+    if (ended.reason !== 'failed') return;
+    if (awaiting.text) {
+      setDraft((current) => (current ? current : awaiting.text));
+      setCaret(awaiting.text.length);
+    }
+    if (awaiting.items.length) setAttachments((current) => (current.length ? current : awaiting.items));
+  }
+
+  // The turn end usually arrives after the send resolved, but may come first.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { restoreFailedPrompt(); }, [snapshot.timeline]);
+
   // The card of a removed image may be published after the removal.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { withdrawAbandoned(); }, [snapshot.timeline, snapshot.pending]);
@@ -323,6 +357,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     setSending(true);
     setError('');
     const sentDraft = draft;
+    const before = turnEndIds();
     try {
       await onSend(text, attachmentPayload(items));
       const ids = new Set(items.map((item) => item.id));
@@ -331,6 +366,8 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
       if (text) setSent((current) => [...current, text].slice(-100));
       historyIndex.current = null;
       if (fromDraft) setDraft((current) => (current === sentDraft ? '' : current));
+      awaitingRef.current = { text, items, before };
+      restoreFailedPrompt();
     } catch (value) {
       if (fromDraft) setError(errorText(value));
       throw value;
@@ -432,7 +469,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   const sendable = canSend && !turnBusy && !sending && !reading.length && (!!draft.trim() || attachments.length > 0);
   const activeId = menuItems ? `${listId}-option-${activeIndex}` : undefined;
 
-  return <div ref={rootRef} className={styles.composer} data-acp-composer="" data-drag={dragOver || undefined}
+  return <div ref={rootRef} className={styles.composer} data-acp-composer="" data-drag={dragOver || undefined} hidden={hidden}
     onDragOver={(event) => {
       if (!live || !event.dataTransfer?.types?.includes('Files')) return;
       event.preventDefault();

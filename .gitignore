@@ -54,6 +54,7 @@ docs/verification/*
 !docs/verification/omp-performance-2026-11-17.md
 !docs/verification/secret-access.md
 !docs/verification/secret-access-live-2026-11-21.json
+!docs/verification/acp-live-2026-11-27.json
 !docs/verification/acp-agents.md
 !docs/verification/ui-omp-optimization/
 docs/verification/ui-omp-optimization/*

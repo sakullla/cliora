@@ -708,3 +708,124 @@ fn a_terminal_outside_the_directory_needs_an_execute_approval() {
     close(&snapshot.id).unwrap();
     worker.join().unwrap();
 }
+
+/// A whole command line with no args, the way Grok, CodeBuddy, Kiro and Devin
+/// send it: it runs through the platform shell (ADR-9 revision, 2026-11-27).
+fn run_shell_line(line: &'static str) -> (Value, Value, super::terminal::AcpTerminal) {
+    let directory = temp_dir();
+    let (io, mut agent) = pair();
+    let (done_tx, done_rx) = channel();
+    let worker = std::thread::spawn(move || {
+        agent.handshake(false);
+        let created = call(&mut agent, 90, "terminal/create", json!({ "sessionId": "session-1", "command": line, "args": [] }));
+        let terminal = created["result"]["terminalId"].as_str().unwrap_or_else(|| panic!("整行命令经 shell 运行：{created}")).to_owned();
+        let exit = call(&mut agent, 91, "terminal/wait_for_exit", json!({ "sessionId": "session-1", "terminalId": terminal }));
+        let output = call(&mut agent, 92, "terminal/output", json!({ "sessionId": "session-1", "terminalId": terminal }));
+        let _ = done_tx.send((terminal, exit, output));
+        agent.stay_connected();
+    });
+    let snapshot = open(spec(directory.path()), io).unwrap();
+    let (terminal, exit, output) = done_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+    let state = snapshot_of(&snapshot.id).terminals.into_iter().find(|item| item.terminal_id == terminal).unwrap();
+    close(&snapshot.id).unwrap();
+    worker.join().unwrap();
+    (exit, output, state)
+}
+
+#[test]
+fn a_whole_command_line_without_args_runs_through_the_shell() {
+    let (exit, output, state) = run_shell_line("echo cliora-acp-ok");
+    assert_eq!(exit["result"]["exitCode"], 0, "{exit}");
+    assert!(output["result"]["output"].as_str().unwrap().contains("cliora-acp-ok"), "{output}");
+    // The conversation shows the line as the agent sent it.
+    assert_eq!(state.command, "echo cliora-acp-ok");
+}
+
+#[cfg(windows)]
+#[test]
+fn a_shell_line_on_windows_is_parsed_by_cmd_once() {
+    // `&` chains in cmd and the quotes reach echo untouched: the host added no
+    // quoting of its own that cmd would parse.
+    let (exit, output, _) = run_shell_line("echo \"cliora acp\"& echo second& exit /b 3");
+    assert_eq!(exit["result"]["exitCode"], 3, "{exit}");
+    let text = output["result"]["output"].as_str().unwrap();
+    assert!(text.contains("\"cliora acp\""), "{text:?}");
+    assert!(text.contains("second"), "{text:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_shell_line_on_unix_runs_through_sh() {
+    let (exit, output, _) = run_shell_line("printf 'cliora %s\n' \"acp ok\" | cat; exit 3");
+    assert_eq!(exit["result"]["exitCode"], 3, "{exit}");
+    assert!(output["result"]["output"].as_str().unwrap().contains("cliora acp ok"), "{output}");
+}
+
+#[test]
+fn a_command_with_args_never_goes_through_the_shell() {
+    let directory = temp_dir();
+    let (io, mut agent) = pair();
+    let (done_tx, done_rx) = channel();
+    let worker = std::thread::spawn(move || {
+        agent.handshake(false);
+        // The same line with an argument names a program that does not exist.
+        let refused = call(&mut agent, 93, "terminal/create", json!({ "sessionId": "session-1", "command": "echo cliora-acp-ok", "args": ["extra"] }));
+        // A single name without whitespace is never a shell line either.
+        let single = call(&mut agent, 94, "terminal/create", json!({ "sessionId": "session-1", "command": "cliora-no-such-program-xyz", "args": [] }));
+        let _ = done_tx.send((refused, single));
+        agent.stay_connected();
+    });
+    let snapshot = open(spec(directory.path()), io).unwrap();
+    let (refused, single) = done_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+    assert!(refused["error"]["message"].as_str().unwrap().contains("找不到"), "{refused}");
+    assert!(single["error"]["message"].as_str().unwrap().contains("找不到"), "{single}");
+    assert!(snapshot_of(&snapshot.id).terminals.is_empty(), "被拒绝的命令不会启动");
+    close(&snapshot.id).unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
+fn a_shell_line_outside_the_directory_still_needs_an_execute_approval() {
+    let workspace = temp_dir();
+    let directory = workspace.path().join("project");
+    std::fs::create_dir_all(&directory).unwrap();
+    let outside_text = path_text(workspace.path());
+    let (io, mut agent) = pair();
+    let (done_tx, done_rx) = channel();
+    let worker = std::thread::spawn(move || {
+        agent.handshake(false);
+        let prompt = agent.next_line();
+        let refused = call(&mut agent, 95, "terminal/create", json!({ "sessionId": "session-1", "command": "echo cliora-acp-ok", "cwd": outside_text.clone() }));
+        assert!(refused.get("error").is_some(), "{refused}");
+        let allowed = call(&mut agent, 96, "terminal/create", json!({ "sessionId": "session-1", "command": "echo cliora-acp-ok", "cwd": outside_text }));
+        let terminal = allowed["result"]["terminalId"].as_str().unwrap_or_else(|| panic!("批准后运行：{allowed}")).to_owned();
+        let exit = call(&mut agent, 97, "terminal/wait_for_exit", json!({ "sessionId": "session-1", "terminalId": terminal }));
+        assert_eq!(exit["result"]["exitCode"], 0, "{exit}");
+        let _ = done_tx.send(());
+        finish_prompt(&agent, &prompt);
+        agent.stay_connected();
+    });
+    let snapshot = open(spec(&directory), io).unwrap();
+    prompt(&snapshot.id, "在上级目录运行整行命令").unwrap();
+    let card = open_card(&snapshot.id);
+    let pending = accesses(&snapshot_of(&snapshot.id)).into_iter().find(|access| access.decision == "pending").unwrap();
+    assert_eq!(pending.access_kind, "execute");
+    assert_eq!(pending.detail.as_deref(), Some("echo cliora-acp-ok"));
+    respond_access(&snapshot.id, &card, "deny").unwrap();
+    let second = wait_for(
+        || {
+            let current = snapshot_of(&snapshot.id);
+            accesses(&current)
+                .into_iter()
+                .find(|access| access.decision == "pending")
+                .and_then(|access| access.request_id)
+                .filter(|request| *request != card && current.pending.contains(request))
+        },
+        "第二张审批卡",
+    );
+    respond_access(&snapshot.id, &second, "once").unwrap();
+    done_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+    assert_eq!(snapshot_of(&snapshot.id).terminals.len(), 1, "只有批准的那次运行");
+    close(&snapshot.id).unwrap();
+    worker.join().unwrap();
+}

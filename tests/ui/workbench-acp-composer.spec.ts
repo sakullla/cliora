@@ -744,3 +744,49 @@ test('the same outside image dropped and removed twice withdraws both of its car
   await expect(panel.locator('[data-attachment]')).toHaveCount(0);
   expect((await testState(page)).accessAnswers).toHaveLength(2);
 });
+
+test('a turn the agent answers with an error ends as failed, keeps the session ready and gives the prompt back; a login it asks for keeps the draft', async ({ page }) => {
+  const agent = { ...textAgent, authMethods: [{ id: 'oauth', name: '浏览器', description: null, type: 'agent' }] };
+  await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', agent })] });
+  await openWorkbench(page);
+  const panel = panelOf(page);
+  const input = inputOf(panel);
+  const state = panel.locator('[data-acp-bar] [data-acp-state]');
+  await input.fill('帮我看看 README');
+  await input.press('Enter');
+  await expect.poll(async () => (await testState(page)).prompts).toEqual([['a1', '帮我看看 README']]);
+  await expect(input).toHaveValue('');
+
+  // The host: the agent answered session/prompt with a JSON-RPC error. The turn
+  // ends as failed, the session stays ready and the agent's reason is shown.
+  const failedTurn = (n: number, text: string) => [
+    userMessage(`u${n}`, text),
+    { kind: 'notice', id: `notice-${n}`, level: 'error', code: 'prompt_failed', text: 'agent 未能完成本轮：Invalid API key or the key has expired', turnId: `turn-${n}` },
+    { kind: 'turn', id: `turn-${n}-end`, turnId: `turn-${n}`, reason: 'failed' },
+  ];
+  await page.evaluate((timeline) => (window as any).__acpSessionState('a1', { state: 'ready', lastTurnReason: 'failed', timeline, seq: 5 }), failedTurn(1, '帮我看看 README'));
+  await expect(panel.locator('[data-code="prompt_failed"]')).toContainText('Invalid API key');
+  await expect(panel.locator('[data-reason="failed"]')).toHaveText('agent 返回了错误，本轮未完成，原因见上方提示；可以修改提示后再次发送。');
+  await expect(panel).not.toContainText('与 agent 的连接已断开');
+  await expect(state).toHaveText('可以输入');
+  await expect(input).toHaveValue('帮我看看 README');
+  await expect(input).toBeEnabled();
+
+  // Sent again, the agent now asks for a login: the login panel stands in for the
+  // input and the prompt comes back once it is done.
+  await input.press('Enter');
+  await expect.poll(async () => (await testState(page)).prompts.length).toBe(2);
+  await expect(input).toHaveValue('');
+  await page.evaluate((timeline) => (window as any).__acpSessionState('a1', {
+    state: 'auth_required', authError: 'Authentication required', lastTurnReason: 'failed', timeline, seq: 6,
+  }), [...failedTurn(1, '帮我看看 README'), ...failedTurn(2, '帮我看看 README').filter((item) => item.kind !== 'notice')]);
+  const login = panel.getByRole('region', { name: 'Codex 需要登录', exact: true });
+  await expect(login).toBeVisible();
+  await expect(inputOf(panel)).toHaveCount(0);
+  await login.getByRole('button', { name: '用 浏览器 登录', exact: true }).click();
+  await expect.poll(async () => (await testState(page)).authentications).toEqual([['a1', 'oauth']]);
+  await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'ready', authError: null, seq: 7 }));
+  await expect(login).toHaveCount(0);
+  await expect(input).toBeEnabled();
+  await expect(input).toHaveValue('帮我看看 README');
+});

@@ -159,6 +159,105 @@ fn a_login_is_required_then_a_failed_login_keeps_the_reason_and_a_retry_opens_th
     worker.join().unwrap();
 }
 
+fn turn_ends(snapshot: &AcpSessionSnapshot) -> Vec<&'static str> {
+    snapshot
+        .timeline
+        .iter()
+        .filter_map(|item| match item {
+            AcpTimelineItem::Turn(end) => Some(end.reason),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_prompt_the_agent_answers_with_an_error_fails_the_turn_and_the_session_stays_ready() {
+    let directory = temp_dir();
+    let (io, mut agent) = pair();
+    let worker = std::thread::spawn(move || {
+        agent.handshake(false);
+        let first = agent.next_line();
+        assert_eq!(first["method"], "session/prompt");
+        refuse(&agent, &first, -32603, "Invalid API key or the key has expired");
+        // The session is still usable: the next prompt reaches the same session.
+        let second = agent.next_line();
+        assert_eq!(second["method"], "session/prompt");
+        assert_eq!(second["params"]["sessionId"], "session-1");
+        reply(&agent, &second, json!({ "stopReason": "end_turn" }));
+        agent.stay_connected();
+    });
+    let snapshot = open(spec(directory.path()), io).unwrap();
+    prompt(&snapshot.id, "第一轮").unwrap();
+    wait_for(|| (snapshot_of(&snapshot.id).last_turn_reason == "failed").then_some(()), "本轮失败");
+    wait_until_idle(&snapshot.id, Duration::from_secs(8)).unwrap();
+    let failed = snapshot_of(&snapshot.id);
+    assert_eq!(failed.state, "ready", "agent 的错误回复不是断线");
+    assert_eq!(turn_ends(&failed), ["failed"]);
+    let reason = failed
+        .timeline
+        .iter()
+        .find_map(|item| match item {
+            AcpTimelineItem::Notice(notice) if notice.code == "prompt_failed" => Some(notice.text.clone()),
+            _ => None,
+        })
+        .expect("显示 agent 给出的原因");
+    assert!(reason.contains("Invalid API key"), "{reason}");
+    assert!(!notices(&failed).contains(&"auth_required"));
+    assert!(turn_reason_text("failed").contains("再次发送"));
+    prompt(&snapshot.id, "第二轮").unwrap();
+    wait_for(|| (snapshot_of(&snapshot.id).last_turn_reason == "end_turn").then_some(()), "第二轮结束");
+    wait_until_idle(&snapshot.id, Duration::from_secs(8)).unwrap();
+    assert_eq!(snapshot_of(&snapshot.id).state, "ready");
+    close(&snapshot.id).unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
+fn a_prompt_answered_with_auth_required_waits_for_a_login_that_keeps_the_session() {
+    let directory = temp_dir();
+    let (io, mut agent) = pair();
+    let worker = std::thread::spawn(move || {
+        initialize(&mut agent, json!({ "protocolVersion": 1, "authMethods": [{ "id": "login", "name": "浏览器登录" }] }));
+        create(&mut agent, "session-1");
+        let first = agent.next_line();
+        assert_eq!(first["method"], "session/prompt");
+        refuse(&agent, &first, -32000, "Authentication required");
+        let login = agent.next_line();
+        assert_eq!(login["method"], "authenticate", "{login}");
+        reply(&agent, &login, json!({}));
+        // The interrupted session continues: no new session is created.
+        let next = agent.next_line();
+        assert_eq!(next["method"], "session/prompt", "{next}");
+        assert_eq!(next["params"]["sessionId"], "session-1");
+        reply(&agent, &next, json!({ "stopReason": "end_turn" }));
+        agent.stay_connected();
+    });
+    let snapshot = open(spec(directory.path()), io).unwrap();
+    assert_eq!(snapshot.state, "ready");
+    prompt(&snapshot.id, "需要登录的一轮").unwrap();
+    let waiting = wait_for(
+        || {
+            let current = snapshot_of(&snapshot.id);
+            (current.state == "auth_required" && !turn_ends(&current).is_empty()).then_some(current)
+        },
+        "轮次中要求登录",
+    );
+    assert_eq!(turn_ends(&waiting), ["failed"]);
+    assert!(waiting.auth_error.as_deref().unwrap().contains("Authentication required"));
+    assert!(notices(&waiting).contains(&"auth_required"), "登录面板的提示");
+    assert!(prompt(&snapshot.id, "登录前不能发送").is_err());
+    authenticate(&snapshot.id, "login").unwrap();
+    let ready = snapshot_of(&snapshot.id);
+    assert_eq!(ready.state, "ready");
+    assert!(ready.auth_error.is_none());
+    assert_eq!(ready.native_session_id.as_deref(), Some("session-1"));
+    assert!(notices(&ready).contains(&"authenticated"));
+    prompt(&snapshot.id, "登录后继续").unwrap();
+    wait_for(|| (snapshot_of(&snapshot.id).last_turn_reason == "end_turn").then_some(()), "登录后的一轮");
+    close(&snapshot.id).unwrap();
+    worker.join().unwrap();
+}
+
 #[test]
 fn any_session_error_counts_as_a_login_only_when_the_agent_declares_methods() {
     // Declared methods: an ordinary error from session/new means "log in".

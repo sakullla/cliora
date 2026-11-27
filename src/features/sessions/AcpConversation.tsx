@@ -153,10 +153,12 @@ export const AcpConversation = forwardRef<AcpConversationHandle, {
       </div>}
       <AcpPendingBar count={waiting.length} onLocate={locatePending} />
       {error && <p className={styles.acpError} role="alert">{error}</p>}
-      {login
-        ? <AcpAuthPanel snapshot={snapshot} toolName={toolName} onAuthenticate={onAuthenticate} onLoginTerminal={onLoginTerminal} />
-        : <AcpComposer
+      {login && <AcpAuthPanel snapshot={snapshot} toolName={toolName} onAuthenticate={onAuthenticate} onLoginTerminal={onLoginTerminal} />}
+      {/* Hidden rather than removed during a login, so the draft (and a prompt a
+          failed turn gave back) is still there afterwards. */}
+      <AcpComposer
           ref={composerRef}
+          hidden={login}
           snapshot={snapshot}
           toolName={toolName}
           live={live}
@@ -171,7 +173,7 @@ export const AcpConversation = forwardRef<AcpConversationHandle, {
           onWithdrawAccess={(requestId) => onAnswerAccess(requestId, 'deny')}
           onSetMode={onSetMode}
           onSetConfig={onSetConfig}
-        />}
+        />
     </div>
     {historyOpen && createPortal(<AcpHistoryDialog open={historyOpen} snapshot={snapshot} toolName={toolName} onClose={() => setHistoryOpen(false)} onList={onNativeSessions} onDelete={onDeleteNativeSession} onResume={onResumeNative} onNewConversation={onNewConversation} />, document.body)}
   </div>;

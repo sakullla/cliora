@@ -588,7 +588,7 @@ export default {
   acpTurnRefusal: 'agent 拒绝了本轮请求。',
   acpTurnCancelled: '本轮已停止。',
   acpTurnDisconnected: '与 agent 的连接已断开，可以关闭后从同一目录重试。',
-  acpTurnFailed: '会话初始化失败。',
+  acpTurnFailed: 'agent 返回了错误，本轮未完成，原因见上方提示；可以修改提示后再次发送。',
   acpTurnUnknown: 'agent 报告了未知的结束原因，本轮已结束，可以再次发送。',
   acpResumeLoaded: '已恢复上次的原生会话。',
   acpResumeFailed: '没有恢复上次的原生会话，已新建一个会话；之前的对话内容没有重新发送。',

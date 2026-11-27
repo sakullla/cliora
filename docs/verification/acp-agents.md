@@ -294,11 +294,30 @@
 | 能力 | 声明 | 实现 |
 | --- | --- | --- |
 | 文件 | `fs.readTextFile`、`fs.writeTextFile` = true | `acp/client_fs.rs` 经共享 `safe_fs` 读取（行号与行数）与原子替换写入；目录内写入在时间线记一条带 diff 的 access 记录；目录外读写先出审批卡（允许一次 / 本会话都允许 / 拒绝）；Cliora 自身的应用数据目录在任何授权（含 YOLO）下都拒绝 |
-| 终端 | `terminal` = true | `acp/terminal.rs`：create → output → wait_for_exit → kill / release，输出按 `outputByteLimit` 截断并置 `truncated`；不经过 shell 运行；会话结束时结束进程树（Windows job object，Unix 进程组）；每会话终端数有上限 |
+| 终端 | `terminal` = true | `acp/terminal.rs`：create → output → wait_for_exit → kill / release，输出按 `outputByteLimit` 截断并置 `truncated`；带 `args` 或只给一个程序名时不经过 shell、直接启动解析出的程序；`args` 为空且 `command` 是含空白的整行命令（且整体不是一个可解析的程序路径）时经系统 shell 运行（见下文「ADR-9 修订」）；会话结束时结束进程树（Windows job object，Unix 进程组）；每会话终端数有上限 |
 | 结构化提问 | `elicitation.form`（不声明 url） | `acp/elicitation.rs`：表单进入 pending，accept / decline / cancel 只回答一次；停止、断开或轮次结束后表单失效并回 cancel |
 | 子 agent | `subagents` | `subagent_update` 登记子会话，子会话的更新、授权与客户端请求归属到该子会话 |
 
 `mcpServers` 仍固定为 `[]`（需求 R12 排除项）。
+
+### ADR-9 修订（用户决定 2026-11-27）
+
+原 ADR-9 规定终端命令一律不经过 shell。真实抽样（见下文 F1）显示 Grok、CodeBuddy、Kiro、Devin 都把整行命令放在 `terminal/create.command`、`args` 为空，于是全部被拒。用户决定修订为：
+
+- `args` 为空、`command` 含空白，且 `command` 整体不能解析为一个程序（含空格的完整路径仍按程序直接启动）时，经系统 shell 运行：Windows 复用既有命令解释器包装 `cmd /D /V:OFF /S /C "<整行>"`（`%COMSPEC%`），宿主只加最外层一对引号，`/S` 恰好去掉这一对，整行原样交给 cmd 解析一次，宿主不再做第二层转义；Unix 为 `/bin/sh -c <整行>`。整行含控制字符（换行等）时拒绝。
+- 其余保持不变：带 `args` 的调用与单个程序名仍不经过 shell（`找不到要运行的程序` 的拒绝保留）；ACP 入口的 `rejects_system_program` 判定不变；目录外工作目录照常先出 execute 审批卡（YOLO 照常自动批准并记录）；环境规则（agent 自身的隔离环境、`CLIORA_SECRET_SESSION` 固定为本会话）、`outputByteLimit` 截断、kill / release 与会话关闭时结束进程树（shell 及其子进程同在 job object / 进程组内）、输出的代码页回退都不变。
+- 时间线与审批卡显示 agent 发来的原始整行。
+- 测试：`tests/launch/acp_client.rs` 的 `a_whole_command_line_without_args_runs_through_the_shell`（`echo cliora-acp-ok` 退出码 0 且输出含标记）、`a_command_with_args_never_goes_through_the_shell`、`a_shell_line_outside_the_directory_still_needs_an_execute_approval`（拒绝后不启动、允许一次后运行），以及按平台 `cfg` 的 `a_shell_line_on_windows_is_parsed_by_cmd_once`（`&` 串联、引号原样到达 echo、`exit /b 3` 的退出码）与 `a_shell_line_on_unix_runs_through_sh`（管道与 `exit 3`；本机为 Windows，Unix 用例只编译未运行）。
+
+### 轮次内的协议错误（F2 修复）
+
+`session/prompt` 的回应线程（`src-tauri/src/acp/mod.rs` 的 `begin_turn`）现在区分三种结局：
+
+- agent 回了 JSON-RPC 错误（`RpcError.reply = true`）：轮次以 `failed` 结束，时间线加一条 `prompt_failed` 错误提示，内容为 agent 给出的原因（经 `redact`），会话保持 `ready`，可继续发送。
+- 错误码为 ACP 的 auth_required（`-32000`）：先转入 `auth_required`（与 session/new 的路径同一个 `require_auth`，出现登录面板与 `auth_required` 提示），再以 `failed` 结束该轮；此时会话已经建立，登录成功后保留原协议会话，不再重新 `session/new`。
+- 只有通道关闭或 agent 进程退出（本地错误）仍记为 `disconnected`。
+- 前端：`acpTurnFailed` 文案改为「agent 返回了错误，本轮未完成，原因见上方提示；可以修改提示后再次发送。」；输入区在本轮以 `failed` 结束且输入框为空时放回本轮的提示与附件；登录面板出现时输入区只隐藏不卸载，草稿在登录后仍在。
+- 测试：`tests/launch/acp_session_ops.rs` 的 `a_prompt_the_agent_answers_with_an_error_fails_the_turn_and_the_session_stays_ready`、`a_prompt_answered_with_auth_required_waits_for_a_login_that_keeps_the_session`；`tests/ui/workbench-acp-composer.spec.ts` 的 “a turn the agent answers with an error ends as failed …”。
 
 ### YOLO：19 个适配器均为 Client 型
 
@@ -344,6 +363,8 @@
 | Kimi Code (`kimi acp`) | 2.7.0 | true · list/resume/delete/close · ✓/✓ · `login` | default/plan/auto/yolo · model, thinking, mode | 成功（4.7 s） | ✗ | ✗ | 无 | 否 | 否 | 无 | 未触发 | 两个提示都被 `session/prompt` 以 “Authentication required: The API Key appears to be invalid or may have expired” 拒绝（本机凭据失效，未替它登录）；宿主把该轮记为 `disconnected`，会话仍为 `ready`，没有转入登录面板（见后续项 F2） |
 | MiMo Code (`mimo acp`) | 0.1.15 | true · list/resume · ✓/✓ · `opencode-login`（自报 OpenCode 0.1.15） | build/plan/compose · model, mode（16 个模型） | 成功（10.7 s） | ✗ | ✗ | 无 | 否 | 否 | 无 | 未触发 | 两轮都立即以 `end_turn` 结束、没有任何回复或工具（只收到 usage 更新）；原因未查明（推测未配置可用模型/提供方），未改动其配置 |
 
+上表是修复前（候选 `946e75b2`）的结果，保留原样；修复后的复测见下方「修复后复测」。
+
 所有成功回复的会话都出现了工具卡；**9 个 agent 都没有为这两个小任务发送 `plan`**，计划的真实形态仍只有合成验证。标题（`session_info_update` 带 title）出现在 Kimi、CodeBuddy、Kiro、Devin；用量出现在除 Grok、Kiro 外的 7 个。
 
 未进入会话的 10 个适配器（启动前由适配器解析给出的原因）：
@@ -359,9 +380,23 @@
 | Cline、Antigravity | 启动探测未发现可用安装 |
 | Qoder CN、Command Code | 启动探测（`probe_registered_launch`，未带自定义路径）两次都报告没有可用安装，而 `qoderclicn --version`（1.1.94）与 `cmdc --version`（1.88.0）单独执行 2–3 s 即返回；MiMo 在 19 路并行时同样未解析、串行补跑时解析成功。原因未查明，列为后续项 F5 |
 
+#### 修复后复测（2026-11-27，修复后）
+
+ADR-9 修订与 F2 修复之后，只对受影响的 5 个 agent 复测一次（用户已确认推理费用）：`CLIORA_LIVE_ACP_TESTS=1 CLIORA_LIVE_ACP_AGENTS=grok,codebuddy,kiro,devin,kimi_code CLIORA_LIVE_ACP_REPORT=<临时目录>/cliora-live-acp-2026-11-27-after-fix.json cargo test --manifest-path src-tauri/Cargo.toml --lib acp::live_tests -- --ignored --nocapture`（1 passed，37.9 s；Kimi 的适配器 id 是 `kimi_code`）。报告并入 `docs/verification/acp-live-2026-11-27.json` 的 `afterFix`（`agents`、`rerun` 仍是修复前的记录，`note` 字段说明了区别）。基线为 `f0cbc019` 加本轮工作区改动。
+
+| Agent（修复后） | 读 README | echo | 客户端终端（命令 → 退出码） | 授权 / YOLO | 结论 |
+| --- | --- | --- | --- | --- | --- |
+| Grok | ✓（fs 读取 1 次） | ✓，有执行依据 | YOLO：`echo cliora-acp-ok` → 0，输出含标记 | 无授权请求 | 终端可用；修复前 6 次全部被拒 |
+| CodeBuddy | ✓（fs 读取 1 次） | ✓ | YOLO：`echo cliora-acp-ok` → 0，输出含标记 | YOLO 1 次，选 `allow_once`（`allow_always` 在前） | 终端可用 |
+| Kiro | ✓（`head` 失败后改走 fs） | ✓ | 普通：`head -n 1 README.md` → 1（Windows 的 cmd 没有 `head`，经 shell 正常运行并如实返回退出码）；YOLO：`echo cliora-acp-ok` → 0，输出含标记 | 普通 1 次（测试答「允许一次」）、YOLO 1 次选 `allow_once` | 终端可用；`_kiro/terminal/shell_type` 仍按未声明能力拒绝 |
+| Devin | ✓ | ✓ | 普通：`head -n 1 README.md` → 1，随后 `powershell -Command "Get-Content README.md -TotalCount 1"` → 0；YOLO：`echo cliora-acp-ok` → 0，输出含标记 | 普通 1 次，测试答「允许一次」 | 终端可用；回复有执行依据 |
+| Kimi Code | ✗ | ✗ | 未调用 | 无 | 两段会话的 `session/prompt` 都回 auth_required（“The API Key appears to be invalid or may have expired”）：轮次原因为 `failed`、会话转入 `auth_required`、出现 `auth_required` 提示（登录面板），不再记为 `disconnected`；仍未替它登录 |
+
 #### 抽样得到的问题与后续项
 
+- **F1 已修复（修复后）**：见上文「ADR-9 修订」与「修复后复测」；Grok、CodeBuddy、Kiro、Devin 的整行命令均经 shell 运行，`echo` 均退出码 0。以下为修复前的原始记录。
 - **F1 终端不经 shell，与多数 agent 的用法不兼容（P1 级发现）**：Grok、CodeBuddy、Kiro、Devin 都把整行命令放在 `terminal/create` 的 `command` 字段（`args` 为空），执行器按「不经过 shell」把整行当成程序名，回复「找不到要运行的程序：…（不经过 shell，请给出程序名或完整路径）」。只有 oh-my-pi 显式包了 `bash.exe -l -c`，完整走通。结果是 4/9 个 agent 的客户端终端实际不可用（agent 要么自行执行、要么放弃，Grok 与 Devin 甚至在执行全部失败时给出了期望文本）。是否改为在 `args` 为空时经平台 shell 运行，涉及 ADR-9 的安全取舍，需要单独决定，本期未改。
+- **F2 已修复（修复后）**：见上文「轮次内的协议错误」；Kimi 复测转入 `auth_required`，轮次原因为 `failed`。以下为修复前的原始记录。
 - **F2 轮次内的协议错误被记成「连接断开」**：`session/prompt` 返回 JSON-RPC 错误时（Kimi 凭据失效），宿主把轮次原因记为 `disconnected`，界面会显示「与 agent 的连接已断开」，而会话实际仍为 `ready`；轮次内的 auth_required 也没有转到登录面板。应区分 `failed` 与断开，并把认证错误引到登录流程。
 - **F3 回复没有执行依据**：Grok、Devin 在所有执行卡失败时仍回复了期望输出。宿主如实显示失败的工具卡，这是 agent 行为，记录在案。
 - **F4 厂商扩展**：`_x.ai/*`、`_cognition.ai/*`、`_kiro/*`、`_codebuddy.ai/*` 通知只进诊断；`_kiro/terminal/shell_type` 请求按未声明能力拒绝。功能未受影响。
@@ -380,7 +415,7 @@
 6. **读图期间刷新会留下 pending 卡**（T5 复核 P3）：拖入目录外图片、审批卡仍在等待时重新加载页面，该卡保持 pending；`withdrawAbandoned` 在 IPC 失败后不重试撤回。
 7. **「手动改名的标题保持不变」无法验证**：工作台没有对 ACP 会话手动改名的功能，T4 的这一项验收无从执行。
 8. **`remote::*` 与 `external::twiglane` 的 12 项环境失败与本次改动无关**：见上文「原生命令实际排除的用例」，本期对这些模块零改动。
-9. 真实抽样暴露的 F1–F6 见上一小节。另外，`acp::tests` 中的 `the_child_receives_its_own_secret_session_token` 与 `frames_split_across_writes_are_reassembled_and_coalesced` 在 `--lib acp::` 并行运行时偶发失败；在未改动的 `946e75b2` 上 5 次运行复现 1 次，单独运行 `acp::tests::` 3 次均通过，属既有的并发脆弱性。
+9. 真实抽样暴露的 F1–F6 见上一小节，其中 F1、F2 已修复（修复后），F3–F6 仍为后续项。另外，`acp::tests` 中的 `the_child_receives_its_own_secret_session_token` 与 `frames_split_across_writes_are_reassembled_and_coalesced` 在 `--lib acp::` 并行运行时偶发失败；在未改动的 `946e75b2` 上 5 次运行复现 1 次，单独运行 `acp::tests::` 3 次均通过，属既有的并发脆弱性。
 
 ### 截图
 
@@ -399,4 +434,4 @@ ACP 场景由 `scripts/capture-workbench.mjs` 生成（Playwright + 合成 IPC�
 
 人工抽查了 tools、diff、yolo、empty、long、disconnected、permission、login、slash、attach 在两种主题、1360 与 720 下的画面：长路径和 diff 不撑宽窗格；720 下计划、审批卡与输入区完整可见；断开后输入框显示「对话已结束，不能再输入」。
 
-`docs/verification/*` 按 `.gitignore` 默认不入库；这两个图库目录需要在 `.gitignore` 中显式放行（或 `git add -f`）才会随提交保存。
+**这两个图库（`product-ui-ux/workbench/` 与 `product-ui-ux/workbench-acp/` 的 70 张 PNG）只保存在本地，不入库**：`docs/verification/*` 按 `.gitignore` 默认忽略，本期没有为它们放行，提交里没有这些图片；需要查看时用上表的命令重新生成。真实抽样报告 `docs/verification/acp-live-2026-11-27.json` 已在 `.gitignore` 中显式放行（`!docs/verification/acp-live-2026-11-27.json`），随提交保存；该报告只含协议事实，不含凭据。
