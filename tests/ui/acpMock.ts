@@ -34,6 +34,8 @@ type Config = {
   nativeSessions?: AcpNativeSession[][];
   /** acp_native_sessions rejects with this reason (an agent without session/list). */
   nativeSessionsError?: string | null;
+  /** The app theme the bootstrap reports; the terminal theme follows it. */
+  theme?: 'light' | 'dark';
 };
 
 /** The host's own snapshot shape: the mock never invents a field the host lacks. */
@@ -67,6 +69,7 @@ export async function installAcpMock(page: Page, config: Config = {}) {
       accessAnswers: [] as Array<[string, string, string]>,
       revokes: [] as Array<[string, string[]]>,
       kills: [] as Array<[string, string]>,
+      opens: [] as Array<[string, string]>,
       closes: [] as string[],
       sessions: (config.sessions ?? []) as Array<Record<string, unknown>>,
     };
@@ -108,7 +111,7 @@ export async function installAcpMock(page: Page, config: Config = {}) {
       __TAURI_INTERNALS__: {
         transformCallback: (callback: (event: { payload: unknown }) => void) => { bridge.handlers.push(callback); return bridge.handlers.length - 1; },
         invoke: async (command: string, args: Record<string, any> = {}) => {
-          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'light' }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: config.theme ?? 'light' }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
           if (command === 'list_cli_adapters') return {
             registered: [{
               id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: config.yoloAvailable ?? true, resumeLatestAvailable: false, projectModelOverride: false,
@@ -165,6 +168,7 @@ export async function installAcpMock(page: Page, config: Config = {}) {
           if (command === 'acp_respond_access') { state.accessAnswers.push([args.sessionId, args.accessId, args.decision]); return null; }
           if (command === 'acp_revoke_grants') { state.revokes.push([args.sessionId, args.kinds]); return null; }
           if (command === 'acp_kill_terminal') { state.kills.push([args.sessionId, args.terminalId]); return null; }
+          if (command === 'open_workbench_path') { state.opens.push([args.sessionId, args.path]); return null; }
           if (command === 'acp_set_mode') {
             state.modes.push([args.sessionId, args.modeId]);
             if (state.failSetting) throw { message: state.failSetting };
@@ -238,3 +242,7 @@ export async function openWorkbench(page: Page) {
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工作台', exact: true }).click();
 }
 
+/** One tool call as a timeline entry of a snapshot. */
+export function toolItem(callId: string, extra: Record<string, unknown> = {}) {
+  return { kind: 'tool' as const, ...toolCall(callId, extra) };
+}

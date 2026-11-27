@@ -2013,7 +2013,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     const project = session.projectId ? projects.find((item) => item.id === session.projectId) : undefined;
     // A CLI in a linked worktree may append the repository's name instead of the checkout folder.
     const git = gitContexts.get(session.id);
-    return railTaskTitle(titles.get(session.id) ?? '', toolName(session), [project?.name ?? '', session.directory ?? '', git?.repository ?? '', git?.worktree ?? '']);
+    // A conversation has no terminal title; its title is the one the agent reported.
+    const raw = titles.get(session.id) ?? conversationOf(session.id)?.info?.title ?? '';
+    return railTaskTitle(raw, toolName(session), [project?.name ?? '', session.directory ?? '', git?.repository ?? '', git?.worktree ?? '']);
   }
 
   /** What a remote session reads as without its id: the CLI title, else its project or directory. */
@@ -2057,7 +2059,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     const conversation = conversationOf(session.id);
     if (conversation) {
       if (conversation.state === 'failed') return 'error';
-      if (conversation.state === 'waiting_permission') return 'bell';
+      // Every waiting card or form asks for this person, whatever the turn state says.
+      if (conversation.state === 'waiting_permission' || acpPendingCount(conversation) > 0) return 'bell';
       if (conversation.state === 'running' || conversation.state === 'starting' || conversation.state === 'stopping') return 'live';
       return acpIsLive(conversation) ? 'idle' : 'ended';
     }
@@ -2771,6 +2774,17 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   /** Answer exactly the request the card was rendered for. */
   async function answerConversation(sessionId: string, requestId: string, optionId: string | null) {
     await acp.respondPermission(sessionId, requestId, optionId);
+  }
+
+  /** Answer one out-of-directory approval card; a late answer rejects with the host's reason. */
+  async function answerConversationAccess(sessionId: string, accessId: string, decision: 'once' | 'session' | 'deny') {
+    await acp.respondAccess(sessionId, accessId, decision);
+  }
+
+  /** A location inside the conversation's directory opens like a terminal path; the host
+   *  resolves it again against the conversation's own directory. */
+  async function openConversationPath(sessionId: string, target: string) {
+    await native.openWorkbenchPath(sessionId, target);
   }
 
   /** Closing a conversation is a native close plus a local row removal: the host may still
@@ -4353,7 +4367,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   // A conversation renders its own panel: its content never reaches an xterm,
                   // and a terminal never receives conversation text.
                   const conversation = conversations.get(session.id);
-                  if (conversation) return <AcpConversation key={session.id} conversation={conversation} toolName={toolName(session)} active={visible} focused={focused} pane={split ? pane : undefined} header={split && visible ? paneHeader(session) : null} onSend={(text) => promptConversation(session.id, text)} onStop={() => stopConversation(session.id)} onAnswer={(requestId, optionId) => answerConversation(session.id, requestId, optionId)} onClose={() => endSession(session)} />;
+                  if (conversation) return <AcpConversation key={session.id} conversation={conversation} toolName={toolName(session)} active={visible} focused={focused} pane={split ? pane : undefined} header={split && visible ? paneHeader(session) : null} onSend={(text) => promptConversation(session.id, text)} onStop={() => stopConversation(session.id)} onAnswer={(requestId, optionId) => answerConversation(session.id, requestId, optionId)}
+                    onAnswerAccess={(accessId, decision) => answerConversationAccess(session.id, accessId, decision)} onRevokeGrants={(kinds) => acp.revokeGrants(session.id, kinds)} onKillTerminal={(terminalId) => acp.killTerminal(session.id, terminalId)} onOpenPath={nativeAvailable ? (target) => openConversationPath(session.id, target) : undefined} onClose={() => endSession(session)} />;
                   return <SessionTerminal key={session.id} sessionId={session.id} toolId={session.toolId} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} suspendInput={!!peekSession && session.id === selectedId} peeking={peeking} keepRendererWarm={renderActive && scopedSessionIds.has(session.id)} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onFilesPaste={(inputs) => uploads.enqueueUpload(session.id, remotePane || null, inputs)} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={TERMINAL_LINE_HEIGHT[density]} scrollSpeed={scrollSpeed} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
                     header={split && visible ? paneHeader(session) : null}
                     overlay={<>

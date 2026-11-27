@@ -119,10 +119,28 @@ fn reveal_only(path: &Path) -> bool {
     false
 }
 
+/// The local directory a workbench session resolves paths against: a terminal
+/// session's current directory, or else an ACP conversation's own directory. An
+/// id neither host knows keeps the terminal host's error.
+pub(crate) fn session_directory(session_id: &str) -> Result<Option<PathBuf>, String> {
+    match crate::session_host::local_directory(session_id) {
+        Ok(directory) => Ok(directory),
+        Err(error) => match crate::acp::snapshot(session_id) {
+            Ok(snapshot) if !snapshot.directory.trim().is_empty() => Ok(Some(PathBuf::from(snapshot.directory))),
+            _ => Err(error),
+        },
+    }
+}
+
+/// Resolve a path a session showed, with the same checks for both session kinds.
+pub(crate) fn resolve_for_session(session_id: &str, home: &Path, value: &str) -> Result<PathBuf, String> {
+    let directory = session_directory(session_id)?;
+    resolve(directory.as_deref(), home, value)
+}
+
 pub(crate) fn open(app: &tauri::AppHandle, session_id: &str, home: &Path, value: &str) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
-    let directory = crate::session_host::local_directory(session_id)?;
-    let path = resolve(directory.as_deref(), home, value)?;
+    let path = resolve_for_session(session_id, home, value)?;
     if reveal_only(&path) {
         app.opener().reveal_item_in_dir(&path).map_err(|_| "无法在文件管理器中显示此文件".into())
     } else {

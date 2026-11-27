@@ -1,62 +1,64 @@
 /* One ACP conversation. The pane frame comes from the shared session card; only
-   the conversation's own body is styled here, so both session kinds read alike in
-   a split and switch themes together. */
-.acpBody { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; min-width: 0; gap: var(--space-2); padding: var(--space-2) var(--space-3) var(--space-3); }
-.acpMeta { display: flex; flex: none; flex-wrap: wrap; gap: var(--space-2); align-items: center; min-width: 0; color: var(--term-text-3); font-size: var(--fs-micro); }
-.acpMetaItem { display: inline-flex; align-items: center; gap: var(--space-1); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.acpState { margin-left: auto; padding: 0 var(--space-1_5); border-radius: var(--radius-pill); background: var(--term-hover); color: var(--term-text-2); line-height: 18px; }
-.acpState[data-state='running'], .acpState[data-state='starting'] { background: color-mix(in srgb, var(--term-success) 16%, transparent); color: var(--term-success); }
-.acpState[data-state='waiting_permission'] { background: color-mix(in srgb, var(--term-warning) 18%, transparent); color: var(--term-warning); }
-.acpState[data-state='failed'], .acpState[data-state='closed'] { background: color-mix(in srgb, var(--term-danger) 14%, transparent); color: var(--term-danger); }
-.acpLog { display: flex; flex: 1 1 auto; flex-direction: column; gap: var(--space-2); min-height: 0; overflow-y: auto; padding-right: var(--space-1); scrollbar-gutter: stable; }
-.acpEmpty { margin: 0; color: var(--term-text-3); font-size: var(--fs-caption); }
-.acpMessage { display: flex; flex-direction: column; gap: var(--space-0_5); padding: var(--space-1_5) var(--space-2); border-radius: var(--radius-sm); background: var(--term-hover); }
-.acpMessage[data-role='user'] { background: var(--accent-soft); }
-.acpMessage[data-role='thought'] { background: transparent; border-left: 2px solid var(--term-line); border-radius: 0; }
-.acpRole { color: var(--term-text-3); font-size: var(--fs-micro); font-weight: var(--fw-semibold); }
-.acpText { margin: 0; color: var(--term-fg); font-size: var(--fs-caption); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
-.acpMessage[data-role='thought'] .acpText { color: var(--term-text-2); font-style: italic; }
-.acpTruncated { margin-left: var(--space-1); color: var(--term-warning); font-size: var(--fs-micro); font-style: normal; }
-.acpCursor { display: inline-block; width: 7px; height: 14px; background: var(--term-accent); animation: acpBlink 1s step-end infinite; }
-@keyframes acpBlink { 50% { opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .acpCursor { animation: none; } }
-.acpTools { display: flex; flex-direction: column; gap: var(--space-1); }
-.acpTool { display: flex; flex-direction: column; gap: var(--space-0_5); padding: var(--space-1_5) var(--space-2); border: 1px solid var(--term-line); border-radius: var(--radius-sm); }
-.acpToolHead { display: flex; align-items: center; gap: var(--space-1); min-width: 0; color: var(--term-text-2); font-size: var(--fs-micro); }
-.acpToolHead strong { min-width: 0; overflow: hidden; color: var(--term-fg); font-size: var(--fs-caption); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
-.acpToolStatus { margin-left: auto; flex: none; }
-.acpTool[data-status='completed'] .acpToolStatus { color: var(--term-success); }
-.acpTool[data-status='failed'] .acpToolStatus { color: var(--term-danger); }
-.acpTool[data-status='in_progress'] .acpToolStatus { color: var(--term-accent); }
-.acpToolDetail { max-height: 120px; margin: 0; overflow: auto; color: var(--term-text-2); font-family: var(--font-mono); font-size: var(--fs-micro); white-space: pre-wrap; overflow-wrap: anywhere; }
-.acpPermissions { display: flex; flex: none; flex-direction: column; gap: var(--space-1); }
-.acpCard { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-2); border: 1px solid color-mix(in srgb, var(--term-warning) 45%, var(--term-line)); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--term-warning) 8%, transparent); }
-.acpCardTitle { display: flex; align-items: center; gap: var(--space-1); color: var(--term-fg); font-size: var(--fs-caption); }
-.acpCardDetail { margin: 0; color: var(--term-text-2); font-family: var(--font-mono); font-size: var(--fs-micro); white-space: pre-wrap; overflow-wrap: anywhere; }
-.acpCardOptions { display: flex; flex-wrap: wrap; gap: var(--space-1); }
-.acpFooter { display: flex; flex: none; flex-direction: column; gap: var(--space-0_5); }
-.acpTurn { margin: 0; color: var(--term-text-2); font-size: var(--fs-micro); }
-.acpTurn[data-reason='failed'], .acpTurn[data-reason='disconnected'], .acpTurn[data-resume='failed'] { color: var(--term-danger); }
-.acpTurn[data-reason='limit'], .acpTurn[data-reason='refusal'] { color: var(--term-warning); }
-.acpDiagnostics { color: var(--term-text-3); font-size: var(--fs-micro); }
-.acpDiagnostics summary { cursor: pointer; }
+   the conversation's own body is styled here, with the pane's --term-* tokens and
+   the shared size tokens, so both session kinds read alike in a split and follow
+   the terminal theme together. The timeline's own parts live in acp/acp.module.css. */
+.acpBody {
+  container: acp-body / inline-size;
+  display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; min-width: 0;
+  gap: var(--space-2); padding: var(--space-2) var(--space-3) var(--space-3);
+  color: var(--term-fg);
+}
+.acpFooter { display: flex; flex: none; flex-direction: column; gap: var(--space-0_5); min-width: 0; }
+.acpResume { margin: 0; color: var(--term-text-2); font-size: var(--fs-micro); overflow-wrap: anywhere; }
+.acpResume[data-resume='failed'] { color: var(--term-danger); }
+.acpDiagnostics { min-width: 0; color: var(--term-text-3); font-size: var(--fs-micro); }
+.acpDiagnostics summary { cursor: pointer; border-radius: var(--radius-xs); }
+.acpDiagnostics summary:focus-visible { outline: 2px solid var(--term-accent); outline-offset: 1px; }
 .acpDiagnostics pre { max-height: 96px; margin: var(--space-1) 0 0; overflow: auto; font-family: var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
-.acpError { margin: 0; color: var(--term-danger); font-size: var(--fs-caption); }
-.acpComposer { display: flex; flex: none; flex-direction: column; gap: var(--space-1); }
-.acpInput { min-height: 0; resize: vertical; font-size: var(--fs-caption); }
-.acpInput:disabled { color: var(--term-text-3); }
-.acpActions { display: flex; align-items: center; gap: var(--space-1); }
+.acpError { margin: 0; color: var(--term-danger); font-size: var(--fs-caption); overflow-wrap: anywhere; }
+
+.acpComposer { display: flex; flex: none; flex-direction: column; gap: var(--space-1); min-width: 0; }
+/* The composer reads in the terminal theme, not the app's global field style. */
+.acpInput,
+.acpInput:focus {
+  min-height: 0; width: 100%; resize: vertical;
+  padding: var(--space-2) var(--space-2_5);
+  border: 1px solid var(--term-frame); border-radius: var(--radius-sm);
+  background: var(--term-well); color: var(--term-fg); caret-color: var(--term-accent);
+  font-size: var(--fs-control); line-height: 1.55;
+  box-shadow: none;
+}
+.acpInput:focus { outline: 2px solid color-mix(in srgb, var(--term-accent) 55%, transparent); outline-offset: -1px; border-color: var(--term-accent); }
+.acpInput::placeholder { color: var(--term-text-3); }
+.acpInput:disabled { color: var(--term-text-3); opacity: 1; }
+.acpActions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); min-width: 0; }
 .acpHint { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--term-text-3); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
-.acpToolEntry { display: flex; flex-wrap: wrap; gap: var(--space-1); min-width: 0; color: var(--term-text-2); font-family: var(--font-mono); font-size: var(--fs-micro); overflow-wrap: anywhere; }
-.acpLocations { display: flex; flex-direction: column; gap: var(--space-0_5); margin: 0; padding: 0; list-style: none; color: var(--term-text-3); font-family: var(--font-mono); font-size: var(--fs-micro); overflow-wrap: anywhere; }
-.acpNotice { margin: 0; color: var(--term-text-3); font-size: var(--fs-micro); overflow-wrap: anywhere; }
-.acpNotice[data-level='warning'] { color: var(--term-warning); }
-.acpNotice[data-level='error'] { color: var(--term-danger); }
-.acpSubagent { display: flex; flex-direction: column; gap: var(--space-0_5); padding: var(--space-1_5) var(--space-2); border: 1px dashed var(--term-line); border-radius: var(--radius-sm); }
-.acpSubagentText { margin: 0; color: var(--term-text-2); font-size: var(--fs-micro); white-space: pre-wrap; overflow-wrap: anywhere; }
-.acpPlan { flex: none; color: var(--term-text-2); font-size: var(--fs-micro); }
-.acpPlan summary { cursor: pointer; color: var(--term-fg); font-weight: var(--fw-semibold); }
-.acpPlan ol { display: flex; flex-direction: column; gap: var(--space-0_5); margin: var(--space-1) 0 0; padding-left: var(--space-4); overflow-wrap: anywhere; }
-.acpPlan li[data-status='completed'] { color: var(--term-text-3); }
-.acpPlan li[data-status='in_progress'] { color: var(--term-accent); }
-.acpPlanStatus { margin-right: var(--space-1); color: var(--term-text-3); }
+
+.acpButton {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1);
+  min-height: var(--control-h-sm); padding: 0 var(--space-3);
+  border: 1px solid var(--term-frame); border-radius: var(--radius-sm);
+  background: transparent; color: var(--term-fg);
+  font-size: var(--fs-caption); font-weight: var(--fw-medium); white-space: nowrap; cursor: pointer; box-shadow: none;
+  transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.acpButton:hover:not(:disabled) { border-color: var(--term-frame); background: var(--term-hover); box-shadow: none; }
+.acpButton:active:not(:disabled) { transform: none; }
+.acpButton:active:not(:disabled) { background: var(--term-press); }
+.acpButton:focus-visible { outline: 2px solid var(--term-accent); outline-offset: 1px; }
+.acpButton:disabled { cursor: not-allowed; opacity: .45; }
+.acpButton[data-variant='primary'] { border-color: var(--term-accent); background: var(--term-accent); color: var(--term-on-accent); font-weight: var(--fw-semibold); }
+.acpButton[data-variant='primary']:hover:not(:disabled) { border-color: var(--term-accent); background: color-mix(in srgb, var(--term-accent) 88%, var(--term-fg)); }
+.acpButton[data-variant='quiet'] { border-color: transparent; color: var(--term-text-2); }
+.acpButton[data-variant='quiet']:hover:not(:disabled) { border-color: transparent; }
+
+/* A narrow pane (720px window, split) drops the side room; every row may wrap. */
+@container acp-body (max-width: 560px) {
+  .acpHint { flex-basis: 100%; white-space: normal; }
+}
+@media (max-width: 760px) {
+  .acpBody { padding: var(--space-1_5) var(--space-2) var(--space-2); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .acpButton { transition: none; }
+}

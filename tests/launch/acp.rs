@@ -1088,3 +1088,31 @@ fn the_child_environment_keeps_the_planned_boundaries() {
     assert!(!environment.set.iter().any(|(name, _)| name == &token_name));
 }
 
+
+#[test]
+fn a_conversation_id_opens_paths_inside_its_own_directory() {
+    let directory = temp_dir();
+    std::fs::create_dir_all(directory.path().join("src")).unwrap();
+    std::fs::write(directory.path().join("src/a.ts"), "export {};\n").unwrap();
+    let expected = directory.path().join("src/a.ts").canonicalize().unwrap();
+    let (io, mut agent) = pair();
+    let worker = std::thread::spawn(move || {
+        agent.handshake(false);
+        agent.stay_connected();
+    });
+    let snapshot = open(spec(directory.path()), io).unwrap();
+    let home = temp_dir();
+    // A tool call's location resolves against the conversation's directory, with
+    // or without a line number, exactly like a terminal session's path.
+    for value in ["src/a.ts", "src/a.ts:3"] {
+        assert_eq!(crate::terminal_paths::resolve_for_session(&snapshot.id, home.path(), value).unwrap(), expected);
+    }
+    // The terminal checks still apply: a missing file and a stream path are refused.
+    assert!(crate::terminal_paths::resolve_for_session(&snapshot.id, home.path(), "src/missing.ts").is_err());
+    #[cfg(windows)]
+    assert!(crate::terminal_paths::resolve_for_session(&snapshot.id, home.path(), "src/a.ts:secret:$DATA").is_err());
+    close(&snapshot.id).unwrap();
+    worker.join().unwrap();
+    // An id no host knows is refused instead of resolving against anything.
+    assert!(crate::terminal_paths::resolve_for_session(&snapshot.id, home.path(), "src/a.ts").is_err());
+}

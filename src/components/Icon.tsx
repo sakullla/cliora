@@ -2,7 +2,7 @@ export type IconName = 'home' | 'connections' | 'library' | 'records' | 'setting
   | 'sun' | 'moon' | 'monitor' | 'alert' | 'info' | 'close' | 'check' | 'trash' | 'sparkle' | 'folder' | 'search' | 'clock' | 'archive' | 'copy' | 'arrowDown' | 'arrowLeft' | 'chevronLeft' | 'chevronRight' | 'plus' | 'refresh' | 'sidebarClose' | 'sidebarOpen' | 'play'
   | 'terminal' | 'globe' | 'eye' | 'eyeOff' | 'pencil' | 'clipboard' | 'minimize' | 'maximize' | 'ban' | 'download' | 'arrowRight' | 'chevronDown' | 'package'
   | 'cloud' | 'upload' | 'lock' | 'shield' | 'user' | 'link' | 'pin' | 'star'
-  | 'arrowUp' | 'arrowUpRight' | 'sliders' | 'command' | 'more' | 'square' | 'columns' | 'keyboard' | 'server' | 'chevronsUpDown' | 'plug' | 'branch' | 'gitWorktree' | 'file' | 'grid' | 'list';
+  | 'arrowUp' | 'arrowUpRight' | 'sliders' | 'command' | 'more' | 'square' | 'columns' | 'keyboard' | 'server' | 'chevronsUpDown' | 'plug' | 'branch' | 'gitWorktree' | 'file' | 'grid' | 'list' | 'bell';
 const paths: Record<IconName, string> = {
   sidebarClose: 'M3 4h18v16H3zM9 4v16m7-11-3 3 3 3',
   sidebarOpen: 'M3 4h18v16H3zM9 4v16m4-11 3 3-3 3',
@@ -26,6 +26,7 @@ const paths: Record<IconName, string> = {
   file: 'M6.5 3.5h7l4.5 4.5v12.5h-11.5zM13.5 3.5V8H18M9.5 12.5h5M9.5 16h5',
   grid: 'M4 4h6.5v6.5H4zM13.5 4H20v6.5h-6.5zM4 13.5h6.5V20H4zM13.5 13.5H20V20h-6.5z',
   list: 'M4 6.5h2M9 6.5h11M4 12h2M9 12h11M4 17.5h2M9 17.5h11',
+  bell: 'M6 16.5v-5a6 6 0 0 1 12 0v5l1.5 2h-15ZM10 20.5a2 2 0 0 0 4 0',
   folder: 'M3.5 7A1.5 1.5 0 0 1 5 5.5h3.6a1.5 1.5 0 0 1 1.2.6l1 1.4H19a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 18.5H5A1.5 1.5 0 0 1 3.5 17z',
   search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM21 21l-4.8-4.8',
   clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM12 6.5V12l3.5 2',
