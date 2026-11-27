@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { native } from '../../lib/native';
 import { formatFailure } from '../../lib/feedback';
@@ -15,7 +16,41 @@ import { notifyPromptsChanged, promptContextKey, usePromptQuery } from '../promp
 import { scopeLabel, scopeTone } from '../prompts/promptScope';
 import styles from '../prompts/Prompts.module.css';
 
-export function PromptPicker({ context, sourceKey, active = true, workspaces = [], onPick, className, labelClassName }: { context: PromptContext | null; sourceKey: string; active?: boolean; workspaces?: BusinessWorkspace[]; onPick: (prompt: PromptDocument) => void; className?: string; labelClassName?: string }) {
+export type PromptPickerHandle = {
+  open: () => void;
+};
+
+export const PromptPicker = forwardRef<PromptPickerHandle, {
+  context: PromptContext | null;
+  sourceKey: string;
+  active?: boolean;
+  workspaces?: BusinessWorkspace[];
+  onPick: (prompt: PromptDocument) => void;
+  className?: string;
+  labelClassName?: string;
+  /** Compact mode renders only a single trigger button (for the ACP composer toolbar). */
+  compact?: boolean;
+  /** Custom class for the compact trigger button so pane surfaces can apply --term-* tokens. */
+  triggerClassName?: string;
+  triggerLabelClassName?: string;
+  triggerLabel?: string;
+  triggerTitle?: string;
+  disabled?: boolean;
+}>(function PromptPicker({
+  context,
+  sourceKey,
+  active = true,
+  workspaces = [],
+  onPick,
+  className,
+  labelClassName,
+  compact = false,
+  triggerClassName,
+  triggerLabelClassName,
+  triggerLabel,
+  triggerTitle,
+  disabled = false,
+}, ref) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [restoreFocus, setRestoreFocus] = useState(true);
@@ -35,10 +70,18 @@ export function PromptPicker({ context, sourceKey, active = true, workspaces = [
   const readSequence = useRef(0);
   const abortRead = useRef<AbortController | null>(null);
   const emptyContext: PromptContext = { targetId: null };
-  const quick = usePromptQuery(context ?? emptyContext, { limit: 3 }, active && !!context, key);
+  const quick = usePromptQuery(context ?? emptyContext, { limit: 3 }, active && !compact && !!context, key);
   const results = usePromptQuery(context ?? emptyContext, { search, tags: tag.trim() ? [tag.trim()] : [], favoritesOnly: mode === 'favorites', recentOnly: mode === 'recent', includeOtherScopes: includeOther, offset, limit: 30 }, active && open && !!context, key, { keepPrevious: true });
   useEffect(() => { setSelected(null); setReading(false); setError(''); setNotice(''); setSearch(''); setTag(''); setOffset(0); setIncludeOther(false); readSequence.current++; abortRead.current?.abort(); }, [key]);
   useEffect(() => () => { readSequence.current++; abortRead.current?.abort(); }, []);
+  useEffect(() => { if (disabled && open) close(); }, [disabled, open]);
+  function openPicker() {
+    if (!context || disabled) return;
+    setRestoreFocus(true);
+    setOpen(true);
+    setError('');
+  }
+  useImperativeHandle(ref, () => ({ open: openPicker }), [context, disabled]);
   function close() { setOpen(false); setSelected(null); setReading(false); readSequence.current++; abortRead.current?.abort(); }
   function changeFilters(change: () => void) { change(); setOffset(0); setSelected(null); setError(''); readSequence.current++; abortRead.current?.abort(); }
   function pageTo(next: number) { setOffset(next); setSelected(null); setError(''); setReading(false); readSequence.current++; abortRead.current?.abort(); }
@@ -79,17 +122,7 @@ export function PromptPicker({ context, sourceKey, active = true, workspaces = [
     return t('prompts.global');
   })();
   const filtered = !!search.trim() || !!tag || mode !== 'all';
-  return <div className={`${styles.pickerBar} ${className ?? ''}`} role="group" aria-label={t('sessions.pickLibraryPrompt')}>
-    <span className={labelClassName}><Icon name="library" size={12} /> {t('prompts.title')}</span>
-    {quick.page.items.map(item => <Button key={item.id} className={styles.pill} size="sm" variant="ghost" title={`${item.title} · ${scopeLabel(item.scope, workspaces, t)}`} disabled={reading || quick.loading} icon={item.favorite ? <Icon name="star" size={11} className={styles.pillStar} /> : undefined} onClick={() => void read(item, true)}>{item.title}</Button>)}
-    <Button size="sm" variant="ghost" data-select-trigger="true" aria-haspopup="dialog" aria-expanded={open} disabled={!context} title={!context ? t('prompts.unknownHost') : t('prompts.keepDraft')} icon={<Icon name="search" size={13} />} onClick={() => { setRestoreFocus(true); setOpen(true); setError(''); }}>{t('prompts.open')}</Button>
-    {/* Stale prompts are still usable, so the row says so in a word and keeps the detail in the tooltip. */}
-    {(quick.error || (!open && error)) && (() => {
-      const message = quick.error ? t(quick.stale ? 'sessions.promptsStale' : 'sessions.promptsFailed') : error;
-      return <span role="alert" className={styles.pickerAlert} data-stale={quick.error && quick.stale ? '' : undefined} title={message}><Icon name="alert" size={12} /><span>{quick.error && quick.stale ? t('sessions.promptsStaleShort') : message}</span><Button size="sm" variant="ghost" onClick={quick.reload}>{t('sessions.retryPrompts')}</Button></span>;
-    })()}
-    {notice && <span role="status">{notice}</span>}
-    <GuideDialog open={open} restoreFocus={restoreFocus} title={t('prompts.open')} hint={t('prompts.keepDraft')} wide onClose={close}>
+  const dialog = <GuideDialog open={open} restoreFocus={restoreFocus} title={t('prompts.open')} hint={t('prompts.keepDraft')} wide onClose={close}>
       <div className={styles.picker} onKeyDown={event => {
         if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing && selected && !reading) { event.preventDefault(); event.stopPropagation(); void read(selected, true); }
       }}>
@@ -150,6 +183,42 @@ export function PromptPicker({ context, sourceKey, active = true, workspaces = [
         </div>
         <p className={styles.keyHints} aria-hidden="true"><span><kbd>↑</kbd><kbd>↓</kbd>{t('prompts.hintMove')}</span><span><kbd>Enter</kbd>{t('prompts.hintPreview')}</span><span><kbd>{modLabel}</kbd><kbd>Enter</kbd>{t('prompts.hintInsert')}</span></p>
       </div>
-    </GuideDialog>
+    </GuideDialog>;
+
+  if (compact) {
+    const label = triggerLabel ?? t('sessions.acpInsertPrompt');
+    const title = !context ? t('prompts.unknownHost') : (triggerTitle ?? t('sessions.acpInsertPromptHint'));
+    return <span className={`${styles.pickerCompact}${className ? ` ${className}` : ''}`}>
+      <button
+        type="button"
+        className={triggerClassName || styles.compactTrigger}
+        data-acp-prompt-trigger=""
+        data-select-trigger="true"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label={label}
+        title={title}
+        disabled={disabled || !context}
+        onClick={openPicker}
+      >
+        <Icon name="library" size={13} />
+        <span className={triggerLabelClassName} aria-hidden="true">{label}</span>
+      </button>
+      {notice && <span role="status" className={styles.pickerNoticeSr}>{notice}</span>}
+      {open && createPortal(dialog, document.body)}
+    </span>;
+  }
+
+  return <div className={`${styles.pickerBar} ${className ?? ''}`} role="group" aria-label={t('sessions.pickLibraryPrompt')}>
+    <span className={labelClassName}><Icon name="library" size={12} /> {t('prompts.title')}</span>
+    {quick.page.items.map(item => <Button key={item.id} className={styles.pill} size="sm" variant="ghost" title={`${item.title} · ${scopeLabel(item.scope, workspaces, t)}`} disabled={reading || quick.loading} icon={item.favorite ? <Icon name="star" size={11} className={styles.pillStar} /> : undefined} onClick={() => void read(item, true)}>{item.title}</Button>)}
+    <Button size="sm" variant="ghost" data-select-trigger="true" aria-haspopup="dialog" aria-expanded={open} disabled={disabled || !context} title={!context ? t('prompts.unknownHost') : t('prompts.keepDraft')} icon={<Icon name="search" size={13} />} onClick={openPicker}>{t('prompts.open')}</Button>
+    {/* Stale prompts are still usable, so the row says so in a word and keeps the detail in the tooltip. */}
+    {(quick.error || (!open && error)) && (() => {
+      const message = quick.error ? t(quick.stale ? 'sessions.promptsStale' : 'sessions.promptsFailed') : error;
+      return <span role="alert" className={styles.pickerAlert} data-stale={quick.error && quick.stale ? '' : undefined} title={message}><Icon name="alert" size={12} /><span>{quick.error && quick.stale ? t('sessions.promptsStaleShort') : message}</span><Button size="sm" variant="ghost" onClick={quick.reload}>{t('sessions.retryPrompts')}</Button></span>;
+    })()}
+    {notice && <span role="status">{notice}</span>}
+    {dialog}
   </div>;
-}
+});

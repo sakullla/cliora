@@ -3,6 +3,9 @@ import { useTranslation } from 'react-i18next';
 import { highlightRuns } from '../../../components/CommandPalette';
 import { Icon } from '../../../components/Icon';
 import type { AcpAttachment, AcpFileList, AcpImageFile, AcpSessionSnapshot } from '../../../types/acp';
+import type { PromptContext } from '../../../types/prompts';
+import type { BusinessWorkspace } from '../../../types/workspaces';
+import { PromptPicker, type PromptPickerHandle } from '../PromptPicker';
 import { AcpSettings } from './AcpSettings';
 import {
   ACP_IMAGE_BYTES, ACP_IMAGE_LIMIT, ACP_IMAGE_TYPES, attachmentPayload, baseName, insertMention, isImagePath, matchCommands, mentionQuery,
@@ -11,7 +14,7 @@ import {
 import styles from './acpComposer.module.css';
 
 /** Below this pane width (one half of a split), or in a window this narrow, the
- *  selectors fold into the "⋯" menu. */
+ *  selectors fold into the compact menu trigger. */
 const COMPACT_WIDTH = 560;
 const COMPACT_WINDOW = 760;
 
@@ -24,6 +27,12 @@ export type AcpComposerHandle = {
   /** Send text from another input (the shared quick input) with the tray's attachments.
    *  Rejects with the host's reason; the tray stays as it was. */
   submitText: (text: string) => Promise<void>;
+  /** Replace the draft with a previous message and move focus to the end without sending. */
+  fillDraft: (text: string) => void;
+  /** Insert or focus a '/' command or '@' file mention trigger in the draft. */
+  triggerPrefix: (prefix: '/' | '@') => void;
+  /** Open the compact prompt library picker dialog. */
+  openPromptPicker: () => void;
   focus: () => void;
 };
 
@@ -71,16 +80,50 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   onWithdrawAccess: (requestId: string) => Promise<void>;
   onSetMode: (modeId: string) => Promise<void>;
   onSetConfig: (configId: string, value: string | boolean) => Promise<void>;
+  /** Whether this conversation pane is currently visible/active. */
+  active?: boolean;
+  /** Scope context for the integrated prompt library picker. */
+  promptContext?: PromptContext | null;
+  workspaces?: BusinessWorkspace[];
+  /** Panel-wide drag state from AcpConversation. */
+  dragActive?: boolean;
   /** The login panel stands in for the input; the draft is kept meanwhile. */
   hidden?: boolean;
-}>(function AcpComposer({ snapshot, toolName, live, turnBusy, busy, canSend, onSend, onStop, onClose, onListFiles, onReadImage, onWithdrawAccess, onSetMode, onSetConfig, hidden = false }, ref) {
+}>(function AcpComposer({
+  snapshot,
+  toolName,
+  live,
+  turnBusy,
+  busy,
+  canSend,
+  onSend,
+  onStop,
+  onClose,
+  onListFiles,
+  onReadImage,
+  onWithdrawAccess,
+  onSetMode,
+  onSetConfig,
+  active = true,
+  promptContext = null,
+  workspaces = [],
+  dragActive = false,
+  hidden = false,
+}, ref) {
   const { t } = useTranslation();
   const listId = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const menuListRef = useRef<HTMLDivElement | null>(null);
+  const promptPickerRef = useRef<PromptPickerHandle | null>(null);
   const composingRef = useRef(false);
   const [draft, setDraft] = useState('');
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   const [caret, setCaret] = useState(0);
+  const caretRef = useRef(caret);
+  caretRef.current = caret;
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
@@ -96,6 +139,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   const withdrawnRef = useRef(new Set<string>());
   const [notices, setNotices] = useState<string[]>([]);
   const [error, setError] = useState('');
+  const [busyEnterHint, setBusyEnterHint] = useState(false);
   const [sending, setSending] = useState(false);
   const sendingRef = useRef(false);
   const [menuIndex, setMenuIndex] = useState(0);
@@ -111,7 +155,6 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
    *  existed before it was sent. */
   const awaitingRef = useRef<{ text: string; items: ComposerAttachment[]; before: Set<string> } | null>(null);
   const [compact, setCompact] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
 
   const imageAllowed = !!snapshot.agent?.promptCapabilities?.image;
   const commands = snapshot.commands ?? [];
@@ -121,7 +164,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     const node = inputRef.current;
     if (!node) return;
     node.style.height = 'auto';
-    const height = Math.min(200, Math.max(56, node.scrollHeight + 2));
+    const height = Math.min(200, Math.max(48, node.scrollHeight + 2));
     node.style.height = `${height}px`;
     node.style.overflowY = node.scrollHeight + 2 > height ? 'auto' : 'hidden';
   }, [draft]);
@@ -136,6 +179,10 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     return () => observer.disconnect();
   }, []);
 
+  useEffect(() => {
+    if (!turnBusy || !live) setBusyEnterHint(false);
+  }, [turnBusy, live]);
+
   const slash = commands.length ? slashQuery(draft, caret) : null;
   const slashMatches = useMemo(() => (slash == null ? [] : matchCommands(commands, slash)), [commands, slash]);
   const mention = slash == null && live ? mentionQuery(draft, caret) : null;
@@ -146,6 +193,13 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   const menuItems = slashOpen ? slashMatches.length : mentionOpen && fileState.query === mention?.query ? fileState.files.length : 0;
   const menuOpen = slashOpen || mentionOpen;
   const activeIndex = menuItems ? Math.min(menuIndex, menuItems - 1) : 0;
+
+  // Keep the keyboard-selected option visible as the reader moves through long lists.
+  useEffect(() => {
+    if (!menuOpen || !menuItems) return;
+    const option = menuListRef.current?.querySelector<HTMLElement>('[aria-selected="true"]');
+    option?.scrollIntoView({ block: 'nearest' });
+  }, [menuOpen, menuItems, activeIndex, slashKey, mentionKey, fileState.query]);
 
   // Look up files for the `@` being typed; a stale answer never replaces a newer one.
   const mentionText = mentionOpen ? mention!.query : null;
@@ -377,6 +431,59 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     }
   }
 
+  function fillDraft(text: string) {
+    if (!live || hidden) return;
+    setDismissed(null);
+    setError('');
+    setBusyEnterHint(false);
+    setText(text, text.length);
+  }
+
+  function insertPromptBody(body: string) {
+    if (!body || !live || hidden) return;
+    const current = draftRef.current;
+    const node = inputRef.current;
+    const start = Math.max(0, Math.min(current.length, node?.selectionStart ?? caretRef.current));
+    const end = Math.max(start, Math.min(current.length, node?.selectionEnd ?? start));
+    const before = current.slice(0, start);
+    const after = current.slice(end);
+    const prefix = before && !/[\s\n]$/.test(before) ? '\n' : '';
+    const suffix = after && !/^[\s\n]/.test(after) ? '\n' : '';
+    const next = `${before}${prefix}${body}${suffix}${after}`;
+    const nextCaret = before.length + prefix.length + body.length;
+    setDismissed(null);
+    setError('');
+    setBusyEnterHint(false);
+    setText(next, nextCaret);
+  }
+
+  function triggerPrefix(prefix: '/' | '@') {
+    if (!live || hidden) return;
+    const current = draftRef.current;
+    setDismissed(null);
+    setError('');
+    setBusyEnterHint(false);
+    if (prefix === '/') {
+      if (current.startsWith('/')) {
+        setText(current, Math.max(1, Math.min(current.length, caretRef.current || 1)));
+        return;
+      }
+      setText(`/${current}`, 1);
+      return;
+    }
+    const node = inputRef.current;
+    const pos = Math.max(0, Math.min(current.length, node?.selectionStart ?? caretRef.current));
+    const end = Math.max(pos, Math.min(current.length, node?.selectionEnd ?? pos));
+    if (mentionQuery(current, pos)) {
+      setText(current, pos);
+      return;
+    }
+    const before = current.slice(0, pos);
+    const after = current.slice(end);
+    const inserted = before.length > 0 && !/\s$/.test(before) ? ' @' : '@';
+    setText(`${before}${inserted}${after}`, before.length + inserted.length);
+  }
+
   function submit() {
     if (!canSend || turnBusy) return;
     void send(draft.trim(), true).catch(() => {});
@@ -386,6 +493,9 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     addFiles: (files) => { void addFiles(files); },
     addPaths,
     submitText: (text) => send(text.trim(), false),
+    fillDraft,
+    triggerPrefix,
+    openPromptPicker: () => { promptPickerRef.current?.open(); },
     focus: () => inputRef.current?.focus(),
   }));
 
@@ -444,6 +554,10 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     }
     if (event.key === 'Enter' && !event.shiftKey && !event.altKey) {
       event.preventDefault();
+      if (turnBusy && live) {
+        setBusyEnterHint(true);
+        return;
+      }
       submit();
       return;
     }
@@ -469,35 +583,21 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   const sendable = canSend && !turnBusy && !sending && !reading.length && (!!draft.trim() || attachments.length > 0);
   const activeId = menuItems ? `${listId}-option-${activeIndex}` : undefined;
 
-  return <div ref={rootRef} className={styles.composer} data-acp-composer="" data-drag={dragOver || undefined} hidden={hidden}
-    onDragOver={(event) => {
-      if (!live || !event.dataTransfer?.types?.includes('Files')) return;
-      event.preventDefault();
-      setDragOver(true);
-    }}
-    onDragLeave={(event) => { if (!rootRef.current?.contains(event.relatedTarget as Node | null)) setDragOver(false); }}
-    onDrop={(event) => {
-      setDragOver(false);
-      if (!live) return;
-      const files = Array.from(event.dataTransfer?.files ?? []);
-      if (!files.length) return;
-      event.preventDefault();
-      void addFiles(files);
-    }}>
+  return <div ref={rootRef} className={styles.composer} data-acp-composer="" data-drag={dragActive || undefined} hidden={hidden}>
     {menuOpen && <div className={styles.menu} data-acp-menu={slashOpen ? 'commands' : 'files'}>
       <p className={styles.menuHead}>
         <Icon name={slashOpen ? 'command' : 'file'} size={12} />
         <span>{slashOpen ? t('sessions.acpCommandsLabel') : t('sessions.acpFilesLabel')}</span>
         {!slashOpen && fileState.truncated && <span className={styles.menuNote}>{t('sessions.acpFilesTruncated')}</span>}
       </p>
-      {slashOpen ? <div id={listId} role="listbox" aria-label={t('sessions.acpCommandsLabel')} className={styles.menuList}>
+      {slashOpen ? <div ref={menuListRef} id={listId} role="listbox" aria-label={t('sessions.acpCommandsLabel')} className={styles.menuList}>
         {slashMatches.map((command, index) => <div key={command.name} id={`${listId}-option-${index}`} role="option" aria-selected={index === activeIndex} className={styles.menuOption}
           onMouseDown={(event) => event.preventDefault()} onMouseMove={() => setMenuIndex(index)} onClick={() => choose(index)}>
           <span className={styles.menuLabel}>/{highlightRuns(command.name, slash ?? '').map((run, key) => run.hit ? <mark key={key}>{run.text}</mark> : run.text)}</span>
           {command.description && <span className={styles.menuDetail}>{command.description}</span>}
           {command.hint && <span className={styles.menuHint}>{command.hint}</span>}
         </div>)}
-      </div> : <div id={listId} role="listbox" aria-label={t('sessions.acpFilesLabel')} aria-busy={fileState.loading || undefined} className={styles.menuList}>
+      </div> : <div ref={menuListRef} id={listId} role="listbox" aria-label={t('sessions.acpFilesLabel')} aria-busy={fileState.loading || undefined} className={styles.menuList}>
         {fileState.query === mention?.query && fileState.files.map((path, index) => <div key={path} id={`${listId}-option-${index}`} role="option" aria-selected={index === activeIndex} className={styles.menuOption}
           onMouseDown={(event) => event.preventDefault()} onMouseMove={() => setMenuIndex(index)} onClick={() => choose(index)}>
           <span className={`${styles.menuLabel} ${styles.menuPath}`}>{highlightRuns(path, mention?.query ?? '').map((run, key) => run.hit ? <mark key={key}>{run.text}</mark> : run.text)}</span>
@@ -507,73 +607,134 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
             : !fileState.files.length ? <p className={styles.menuEmpty}>{t('sessions.acpFilesEmpty')}</p> : null}
       </div>}
     </div>}
-    {(attachments.length > 0 || reading.length > 0) && <ul className={styles.tray} aria-label={t('sessions.acpAttachments')} aria-busy={reading.length > 0 || undefined}>
-      {attachments.map((item) => <li key={item.id} className={styles.trayItem} data-attachment={item.type}>
-        {item.type === 'image'
-          ? <img className={styles.trayPreview} src={`data:${item.mimeType};base64,${item.dataBase64}`} alt={t('sessions.acpAttachmentImage', { name: item.name })} />
-          : <Icon name="file" size={12} />}
-        <span className={styles.trayName} title={item.type === 'file' ? item.path : item.name}>{item.name}</span>
-        <button type="button" className={styles.trayRemove} aria-label={t('sessions.acpAttachmentRemove', { name: item.name })} title={t('sessions.acpAttachmentRemove', { name: item.name })} onClick={() => setAttachments((current) => current.filter((entry) => entry.id !== item.id))}>
-          <Icon name="close" size={10} />
-        </button>
-      </li>)}
-      {reading.map((item) => <li key={item.id} className={styles.trayItem} data-attachment="reading" title={t('sessions.acpImageReading', { name: item.name })}>
-        <span className={styles.trayReading} role="status" aria-label={t('sessions.acpImageReading', { name: item.name })} />
-        <span className={styles.trayName}>{item.name}</span>
-        <button type="button" className={styles.trayRemove} aria-label={t('sessions.acpAttachmentRemove', { name: item.name })} title={t('sessions.acpAttachmentRemove', { name: item.name })} onClick={() => removeReading(item)}>
-          <Icon name="close" size={10} />
-        </button>
-      </li>)}
-    </ul>}
     {notices.length > 0 && <div className={styles.notice} role="alert" data-acp-attach-notice="">
       <Icon name="info" size={12} />
       <span>{notices.join(' ')}</span>
       <button type="button" className={styles.trayRemove} aria-label={t('sessions.acpNoticeDismiss')} title={t('sessions.acpNoticeDismiss')} onClick={() => setNotices([])}><Icon name="close" size={10} /></button>
     </div>}
     {error && <p className={styles.error} role="alert">{error}</p>}
-    {dragOver && <p className={styles.dropHint} aria-hidden="true"><Icon name="upload" size={12} />{t('sessions.acpDropHint')}</p>}
-    <textarea
-      ref={inputRef}
-      className={styles.input}
-      aria-label={t('sessions.acpMessageLabel', { tool: toolName })}
-      aria-autocomplete={commands.length ? 'list' : undefined}
-      aria-controls={menuOpen ? listId : undefined}
-      aria-activedescendant={activeId}
-      placeholder={live ? t('sessions.acpPlaceholder') : t('sessions.acpEndedPlaceholder')}
-      value={draft}
-      rows={2}
-      disabled={!live}
-      onChange={(event) => {
-        setDraft(event.target.value);
-        setCaret(event.target.selectionStart ?? event.target.value.length);
-        setDismissed(null);
-        setError('');
-      }}
-      onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
-      onCompositionStart={() => { composingRef.current = true; }}
-      onCompositionEnd={() => { composingRef.current = false; }}
-      onBlur={() => {
-        composingRef.current = false;
-        // Leaving the input closes its menu; options keep focus on the input while clicked.
-        if (menuOpen) setDismissed(slashOpen ? slashKey : mentionKey);
-      }}
-      onPaste={(event) => {
-        const data = event.clipboardData;
-        if (!data || data.getData('text/plain')) return;
-        const files = Array.from(data.files ?? []);
-        if (!files.length) return;
-        event.preventDefault();
-        void addFiles(files);
-      }}
-      onKeyDown={onKeyDown}
-    />
-    <div className={styles.actions}>
-      <AcpSettings config={snapshot.config} compact={compact} disabled={!live || snapshot.state === 'starting'} onSetMode={onSetMode} onSetConfig={onSetConfig} />
-      <span className={styles.hint}>{!live ? t('sessions.acpEnded') : turnBusy ? t('sessions.acpBusyHint') : reading.length ? t('sessions.acpImageReadingBusy') : t('sessions.acpSendHint')}</span>
-      {!live && <button type="button" className={styles.button} data-variant="quiet" disabled={busy} onClick={onClose}>{t('sessions.acpClose')}</button>}
-      {turnBusy && live
-        ? <button type="button" className={styles.button} data-variant="stop" disabled={busy || snapshot.state === 'stopping'} onClick={onStop}><Icon name="square" size={12} />{snapshot.state === 'stopping' ? t('sessions.acpStopping') : t('sessions.acpStop')}</button>
-        : <button type="button" className={styles.button} data-variant="primary" disabled={!sendable} onClick={submit}><Icon name="arrowUp" size={13} />{sending ? t('sessions.acpSending') : t('sessions.acpSend')}</button>}
+    {busyEnterHint && turnBusy && live && <p className={styles.busyFeedback} role="status" data-acp-busy-hint="">
+      <Icon name="info" size={12} />
+      <span>{t('sessions.acpBusyEnterHint')}</span>
+    </p>}
+    <div className={styles.composerCard} data-acp-composer-card="">
+      {(attachments.length > 0 || reading.length > 0) && <ul className={styles.tray} aria-label={t('sessions.acpAttachments')} aria-busy={reading.length > 0 || undefined}>
+        {attachments.map((item) => <li key={item.id} className={styles.trayItem} data-attachment={item.type}>
+          {item.type === 'image'
+            ? <img className={styles.trayPreview} src={`data:${item.mimeType};base64,${item.dataBase64}`} alt={t('sessions.acpAttachmentImage', { name: item.name })} />
+            : <Icon name="file" size={12} />}
+          <span className={styles.trayName} title={item.type === 'file' ? item.path : item.name}>{item.name}</span>
+          <button type="button" className={styles.trayRemove} aria-label={t('sessions.acpAttachmentRemove', { name: item.name })} title={t('sessions.acpAttachmentRemove', { name: item.name })} onClick={() => setAttachments((current) => current.filter((entry) => entry.id !== item.id))}>
+            <Icon name="close" size={10} />
+          </button>
+        </li>)}
+        {reading.map((item) => <li key={item.id} className={styles.trayItem} data-attachment="reading" title={t('sessions.acpImageReading', { name: item.name })}>
+          <span className={styles.trayReading} role="status" aria-label={t('sessions.acpImageReading', { name: item.name })} />
+          <span className={styles.trayName}>{item.name}</span>
+          <button type="button" className={styles.trayRemove} aria-label={t('sessions.acpAttachmentRemove', { name: item.name })} title={t('sessions.acpAttachmentRemove', { name: item.name })} onClick={() => removeReading(item)}>
+            <Icon name="close" size={10} />
+          </button>
+        </li>)}
+      </ul>}
+      <textarea
+        ref={inputRef}
+        className={styles.input}
+        aria-label={t('sessions.acpMessageLabel', { tool: toolName })}
+        aria-autocomplete={commands.length ? 'list' : undefined}
+        aria-controls={menuOpen ? listId : undefined}
+        aria-activedescendant={activeId}
+        placeholder={live ? t('sessions.acpPlaceholder') : t('sessions.acpEndedPlaceholder')}
+        value={draft}
+        rows={2}
+        disabled={!live}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          setCaret(event.target.selectionStart ?? event.target.value.length);
+          setDismissed(null);
+          setError('');
+          if (busyEnterHint) setBusyEnterHint(false);
+        }}
+        onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
+        onCompositionStart={() => { composingRef.current = true; }}
+        onCompositionEnd={() => { composingRef.current = false; }}
+        onBlur={() => {
+          composingRef.current = false;
+          // Leaving the input closes its menu; options keep focus on the input while clicked.
+          if (menuOpen) setDismissed(slashOpen ? slashKey : mentionKey);
+        }}
+        onPaste={(event) => {
+          const data = event.clipboardData;
+          if (!data || data.getData('text/plain')) return;
+          const files = Array.from(data.files ?? []);
+          if (!files.length) return;
+          event.preventDefault();
+          void addFiles(files);
+        }}
+        onKeyDown={onKeyDown}
+      />
+      <div className={styles.actions}>
+        <div className={styles.tools}>
+          <PromptPicker
+            ref={promptPickerRef}
+            compact
+            active={active && !hidden}
+            context={promptContext}
+            sourceKey={snapshot.id}
+            workspaces={workspaces}
+            disabled={!live}
+            triggerClassName={styles.toolButton}
+            triggerLabelClassName={styles.toolLabel}
+            onPick={(prompt) => insertPromptBody(prompt.body)}
+          />
+          <button
+            type="button"
+            className={styles.toolButton}
+            data-acp-attach-file=""
+            disabled={!live}
+            aria-label={t('sessions.acpAttachFile')}
+            title={t('sessions.acpAttachFileHint')}
+            onClick={() => triggerPrefix('@')}
+          >
+            <Icon name="file" size={13} />
+            <span className={styles.toolLabel} aria-hidden="true">{t('sessions.acpAttachFile')}</span>
+          </button>
+          {imageAllowed && <>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept={ACP_IMAGE_TYPES.join(',')}
+              multiple
+              hidden
+              onChange={(event) => {
+                const files = Array.from(event.currentTarget.files ?? []);
+                event.currentTarget.value = '';
+                if (files.length) void addFiles(files);
+                inputRef.current?.focus();
+              }}
+            />
+            <button
+              type="button"
+              className={styles.toolButton}
+              data-acp-attach-image=""
+              disabled={!live}
+              aria-label={t('sessions.acpAttachImage')}
+              title={t('sessions.acpAttachImageHint')}
+              onClick={() => imageInputRef.current?.click()}
+            >
+              <Icon name="upload" size={13} />
+              <span className={styles.toolLabel} aria-hidden="true">{t('sessions.acpAttachImage')}</span>
+            </button>
+          </>}
+          <AcpSettings config={snapshot.config} compact={compact} disabled={!live || snapshot.state === 'starting'} onSetMode={onSetMode} onSetConfig={onSetConfig} />
+        </div>
+        <div className={styles.actionsRight}>
+          <span className={styles.hint}>{!live ? t('sessions.acpEnded') : turnBusy ? t('sessions.acpBusyHint') : reading.length ? t('sessions.acpImageReadingBusy') : t('sessions.acpSendHint')}</span>
+          {!live && <button type="button" className={styles.button} data-variant="quiet" disabled={busy} onClick={onClose}>{t('sessions.acpClose')}</button>}
+          {turnBusy && live
+            ? <button type="button" className={styles.button} data-variant="stop" disabled={busy || snapshot.state === 'stopping'} onClick={() => { setBusyEnterHint(false); onStop(); }}><Icon name="square" size={12} />{snapshot.state === 'stopping' ? t('sessions.acpStopping') : t('sessions.acpStop')}</button>
+            : <button type="button" className={styles.button} data-variant="primary" disabled={!sendable} onClick={submit}><Icon name="arrowUp" size={13} />{sending ? t('sessions.acpSending') : t('sessions.acpSend')}</button>}
+        </div>
+      </div>
     </div>
   </div>;
 });

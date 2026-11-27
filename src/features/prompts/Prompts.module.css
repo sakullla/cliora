@@ -29,6 +29,11 @@
 .pickerAlert > svg { flex: none; }
 .pickerAlert[data-stale] > svg { color: var(--warning); }
 .pickerBar { display: flex; align-items: center; gap: var(--space-1_5); flex-wrap: wrap; min-width: 0; font-size: var(--fs-caption); }
+.pickerCompact { display: inline-flex; flex: none; align-items: center; min-width: 0; }
+.compactTrigger { display: inline-flex; align-items: center; gap: var(--space-1); min-height: var(--control-h-sm); padding: 0 var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-sm); background: transparent; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-medium); white-space: nowrap; cursor: pointer; transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease); }
+.compactTrigger:hover:not(:disabled) { background: var(--row-hover); color: var(--text); }
+.compactTrigger:disabled { opacity: .45; cursor: not-allowed; }
+.pickerNoticeSr { position: absolute; width: 1px; height: 1px; margin: 0; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .pill { max-width: 180px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pillStar { color: var(--warning); fill: currentColor; }
 

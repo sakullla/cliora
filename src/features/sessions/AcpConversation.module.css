@@ -4,19 +4,81 @@
    the terminal theme together. The timeline's own parts live in acp/acp.module.css. */
 .acpBody {
   container: acp-body / inline-size;
+  position: relative;
   display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; min-width: 0;
   gap: var(--space-2); padding: var(--space-2) var(--space-3) var(--space-3);
   color: var(--term-fg);
 }
-.acpFooter { display: flex; flex: none; flex-direction: column; gap: var(--space-0_5); min-width: 0; }
+.acpFooter {
+  display: flex; flex: none; flex-direction: column; gap: var(--space-1);
+  width: 100%; max-width: 860px; margin-inline: auto; min-width: 0;
+}
 .acpResume { margin: 0; color: var(--term-text-2); font-size: var(--fs-micro); overflow-wrap: anywhere; }
 .acpResume[data-resume='failed'] { color: var(--term-danger); }
-.acpDiagnostics { min-width: 0; color: var(--term-text-3); font-size: var(--fs-micro); }
-.acpDiagnostics summary { cursor: pointer; border-radius: var(--radius-xs); }
-.acpDiagnostics summary:focus-visible { outline: 2px solid var(--term-accent); outline-offset: 1px; }
-.acpDiagnostics pre { max-height: 96px; margin: var(--space-1) 0 0; overflow: auto; font-family: var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
-.acpError { margin: 0; color: var(--term-danger); font-size: var(--fs-caption); overflow-wrap: anywhere; }
+
+.acpDiagnosticsWrap {
+  display: flex; align-items: flex-start; gap: var(--space-1_5); min-width: 0;
+  padding: var(--space-1) var(--space-1_5) var(--space-1) var(--space-2);
+  border: 1px solid var(--term-line); border-radius: var(--radius-sm);
+  background: var(--term-well);
+}
+.acpDiagnostics { flex: 1 1 auto; min-width: 0; color: var(--term-text-3); font-size: var(--fs-micro); }
+.acpDiagnosticsSummary {
+  display: flex; align-items: center; gap: var(--space-1); min-height: 22px;
+  list-style: none; cursor: pointer; border-radius: var(--radius-xs);
+  color: var(--term-text-2); font-weight: var(--fw-medium);
+}
+.acpDiagnosticsSummary::-webkit-details-marker { display: none; }
+.acpDiagnosticsSummary::before { display: none; }
+.acpDiagnosticsSummary:hover { color: var(--term-fg); }
+.acpDiagnosticsSummary:focus-visible { outline: 2px solid var(--term-accent); outline-offset: 1px; }
+.acpDiagnosticsChevron { flex: none; color: var(--term-text-3); transition: transform var(--fast) var(--ease); }
+.acpDiagnostics[open] > .acpDiagnosticsSummary > .acpDiagnosticsChevron { transform: rotate(90deg); }
+.acpDiagnosticsPre {
+  max-height: 140px; margin: var(--space-1_5) 0 0; padding: var(--space-1_5) var(--space-2);
+  overflow: auto; border-top: 1px solid var(--term-line);
+  color: var(--term-text-2); font-family: var(--font-mono); font-size: var(--fs-micro);
+  line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.acpDiagnosticsCopy { flex: none; }
+
+.acpError {
+  width: 100%; max-width: 860px; margin: 0 auto;
+  color: var(--term-danger); font-size: var(--fs-caption); overflow-wrap: anywhere;
+}
+
+/* Full-panel drag-and-drop overlay (R5). */
+.dropOverlay {
+  position: absolute; z-index: 8; inset: 8px;
+  display: grid; place-items: center; padding: var(--space-4);
+  border: 1.5px dashed var(--term-accent); border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--term-bg) 82%, transparent);
+  backdrop-filter: blur(4px); pointer-events: none;
+}
+.dropCard {
+  display: grid; justify-items: center; gap: var(--space-1_5); max-width: 100%;
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--term-float-line); border-radius: var(--radius-xl);
+  background: var(--term-float); color: var(--term-fg);
+  box-shadow: 0 12px 30px -14px var(--term-shadow); text-align: center;
+}
+.dropGlyph {
+  display: grid; place-items: center; width: 42px; height: 42px; margin-bottom: var(--space-0_5);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--term-accent) 14%, transparent);
+  color: var(--term-accent);
+}
+.dropCard strong { font-size: var(--fs-title); overflow-wrap: anywhere; }
+.dropCard > span:last-child { color: var(--term-text-3); font-size: var(--fs-caption); overflow-wrap: anywhere; }
+
+@container acp-body (max-width: 900px) {
+  .acpFooter, .acpError { max-width: none; }
+}
 
 @media (max-width: 760px) {
   .acpBody { padding: var(--space-1_5) var(--space-2) var(--space-2); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .acpDiagnosticsChevron { transition: none; }
 }

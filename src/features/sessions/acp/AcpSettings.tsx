@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../../components/Icon';
 import { ACP_LEGACY_MODEL_CONFIG, type AcpSessionConfig } from '../../../types/acp';
-import { acpSettings, type AcpSetting } from './composerModel';
+import { acpSettings, settingLabel, type AcpSetting } from './composerModel';
 import styles from './acpComposer.module.css';
 
 function errorText(value: unknown): string {
@@ -35,6 +35,7 @@ export function AcpSettings({ config, compact, disabled, onSetMode, onSetConfig 
   // A config the host published replaces every value shown optimistically: it is
   // either the confirmation or, after a refusal, the original republished.
   useEffect(() => { setShown({}); }, [config]);
+  useEffect(() => { if (!compact) setOpen(false); }, [compact]);
 
   useEffect(() => {
     if (!open) return;
@@ -46,6 +47,14 @@ export function AcpSettings({ config, compact, disabled, onSetMode, onSetConfig 
   }, [open]);
 
   if (!settings.length) return null;
+
+  const valueOf = (setting: AcpSetting) => (Object.hasOwn(shown, setting.key) ? shown[setting.key] : setting.value);
+  const summary = settings
+    .filter((setting) => setting.type === 'select')
+    .slice(0, 2)
+    .map((setting) => settingLabel(setting, valueOf(setting)))
+    .filter(Boolean)
+    .join(' · ');
 
   async function change(setting: AcpSetting, value: string | boolean) {
     if (busy) return;
@@ -66,7 +75,7 @@ export function AcpSettings({ config, compact, disabled, onSetMode, onSetConfig 
   }
 
   const controls = settings.map((setting) => {
-    const value = Object.hasOwn(shown, setting.key) ? shown[setting.key] : setting.value;
+    const value = valueOf(setting);
     const off = disabled || !!busy;
     if (setting.type === 'boolean') {
       return <label key={setting.key} className={styles.setting} data-setting={setting.key} data-type="boolean" title={setting.description ?? undefined}>
@@ -87,10 +96,24 @@ export function AcpSettings({ config, compact, disabled, onSetMode, onSetConfig 
     </label>;
   });
 
+  const compactTitle = summary ? t('sessions.acpSettingsSummary', { summary }) : t('sessions.acpSettings');
+
   return <div ref={rootRef} className={styles.settings} data-acp-settings={compact ? 'menu' : 'inline'}>
     {compact ? <>
-      <button type="button" className={styles.iconButton} aria-label={t('sessions.acpSettings')} title={t('sessions.acpSettings')} aria-haspopup="true" aria-expanded={open} aria-controls={open ? menuId : undefined} onClick={() => setOpen((value) => !value)} onKeyDown={(event) => { if (event.key === 'Escape' && open) { event.preventDefault(); setOpen(false); } }}>
-        <Icon name="more" size={14} />
+      <button
+        type="button"
+        className={summary ? styles.settingsTrigger : styles.iconButton}
+        aria-label={t('sessions.acpSettings')}
+        title={compactTitle}
+        data-summary={summary || undefined}
+        aria-haspopup="true"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        onClick={() => setOpen((value) => !value)}
+        onKeyDown={(event) => { if (event.key === 'Escape' && open) { event.preventDefault(); setOpen(false); } }}
+      >
+        <Icon name="sliders" size={13} />
+        {summary && <span className={styles.settingsSummary} aria-hidden="true">{summary}</span>}
       </button>
       {open && <div id={menuId} className={styles.settingsMenu} role="group" aria-label={t('sessions.acpSettings')} onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); setOpen(false); rootRef.current?.querySelector<HTMLButtonElement>('button')?.focus(); } }}>
         {controls}

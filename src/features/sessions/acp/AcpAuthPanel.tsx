@@ -49,8 +49,11 @@ export function AcpAuthPanel({ snapshot, toolName, onAuthenticate, onLoginTermin
     finally { setBusy(''); }
   }
 
-  return <section className={styles.auth} data-acp-auth="" aria-label={t('sessions.acpLoginTitle', { tool: toolName })}>
-    <strong className={styles.authTitle}><Icon name="lock" size={13} />{t('sessions.acpLoginTitle', { tool: toolName })}</strong>
+  return <section className={styles.auth} data-acp-auth="" data-card="auth" aria-label={t('sessions.acpLoginTitle', { tool: toolName })}>
+    <div className={styles.authHead}>
+      <strong className={styles.authTitle}><Icon name="lock" size={13} />{t('sessions.acpLoginTitle', { tool: toolName })}</strong>
+      <span className={styles.authTag}>{t('sessions.acpCardAuth')}</span>
+    </div>
     <p className={styles.authHint}>{t('sessions.acpLoginHint')}</p>
     {reason && <p className={styles.error} role="alert" data-acp-auth-error="">{visibleControls(reason)}</p>}
     {methods.length > 0 ? <ul className={styles.authMethods}>

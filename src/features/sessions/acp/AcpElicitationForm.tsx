@@ -120,7 +120,10 @@ export function AcpElicitationForm({ item, toolName, answerable, onRespond }: {
 
   return <form className={`${cardStyles.card} ${styles.form}`} data-item-id={item.id} data-card="elicitation" data-decision={item.decision} data-request-id={item.requestId ?? undefined}
     aria-label={t('sessions.acpElicitationTitle', { tool: toolName })} noValidate onSubmit={(event) => { event.preventDefault(); void respond('accept'); }}>
-    <strong className={cardStyles.cardTitle}><Icon name="info" size={13} />{t('sessions.acpElicitationTitle', { tool: toolName })}</strong>
+    <div className={cardStyles.cardHead}>
+      <strong className={cardStyles.cardTitle}><Icon name="info" size={13} />{t('sessions.acpElicitationTitle', { tool: toolName })}</strong>
+      <span className={cardStyles.cardTag}>{t('sessions.acpCardElicitation')}</span>
+    </div>
     <p className={cardStyles.plainText}>{visibleControls(item.message)}</p>
     {fields.map(([name, field]) => fieldView(name, field))}
     {errorCount > 0 && <p className={styles.error} role="alert">{t('sessions.acpFormInvalid', { count: errorCount })}</p>}
