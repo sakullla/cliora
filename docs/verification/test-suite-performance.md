@@ -224,7 +224,7 @@
   `_measure` 的调用栈：`SelectionService._refresh`（rAF）→ `Emitter.fire/_deliver` → `CoreBrowserTerminal` 中 `onRequestRedraw` 的监听 → `RenderService.handleSelectionChanged` → `DomRenderer.handleSelectionChanged` → `DomRenderer.renderRows` → `DomRendererRowFactory.createRow` → `WidthCache.get` → `WidthCache._measure`。
 - **根因（产品侧）**：隐藏窗格的终端使用 xterm 的 DOM 渲染器。窗格是 `display:none`，测量元素的 `offsetWidth` 为 0，而 `WidthCache.get` 只缓存大于 0 的宽度（`@xterm/xterm/src/browser/renderer/dom/WidthCache.ts` 第 134–165 行），所以每一行的每个字符都会重新测量，每次测量都触发一次同步重排。`RenderService.handleSelectionChanged` 直接调用渲染器（`RenderService.ts` 第 303–307 行），不检查渲染器是否因不可见而暂停，所以隐藏终端每帧都会重绘全部行。40 个窗格、每个 1600 行输出时，主线程上的重排约 26 s。在用例引入时的提交 02707f25 上重现，结果相同（28.4 s），说明这是用例本身的负载，不是后续改动造成的回退。本次没有查明是什么触发了选区重绘请求（候选：`clearSelection` 在 `onResize` 行数变化时被调用，或 `_handleTrim`），留给 T9 确认。
 - **处理（过渡）**：T8 不改产品代码。用例加 `test.slow()`，轮询时限从 20 s 放宽到 75 s；输入数据（40 × 1600 行）和堆预算断言（< 48 MB）都不变。`--repeat-each=5`（terminal 项目，3 个 worker 并行）5/5 通过，每次 33.6–36.0 s。在全量运行中，这个用例大约要 64 s。
-- **后续**：根因由 T9（R16）在产品代码中修复。修复后去掉 `test.slow()` 和放宽的时限，恢复默认时限。
+- **后续（已完成）**：T9（R16，`2387fc58`）在产品代码中修复了根因：触发源是 xterm 滚动监听中的 `SelectionService.refresh`，隐藏期间暂缓选区重绘、重新显示时补画。用例已去掉 `test.slow()`，轮询时限恢复为 20 s，`--repeat-each=5` 5/5 通过；详见 `docs/verification/terminal-background-output.md`。
 
 ## 固定等待
 

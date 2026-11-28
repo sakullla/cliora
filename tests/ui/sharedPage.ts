@@ -1,6 +1,12 @@
 import { expect, test as base, type Browser, type BrowserContext, type CDPSession, type Page, type TestInfo } from '@playwright/test';
 
-// Shared page (T8 / R15). Opening a page costs a renderer process and a cold load,
+// Shared page (T8 / R15). This fixture relies on Playwright's private fixtures
+// (_contextFactory, _combinedContextOptions) and on the runner applying project options
+// to browser.newContext(); @playwright/test is pinned to 1.63.0, so re-check this file on
+// every upgrade. Shared contexts skip the per-test video setup: run with
+// PLAYWRIGHT_SHARED_PAGE=0 when collecting traces or videos.
+//
+// Opening a page costs a renderer process and a cold load,
 // about twice the CPU of navigating an existing page again. The suite is CPU-bound, so
 // files that import `test` from here run each test on one page per worker instead of a
 // new context and page. Every test stays an independent test with the same title and
