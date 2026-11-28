@@ -2474,13 +2474,8 @@ test('hidden live terminals answer cursor queries without accepting keyboard inp
 
 test('forty live terminals keep background output within the workbench memory budget', async ({ page }) => {
   // The budget is the assertion; draining the output is only the precondition. Hidden panes
-  // keep xterm's DOM renderer, whose character widths cannot be cached while the pane is
-  // display:none, so every redrawn row forces a layout. Parsing these 40 × 1600 rows took
-  // 24–28 s of main-thread time on an unloaded 8-core Windows host (CPU profile: ~26 s in
-  // WidthCache._measure), past the earlier 20 s wait. Give the drain room instead of
-  // shrinking the load the budget is meant to cover. Interim: the product fix for the
-  // forced layouts (workflow task T9, R16) restores the default timeouts here.
-  test.slow();
+  // hold xterm's selection redraw (terminalRenderPause.ts), so these 40 × 1600 rows are parsed
+  // without redrawing display:none rows; see docs/verification/terminal-background-output.md.
   await page.addInitScript(() => {
     const sessions = Array.from({ length: 39 }, (_, index) => ({
       id: `load-${index}`, toolId: 'codex', projectId: null, directory: `C:/work/${index}`,
@@ -2499,7 +2494,7 @@ test('forty live terminals keep background output within the workbench memory bu
   await expect.poll(() => page.evaluate(() => {
     const log = (window as unknown as { __writeLog: Array<{ sessionId: string; text: string }> }).__writeLog;
     return new Set(log.filter(entry => /\x1b\[\d+;\d+R/.test(entry.text)).map(entry => entry.sessionId)).size;
-  }), { timeout: 75_000 }).toBe(40);
+  }), { timeout: 20_000 }).toBe(40);
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('HeapProfiler.collectGarbage');
   const heap = await cdp.send('Runtime.getHeapUsage');
@@ -2564,6 +2559,52 @@ test('switching sessions preserves a reading position while background output ke
   await page.getByRole('button', { name: '回到最新输出', exact: true }).click();
   await expect(terminalTree).toContainText('background-ordered-11');
   await expect.poll(async () => (await readScroll(viewport)).remaining).toBe(0);
+});
+
+test('a hidden pane parses heavy output and answers DSR/DA without redrawing rows, then draws it once revealed', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await openWorkbench(page);
+  const output = (text: string) => page.evaluate(value => (window as unknown as { __output: (text: string, id: string) => void }).__output(value, 's1'), text);
+  const pane = page.locator('[data-pane-session="s1"]');
+  const rows = pane.locator('.xterm-rows');
+  const viewport = pane.locator('.xterm-scrollable-element');
+  await output('before-hide\r\n');
+  await expect(rows).toContainText('before-hide');
+  const s1Resizes = () => page.evaluate(() => (window as unknown as { __resizes: Array<{ sessionId: string }> }).__resizes.filter(item => item.sessionId === 's1').length);
+  const resizes = await s1Resizes();
+  await page.getByRole('tab', { name: /Claude Code/ }).click();
+  await expect(pane).toBeHidden();
+  // Two frames let xterm's visibility observer report the hidden pane before output arrives.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const hiddenRows = await rows.evaluate(node => node.textContent);
+  await page.evaluate(() => { (window as unknown as { __writeLog: unknown[] }).__writeLog.length = 0; });
+  await output(Array.from({ length: 1200 }, (_, index) => `hidden-row-${index}`).join('\r\n') + '\r\n\x1b[6n\x1b[c');
+  await expect.poll(async () => (await writeLog(page)).filter(entry => entry.sessionId === 's1').map(entry => entry.text).join('')).toMatch(/\x1b\[\d+;\d+R[\s\S]*\x1b\[\?[\d;]+c/);
+  // Each scrolled line used to queue a full redraw of the display:none rows.
+  expect(await rows.evaluate(node => node.textContent)).toBe(hiddenRows);
+  await page.getByRole('tab', { name: /Codex/ }).click();
+  await expect(pane).toBeVisible();
+  await expect(rows).toContainText('hidden-row-1199');
+  await expect(rows).not.toContainText('before-hide');
+  await expect(rows.locator('.xterm-cursor')).toHaveCount(1);
+  await expect.poll(async () => (await readScroll(viewport)).remaining).toBe(0);
+  await expect.poll(async () => (await readScroll(viewport)).max).toBeGreaterThan(1000);
+  // The PTY keeps its grid across the hide and reveal.
+  expect(await s1Resizes()).toBe(resizes);
+});
+
+test('a temporary look renders live output in the otherwise hidden pane', async ({ page }) => {
+  await page.addInitScript(() => { Object.assign(window, { __twoSessions: true }); });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openWorkbench(page);
+  await openClaudeSessionMenu(page);
+  await page.getByRole('menu', { name: 'Claude Code 会话操作', exact: true }).getByRole('menuitem', { name: '临时查看', exact: true }).click();
+  const rows = page.locator('[data-pane-session="s2"][data-peeking] .xterm-rows');
+  await expect(rows).toBeVisible();
+  for (let index = 0; index < 3; index++) {
+    await page.evaluate(index => (window as unknown as { __output: (text: string, id: string) => void }).__output(Array.from({ length: 80 }, (_, row) => `peek-${index}-${row}`).join('\r\n') + '\r\n', 's2'), index);
+    await expect(rows).toContainText(`peek-${index}-79`);
+  }
 });
 
 test('restoration keeps selected and pinned sessions and runs once across page switches', async ({ page }) => {

@@ -13,6 +13,7 @@ import { contrastFloor, terminalTheme, type TerminalTheme } from './terminalThem
 import { registerTerminalLinks, type TerminalLinks } from './terminalLinks';
 import { TerminalScrollbar } from './TerminalScrollbar';
 import { TerminalWebglLifecycle } from './terminalWebgl';
+import { TerminalRenderPause } from './terminalRenderPause';
 import type { OutputChunk, PendingTerminalOutput } from './pendingOutput';
 import { createTerminalIme, type TerminalIme } from './terminalIme';
 import { computeAppWheelSteps, computeViewportWheelLines, createWheelAccumulator, resetWheelAccumulator } from './terminalWheel';
@@ -430,6 +431,10 @@ export function SessionTerminal({ sessionId, toolId, label, active, backgroundSc
   // unchanged grid: the CLI treats every resize as a reason to redraw.
   const ptyGridRef = useRef({ cols: 0, rows: 0 });
   const webglRef = useRef<TerminalWebglLifecycle | null>(null);
+  const renderPauseRef = useRef<TerminalRenderPause | null>(null);
+  // The pane is hidden exactly when it is neither active nor peeked (see the root element).
+  const shownRef = useRef(active || peeking);
+  shownRef.current = active || peeking;
   const viewportRef = useRef<HTMLElement | null>(null);
   const userScrollRef = useRef(false);
   const [, setScrollVersion] = useState(0);
@@ -492,6 +497,11 @@ export function SessionTerminal({ sessionId, toolId, label, active, backgroundSc
     term.open(node);
     if (term.textarea) term.textarea.disabled = !activeRef.current || !runningRef.current || suspendInputRef.current;
     webglRef.current = new TerminalWebglLifecycle(term, () => new WebglAddon());
+    // A hidden pane keeps parsing and answering protocol queries, but must not
+    // redraw rows for every scrolled line (see terminalRenderPause.ts).
+    const renderPause = new TerminalRenderPause(term);
+    if (!shownRef.current) renderPause.pause();
+    renderPauseRef.current = renderPause;
     termRef.current = term;
     fitRef.current = fit;
     let disposed = false;
@@ -1325,6 +1335,8 @@ export function SessionTerminal({ sessionId, toolId, label, active, backgroundSc
       observer.disconnect();
       links.dispose();
       linksRef.current = null;
+      renderPause.dispose();
+      if (renderPauseRef.current === renderPause) renderPauseRef.current = null;
       try {
         webglRef.current?.dispose();
       } finally {
@@ -1373,6 +1385,16 @@ export function SessionTerminal({ sessionId, toolId, label, active, backgroundSc
     term.options.theme = terminalTheme(theme);
     term.options.minimumContrastRatio = contrastFloor(theme);
   }, [theme]);
+
+  // Runs after React shows or hides the pane and before the next frame, so a
+  // queued selection redraw cannot reach a display:none renderer. Reveal draws
+  // the selection held while hidden once; the reveal paths below refresh rows.
+  useLayoutEffect(() => {
+    const pause = renderPauseRef.current;
+    if (!pause) return;
+    if (active || peeking) pause.resume();
+    else pause.pause();
+  }, [active, peeking]);
 
   useLayoutEffect(() => {
     if (!peeking || active) return;
