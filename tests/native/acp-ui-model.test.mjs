@@ -2,8 +2,13 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   GROUPABLE_TOOL_KINDS,
+  agentHeadIds,
+  buildSegments,
+  groupIdByItem,
   groupTimelineItems,
   isGroupableTool,
+  segmentKey,
+  segmentOptions,
   summarizeToolGroupKinds,
   toolGroupIdByItem,
 } from '../../src/features/sessions/acp/timelineModel.ts';
@@ -340,20 +345,32 @@ test('searchAcpTimeline searches all visible timeline items in order with case s
     'elic-1',
   ]);
 
-  // Grouped tools carry the stable toolGroup id; standalone items do not.
+  // The turn's thought and tool calls up to its last call form its work process: each
+  // match inside carries the process id; the prompt and later items do not.
+  const processId = 'process:m-thought';
+  const thoughtMatches = insensitive.filter((match) => match.itemId === 'm-thought');
+  assert.ok(thoughtMatches.length > 0 && thoughtMatches.every((m) => m.groupId === processId));
+
   const g1Matches = insensitive.filter((match) => match.itemId === 'tool:g1');
   assert.equal(g1Matches.length, 4); // title, rawInput, text, location
   assert.deepEqual(g1Matches.map((m) => m.occurrence), [0, 1, 2, 3]);
-  assert.ok(g1Matches.every((m) => m.groupId === 'tool-group:tool:g1'));
+  assert.ok(g1Matches.every((m) => m.groupId === processId));
 
   const g2Matches = insensitive.filter((match) => match.itemId === 'tool:g2');
   assert.equal(g2Matches.length, 1);
-  assert.equal(g2Matches[0].groupId, 'tool-group:tool:g1');
+  assert.equal(g2Matches[0].groupId, processId);
 
   const editMatches = insensitive.filter((match) => match.itemId === 'tool:edit-1');
   // diff path (1) + removed oldAlpha (1) + unchanged shared alpha once + newAlpha (1) + terminal command (1) + ANSI-stripped terminal output (1) = 6
   assert.equal(editMatches.length, 6);
-  assert.ok(editMatches.every((m) => m.groupId === undefined));
+  assert.ok(editMatches.every((m) => m.groupId === processId));
+  assert.ok(insensitive.filter((m) => ['acc-1', 'notice-1', 'sub-1', 'elic-1'].includes(m.itemId)).every((m) => m.groupId === undefined));
+
+  // Without a prompt there is no round: consecutive completed lightweight tools still
+  // fold into a tool group, and the edit stays standalone.
+  const noRound = searchAcpTimeline(makeSnapshot(timeline.slice(1), { pending: snapshot.pending, terminals: snapshot.terminals }), 'alpha', false);
+  assert.ok(noRound.filter((m) => m.itemId === 'tool:g1' || m.itemId === 'tool:g2').every((m) => m.groupId === 'tool-group:tool:g1'));
+  assert.ok(noRound.filter((m) => m.itemId === 'tool:edit-1' || m.itemId === 'm-thought').every((m) => m.groupId === undefined));
 
   const userMatches = insensitive.filter((match) => match.itemId === 'm-user');
   assert.equal(userMatches.length, 2); // message text + attachment name
@@ -368,13 +385,205 @@ test('searchAcpTimeline searches all visible timeline items in order with case s
 
   // Case-sensitive search narrows strictly to exact case.
   const upperOnly = searchAcpTimeline(snapshot, 'ALPHA', true);
-  assert.deepEqual(upperOnly, [{ itemId: 'tool:g2', occurrence: 0, groupId: 'tool-group:tool:g1' }]);
+  assert.deepEqual(upperOnly, [{ itemId: 'tool:g2', occurrence: 0, groupId: processId }]);
 
   const titleCase = searchAcpTimeline(snapshot, 'Alpha', true);
   assert.deepEqual(
     titleCase.map((m) => m.itemId),
     ['m-user', 'tool:edit-1', 'tool:edit-1', 'notice-1', 'sub-1', 'elic-1'],
   );
+});
+
+const user = (id, turnId = 'turn-1') => messageItem(id, `prompt ${id}`, { role: 'user', turnId });
+const thought = (id, text = `thinking ${id}`, extra = {}) => messageItem(id, text, { role: 'thought', ...extra });
+const notice = (id, level = 'info', turnId = 'turn-1') => ({ kind: 'notice', id, level, code: '', text: `notice ${id}`, turnId });
+const turnEnd = (turnId, reason = 'end_turn') => ({ kind: 'turn', id: `${turnId}-end`, turnId, reason });
+const accessItem = (id, decision = 'allowed_once', requestId = null) => ({ kind: 'access', id, accessKind: 'read', path: '/outside/a', detail: null, decision, requestId, diff: null, turnId: 'turn-1', subagent: null, userPath: null });
+const shape = (segments) => segments.map((segment) => segment.kind === 'item'
+  ? segment.item.id
+  : `${segment.kind}[${segment.items.map((item) => item.id).join(',')}]`);
+const flatten = (segments) => segments.flatMap((segment) => segment.kind === 'item' ? [segment.item.id] : segment.items.map((item) => item.id));
+
+test('buildSegments folds startup messages only before a first prompt', () => {
+  const s1 = messageItem('s1', '# Context\n- a', { turnId: '' });
+  const s2 = thought('s2', 'loading', { turnId: '' });
+  const subStart = messageItem('sub-s', 'child', { turnId: '', subagent: 'child-1' });
+  const segments = buildSegments([s1, s2, subStart, user('u1'), messageItem('m1', 'hi')]);
+  assert.deepEqual(shape(segments), ['startup[s1,s2]', 'sub-s', 'u1', 'm1']);
+  assert.equal(segments[0].id, 'startup:s1');
+  // A history without any prompt reads as ordinary replies.
+  assert.deepEqual(shape(buildSegments([s1, s2])), ['s1', 's2']);
+  // Only the agent's own messages outside any turn fold.
+  assert.deepEqual(shape(buildSegments([messageItem('t1', 'in a turn'), s1, user('u1')])), ['t1', 'startup[s1]', 'u1']);
+});
+
+test('buildSegments makes the work up to the last tool call a process and leaves the reply after it', () => {
+  const timeline = [
+    user('u1'),
+    thought('th1'),
+    toolItem('x1', { toolKind: 'execute' }),
+    messageItem('note', 'Now I will add R13.'),
+    toolItem('r1', { toolKind: 'read' }),
+    thought('th2'),
+    messageItem('reply', 'Done.'),
+    turnEnd('turn-1'),
+  ];
+  const segments = buildSegments(timeline);
+  assert.deepEqual(shape(segments), ['u1', 'process[th1,tool:x1,note,tool:r1]', 'th2', 'reply', 'turn-1-end']);
+  const process = segments[1];
+  assert.equal(process.id, 'process:th1');
+  assert.equal(process.ended, true);
+  assert.equal(process.interrupted, false);
+  assert.equal(process.reason, 'end_turn');
+  assert.equal(process.tail, true);
+  assert.equal(process.activity, null);
+  assert.deepEqual(process.summary, { steps: 3, kinds: [{ kind: 'execute', count: 1 }, { kind: 'read', count: 1 }, { kind: 'thought', count: 1 }], failed: 0, files: 0 });
+  assert.deepEqual(flatten(segments), timeline.map((item) => item.id));
+
+  // A turn without any tool call has no process.
+  const plain = [user('u1'), thought('th1'), messageItem('m1', 'hello'), turnEnd('turn-1')];
+  assert.deepEqual(shape(buildSegments(plain)), ['u1', 'th1', 'm1', 'turn-1-end']);
+  // Items of another turn, a subagent's, or without a prompt never join a process.
+  const other = [user('u1'), toolItem('a', { turnId: 'turn-0' }), toolItem('b', { subagent: 'child' }), toolItem('c', { subagent: 'child' })];
+  assert.deepEqual(shape(buildSegments(other)), ['u1', 'tool:a', 'toolGroup[tool:b,tool:c]']);
+});
+
+test('buildSegments splits a process at cards, subagents and errors, keeping every item in order', () => {
+  const permission = { requestId: 'perm-1', turnId: 'turn-1', options: [] };
+  const timeline = [
+    user('u1'),
+    toolItem('t1'),
+    accessItem('acc'),
+    toolItem('t2'),
+    notice('n-err', 'error'),
+    toolItem('t3'),
+    { kind: 'subagent', id: 'sub', sessionId: 'child', parent: null, title: null, description: null, state: null, stopReason: null, summary: '', turnId: 'turn-1' },
+    toolItem('t4'),
+    { kind: 'elicitation', id: 'elic', message: 'q', requestedSchema: { properties: {} }, toolCallId: null, decision: 'accepted', requestId: null, turnId: 'turn-1', subagent: null },
+    toolItem('t5'),
+    notice('n-info'),
+    toolItem('ask', { toolKind: 'edit', status: 'pending', permission }),
+    toolItem('t6'),
+    messageItem('reply', 'ok'),
+  ];
+  const segments = buildSegments(timeline, { pending: ['perm-1'] });
+  assert.deepEqual(shape(segments), [
+    'u1', 'process[tool:t1]', 'acc', 'process[tool:t2]', 'n-err', 'process[tool:t3]', 'sub',
+    'process[tool:t4]', 'elic', 'process[tool:t5,n-info]', 'tool:ask', 'process[tool:t6]', 'reply',
+  ]);
+  assert.deepEqual(flatten(segments), timeline.map((item) => item.id));
+  // Only the last process of the turn carries its tail.
+  assert.deepEqual(segments.filter((s) => s.kind === 'process').map((s) => s.tail), [false, false, false, false, false, true]);
+  // Once nothing waits, the answered call rejoins its process.
+  assert.deepEqual(shape(buildSegments(timeline)).slice(-2), ['process[tool:t5,n-info,tool:ask,tool:t6]', 'reply']);
+});
+
+test('buildSegments counts steps, failures and changed files', () => {
+  const timeline = [
+    user('u1'),
+    ...Array.from({ length: 5 }, (_, index) => thought(`th${index}`)),
+    ...Array.from({ length: 6 }, (_, index) => toolItem(`x${index}`, { toolKind: 'execute', status: index === 2 ? 'failed' : 'completed' })),
+    toolItem('r1', { toolKind: 'read', locations: [{ path: 'src/read-only.ts', line: 1 }] }),
+    toolItem('e1', { toolKind: 'edit', content: [{ type: 'diff', path: 'src/a.ts', oldText: 'a', newText: 'b', truncated: false }] }),
+    toolItem('e2', { toolKind: 'edit', locations: [{ path: 'src/a.ts', line: 3 }, { path: 'src/b.ts', line: null }] }),
+    toolItem('d1', { toolKind: 'delete', locations: [{ path: 'src/c.ts', line: null }] }),
+    toolItem('w1', { toolKind: 'mystery' }),
+  ];
+  const [, process] = buildSegments(timeline);
+  assert.equal(process.kind, 'process');
+  assert.deepEqual(process.summary, {
+    steps: 16,
+    kinds: [{ kind: 'execute', count: 6 }, { kind: 'read', count: 1 }, { kind: 'edit', count: 2 }, { kind: 'delete', count: 1 }, { kind: 'other', count: 1 }, { kind: 'thought', count: 5 }],
+    failed: 1,
+    files: 3,
+  });
+});
+
+test('buildSegments tells a running, waiting, replying, stopped and interrupted turn apart', () => {
+  const running = [user('u1'), thought('th1'), toolItem('x1', { toolKind: 'execute', status: 'in_progress', title: 'npm test' })];
+  const [, open] = buildSegments(running, { turnOpen: true });
+  assert.equal(open.ended, false);
+  assert.deepEqual(open.activity, { kind: 'running', title: 'npm test' });
+  // Without a turn in flight the same round has ended, with its last call cut short.
+  const [, cut] = buildSegments(running);
+  assert.equal(cut.ended, true);
+  assert.equal(cut.interrupted, true);
+  assert.equal(cut.activity, null);
+
+  const thinking = [user('u1'), toolItem('r1'), thought('th2')];
+  assert.deepEqual(buildSegments(thinking, { turnOpen: true })[1].activity, { kind: 'thinking' });
+  const replying = [user('u1'), toolItem('r1'), thought('th2'), messageItem('m1', 'answer')];
+  assert.deepEqual(buildSegments(replying, { turnOpen: true })[1].activity, { kind: 'replying' });
+  const waiting = [user('u1'), toolItem('r1'), accessItem('acc', 'pending', 'req-1')];
+  assert.deepEqual(buildSegments(waiting, { turnOpen: true, pending: ['req-1'] })[1].activity, { kind: 'waiting' });
+  const working = [user('u1'), toolItem('r1')];
+  assert.deepEqual(buildSegments(working, { turnOpen: true })[1].activity, { kind: 'working' });
+
+  const stopped = [user('u1'), toolItem('r1'), turnEnd('turn-1', 'cancelled')];
+  const [, stop] = buildSegments(stopped, { turnOpen: true });
+  assert.equal(stop.ended, true);
+  assert.equal(stop.interrupted, true);
+  assert.equal(stop.reason, 'cancelled');
+  const failed = [user('u1'), toolItem('r1'), turnEnd('turn-1', 'failed')];
+  assert.equal(buildSegments(failed)[1].interrupted, false);
+  // A later prompt ends the earlier round even without its turn entry.
+  const replay = [user('u1', ''), toolItem('r1', { turnId: '', status: 'in_progress' }), user('u2', ''), toolItem('r2', { turnId: '' })];
+  const replayed = buildSegments(replay, { turnOpen: true }).filter((s) => s.kind === 'process');
+  assert.deepEqual(replayed.map((s) => [s.ended, s.interrupted]), [[true, true], [false, false]]);
+});
+
+test('agentHeadIds names the first agent content of each round once', () => {
+  const timeline = [
+    messageItem('s1', 'boot', { turnId: '' }),
+    user('u1'),
+    thought('th1'),
+    messageItem('m1', 'hi there'),
+    turnEnd('turn-1'),
+    user('u2', 'turn-2'),
+    toolItem('t1', { turnId: 'turn-2' }),
+    messageItem('m2', 'reply', { turnId: 'turn-2' }),
+    user('u3', 'turn-3'),
+    messageItem('m3', 'third', { turnId: 'turn-3' }),
+    messageItem('m4', 'more', { turnId: 'turn-3' }),
+    messageItem('sub', 'child says', { turnId: 'turn-3', subagent: 'child' }),
+  ];
+  const segments = buildSegments(timeline);
+  assert.deepEqual([...agentHeadIds(segments)], ['th1', 'process:tool:t1', 'm3']);
+  assert.deepEqual([...agentHeadIds(buildSegments([messageItem('a', 'x'), messageItem('b', 'y')]))], ['a']);
+  assert.deepEqual(segments.map(segmentKey).slice(0, 2), ['startup:s1', 'u1']);
+});
+
+test('groupIdByItem covers startup, process and tool group members', () => {
+  const timeline = [
+    messageItem('s1', 'boot', { turnId: '' }),
+    user('u1'),
+    thought('th1'),
+    toolItem('x1', { toolKind: 'execute' }),
+    toolItem('c1', { subagent: 'child' }),
+    toolItem('c2', { subagent: 'child' }),
+  ];
+  const byItem = groupIdByItem(buildSegments(timeline));
+  assert.deepEqual(Object.fromEntries(byItem), {
+    s1: 'startup:s1',
+    th1: 'process:th1',
+    'tool:x1': 'process:th1',
+    'tool:c1': 'tool-group:tool:c1',
+    'tool:c2': 'tool-group:tool:c1',
+  });
+});
+
+test('segmentOptions reads a running turn and only live pending requests', () => {
+  assert.deepEqual(segmentOptions({ state: 'running', pending: ['a'] }), { turnOpen: true, pending: ['a'] });
+  assert.deepEqual(segmentOptions({ state: 'waiting_permission', pending: ['a'] }), { turnOpen: true, pending: ['a'] });
+  assert.deepEqual(segmentOptions({ state: 'ready', pending: [] }), { turnOpen: false, pending: [] });
+  assert.deepEqual(segmentOptions({ state: 'closed', pending: ['a'] }), { turnOpen: false, pending: [] });
+});
+
+test('searchAcpTimeline never indexes the id of a terminal whose record is missing', () => {
+  const call = toolItem('bash-1', { title: 'Run', toolKind: 'execute', content: [{ type: 'terminal', terminalId: 'toolu_secret_id' }] });
+  assert.deepEqual(searchAcpTimeline(makeSnapshot([call]), 'toolu_secret', false), []);
+  const withRecord = makeSnapshot([call], { terminals: [{ terminalId: 'toolu_secret_id', command: 'ls', cwd: '/', output: 'toolu_secret printed\n', truncated: false, exitStatus: null, released: false, subagent: null, agentOwned: true }] });
+  assert.deepEqual(searchAcpTimeline(withRecord, 'toolu_secret', false), [{ itemId: 'tool:bash-1', occurrence: 0 }]);
 });
 
 test('searchAcpTimeline handles non-overlapping occurrences and splitMatchRuns preserves original casing safely', () => {

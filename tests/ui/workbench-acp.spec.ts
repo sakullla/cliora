@@ -105,7 +105,9 @@ test('a launch opens a conversation, streams one reply, merges its tool call and
   await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'ready', lastTurnReason: 'cancelled', seq: 12 }));
   // The end of the turn is a timeline entry, in its place after the turn's output.
   await send({ sessionId: 'a1', seq: 13, kind: 'item', item: { kind: 'turn', id: 'turn-1-end', turnId: 'turn-1', reason: 'cancelled' } });
-  await expect(panel.getByText('本轮已停止。')).toBeVisible();
+  // A stop reads as a quiet mark at the end of the turn, not a rule with a sentence.
+  await expect(panel.locator('[data-reason="cancelled"]')).toHaveText('已停止');
+  await expect(panel.getByText('本轮已停止。')).toHaveCount(0);
   await expect(panel.getByRole('textbox')).toBeEnabled();
 
   // ACP mode removes duplicate top-bar quick-input and interrupt buttons; Ctrl/Cmd+Shift+M focuses the ACP composer directly.
@@ -359,8 +361,11 @@ test('Ctrl+Shift+F searches ACP conversations, toggles case, auto-expands folded
   const stage = page.getByRole('region', { name: '当前会话' });
   const panel = page.locator('[data-acp="true"][data-pane-session="a1"]');
   await expect(panel).toBeVisible();
-  // Two consecutive completed lightweight tools start folded inside one group.
-  await expect(panel.locator('[data-acp-tool-group]')).toHaveCount(1);
+  // The ended turn's thought and tool calls start folded inside its work process.
+  const work = panel.locator('[data-acp-process]');
+  await expect(work).toHaveCount(1);
+  await expect(work.locator(':scope > button[aria-expanded]')).toHaveAttribute('aria-expanded', 'false');
+  await expect(panel.locator('[data-item-id="th1"]')).toHaveCount(0);
   await expect(panel.locator('[data-item-id="tool:r2"]')).toHaveCount(0);
 
   await page.keyboard.press(`${mod}+Shift+F`);
@@ -380,11 +385,14 @@ test('Ctrl+Shift+F searches ACP conversations, toggles case, auto-expands folded
   await expect(caseToggle).toHaveAttribute('aria-pressed', 'false');
   await expect(stage.getByRole('search')).toContainText('1 / 4');
 
-  // Stepping into folded thought, folded tool group and folded edit tool auto-expands each one.
+  // Stepping into the folded process opens it and each step it lands on: the thought,
+  // a lookup and the edit.
   await search.press('Enter');
   await expect(stage.getByRole('search')).toContainText('2 / 4');
+  await expect(work.locator(':scope > button[aria-expanded]')).toHaveAttribute('aria-expanded', 'true');
   await expect(panel.locator('[data-item-id="th1"]')).toHaveAttribute('data-find-hit', 'active');
-  await expect(panel.locator('[data-item-id="th1"]')).toHaveAttribute('open', '');
+  await expect(panel.locator('[data-item-id="th1"] button[aria-expanded]')).toHaveAttribute('aria-expanded', 'true');
+  await expect(panel.locator('[data-item-id="th1"] mark')).toHaveText('alpha');
 
   await search.press('Enter');
   await expect(stage.getByRole('search')).toContainText('3 / 4');

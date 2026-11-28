@@ -517,13 +517,14 @@ for (const theme of ['light', 'dark'] as const) {
 }
 
 test('consecutive completed lightweight tools fold into a summary group and break out when status or content changes', async ({ page }) => {
+  // No prompt opens a round here (as in a replay without one, or a subagent's calls), so
+  // there is no work process: the lightweight-call grouping still applies.
   await installAcpMock(page, {
     interaction: 'acp',
     conversations: [snapshot({
       id: 'a1',
       state: 'running',
       timeline: [
-        userMessage('u1', '检查配置并搜索用法'),
         toolItem('g1', { title: '读取 package.json', toolKind: 'read', status: 'completed', locations: [{ path: 'package.json', line: null }] }),
         toolItem('g2', { title: '读取 tsconfig.json', toolKind: 'read', status: 'completed', locations: [{ path: 'tsconfig.json', line: null }] }),
         toolItem('g3', { title: '搜索 AcpTimeline', toolKind: 'search', status: 'completed', content: [{ type: 'text', text: '3 matches', truncated: false }] }),
@@ -575,14 +576,15 @@ test('code wrap toggle, diff copy/line-numbers/incremental expand, thought previ
       directory: 'C:/work',
       timeline: [
         userMessage('u1', '帮我重构工具栏样式'),
-        { kind: 'message', id: 'th1', role: 'thought', text: '先检查现有 token\n再替换像素值', truncated: false, turnId: 'turn-1', subagent: null },
-        agentMessage('m1', '```ts\nconst veryLongVariableName = "hello world";\n```'),
         toolItem('d1', {
           title: '更新 src/large.ts',
           toolKind: 'edit',
           status: 'in_progress',
           content: [{ type: 'diff', path: 'src/large.ts', oldText: null, newText: manyLines, truncated: false }],
         }),
+        // After the turn's last tool call: a thought and the reply, outside the process.
+        { kind: 'message', id: 'th1', role: 'thought', text: '先检查现有 token\n再替换像素值', truncated: false, turnId: 'turn-1', subagent: null },
+        agentMessage('m1', '```ts\nconst veryLongVariableName = "hello world";\n```'),
       ],
     })],
   });
@@ -609,6 +611,11 @@ test('code wrap toggle, diff copy/line-numbers/incremental expand, thought previ
   await expect(codeBlock).toHaveAttribute('data-wrap', 'true');
 
   // Diff renders line numbers, copies updated text, opens inside-directory path, and expands remaining rows incrementally.
+  // The edit is a step of the turn's process; the turn ended while it ran, so the
+  // process stays open and the step says it was interrupted. Opening the step shows the diff.
+  const step = panel.locator('[data-item-id="tool:d1"]');
+  await expect(step).toHaveAttribute('data-step-status', 'interrupted');
+  await step.getByRole('button', { name: /更新 src\/large\.ts/ }).click();
   const diff = panel.locator('[data-item-id="tool:d1"] [data-content="diff"]');
   await expect(diff.locator('[data-op="insert"]')).toHaveCount(400);
   await diff.getByRole('button', { name: '复制修改后内容', exact: true }).click();
@@ -630,4 +637,242 @@ test('code wrap toggle, diff copy/line-numbers/incremental expand, thought previ
 
   await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'closed', seq: 2 }));
   await expect(userMsg.getByRole('button', { name: '回填到输入框', exact: true })).toHaveCount(0);
+});
+
+/* R4 / R14: startup info, one name per round, quiet turn ends and the work process. */
+const thoughtItem = (id: string, text: string, turnId = 'turn-1') => ({ kind: 'message' as const, id, role: 'thought' as const, text, truncated: false, turnId, subagent: null });
+const turnItem = (turnId: string, reason: string) => ({ kind: 'turn' as const, id: `${turnId}-end`, turnId, reason });
+const openFind = async (page: Page) => {
+  await page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+Shift+F`);
+  const search = page.getByRole('region', { name: '当前会话' }).getByRole('searchbox', { name: '在对话内容中查找…', exact: true });
+  await expect(search).toBeFocused();
+  return search;
+};
+
+test('startup messages fold into one line, the agent is named once per round and a normal end says nothing', async ({ page }) => {
+  const startup = agentMessage('s1', '## Context\n\n- AGENTS.md\n- docs/requirements\n\n## Extensions\n\n- pi-acp-bridge', { turnId: '' });
+  await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', state: 'ready', lastTurnReason: 'end_turn', timeline: [
+    startup,
+    userMessage('u1', 'hi'),
+    thoughtItem('th1', 'The user greets me.'),
+    agentMessage('m1', 'Hello! What would you like to work on?\n\n## Next\n\nTell me the task.'),
+    turnItem('turn-1', 'end_turn'),
+  ] as any })] });
+  await openWorkbench(page);
+  const panel = panelOf(page);
+  const log = panel.getByRole('log');
+  await expect(panel.locator('[data-item-id="m1"]')).toContainText('Hello!');
+  // The startup message is one folded line: its headings are not drawn until opened.
+  const group = panel.locator('[data-acp-startup]');
+  await expect(group).toHaveCount(1);
+  await expect(group.getByRole('button', { name: /会话启动信息/ })).toHaveAttribute('aria-expanded', 'false');
+  await expect(group).toContainText('Context');
+  await expect(log.getByRole('heading', { name: 'Context' })).toHaveCount(0);
+  // One name for the whole round, above its first agent content (the thought).
+  await expect(log.locator('[data-acp-agent-head]')).toHaveCount(1);
+  await expect(log.getByText('Codex', { exact: true })).toHaveCount(1);
+  expect(await log.locator('[data-acp-agent-head], [data-item-id]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-item-id') ?? 'head'))).toEqual(['u1', 'head', 'th1', 'm1', 'turn-1-end']);
+  // A normal end draws neither a rule nor words.
+  await expect(log).not.toContainText('本轮结束');
+  await expect(panel.locator('[data-reason="end_turn"]')).toHaveText('');
+  // Reply headings use the conversation's own scale, without a rule under them.
+  const heading = panel.locator('[data-item-id="m1"]').getByRole('heading', { name: 'Next' });
+  await expect(heading).toBeVisible();
+  const body = panel.locator('[data-item-id="m1"] p').filter({ hasText: 'Tell me the task.' });
+  const sizes = await Promise.all([heading, body].map((node) => node.evaluate((element) => getComputedStyle(element).fontSize)));
+  expect(sizes[0]).toBe(sizes[1]);
+  expect(await heading.evaluate((element) => getComputedStyle(element).borderBottomWidth)).toBe('0px');
+
+  // Finding text inside the folded startup info opens it and highlights the match.
+  const search = await openFind(page);
+  await search.fill('Extensions');
+  await expect(group.getByRole('button', { name: /会话启动信息/ })).toHaveAttribute('aria-expanded', 'true');
+  await expect(group.locator('mark').first()).toHaveText('Extensions');
+  await expect(group.locator('[data-item-id="s1"]')).toHaveAttribute('data-find-hit', 'active');
+});
+
+test('a stopped turn ends with a quiet mark, a failed one still explains itself', async ({ page }) => {
+  await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', state: 'ready', lastTurnReason: 'failed', timeline: [
+    userMessage('u1', '先停一下'),
+    agentMessage('m1', '好的，正在读取……'),
+    turnItem('turn-1', 'cancelled'),
+    { ...userMessage('u2', '再试一次'), turnId: 'turn-2' },
+    { kind: 'notice', id: 'n2', level: 'error', code: 'prompt_failed', text: 'agent 未能完成本轮：网络错误', turnId: 'turn-2' },
+    turnItem('turn-2', 'failed'),
+  ] as any })] });
+  await openWorkbench(page);
+  const panel = panelOf(page);
+  const stopped = panel.locator('[data-reason="cancelled"]');
+  await expect(stopped).toHaveText('已停止');
+  // No rule across the column and a quieter color than the reply.
+  const style = await stopped.evaluate((node) => ({
+    before: getComputedStyle(node, '::before').content,
+    after: getComputedStyle(node, '::after').content,
+    color: getComputedStyle(node).color,
+    width: node.getBoundingClientRect().width,
+    column: node.parentElement!.getBoundingClientRect().width,
+  }));
+  expect(style.before).toBe('none');
+  expect(style.after).toBe('none');
+  expect(style.width).toBeLessThan(style.column / 2);
+  const reply = await panel.locator('[data-item-id="m1"] [class*="agentBody"]').evaluate((node) => getComputedStyle(node).color);
+  expect(style.color).not.toBe(reply);
+  await expect(panel.locator('[data-reason="failed"]')).toContainText('agent 返回了错误，本轮未完成');
+  await expect(panel.locator('[data-reason="failed"] svg')).toHaveCount(1);
+});
+
+test('a running turn shows its work as compact steps and folds into a summary when it ends', async ({ page }) => {
+  // Five thoughts, six executions, one read and one interim note, then the reply.
+  const timeline = [
+    userMessage('u1', '把 R13 补进需求，然后跑一遍检查'),
+    thoughtItem('th0', '先看需求文档的结构'),
+    toolItem('x0', { title: 'git status', toolKind: 'execute', status: 'completed' }),
+    thoughtItem('th1', '需要确认 R13 的编号'),
+    toolItem('r0', { title: '读取 docs/requirements.md', toolKind: 'read', status: 'completed' }),
+    toolItem('x1', { title: 'rg -n R13 docs', toolKind: 'execute', status: 'completed' }),
+    thoughtItem('th2', '编号没有冲突'),
+    toolItem('x2', { title: 'node scripts/check.mjs', toolKind: 'execute', status: 'completed' }),
+    agentMessage('note', 'Now I\'ll add R13 to the requirement.'),
+    thoughtItem('th3', '写完后跑测试'),
+    toolItem('x3', { title: 'npm run lint', toolKind: 'execute', status: 'completed' }),
+    toolItem('x4', { title: 'npm test', toolKind: 'execute', status: 'completed' }),
+    thoughtItem('th4', '最后构建一次'),
+    toolItem('x5', { title: 'npm run build', toolKind: 'execute', status: 'in_progress' }),
+  ];
+  await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', state: 'running', timeline: timeline as any })] });
+  await openWorkbench(page);
+  const panel = panelOf(page);
+  const log = panel.getByRole('log');
+  const work = panel.locator('[data-acp-process]');
+  const toggle = work.locator(':scope > button[aria-expanded]');
+  await expect(work).toHaveAttribute('data-state', 'running');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  // The newest eight steps show; five older ones fold into one line.
+  await expect(work.locator('[data-item-id]')).toHaveCount(8);
+  const earlier = work.getByRole('button', { name: '更早的 5 步' });
+  await expect(earlier).toBeVisible();
+  // One line per step, no card frame, and no "completed" words.
+  const step = work.locator('[data-item-id="tool:x3"]');
+  expect(await step.evaluate((node) => getComputedStyle(node).borderTopWidth)).toBe('0px');
+  expect((await step.boundingBox())!.height).toBeLessThan(32);
+  await expect(work).not.toContainText('已完成');
+  await expect(step.getByRole('img', { name: '已完成' })).toHaveCount(1);
+  // The command reads in a monospace face and only the newest step shows activity.
+  expect(await step.locator('[data-mono]').evaluate((node) => getComputedStyle(node).fontFamily)).toMatch(/mono|consol|courier/i);
+  await expect(work.locator('[data-active]')).toHaveCount(1);
+  await expect(work.locator('[data-item-id="tool:x5"] [data-active]')).toContainText('执行中');
+  await expect(work.locator('[data-acp-activity="running"]')).toHaveText('正在执行 npm run build');
+  // The interim note is a plain line of the process, without the agent's name.
+  await expect(work.locator('[data-item-id="note"]')).toHaveText('Now I\'ll add R13 to the requirement.');
+  await expect(log.locator('[data-acp-agent-head]')).toHaveCount(1);
+  await expect(work.locator('[data-acp-agent-head]')).toHaveCount(0);
+  // The folded earlier steps open on request.
+  await earlier.click();
+  await expect(work.locator('[data-item-id]')).toHaveCount(13);
+
+  // The turn ends: the last call completes, the reply streams, the turn ends normally.
+  await send(page, { sessionId: 'a1', seq: 2, kind: 'tool', call: toolCall('x5', { title: 'npm run build', toolKind: 'execute', status: 'completed' }) });
+  await send(page, { sessionId: 'a1', seq: 3, kind: 'chunk', messageId: 'reply', role: 'agent', text: 'R13 已补进需求，检查和构建都通过了。', truncated: false, turnId: 'turn-1', subagent: null });
+  await expect(work.locator('[data-acp-activity="replying"]')).toHaveText('正在回复');
+  await send(page, { sessionId: 'a1', seq: 4, kind: 'item', item: turnItem('turn-1', 'end_turn') });
+  // The host's own snapshot of the ended turn arrives too.
+  const ended = [...timeline.slice(0, -1), toolItem('x5', { title: 'npm run build', toolKind: 'execute', status: 'completed' }), agentMessage('reply', 'R13 已补进需求，检查和构建都通过了。'), turnItem('turn-1', 'end_turn')];
+  await page.evaluate((timeline) => (window as any).__acpSessionState('a1', { state: 'ready', lastTurnReason: 'end_turn', timeline, seq: 5 }), ended);
+  await expect(work).toHaveAttribute('data-state', 'ended');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(toggle).toHaveText('工作过程 · 12 步：执行 6 · 读取 1 · 思考 5');
+  await expect(work.locator('[data-item-id]')).toHaveCount(0);
+  await expect(work.locator('[data-acp-activity]')).toHaveCount(0);
+  const reply = panel.locator('[data-item-id="reply"]');
+  await expect(reply).toContainText('R13 已补进需求');
+  await expect(reply.locator('[data-acp-agent-head]')).toHaveCount(0);
+  await expect(log.locator('[data-acp-agent-head]')).toHaveCount(1);
+  // The reader may open the whole process again, all steps at once.
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(work.locator('[data-item-id]')).toHaveCount(13);
+});
+
+test('a failed step stays visible under the folded summary with failures and changed files counted', async ({ page }) => {
+  await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', state: 'ready', lastTurnReason: 'end_turn', timeline: [
+    userMessage('u1', '修一下样式再跑测试'),
+    thoughtItem('th0', '先改样式'),
+    toolItem('e1', { title: '编辑 a.css', toolKind: 'edit', status: 'completed', content: [{ type: 'diff', path: 'src/a.css', oldText: 'a', newText: 'b', truncated: false }] }),
+    toolItem('f1', { title: 'npm test', toolKind: 'execute', status: 'failed', content: [{ type: 'text', text: '2 tests failed', truncated: false }] }),
+    agentMessage('m1', '测试有两个失败，需要你看一下。'),
+    turnItem('turn-1', 'end_turn'),
+  ] as any })] });
+  await openWorkbench(page);
+  const panel = panelOf(page);
+  const work = panel.locator('[data-acp-process]');
+  const toggle = work.locator(':scope > button[aria-expanded]');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(toggle).toContainText('工作过程 · 3 步');
+  await expect(toggle).toContainText('1 个失败');
+  await expect(toggle).toContainText('改动 1 个文件');
+  // The failed step is listed without opening the process, its reason in view.
+  const failed = work.locator('[data-item-id="tool:f1"]');
+  await expect(failed).toBeVisible();
+  await expect(failed).toContainText('失败');
+  await expect(failed).toContainText('2 tests failed');
+  await expect(work.locator('[data-item-id="tool:e1"]')).toHaveCount(0);
+  await expect(panel.locator('[data-item-id="m1"]')).toContainText('测试有两个失败');
+});
+
+test('a waiting authorization card stays outside the running process and answers from the keyboard', async ({ page }) => {
+  const permission = { requestId: 'r1', turnId: 'turn-1', options: [{ optionId: 'allow', name: '允许一次', kind: 'allow_once' }, { optionId: 'reject', name: '拒绝', kind: 'reject_once' }] };
+  await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', state: 'waiting_permission', pending: ['r1'], timeline: [
+    userMessage('u1', '改一下 a.ts'),
+    thoughtItem('th0', '先读文件'),
+    toolItem('r0', { title: '读取 a.ts', toolKind: 'read', status: 'completed' }),
+    toolItem('c2', { title: '写入 src/a.ts', toolKind: 'edit', status: 'pending', permission }),
+  ] as any })] });
+  await openWorkbench(page);
+  const panel = panelOf(page);
+  const work = panel.locator('[data-acp-process]');
+  await expect(work).toHaveCount(1);
+  await expect(work.locator('[data-item-id="tool:r0"]')).toBeVisible();
+  // The call that asks is a whole card after the process, its authorization on it.
+  await expect(work.locator('[data-item-id="tool:c2"]')).toHaveCount(0);
+  const card = panel.locator('[data-item-id="tool:c2"]').getByRole('group', { name: '写入 src/a.ts' });
+  await expect(card).toBeVisible();
+  await expect(panel.locator('[data-acp-activity="waiting"]')).toHaveText('等你处理');
+  // The pending bar brings it into view and focuses its first answer; Enter answers it.
+  await panel.locator('[data-acp-pending]').getByRole('button', { name: '定位' }).click();
+  await expect(card.getByRole('button', { name: '允许一次' })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect.poll(() => page.evaluate(() => (window as any).__acpTest.answers)).toEqual([['a1', 'r1', 'allow']]);
+  // Once answered, the call rejoins the process as a step.
+  await send(page, { sessionId: 'a1', seq: 2, kind: 'tool', call: toolCall('c2', { title: '写入 src/a.ts', toolKind: 'edit', status: 'in_progress' }) });
+  await send(page, { sessionId: 'a1', seq: 3, kind: 'pending', pending: [] });
+  await expect(work.locator('[data-item-id="tool:c2"]')).toHaveAttribute('data-step', 'tool');
+  await expect(panel.getByRole('group', { name: '写入 src/a.ts' })).toHaveCount(0);
+});
+
+test('finding a command inside a folded process opens it and highlights the step', async ({ page }) => {
+  await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', state: 'ready', lastTurnReason: 'end_turn', timeline: [
+    userMessage('u1', '检查一下'),
+    thoughtItem('th0', '跑检查'),
+    toolItem('x0', { title: 'npm run lint-special', toolKind: 'execute', status: 'completed', rawInput: '{"command":"npm run lint-special"}' }),
+    agentMessage('m1', '检查通过。'),
+    turnItem('turn-1', 'end_turn'),
+  ] as any })] });
+  await openWorkbench(page);
+  const panel = panelOf(page);
+  const work = panel.locator('[data-acp-process]');
+  const toggle = work.locator(':scope > button[aria-expanded]');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(panel.locator('[data-item-id="tool:x0"]')).toHaveCount(0);
+  const search = await openFind(page);
+  await search.fill('lint-special');
+  await expect(page.getByRole('region', { name: '当前会话' }).getByRole('search')).toContainText('1 / 2');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  const step = panel.locator('[data-item-id="tool:x0"]');
+  await expect(step).toHaveAttribute('data-find-hit', 'active');
+  await expect(step.getByRole('button', { name: /npm run lint-special/ })).toHaveAttribute('aria-expanded', 'true');
+  await expect(step.locator('mark').first()).toHaveText('lint-special');
+  // The reader's own fold choice holds once find moves on.
+  await search.press('Escape');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
 });

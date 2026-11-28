@@ -1,5 +1,5 @@
 import type { AcpAccess, AcpElicitation, AcpSessionSnapshot, AcpTerminal, AcpTimelineItem, AcpToolCall } from '../../../types/acp';
-import { groupTimelineItems, toolGroupIdByItem } from './timelineModel.ts';
+import { buildSegments, groupIdByItem, segmentOptions } from './timelineModel.ts';
 import { locationTarget, terminalText, visibleControls } from './acpView.ts';
 
 /** Safety ceiling so a 1-letter query in a massive log cannot stall the UI thread. */
@@ -9,7 +9,7 @@ export type AcpFindMatch = {
   itemId: string;
   /** Zero-based occurrence index within `itemId`. */
   occurrence: number;
-  /** Enclosing lightweight tool group id when the matched tool is currently grouped. */
+  /** The folded segment (startup, work process or tool group) that holds the item, if any. */
   groupId?: string;
 };
 
@@ -71,12 +71,12 @@ function toolSearchTexts(
         parts.push(...diffSearchTexts(piece.path, piece.oldText, piece.newText, true));
         break;
       case 'terminal': {
+        // Without its record the card shows only whether output is expected, never
+        // the terminal id, so there is nothing to find.
         const terminal = terminalsById.get(piece.terminalId);
         if (terminal) {
           if (terminal.command) parts.push(visibleControls(terminal.command));
           if (terminal.output) parts.push(terminalText(terminal.output));
-        } else if (piece.terminalId) {
-          parts.push(visibleControls(piece.terminalId));
         }
         break;
       }
@@ -196,8 +196,8 @@ export function splitMatchRuns(text: string, query: string, caseSensitive = fals
 
 /**
  * Search visible ACP timeline content in arrival/render order.
- * Returns stable item ids, per-item occurrence indices, and enclosing lightweight
- * tool group ids so the UI can auto-expand folded groups/cards on navigation.
+ * Returns stable item ids, per-item occurrence indices, and the enclosing folded
+ * segment (startup, work process, tool group) so the UI can open it on navigation.
  */
 export function searchAcpTimeline(snapshot: AcpSessionSnapshot, query: string, caseSensitive = false): AcpFindMatch[] {
   const trimmed = query.trim();
@@ -207,7 +207,7 @@ export function searchAcpTimeline(snapshot: AcpSessionSnapshot, query: string, c
   const timeline = snapshot.timeline ?? [];
   if (!timeline.length) return [];
 
-  const groupByItem = toolGroupIdByItem(groupTimelineItems(timeline));
+  const groupByItem = groupIdByItem(buildSegments(timeline, segmentOptions(snapshot)));
   const terminalsById = new Map<string, AcpTerminal>();
   for (const terminal of snapshot.terminals ?? []) {
     terminalsById.set(terminal.terminalId, terminal);
