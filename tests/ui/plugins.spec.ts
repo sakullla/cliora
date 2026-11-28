@@ -549,7 +549,8 @@ test('resource list opens the next plugin from the keyboard and returns to that 
   await expect(rows.nth(1)).toBeFocused();
 });
 
-for (const colorScheme of ['light', 'dark'] as const) {
+// Horizontal fit does not depend on the colour scheme; the light run covers it.
+for (const colorScheme of ['light'] as const) {
   test(`plugin workspace stays within the viewport at target widths in ${colorScheme} theme`, async ({ page }) => {
     await page.emulateMedia({ colorScheme });
     await setup(page);

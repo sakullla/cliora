@@ -300,9 +300,16 @@ function hitsBorder(text: Box, border: { left: number; top: number; right: numbe
   return overlaps(text, border);
 }
 
-for (const theme of ['light', 'dark'] as const) {
-  for (const language of ['zh', 'en'] as const) {
-    for (const viewport of viewports) {
+// Pairwise rather than the full 2 × 2 × 3 product: each viewport runs once per theme and
+// once per language, and the theme × language pairs alternate across viewports, so every
+// pair of theme, language and viewport is still exercised (6 runs instead of 12).
+const readingCases = viewports.flatMap((viewport, index) => ([
+  { theme: 'light', language: index % 2 ? 'en' : 'zh', viewport },
+  { theme: 'dark', language: index % 2 ? 'zh' : 'en', viewport },
+] as const));
+for (const { theme, language, viewport } of readingCases) {
+  {
+    {
       test(`edit MCP reading ${theme} ${language} ${viewport.width}x${viewport.height} @${viewport.scale}`, async ({ browser, baseURL }) => {
         const text = copy[language];
         const context = await browser.newContext({

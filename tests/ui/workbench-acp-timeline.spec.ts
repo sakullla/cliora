@@ -484,7 +484,8 @@ test('a YOLO conversation shows its badge without single-pane duplication and re
   await expect(page.getByRole('region', { name: '当前会话' }).locator('header [data-mode="yolo"]')).toBeVisible();
 });
 
-for (const theme of ['light', 'dark'] as const) {
+// Horizontal fit does not depend on the theme; the light run covers it.
+for (const theme of ['light'] as const) {
   test(`the conversation fits a 720px window and a split in the ${theme} theme`, async ({ page }) => {
     await page.setViewportSize({ width: 720, height: 720 });
     const busy = snapshot({

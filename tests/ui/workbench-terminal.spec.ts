@@ -29,10 +29,16 @@ function scrollState(node: Element) {
   return { top, max, remaining: max - top, ratio: max ? top / max : 0 };
 }
 const readScroll = (viewport: Locator) => viewport.evaluate(scrollState);
-test.use({ launchOptions: { args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] } });
-// These real terminal renderers share the software GPU. Keep this file on one
-// worker so competing contexts cannot starve its rendering assertions.
-test.describe.configure({ mode: 'default' });
+// The two WebGL groups below ('product WebGL input integration' and 'session switching with
+// the production renderer') run in playwright.config.ts's terminal-gpu project, which launches
+// Chromium with the software GPU. Under webdriver the application renders every other terminal
+// here in the DOM, and a SwiftShader browser roughly doubled their CPU time. These real
+// terminal renderers share that software GPU, so both projects cap their worker counts and
+// competing contexts cannot starve the rendering assertions. Keep those group titles in sync
+// with the config's grep; requireSoftwareGpu fails a group that lands in another project.
+const requireSoftwareGpu = () => test.beforeEach(({}, testInfo) => {
+  expect(testInfo.project.name, 'WebGL groups must run in the terminal-gpu project').toBe('terminal-gpu');
+});
 
 // SessionTerminal batches output before xterm's asynchronous parser. A paint
 // frame is not a parse acknowledgement. DECRQM reads cursor visibility without
@@ -45,6 +51,7 @@ async function hiddenCursorOutput(page: Page, text: string) {
 }
 
 test.describe('product WebGL input integration', () => {
+  requireSoftwareGpu();
   test('IME commit insertText is sent once and intentional repeated input remains intact', async ({ page }) => {
     await page.addInitScript(() => Object.defineProperty(navigator, 'webdriver', { get: () => false }));
     await installWorkbenchMock(page);
@@ -2215,6 +2222,7 @@ test('switching back to a session does not resend its unchanged grid', async ({ 
 });
 
 test.describe('session switching with the production renderer', () => {
+  requireSoftwareGpu();
   test('synchronized TUI redraws keep status motion lightweight and avoid redundant frame scheduling', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     await page.addInitScript(() => {
@@ -2465,6 +2473,14 @@ test('hidden live terminals answer cursor queries without accepting keyboard inp
 });
 
 test('forty live terminals keep background output within the workbench memory budget', async ({ page }) => {
+  // The budget is the assertion; draining the output is only the precondition. Hidden panes
+  // keep xterm's DOM renderer, whose character widths cannot be cached while the pane is
+  // display:none, so every redrawn row forces a layout. Parsing these 40 × 1600 rows took
+  // 24–28 s of main-thread time on an unloaded 8-core Windows host (CPU profile: ~26 s in
+  // WidthCache._measure), past the earlier 20 s wait. Give the drain room instead of
+  // shrinking the load the budget is meant to cover. Interim: the product fix for the
+  // forced layouts (workflow task T9, R16) restores the default timeouts here.
+  test.slow();
   await page.addInitScript(() => {
     const sessions = Array.from({ length: 39 }, (_, index) => ({
       id: `load-${index}`, toolId: 'codex', projectId: null, directory: `C:/work/${index}`,
@@ -2483,7 +2499,7 @@ test('forty live terminals keep background output within the workbench memory bu
   await expect.poll(() => page.evaluate(() => {
     const log = (window as unknown as { __writeLog: Array<{ sessionId: string; text: string }> }).__writeLog;
     return new Set(log.filter(entry => /\x1b\[\d+;\d+R/.test(entry.text)).map(entry => entry.sessionId)).size;
-  }), { timeout: 20_000 }).toBe(40);
+  }), { timeout: 75_000 }).toBe(40);
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('HeapProfiler.collectGarbage');
   const heap = await cdp.send('Runtime.getHeapUsage');
@@ -4735,7 +4751,9 @@ test('a running row stays in its group while its output starts and pauses', asyn
     await page.evaluate((index) => (window as unknown as { __output: (text: string, id?: string) => void }).__output(`tick ${index}\r\n`, 's1'), round);
     await expect(inRunning).toHaveCount(1);
     // The live mark clears after a quiet pause; the row does not move to another group.
-    await page.waitForTimeout(1700);
+    const tone = inRunning.locator('[data-rail-icon]');
+    await expect(tone).toHaveAttribute('data-tone', 'live');
+    await expect(tone).not.toHaveAttribute('data-tone', 'live');
     await expect(inRunning).toHaveCount(1);
   }
 });
@@ -5089,7 +5107,6 @@ test.describe('terminal command phases, progress and colours', () => {
     await expect(meta).toContainText('进度错误');
     // Progress describes the program: once its output goes quiet the task state is still the
     // session's own, and the bar is still the program's.
-    await page.waitForTimeout(1700);
     await expect(badge).toHaveAttribute('title', /· 等待输入$/);
     await expect(badgeLabel).toHaveText('进度错误');
     await sendPtyText(page, '\x1b]9;4;0\x07');

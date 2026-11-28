@@ -770,8 +770,9 @@ test('reattach uses the mounted grid after a disconnected resize and answers its
   expect(Number(reply[2])).toBeLessThanOrEqual(calls[0].cols);
 });
 
-for (const width of [900, 640]) {
-  for (const theme of ['light', 'dark']) {
+// The banner placement depends on width, not theme: each width runs once, in alternating themes.
+for (const [width, theme] of [[900, 'light'], [640, 'dark']] as const) {
+  {
     test(`disconnected sessions continue from the banner, not a second toolbar button, at ${width}px in ${theme}`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       await installIndependentSessions(page);

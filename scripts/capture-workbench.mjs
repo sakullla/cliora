@@ -771,13 +771,40 @@ const manifest = [];
 // the manifest, gallery and README are always written and the exit code is 1.
 const runErrors = [];
 let browser = null;
-async function shot(name, theme, width, run, empty = false, remoteState = null, promptFailure = null, directoryMode = null, writeRecovery = false, chrome = null, acpMode = null) {
-  if (curated && !name.startsWith('workbench-remote-stream-') && !name.startsWith('workbench-acp-large-perf')) {
+// Measurements run alone; every other scene shares the browser with up to `pageJobs` others.
+const measured = (name) => name.startsWith('workbench-remote-stream-') || name.startsWith('workbench-acp-large-perf');
+function selected(name, theme, width) {
+  if (curated && !measured(name)) {
     const scene = name.slice(0, -`-${theme}-${width}`.length);
     const index = defaultScenes.indexOf(scene);
-    if (index === -1 || theme !== sceneTheme(themes, widths, width, index)) return;
+    if (index === -1 || theme !== sceneTheme(themes, widths, width, index)) return false;
   }
-  if (!onlyPatterns.some((pattern) => pattern.test(name))) return;
+  return onlyPatterns.some((pattern) => pattern.test(name));
+}
+// Scenes are independent pages (each opens its own context), so they run concurrently. The
+// manifest keeps the order in which they were requested. CLIORA_WORKBENCH_PAGES=1 runs serially.
+const pageJobsSetting = process.env.CLIORA_WORKBENCH_PAGES ?? '4';
+if (!/^[1-9]\d*$/.test(pageJobsSetting)) throw new Error('CLIORA_WORKBENCH_PAGES must be a positive integer');
+const pageJobs = Number(pageJobsSetting);
+const running = new Set();
+let requested = 0;
+async function drain() {
+  while (running.size) await Promise.race(running);
+}
+async function shot(...args) {
+  const [name, theme, width] = args;
+  if (!selected(name, theme, width)) return;
+  const order = requested++;
+  if (measured(name)) {
+    await drain();
+    await captureShot(order, ...args);
+    return;
+  }
+  while (running.size >= pageJobs) await Promise.race(running);
+  const job = captureShot(order, ...args).finally(() => running.delete(job));
+  running.add(job);
+}
+async function captureShot(order, name, theme, width, run, empty = false, remoteState = null, promptFailure = null, directoryMode = null, writeRecovery = false, chrome = null, acpMode = null) {
   const errors = [];
   let actionError = null;
   let overflow = null;
@@ -818,7 +845,7 @@ async function shot(name, theme, width, run, empty = false, remoteState = null, 
     actionError = String(error?.message ?? error).split('\n')[0];
     console.error(name + ': ' + (error?.message ?? error));
   } finally { await page?.close().catch(() => {}); }
-  manifest.push({ name, theme, width, locale, pageErrors: errors, overflow, actionError, resourceObservation });
+  manifest[order] = { name, theme, width, locale, pageErrors: errors, overflow, actionError, resourceObservation };
 }
 
 const option = (flag, fallback) => {
@@ -840,7 +867,7 @@ const themes = themeOption === 'all' ? ['light', 'dark'] : [themeOption];
 // Routine desktop review: one example of each distinct primary surface. The
 // exhaustive platform/error/large-list variants remain opt-in via --full/--only.
 const defaultScenes = ['workbench-active', 'workbench-acp-conversation', 'workbench-acp-tools', 'workbench-worktrees-many', 'workbench-ended', 'workbench-composer',
-  'workbench-dialog', 'workbench-task-dialog', 'workbench-task-states', 'workbench-restore-mixed',
+  'workbench-task-dialog', 'workbench-task-states', 'workbench-restore-mixed',
   'workbench-remote-disconnected', 'workbench-empty'];
 const curated = !process.argv.includes('--full') && !process.argv.includes('--only');
 const onlyPatterns = option('--only', '*').split(',').map((pattern) => new RegExp('^' + pattern.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$'));
@@ -1649,10 +1676,12 @@ for (const width of widths) {
   await shot('workbench-empty-' + theme + '-' + width, theme, width, null, true);
 }
 }
+await drain();
 } catch (error) {
   runErrors.push(String(error?.message ?? error).split('\n')[0]);
   console.error(runErrors[runErrors.length - 1]);
 } finally {
+  await drain();
   await browser?.close().catch(() => {});
 }
 
