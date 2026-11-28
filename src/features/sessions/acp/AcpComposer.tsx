@@ -3,25 +3,33 @@ import { useTranslation } from 'react-i18next';
 import { highlightRuns } from '../../../components/CommandPalette';
 import { Icon } from '../../../components/Icon';
 import { modLabel } from '../../../lib/shortcut';
-import type { AcpAccessKind, AcpAttachment, AcpFileList, AcpImageFile, AcpSessionSnapshot, AcpTurnReason } from '../../../types/acp';
+import type { AcpAccessKind, AcpAttachment, AcpFileList, AcpImageFile, AcpSessionSnapshot } from '../../../types/acp';
 import type { PromptContext } from '../../../types/prompts';
 import type { BusinessWorkspace } from '../../../types/workspaces';
 import { PromptPicker, type PromptPickerHandle } from '../PromptPicker';
 import { AcpGrantBadges } from './AcpGrantBadges';
 // acpQueue.ts and AcpQueue.tsx differ only in case: their extensions keep a
 // case-insensitive file system from resolving one for the other.
-import { AcpQueue, useAcpQueue } from './AcpQueue.tsx';
+import { AcpQueue, useAcpQueue, useAcpQueueSending } from './AcpQueue.tsx';
 import { AcpSettings } from './AcpSettings';
 import { AcpUsageMeter } from './AcpUsageMeter';
 import { bindAcpImages, expectAcpImages, userMessageIds } from './acpImageCache';
 import {
-  enqueueAcpPrompt, failAcpEntry, nextQueueAction, pauseAcpQueue, readAcpQueue, resumeAcpQueue, sendAcpEntryNext, takeAcpEntry, type QueuedPrompt,
+  beginAcpSend, dispatchAcpHead, endAcpSend, enqueueAcpPrompt, pauseAcpQueue, readAcpQueue, resumeAcpQueue, sendAcpEntryNext, stepAcpQueue, takeAcpEntry,
+  type AcpTurnEnd, type QueuedPrompt,
 } from './acpQueue.ts';
 import {
   ACP_IMAGE_BYTES, ACP_IMAGE_LIMIT, ACP_IMAGE_TYPES, attachmentPayload, baseName, composerPlaceholder, insertMention, isImagePath, matchCommands, mentionQuery,
   promptHistory, readBase64, slashQuery, type ComposerAttachment,
 } from './composerModel';
 import styles from './acpComposer.module.css';
+
+/** The timeline's turn ends, in order, as the queue's scheduler reads them. */
+function queueTurnEnds(timeline: AcpSessionSnapshot['timeline']): AcpTurnEnd[] {
+  const turns: AcpTurnEnd[] = [];
+  for (const item of timeline) if (item.kind === 'turn') turns.push({ id: item.id, reason: item.reason });
+  return turns;
+}
 
 /** Below this pane width (one half of a split), or in a window this narrow, the
  *  selectors fold into the compact menu trigger. */
@@ -171,8 +179,6 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   const [notices, setNotices] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [blocked, setBlocked] = useState<Blocked>(null);
-  const [sending, setSending] = useState(false);
-  const sendingRef = useRef(false);
   const [menuIndex, setMenuIndex] = useState(0);
   /** The token the person dismissed with Escape; its menu stays closed until it changes. */
   const [dismissed, setDismissed] = useState<string | null>(null);
@@ -188,12 +194,10 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   const [compact, setCompact] = useState(false);
   const sessionId = snapshot.id;
   const queue = useAcpQueue(sessionId);
-  /** Turn ends the queue has already acted on; those before this view mounted count. */
-  const handledTurnsRef = useRef<Set<string> | null>(null);
-  if (handledTurnsRef.current == null) handledTurnsRef.current = turnEndIds();
-  /** A prompt was sent (with the turn ends that existed then) and its turn has not
-   *  been seen running or ended yet: nothing else goes out meanwhile. */
-  const inFlightRef = useRef<Set<string> | null>(null);
+  /** A send of this session waits for the host. Kept with the queue, not in this view,
+   *  so a pane mounted again neither sends twice nor forgets a send in flight. */
+  const sending = useAcpQueueSending(sessionId);
+  const turnEnds = useMemo(() => queueTurnEnds(snapshot.timeline), [snapshot.timeline]);
   const login = snapshot.state === 'auth_required';
 
   const localFiles = !snapshot.projectId?.startsWith('remote:');
@@ -350,6 +354,11 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     return new Set(snapshotRef.current.timeline.filter((item) => item.kind === 'turn').map((item) => item.id));
   }
 
+  /** The turn ends of the latest snapshot, for a send that starts now. */
+  function currentTurnEnds(): AcpTurnEnd[] {
+    return queueTurnEnds(snapshotRef.current.timeline);
+  }
+
   /** The sent prompt's turn has ended: one the agent answered with an error gives
    *  the prompt and its attachments back to an input that is still empty. */
   function restoreFailedPrompt() {
@@ -447,13 +456,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   async function deliver(text: string, items: ComposerAttachment[]) {
     const before = turnEndIds();
     const users = userMessageIds(snapshotRef.current.timeline);
-    inFlightRef.current = before;
-    try {
-      await onSend(text, attachmentPayload(items));
-    } catch (value) {
-      inFlightRef.current = null;
-      throw value;
-    }
+    await onSend(text, attachmentPayload(items));
     const images = items.flatMap((item) => (item.type === 'image' ? [{ name: item.name, mimeType: item.mimeType, dataBase64: item.dataBase64 }] : []));
     expectAcpImages(sessionId, users, images);
     bindAcpImages(sessionId, snapshotRef.current.timeline);
@@ -472,16 +475,16 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
       if (fromDraft) return;
       throw new Error(t('sessions.acpImageReadingBusy'));
     }
-    if (sendingRef.current) {
+    if (!beginAcpSend(sessionId, currentTurnEnds())) {
       if (fromDraft) return;
       throw new Error(t('sessions.acpSendBusy'));
     }
-    sendingRef.current = true;
-    setSending(true);
     setError('');
     const sentDraft = draft;
+    let accepted = false;
     try {
       await deliver(text, items);
+      accepted = true;
       const ids = new Set(items.map((item) => item.id));
       setAttachments((current) => current.filter((item) => !ids.has(item.id)));
       setNotices([]);
@@ -490,8 +493,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
       if (fromDraft) setError(errorText(value));
       throw value;
     } finally {
-      sendingRef.current = false;
-      setSending(false);
+      endAcpSend(sessionId, accepted);
     }
   }
 
@@ -528,21 +530,8 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   }
 
   /** Sends the queue's head; a refusal puts it back first, paused, with the reason. */
-  async function dispatchHead() {
-    if (sendingRef.current) return;
-    const head = readAcpQueue(sessionId).items[0];
-    if (!head) return;
-    takeAcpEntry(sessionId, head.id);
-    sendingRef.current = true;
-    setSending(true);
-    try {
-      await deliver(head.text, head.attachments);
-    } catch (value) {
-      failAcpEntry(sessionId, head, errorText(value));
-    } finally {
-      sendingRef.current = false;
-      setSending(false);
-    }
+  function dispatchHead() {
+    void dispatchAcpHead(sessionId, currentTurnEnds(), (head) => deliver(head.text, head.attachments), errorText);
   }
 
   /** A queued prompt goes back into the input (after any text already there). */
@@ -569,27 +558,14 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
 
   // The queue's scheduler: it acts on turn ends once the session is idle, and sends the
   // head whenever the session is idle and the queue is not paused (see nextQueueAction).
+  // What it handled and what is in flight live in the session's queue store
+  // (stepAcpQueue), so this view only reports what the session shows.
   useEffect(() => {
-    const handled = handledTurnsRef.current!;
-    const fresh = snapshot.timeline.filter((item) => item.kind === 'turn' && !handled.has(item.id));
-    const inFlight = inFlightRef.current;
-    if (inFlight && (turnBusy || fresh.some((item) => !inFlight.has(item.id)))) inFlightRef.current = null;
-    const idle = canSend && !turnBusy;
-    let turnEnd: AcpTurnReason | null = null;
-    if (fresh.length && (idle || login || !live)) {
-      for (const item of fresh) handled.add(item.id);
-      const last = fresh[fresh.length - 1];
-      if (last.kind === 'turn') turnEnd = last.reason;
-    }
-    const action = nextQueueAction({
-      items: queue.items, paused: queue.paused, turnEnd, idle, login, live,
-      inFlight: !!inFlightRef.current || sendingRef.current,
-    });
-    if (action.kind === 'pause') pauseAcpQueue(sessionId);
-    else if (action.kind === 'send') void dispatchHead();
-    // dispatchHead reads the queue and refs at call time.
+    const action = stepAcpQueue(sessionId, { turns: turnEnds, turnBusy, canSend, login, live });
+    if (action.kind === 'send') dispatchHead();
+    // dispatchHead reads the queue and the snapshot at call time.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [snapshot.timeline, snapshot.state, turnBusy, canSend, live, login, queue, sending, sessionId]);
+  }, [turnEnds, snapshot.state, turnBusy, canSend, live, login, queue, sending, sessionId]);
 
   // Pictures sent with a prompt bind to its message once the host publishes it.
   useEffect(() => { bindAcpImages(sessionId, snapshot.timeline); }, [sessionId, snapshot.timeline]);

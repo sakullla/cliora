@@ -1171,6 +1171,111 @@ test('a failed turn pauses the queue until "continue sending"; a refused send st
   await expect(panel.locator('[data-acp-queue]')).toHaveCount(0);
 });
 
+test('a turn that fails while its queued prompt is still being sent pauses the queue; nothing else goes out', async ({ page }) => {
+  const { panel, input, timeline, queue } = await runningConversation(page);
+  for (const text of ['先发这条', '再发这条']) {
+    await input.fill(text);
+    await input.press('Enter');
+  }
+  await expect(queue).toHaveCount(2);
+  // The host takes the head but does not answer the send yet.
+  await page.evaluate(() => { (window as any).__acpTest.holdPrompt = true; });
+  timeline.push(turnEnd('turn-1', 'end_turn'));
+  await hostState(page, { state: 'ready', timeline, seq: 2 });
+  await expect(queue).toHaveCount(1);
+  await expect.poll(() => page.evaluate(() => typeof (window as any).__acpReleasePrompt)).toBe('function');
+  // Its turn runs and fails before the send returns.
+  timeline.push(userTurn('turn-2', '先发这条'), turnEnd('turn-2', 'failed'));
+  await hostState(page, { state: 'ready', timeline, lastTurnReason: 'failed', seq: 3 });
+  await expect(panel.locator('[data-item-id="turn-2-user"]')).toBeVisible();
+  const paused = panel.locator('[data-acp-queue-paused]');
+  await expect(paused).toContainText('队列已暂停');
+  // The send returns: the queue stays paused and the next prompt waits.
+  await page.evaluate(() => (window as any).__acpReleasePrompt());
+  await expect.poll(async () => (await testState(page)).prompts).toEqual([['a1', '先发这条']]);
+  await expect(panel.getByRole('button', { name: '发送', exact: true })).toBeVisible();
+  await expect(paused).toBeVisible();
+  await expect(queue).toHaveCount(1);
+  await expect(queue.nth(0)).toContainText('再发这条');
+  await page.waitForTimeout(150);
+  expect((await testState(page)).prompts).toEqual([['a1', '先发这条']]);
+  // Continuing on the idle session sends it at once, exactly once.
+  await paused.getByRole('button', { name: '继续发送', exact: true }).click();
+  await expect.poll(async () => (await testState(page)).prompts).toEqual([['a1', '先发这条'], ['a1', '再发这条']]);
+  await expect(panel.locator('[data-acp-queue]')).toHaveCount(0);
+});
+
+test('a turn that fails while its pane is hidden behind another session leaves the queue paused when it shows again', async ({ page }) => {
+  const timeline: any[] = [userTurn('turn-1', '开始')];
+  await installAcpMock(page, { interaction: 'acp', conversations: [
+    snapshot({ id: 'a1', state: 'running', timeline }),
+    snapshot({ id: 'a2', state: 'ready' }),
+  ] });
+  await openWorkbench(page);
+  await page.locator('[data-session-id="a1"]').first().click();
+  const panel = panelOf(page, 'a1');
+  const input = inputOf(panel);
+  await expect(panel.getByRole('button', { name: '停止', exact: true })).toBeVisible();
+  await input.fill('等它结束');
+  await input.press('Enter');
+  const queue = panel.locator('[data-acp-queue-item]');
+  await expect(queue).toHaveCount(1);
+
+  // Another session takes the stage; the first pane is hidden while its turn fails.
+  await page.locator('[data-session-id="a2"]').first().click();
+  await expect(panelOf(page, 'a2')).toBeVisible();
+  await expect(panel).toBeHidden();
+  timeline.push(turnEnd('turn-1', 'failed'));
+  await hostState(page, { state: 'ready', timeline, lastTurnReason: 'failed', seq: 2 });
+  // The hidden pane's scheduler acts on the failure as it arrives.
+  await expect(panel.locator('[data-acp-queue-paused]')).toBeAttached();
+
+  await page.locator('[data-session-id="a1"]').first().click();
+  await expect(panel).toBeVisible();
+  await expect(panel.locator('[data-acp-queue-paused]')).toContainText('队列已暂停');
+  await expect(queue).toHaveCount(1);
+  await expect(panel.getByRole('button', { name: '发送', exact: true })).toBeVisible();
+  await page.waitForTimeout(150);
+  expect((await testState(page)).prompts).toEqual([]);
+  // Switching away and back again does not act on the old failure a second time.
+  await panel.locator('[data-acp-queue-paused]').getByRole('button', { name: '继续发送', exact: true }).click();
+  await expect.poll(async () => (await testState(page)).prompts).toEqual([['a1', '等它结束']]);
+  await expect(panel.locator('[data-acp-queue]')).toHaveCount(0);
+});
+
+test('ten queued and ten unsent prompts scroll inside their own areas at 720px; the timeline keeps its room', async ({ page }) => {
+  await page.setViewportSize({ width: 720, height: 720 });
+  const { panel, input, queue } = await runningConversation(page);
+  for (let index = 1; index <= 10; index += 1) {
+    await input.fill(`排队第 ${index} 条`);
+    await input.press('Enter');
+    await expect(queue).toHaveCount(index);
+  }
+  const log = panel.getByRole('log');
+  const bounded = async (area: Locator) => area.locator(':scope > ol').evaluate((node) => ({
+    scrolls: node.scrollHeight > node.clientHeight + 1 && getComputedStyle(node).overflowY === 'auto',
+    height: node.getBoundingClientRect().height,
+  }));
+  const list = await bounded(panel.locator('[data-acp-queue]'));
+  expect(list.scrolls).toBe(true);
+  expect(list.height).toBeLessThanOrEqual(140);
+  // The last entry is reachable by scrolling the queue itself.
+  await queue.nth(9).scrollIntoViewIfNeeded();
+  await expect(queue.nth(9)).toBeInViewport();
+  expect((await log.boundingBox())!.height).toBeGreaterThanOrEqual(220);
+
+  await hostState(page, { state: 'closed', lastTurnReason: 'disconnected', seq: 2 });
+  const unsent = panel.locator('[data-acp-unsent]');
+  await expect(unsent).toContainText('未发送的消息（10 条）');
+  const ended = await bounded(unsent);
+  expect(ended.scrolls).toBe(true);
+  expect(ended.height).toBeLessThanOrEqual(220);
+  await expect(unsent.getByRole('button', { name: '全部复制', exact: true })).toBeInViewport();
+  expect((await log.boundingBox())!.height).toBeGreaterThanOrEqual(160);
+  const overflow = await panel.evaluate((node) => node.scrollWidth - node.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+});
+
 test('deleting and editing queued prompts changes exactly what is sent', async ({ page }) => {
   const { panel, input, timeline, queue } = await runningConversation(page);
   for (const text of ['甲', '乙', '丙']) {
@@ -1253,6 +1358,27 @@ test('prompts still queued when the conversation ends stay readable and copyable
 });
 
 /* Pictures in the person's own messages (R12). */
+
+test('finding "png" counts what the bubble shows, never the media type of a picture', async ({ page }) => {
+  const timeline = [
+    userTurn('turn-1', '这是 png 截图', { attachments: [{ type: 'image', name: 'image/png', delivery: null }, { type: 'file', name: 'docs/logo.png', delivery: 'link' }] }),
+    turnEnd('turn-1', 'end_turn'),
+  ];
+  await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', agent: imageAgent, timeline: timeline as any })] });
+  await openWorkbench(page);
+  const panel = panelOf(page);
+  await expect(panel.locator('[data-item-id="turn-1-user"] [data-acp-image-placeholder]')).toHaveCount(1);
+  await page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+Shift+F`);
+  const stage = page.getByRole('region', { name: '当前会话' });
+  const search = stage.getByRole('searchbox', { name: '在对话内容中查找…', exact: true });
+  await expect(search).toBeFocused();
+  await search.fill('png');
+  // The text and the file name; the picture's label is not on screen and not counted.
+  await expect(stage.getByRole('search')).toContainText('1 / 2');
+  await expect(panel.locator('[data-item-id="turn-1-user"] mark')).toHaveText(['png', 'png']);
+  await search.fill('image/');
+  await expect(stage.getByRole('search')).toContainText('无匹配');
+});
 
 test('sent pictures show as thumbnails that open full size; without data a named placeholder shows; closing releases them', async ({ page }) => {
   await page.addInitScript(() => {

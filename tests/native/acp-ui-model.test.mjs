@@ -586,6 +586,26 @@ test('searchAcpTimeline never indexes the id of a terminal whose record is missi
   assert.deepEqual(searchAcpTimeline(withRecord, 'toolu_secret', false), [{ itemId: 'tool:bash-1', occurrence: 0 }]);
 });
 
+test('searchAcpTimeline skips picture labels (media types the bubble never shows) and still finds file names', () => {
+  const user = messageItem('u1', '看这张 png 图', {
+    role: 'user',
+    attachments: [
+      { type: 'image', name: 'image/png', delivery: null },
+      { type: 'image', name: 'image/jpeg', delivery: null },
+      { type: 'file', name: 'docs/logo.png', delivery: 'link' },
+    ],
+  });
+  const snapshot = makeSnapshot([user]);
+  // The text and the file name: two hits, none from the picture labels.
+  assert.deepEqual(searchAcpTimeline(snapshot, 'png', false), [
+    { itemId: 'u1', occurrence: 0 },
+    { itemId: 'u1', occurrence: 1 },
+  ]);
+  assert.deepEqual(searchAcpTimeline(snapshot, 'image/', false), []);
+  assert.deepEqual(searchAcpTimeline(snapshot, 'jpeg', false), []);
+  assert.deepEqual(searchAcpTimeline(snapshot, 'logo', false), [{ itemId: 'u1', occurrence: 0 }]);
+});
+
 test('searchAcpTimeline handles non-overlapping occurrences and splitMatchRuns preserves original casing safely', () => {
   const snapshot = makeSnapshot([messageItem('m1', 'aaaa and Alpha/ALPHA')]);
   const overlaps = searchAcpTimeline(snapshot, 'aa', false);

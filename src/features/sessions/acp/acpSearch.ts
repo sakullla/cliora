@@ -139,8 +139,10 @@ export function extractItemSearchTexts(
     case 'message': {
       const parts: string[] = [];
       if (item.text) parts.push(visibleControls(item.text));
+      // A picture shows as a thumbnail or a placeholder, never its label (a media
+      // type), so only file names are there to find.
       for (const attachment of item.attachments ?? []) {
-        if (attachment.name) parts.push(visibleControls(attachment.name));
+        if (attachment.type === 'file' && attachment.name) parts.push(visibleControls(attachment.name));
       }
       return parts;
     }

@@ -313,6 +313,11 @@
 .queueError { color: var(--term-danger); }
 .queuePaused .button { min-height: 22px; padding: 0 var(--space-1_5); font-size: var(--fs-micro); }
 .queueList { display: flex; flex-direction: column; gap: var(--space-0_5); margin: 0; padding: 0; list-style: none; min-width: 0; }
+/* A long queue or unsent list scrolls inside its own bounded area: its heading, the
+   paused line and "copy all" stay in view, and the timeline above keeps its room
+   (at 720px a full list still leaves most of the pane to the conversation). */
+.queue > .queueList { max-height: min(132px, 18vh); overflow-y: auto; overscroll-behavior: contain; }
+.unsent > .queueList { max-height: min(220px, 16vh); overflow-y: auto; overscroll-behavior: contain; padding-right: var(--space-0_5); }
 .queueItem { display: flex; align-items: center; gap: var(--space-1); min-width: 0; color: var(--term-text-2); font-size: var(--fs-micro); }
 .queueItem[data-immediate] { color: var(--term-fg); }
 .queueGlyph { flex: none; color: var(--term-text-3); }
