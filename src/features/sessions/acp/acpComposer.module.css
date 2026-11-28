@@ -47,6 +47,7 @@
 .actionsRight { display: inline-flex; flex: 0 1 auto; align-items: center; gap: var(--space-1_5); margin-left: auto; min-width: 0; }
 .primary { display: inline-flex; flex: none; align-items: center; gap: var(--space-1); }
 .primary .button { min-height: 28px; padding: 0 var(--space-2_5); }
+.primary .stopIcon { width: 28px; padding: 0; }
 .actionsError { order: 9; flex-basis: 100%; margin: 0; color: var(--term-danger); font-size: var(--fs-micro); overflow-wrap: anywhere; }
 
 .busyFeedback {
@@ -298,6 +299,45 @@
 .endedDetail { margin: 0; color: var(--term-text-3); font-size: var(--fs-micro); line-height: 1.45; overflow-wrap: anywhere; }
 .endedActions { display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; gap: var(--space-1_5); margin-left: auto; min-width: 0; }
 
+/* The queue above the input card (R11): one row per waiting prompt, a paused line
+   with "continue sending" when nothing goes out on its own. */
+.queue {
+  display: flex; flex-direction: column; gap: var(--space-1); min-width: 0;
+  padding: var(--space-1) var(--space-1_5);
+  border: 1px solid var(--term-line); border-radius: var(--radius-sm); background: var(--term-raise);
+}
+.queue[data-paused] { border-color: color-mix(in srgb, var(--term-warning) 42%, var(--term-line)); }
+.queuePaused { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-1_5); min-width: 0; color: var(--term-text-2); font-size: var(--fs-micro); }
+.queuePaused > svg { flex: none; color: var(--term-warning); }
+.queuePausedText { display: flex; flex: 1 1 12em; flex-wrap: wrap; gap: 0 var(--space-1_5); min-width: 0; overflow-wrap: anywhere; }
+.queueError { color: var(--term-danger); }
+.queuePaused .button { min-height: 22px; padding: 0 var(--space-1_5); font-size: var(--fs-micro); }
+.queueList { display: flex; flex-direction: column; gap: var(--space-0_5); margin: 0; padding: 0; list-style: none; min-width: 0; }
+.queueItem { display: flex; align-items: center; gap: var(--space-1); min-width: 0; color: var(--term-text-2); font-size: var(--fs-micro); }
+.queueItem[data-immediate] { color: var(--term-fg); }
+.queueGlyph { flex: none; color: var(--term-text-3); }
+.queueItem[data-immediate] .queueGlyph { color: var(--term-accent); }
+.queueText { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queueMeta { flex: none; color: var(--term-text-3); white-space: nowrap; }
+.queueActions { display: inline-flex; flex: none; align-items: center; gap: var(--space-0_5); }
+.queueActions .trayRemove:focus-visible { outline: 2px solid var(--term-accent); outline-offset: 1px; }
+/* The queue an ended conversation still held: read in full and copied, never sent. */
+.unsent {
+  display: flex; flex: none; flex-direction: column; gap: var(--space-1_5);
+  width: 100%; max-width: 860px; margin-inline: auto; min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--term-line); border-radius: var(--radius-lg); background: var(--term-raise);
+}
+.unsentHead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); min-width: 0; }
+.unsentTitle { color: var(--term-fg); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
+.unsentHint { flex: 1 1 12em; min-width: 0; color: var(--term-text-3); font-size: var(--fs-micro); overflow-wrap: anywhere; }
+.unsentCopyAll { margin-left: auto; }
+.unsentItem { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; padding: var(--space-1_5) var(--space-2); border: 1px solid var(--term-line); border-radius: var(--radius-sm); background: var(--term-well); }
+.unsentText { margin: 0; color: var(--term-fg); font-size: var(--fs-caption); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.unsentItem[data-folded] .unsentText { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }
+.unsentMeta { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-1); min-width: 0; }
+.unsentMeta .button { min-height: 22px; padding: 0 var(--space-1_5); font-size: var(--fs-micro); }
+
 /* Elicitation form fields. */
 .form { gap: var(--space-2); }
 .form fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
@@ -339,7 +379,7 @@
 .historyMore { display: flex; justify-content: center; }
 
 @container acp-body (max-width: 900px) {
-  .composer, .auth, .endedBar { max-width: none; }
+  .composer, .auth, .endedBar, .unsent { max-width: none; }
 }
 
 @container acp-body (max-width: 560px) {

@@ -207,6 +207,26 @@ details[open] > summary > .disclosure,
 .attachment { display: inline-flex; align-items: center; gap: var(--space-1); max-width: 100%; min-width: 0; padding: var(--space-0_5) var(--space-1_5); border: 1px solid var(--term-line); border-radius: var(--radius-pill); background: var(--term-bg); color: var(--term-text-2); font-size: var(--fs-micro); }
 .attachmentName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
 .attachmentNote { flex: none; color: var(--term-text-3); }
+/* The person's pictures: thumbnails in a grid, or a named placeholder once this run no
+   longer holds their data. The full picture opens in an app dialog (app tokens). */
+.imageGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 96px)); gap: var(--space-1); margin: 0; padding: 0; list-style: none; min-width: 0; }
+.imageCell { display: flex; min-width: 0; }
+.imageThumb {
+  appearance: none; display: block; width: 100%; aspect-ratio: 1; min-height: 0; padding: 0; overflow: hidden;
+  border: 1px solid var(--term-line); border-radius: var(--radius-sm); background: var(--term-bg); cursor: zoom-in; box-shadow: none;
+}
+.imageThumb > img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.imageThumb:hover:not(:disabled) { border-color: var(--term-frame); box-shadow: none; }
+.imageThumb:focus-visible { outline: 2px solid var(--term-accent); outline-offset: 1px; }
+.imagePlaceholder {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-0_5);
+  width: 100%; aspect-ratio: 1; min-width: 0; padding: var(--space-1);
+  border: 1px dashed var(--term-line); border-radius: var(--radius-sm); background: var(--term-bg); color: var(--term-text-3); font-size: var(--fs-micro);
+}
+.imageGlyph { flex: none; }
+.imagePlaceholderName { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imagePreview { display: flex; justify-content: center; min-width: 0; }
+.imagePreview > img { display: block; max-width: 100%; max-height: 70vh; object-fit: contain; border-radius: var(--radius-sm); }
 
 /* Thought: folds with a single-line preview; expands to calm secondary prose (no full italic). */
 .thought { min-width: 0; padding: var(--space-0_5) 0 var(--space-0_5) var(--space-2_5); border-left: 2px solid color-mix(in srgb, var(--term-accent-2) 35%, var(--term-line)); border-radius: 0 var(--radius-xs) var(--radius-xs) 0; }
@@ -298,8 +318,8 @@ details[open] > summary > .disclosure,
 .stepStatus[data-active] > svg { animation: acpSpin 1.1s linear infinite; }
 .step > .toolBody { flex: 1 0 100%; padding: var(--space-0_5) 0 var(--space-1_5) var(--space-5); }
 .stepThought { flex: 1 0 100%; margin: 0; padding: var(--space-0_5) 0 var(--space-1_5) var(--space-5); color: var(--term-text-2); font-size: var(--fs-caption); line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
-/* Interim text lines up with the step titles, past the glyph column. */
-.stepNoteRow { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-0_5); min-width: 0; padding: var(--space-0_5) var(--space-1) var(--space-0_5) calc(var(--space-1) + 16px + var(--space-1_5)); border-radius: var(--radius-xs); }
+/* Interim text lines up with the step titles, past the glyph column (16px = --space-4). */
+.stepNoteRow { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-0_5); min-width: 0; padding: var(--space-0_5) var(--space-1) var(--space-0_5) calc(var(--space-1) + var(--space-4) + var(--space-1_5)); border-radius: var(--radius-xs); }
 .stepNote { margin: 0; color: var(--term-text-2); font-size: var(--fs-caption); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .stepNote[data-folded] { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; }
 .processBody > .notice { padding-left: var(--space-1); }

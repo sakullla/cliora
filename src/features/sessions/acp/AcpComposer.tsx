@@ -2,13 +2,21 @@ import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, use
 import { useTranslation } from 'react-i18next';
 import { highlightRuns } from '../../../components/CommandPalette';
 import { Icon } from '../../../components/Icon';
-import type { AcpAccessKind, AcpAttachment, AcpFileList, AcpImageFile, AcpSessionSnapshot } from '../../../types/acp';
+import { modLabel } from '../../../lib/shortcut';
+import type { AcpAccessKind, AcpAttachment, AcpFileList, AcpImageFile, AcpSessionSnapshot, AcpTurnReason } from '../../../types/acp';
 import type { PromptContext } from '../../../types/prompts';
 import type { BusinessWorkspace } from '../../../types/workspaces';
 import { PromptPicker, type PromptPickerHandle } from '../PromptPicker';
 import { AcpGrantBadges } from './AcpGrantBadges';
+// acpQueue.ts and AcpQueue.tsx differ only in case: their extensions keep a
+// case-insensitive file system from resolving one for the other.
+import { AcpQueue, useAcpQueue } from './AcpQueue.tsx';
 import { AcpSettings } from './AcpSettings';
 import { AcpUsageMeter } from './AcpUsageMeter';
+import { bindAcpImages, expectAcpImages, userMessageIds } from './acpImageCache';
+import {
+  enqueueAcpPrompt, failAcpEntry, nextQueueAction, pauseAcpQueue, readAcpQueue, resumeAcpQueue, sendAcpEntryNext, takeAcpEntry, type QueuedPrompt,
+} from './acpQueue.ts';
 import {
   ACP_IMAGE_BYTES, ACP_IMAGE_LIMIT, ACP_IMAGE_TYPES, attachmentPayload, baseName, composerPlaceholder, insertMention, isImagePath, matchCommands, mentionQuery,
   promptHistory, readBase64, slashQuery, type ComposerAttachment,
@@ -27,7 +35,8 @@ export type AcpComposerHandle = {
    *  agent accepts images, is read by the host and becomes an image like a pasted one. */
   addPaths: (paths: string[]) => void;
   /** Send text from another input (the shared quick input) with the tray's attachments.
-   *  Rejects with the host's reason; the tray stays as it was. */
+   *  While a turn runs it joins the queue instead. Rejects with the host's reason; the
+   *  tray stays as it was. */
   submitText: (text: string) => Promise<void>;
   /** Replace the draft with a previous message and move focus to the end without sending. */
   fillDraft: (text: string) => void;
@@ -47,7 +56,7 @@ const nextAttachmentId = () => `attachment-${Date.now().toString(36)}-${(attachm
 
 type FileState = { query: string; files: string[]; truncated: boolean; loading: boolean; error: string };
 /** Why the last send was held back, said once until the person types or it clears. */
-type Blocked = 'busy' | 'starting' | 'reading' | null;
+type Blocked = 'starting' | 'reading' | null;
 /** A dropped image the host is still reading. */
 type ReadingImage = { id: string; name: string; path: string };
 
@@ -63,19 +72,28 @@ type ReadingImage = { id: string; name: string; path: string };
  * The card is the input and one row of actions: icon tools and the selectors on the
  * left; context usage, session grants and the main button on the right. Idle, the row
  * holds no explanatory text (the keys are in the send button's hover text); a send that
- * is held back (a turn running, the session connecting, a picture still being read)
- * says why once. While a
- * turn runs the draft stays editable and the main button stops the turn; a send that
- * fails keeps the draft and its attachments, and so does a turn the agent answers with
- * an error (its end reads `failed`): the prompt and its attachments come back into an
- * empty input. While the agent waits for a login the composer stays mounted but
- * hidden, so what it holds survives the login.
+ * is held back (the session connecting, a picture still being read) says why once.
+ *
+ * While a turn runs the draft stays editable: Enter (or "Queue") adds it, with its
+ * attachments, to this session's queue above the card, and Ctrl/Cmd+Enter sends it
+ * now, which stops the running turn first. The queue sends its head once the session
+ * is idle and the queue is not paused: after a turn that ended normally, after the
+ * stop a "send now" asked for, or when the person continues a paused queue. A stop,
+ * a turn that ended any other way, a failed send or a login pauses it. One prompt is
+ * in flight at a time. With an empty draft the main button stops the turn; with a
+ * draft it queues, and a stop icon stays next to it.
+ *
+ * A send that fails keeps the draft and its attachments, and so does a turn the agent
+ * answers with an error (its end reads `failed`): the prompt and its attachments come
+ * back into an empty input. Images a sent prompt carried are kept for its message's
+ * thumbnails. While the agent waits for a login the composer (and its queue) stays
+ * mounted but hidden, so what it holds survives the login.
  */
 export const AcpComposer = forwardRef<AcpComposerHandle, {
   snapshot: AcpSessionSnapshot;
   toolName: string;
   live: boolean;
-  /** A turn is in flight: the main button stops it instead of sending. */
+  /** A turn is in flight: a send joins the queue and the main button can stop it. */
   turnBusy: boolean;
   /** Something else (a stop, a close) is in flight. */
   busy: boolean;
@@ -168,6 +186,15 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
    *  existed before it was sent. */
   const awaitingRef = useRef<{ text: string; items: ComposerAttachment[]; before: Set<string> } | null>(null);
   const [compact, setCompact] = useState(false);
+  const sessionId = snapshot.id;
+  const queue = useAcpQueue(sessionId);
+  /** Turn ends the queue has already acted on; those before this view mounted count. */
+  const handledTurnsRef = useRef<Set<string> | null>(null);
+  if (handledTurnsRef.current == null) handledTurnsRef.current = turnEndIds();
+  /** A prompt was sent (with the turn ends that existed then) and its turn has not
+   *  been seen running or ended yet: nothing else goes out meanwhile. */
+  const inFlightRef = useRef<Set<string> | null>(null);
+  const login = snapshot.state === 'auth_required';
 
   const localFiles = !snapshot.projectId?.startsWith('remote:');
   const imageAllowed = !!snapshot.agent?.promptCapabilities?.image;
@@ -197,7 +224,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   const starting = snapshot.state === 'starting';
   useEffect(() => {
     setBlocked((current) => {
-      if (current === 'busy' || current === 'starting') return turnBusy && live ? current : null;
+      if (current === 'starting') return turnBusy && live ? current : null;
       if (current === 'reading') return reading.length ? current : null;
       return current;
     });
@@ -415,6 +442,27 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     setAttachments((current) => [...current, { id: nextAttachmentId(), type: 'file', name: path, path }]);
   }
 
+  /** Hands one prompt to the host. Once accepted, its images wait for the message the
+   *  host publishes for it, and its turn is awaited (a failed one gives it back). */
+  async function deliver(text: string, items: ComposerAttachment[]) {
+    const before = turnEndIds();
+    const users = userMessageIds(snapshotRef.current.timeline);
+    inFlightRef.current = before;
+    try {
+      await onSend(text, attachmentPayload(items));
+    } catch (value) {
+      inFlightRef.current = null;
+      throw value;
+    }
+    const images = items.flatMap((item) => (item.type === 'image' ? [{ name: item.name, mimeType: item.mimeType, dataBase64: item.dataBase64 }] : []));
+    expectAcpImages(sessionId, users, images);
+    bindAcpImages(sessionId, snapshotRef.current.timeline);
+    if (text) setSent((current) => [...current, text].slice(-100));
+    historyIndex.current = null;
+    awaitingRef.current = { text, items, before };
+    restoreFailedPrompt();
+  }
+
   /** Send, then clear only what was sent: text typed meanwhile stays. */
   async function send(text: string, fromDraft: boolean) {
     const items = attachmentsRef.current;
@@ -432,17 +480,12 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     setSending(true);
     setError('');
     const sentDraft = draft;
-    const before = turnEndIds();
     try {
-      await onSend(text, attachmentPayload(items));
+      await deliver(text, items);
       const ids = new Set(items.map((item) => item.id));
       setAttachments((current) => current.filter((item) => !ids.has(item.id)));
       setNotices([]);
-      if (text) setSent((current) => [...current, text].slice(-100));
-      historyIndex.current = null;
       if (fromDraft) setDraft((current) => (current === sentDraft ? '' : current));
-      awaitingRef.current = { text, items, before };
-      restoreFailedPrompt();
     } catch (value) {
       if (fromDraft) setError(errorText(value));
       throw value;
@@ -451,6 +494,105 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
       setSending(false);
     }
   }
+
+  /** Queues a prompt with the tray's attachments while a turn runs; sent now, it goes
+   *  first and the running turn is stopped. The input and tray are cleared. */
+  function enqueue(text: string, fromDraft: boolean, immediate: boolean) {
+    if (readingRef.current.length) {
+      if (fromDraft) { setBlocked('reading'); return; }
+      throw new Error(t('sessions.acpImageReadingBusy'));
+    }
+    const items = attachmentsRef.current;
+    if (!text && !items.length) return;
+    enqueueAcpPrompt(sessionId, { text, attachments: items }, immediate);
+    attachmentsRef.current = [];
+    setAttachments([]);
+    setNotices([]);
+    setError('');
+    setBlocked(null);
+    if (fromDraft) {
+      setDraft('');
+      setCaret(0);
+      historyIndex.current = null;
+    }
+    if (immediate && snapshotRef.current.state !== 'stopping') onStop();
+  }
+
+  /** The person stops the turn: the queue waits for them, unless its head is the
+   *  prompt they asked to send now. */
+  function stopTurn() {
+    setBlocked(null);
+    const current = readAcpQueue(sessionId);
+    if (current.items.length && !current.items[0].immediate) pauseAcpQueue(sessionId);
+    onStop();
+  }
+
+  /** Sends the queue's head; a refusal puts it back first, paused, with the reason. */
+  async function dispatchHead() {
+    if (sendingRef.current) return;
+    const head = readAcpQueue(sessionId).items[0];
+    if (!head) return;
+    takeAcpEntry(sessionId, head.id);
+    sendingRef.current = true;
+    setSending(true);
+    try {
+      await deliver(head.text, head.attachments);
+    } catch (value) {
+      failAcpEntry(sessionId, head, errorText(value));
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
+    }
+  }
+
+  /** A queued prompt goes back into the input (after any text already there). */
+  function editQueued(entry: QueuedPrompt) {
+    if (!takeAcpEntry(sessionId, entry.id)) return;
+    const current = draftRef.current;
+    const text = current.trim() ? (entry.text ? `${current}\n${entry.text}` : current) : entry.text;
+    if (entry.attachments.length) {
+      const next = [...attachmentsRef.current, ...entry.attachments];
+      attachmentsRef.current = next;
+      setAttachments(next);
+    }
+    setDismissed(null);
+    setError('');
+    setBlocked(null);
+    setText(text, text.length);
+  }
+
+  /** "Send now" on a queued prompt: it goes first, and a running turn is stopped. */
+  function sendQueuedNow(entry: QueuedPrompt) {
+    sendAcpEntryNext(sessionId, entry.id);
+    if (turnBusy && live && snapshotRef.current.state !== 'stopping') onStop();
+  }
+
+  // The queue's scheduler: it acts on turn ends once the session is idle, and sends the
+  // head whenever the session is idle and the queue is not paused (see nextQueueAction).
+  useEffect(() => {
+    const handled = handledTurnsRef.current!;
+    const fresh = snapshot.timeline.filter((item) => item.kind === 'turn' && !handled.has(item.id));
+    const inFlight = inFlightRef.current;
+    if (inFlight && (turnBusy || fresh.some((item) => !inFlight.has(item.id)))) inFlightRef.current = null;
+    const idle = canSend && !turnBusy;
+    let turnEnd: AcpTurnReason | null = null;
+    if (fresh.length && (idle || login || !live)) {
+      for (const item of fresh) handled.add(item.id);
+      const last = fresh[fresh.length - 1];
+      if (last.kind === 'turn') turnEnd = last.reason;
+    }
+    const action = nextQueueAction({
+      items: queue.items, paused: queue.paused, turnEnd, idle, login, live,
+      inFlight: !!inFlightRef.current || sendingRef.current,
+    });
+    if (action.kind === 'pause') pauseAcpQueue(sessionId);
+    else if (action.kind === 'send') void dispatchHead();
+    // dispatchHead reads the queue and refs at call time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot.timeline, snapshot.state, turnBusy, canSend, live, login, queue, sending, sessionId]);
+
+  // Pictures sent with a prompt bind to its message once the host publishes it.
+  useEffect(() => { bindAcpImages(sessionId, snapshot.timeline); }, [sessionId, snapshot.timeline]);
 
   function fillDraft(text: string) {
     if (!live || hidden) return;
@@ -505,10 +647,16 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     setText(`${before}${inserted}${after}`, before.length + inserted.length);
   }
 
-  function submit() {
-    if (!canSend || turnBusy) return;
+  /** Enter or the main button: sends when idle, queues while a turn runs; `now` (Ctrl/Cmd+Enter)
+   *  stops the running turn and sends this prompt next. */
+  function submit(now = false) {
+    if (!canSend) return;
     if (readingRef.current.length) {
       setBlocked('reading');
+      return;
+    }
+    if (turnBusy) {
+      enqueue(draft.trim(), true, now);
       return;
     }
     void send(draft.trim(), true).catch(() => {});
@@ -517,7 +665,10 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   useImperativeHandle(ref, () => ({
     addFiles: (files) => { void addFiles(files); },
     addPaths,
-    submitText: (text) => send(text.trim(), false),
+    submitText: async (text) => {
+      if (canSend && turnBusy) { enqueue(text.trim(), false, false); return; }
+      await send(text.trim(), false);
+    },
     fillDraft,
     triggerPrefix,
     openPromptPicker: () => { promptPickerRef.current?.open(); },
@@ -579,11 +730,11 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     }
     if (event.key === 'Enter' && !event.shiftKey && !event.altKey) {
       event.preventDefault();
-      if (turnBusy && live) {
-        setBlocked(starting ? 'starting' : 'busy');
+      if (starting && live) {
+        setBlocked('starting');
         return;
       }
-      submit();
+      submit(event.ctrlKey || event.metaKey);
       return;
     }
     if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && history.length) {
@@ -609,7 +760,10 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     base: t('sessions.acpPlaceholderBase'), command: t('sessions.acpPlaceholderCommand'), file: t('sessions.acpPlaceholderFile'), image: t('sessions.acpPlaceholderImage'),
     lead: t('sessions.acpPlaceholderLead'), separator: t('sessions.acpPlaceholderSeparator'),
   });
-  const sendable = canSend && !turnBusy && !sending && !reading.length && (!!draft.trim() || attachments.length > 0);
+  const hasDraft = !!draft.trim() || attachments.length > 0;
+  const sendable = canSend && !turnBusy && !sending && !reading.length && hasDraft;
+  const stopDisabled = busy || snapshot.state === 'stopping';
+  const sendHint = t('sessions.acpSendHint', { mod: modLabel });
   const activeId = menuItems ? `${listId}-option-${activeIndex}` : undefined;
 
   return <div ref={rootRef} className={styles.composer} data-acp-composer="" data-drag={dragActive || undefined} hidden={hidden}>
@@ -645,8 +799,9 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     {error && <p className={styles.error} role="alert">{error}</p>}
     {blocked && live && <p className={styles.busyFeedback} role="status" data-acp-busy-hint={blocked}>
       <Icon name="info" size={12} />
-      <span>{blocked === 'starting' ? t('sessions.acpStartingEnterHint') : blocked === 'reading' ? t('sessions.acpImageReadingBusy') : t('sessions.acpBusyEnterHint')}</span>
+      <span>{blocked === 'starting' ? t('sessions.acpStartingEnterHint') : t('sessions.acpImageReadingBusy')}</span>
     </p>}
+    {live && <AcpQueue sessionId={sessionId} onEdit={editQueued} onSendNow={sendQueuedNow} onResume={() => resumeAcpQueue(sessionId)} />}
     <div className={styles.composerCard} data-acp-composer-card="">
       {(attachments.length > 0 || reading.length > 0) && <ul className={styles.tray} aria-label={t('sessions.acpAttachments')} aria-busy={reading.length > 0 || undefined}>
         {attachments.map((item) => <li key={item.id} className={styles.trayItem} data-attachment={item.type}>
@@ -761,11 +916,17 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
           <AcpUsageMeter usage={snapshot.info.usage} compact={compact} />
           <AcpGrantBadges grants={live ? snapshot.grants ?? [] : []} onRevoke={onRevokeGrants} />
           {!live && <button type="button" className={styles.button} data-variant="quiet" disabled={busy} onClick={onClose}>{t('sessions.acpClose')}</button>}
-          {/* The main control: one button now; a queued send adds its own next to Stop. */}
+          {/* The main control: Send when idle; Stop while a turn runs, or Queue with a
+              stop icon next to it once there is a draft. */}
           <span className={styles.primary} data-acp-primary="">
             {turnBusy && live
-              ? <button type="button" className={styles.button} data-variant="stop" disabled={busy || snapshot.state === 'stopping'} onClick={() => { setBlocked(null); onStop(); }}><Icon name="square" size={12} />{snapshot.state === 'stopping' ? t('sessions.acpStopping') : t('sessions.acpStop')}</button>
-              : <button type="button" className={styles.button} data-variant="primary" disabled={!sendable} title={t('sessions.acpSendHint')} onClick={submit}><Icon name="arrowUp" size={13} />{sending ? t('sessions.acpSending') : t('sessions.acpSend')}</button>}
+              ? hasDraft && canSend
+                ? <>
+                    <button type="button" className={styles.button} data-variant="primary" data-acp-enqueue="" title={t('sessions.acpQueueHint', { mod: modLabel })} onClick={() => submit()}><Icon name="plus" size={13} />{t('sessions.acpQueueAdd')}</button>
+                    <button type="button" className={`${styles.button} ${styles.stopIcon}`} data-variant="stop" disabled={stopDisabled} aria-label={snapshot.state === 'stopping' ? t('sessions.acpStopping') : t('sessions.acpStop')} title={t('sessions.acpStop')} onClick={stopTurn}><Icon name="square" size={12} /></button>
+                  </>
+                : <button type="button" className={styles.button} data-variant="stop" disabled={stopDisabled} onClick={stopTurn}><Icon name="square" size={12} />{snapshot.state === 'stopping' ? t('sessions.acpStopping') : t('sessions.acpStop')}</button>
+              : <button type="button" className={styles.button} data-variant="primary" disabled={!sendable} title={sendHint} onClick={() => submit()}><Icon name="arrowUp" size={13} />{sending ? t('sessions.acpSending') : t('sessions.acpSend')}</button>}
           </span>
         </div>
       </div>
