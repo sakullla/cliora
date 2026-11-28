@@ -44,7 +44,8 @@ import { placeParts, railPlace, railTaskTitle } from './railTitle';
 import { uploadDisplayName, useSessionUploads, type SessionUploadTask } from './sessionUploads';
 import uploadStyles from './sessionUploads.module.css';
 import { AcpConversation, type AcpConversationHandle, type AcpFindMatch } from './AcpConversation';
-import { applyAcpEvent, acpIsLive, acpPendingCount, acpRow, acpStateKey, type AcpConversation as AcpConversationState } from './acpSession';
+import { acpIsLive, acpRow, acpStateKey } from './acpSession';
+import { createAcpStore, type AcpSummary } from './acpStore';
 import type { AcpAttachment, AcpEvent, AcpSessionSnapshot } from '../../types/acp';
 import { WorkbenchComposer } from './WorkbenchComposer';
 import { PromptPicker } from './PromptPicker';
@@ -473,10 +474,12 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const renderActive = active && windowVisible;
   const [sessions, setSessions] = useState<WorkbenchSession[]>([]);
   /** ACP conversations this window holds. They are not PTY sessions, so they keep
-   *  their own ordered snapshot map instead of the listed session rows. */
-  const [conversations, setConversations] = useState<Map<string, AcpConversationState>>(() => new Map());
-  /** A conversation the user closed: a later list read must not put its row back. */
-  const retiredConversations = useRef(new Set<string>());
+   *  their own ordered snapshots in a store outside React: each mounted conversation
+   *  subscribes to its own session, and the frame only to the summaries it shows. A
+   *  conversation the user closed is retired there, so a later read never puts it back. */
+  const [acpStore] = useState(() => createAcpStore());
+  useEffect(() => () => acpStore.dispose(), [acpStore]);
+  const conversations = useSyncExternalStore(acpStore.subscribeSummaries, acpStore.summaries);
   const sessionStateUpdates = useRef(new Map<string, WorkbenchSession>());
   /** A restored snapshot can arrive before any list contains it. It survives the list reads
    *  that have not seen it yet; once the native list names that id, the list is authoritative. */
@@ -503,20 +506,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   /** Registers a native conversation snapshot. A snapshot the window already holds with a
    *  newer sequence is kept: an older read must not undo output that already arrived. */
   function registerConversation(snapshot: AcpSessionSnapshot | null | undefined) {
-    if (!snapshot || typeof snapshot.id !== 'string' || retiredConversations.current.has(snapshot.id)) return;
-    setConversations((current) => {
-      const existing = current.get(snapshot.id);
-      if (existing && existing.snapshot.seq > snapshot.seq) return current;
-      const next = new Map(current);
-      next.set(snapshot.id, { snapshot });
-      return next;
-    });
+    acpStore.register(snapshot);
   }
-  const conversationsRef = useRef(conversations);
-  conversationsRef.current = conversations;
-  /** The native conversation of a session id, or null for a terminal session. */
-  function conversationOf(id: string): AcpSessionSnapshot | null {
-    return conversations.get(id)?.snapshot ?? null;
+  /** The summary of a session's native conversation, or null for a terminal session. */
+  function conversationOf(id: string): AcpSummary | null {
+    return conversations.get(id) ?? null;
   }
   const allSessionsRef = useRef(sessions);
   allSessionsRef.current = sessions;
@@ -727,7 +721,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [pruningRemote, setPruningRemote] = useState(false);
   const remotePicker = useRemoteFolderPicker();
 
-  const conversationRows = useMemo(() => [...conversations.values()].map(item => acpRow(item.snapshot)), [conversations]);
+  const conversationRows = useMemo(() => [...conversations.values()].map(item => acpRow(item)), [conversations]);
   const scopedSessions = useMemo(() => {
     const rows = [...sessions, ...conversationRows];
     if (activeTargetId === 'local') return rows.filter(item => !item.projectId?.startsWith('remote:'));
@@ -1099,15 +1093,10 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     }).catch(() => { /* A missing list read leaves the event stream as the only source. */ });
     void onAcpEvent((event: AcpEvent) => {
       if (!alive || !event || typeof event.sessionId !== 'string') return;
-      if (retiredConversations.current.has(event.sessionId)) return;
-      const known = conversationsRef.current.has(event.sessionId);
-      setConversations((current) => {
-        const updated = applyAcpEvent(current.get(event.sessionId), event);
-        if (!updated || updated === current.get(event.sessionId)) return current;
-        const next = new Map(current);
-        next.set(event.sessionId, updated);
-        return next;
-      });
+      if (acpStore.retired(event.sessionId)) return;
+      const known = acpStore.known(event.sessionId);
+      // Folded with the other events of this frame, then only that session's view renders.
+      acpStore.push(event);
       // A conversation this window has not seen yet (another window started it): read the
       // full snapshot rather than rendering a fragment of its event stream.
       if (!known && event.kind !== 'snapshot' && !reading.has(event.sessionId)) {
@@ -1635,7 +1624,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   function toggleComposer(target?: boolean) {
     const currentId = selectedIdRef.current;
-    if (currentId && conversationsRef.current.has(currentId)) {
+    if (currentId && acpStore.has(currentId)) {
       setAppearanceOpen(false);
       setComposerOpen(false);
       if (target !== false) requestAnimationFrame(() => acpHandles.current.get(currentId)?.focus());
@@ -2065,7 +2054,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     // A CLI in a linked worktree may append the repository's name instead of the checkout folder.
     const git = gitContexts.get(session.id);
     // A conversation has no terminal title; its title is the one the agent reported.
-    const raw = titles.get(session.id) ?? conversationOf(session.id)?.info?.title ?? '';
+    const raw = titles.get(session.id) ?? conversationOf(session.id)?.title ?? '';
     return railTaskTitle(raw, toolName(session), [project?.name ?? '', session.directory ?? '', git?.repository ?? '', git?.worktree ?? '']);
   }
 
@@ -2111,7 +2100,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     if (conversation) {
       if (conversation.state === 'failed') return 'error';
       // Every waiting card or form asks for this person, whatever the turn state says.
-      if (conversation.state === 'waiting_permission' || acpPendingCount(conversation) > 0) return 'bell';
+      if (conversation.state === 'waiting_permission' || conversation.pendingCount > 0) return 'bell';
       if (conversation.state === 'auth_required') return 'warning';
       if (conversation.state === 'running' || conversation.state === 'starting' || conversation.state === 'stopping') return 'live';
       return acpIsLive(conversation) ? 'idle' : 'ended';
@@ -2136,7 +2125,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         running: acpIsLive(conversation),
         exitCode: null,
         remoteUnconfirmed: false,
-        attention: acpPendingCount(conversation) > 0 ? 'approval' : null,
+        attention: conversation.pendingCount > 0 ? 'approval' : null,
         bell: false,
         outputActive: conversation.state === 'running',
         resting: conversation.state === 'ready',
@@ -2171,7 +2160,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       if (conversation.state === 'starting' || conversation.state === 'stopping' || conversation.state === 'auth_required' || conversation.state === 'failed') {
         return t(acpStateKey(conversation.state));
       }
-      if (conversation.state === 'waiting_permission' && acpPendingCount(conversation) === 0) {
+      if (conversation.state === 'waiting_permission' && conversation.pendingCount === 0) {
         return t(acpStateKey(conversation.state));
       }
     }
@@ -2893,13 +2882,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   async function closeConversationNow(sessionId: string) {
     const order = arrangedSessions.map((item) => item.id);
     await acp.close(sessionId);
-    retiredConversations.current.add(sessionId);
-    setConversations((current) => {
-      if (!current.has(sessionId)) return current;
-      const next = new Map(current);
-      next.delete(sessionId);
-      return next;
-    });
+    acpStore.retire(sessionId);
     forgetSession(sessionId);
     const rest = sessionsRef.current.filter((item) => item.id !== sessionId);
     setSelectedId((current) => selectionAfterClose(current, new Set([sessionId]), order, rest));
@@ -3933,7 +3916,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         return;
       }
       if (mod && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'm' && selectedIdRef.current) {
-        if (conversationsRef.current.has(selectedIdRef.current)) {
+        if (acpStore.has(selectedIdRef.current)) {
           event.preventDefault();
           setAppearanceOpen(false);
           setComposerOpen(false);
@@ -4528,9 +4511,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                   const peeking = peekSessionId === session.id;
                   // A conversation renders its own panel: its content never reaches an xterm,
                   // and a terminal never receives conversation text.
-                  const conversation = conversations.get(session.id);
-                  if (conversation) return <AcpConversation key={session.id} ref={(handle) => { if (handle) acpHandles.current.set(session.id, handle); else acpHandles.current.delete(session.id); }}
-                    conversation={conversation} toolName={toolName(session)} active={visible} focused={focused} pane={split ? pane : undefined} header={split && visible ? paneHeader(session) : null}
+                  if (conversations.has(session.id)) return <AcpConversation key={session.id} ref={(handle) => { if (handle) acpHandles.current.set(session.id, handle); else acpHandles.current.delete(session.id); }}
+                    store={acpStore} sessionId={session.id} toolName={toolName(session)} active={visible} focused={focused} pane={split ? pane : undefined} header={split && visible ? paneHeader(session) : null}
                     promptContext={sessionPromptContext(session)} workspaces={businessWorkspaces} dropActive={visible && dropTarget === session.id}
                     onSend={(text, attachments) => promptConversation(session.id, text, attachments)} onStop={() => stopConversation(session.id)} onAnswer={(requestId, optionId) => answerConversation(session.id, requestId, optionId)}
                     onAnswerAccess={(accessId, decision) => answerConversationAccess(session.id, accessId, decision)} onRevokeGrants={(kinds) => acp.revokeGrants(session.id, kinds)} onKillTerminal={(terminalId) => acp.killTerminal(session.id, terminalId)} onOpenPath={nativeAvailable && !remotePane ? (target) => openConversationPath(session.id, target) : undefined} onClose={() => endSession(session)}

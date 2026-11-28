@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
@@ -7,6 +7,7 @@ import type { PromptContext } from '../../types/prompts';
 import type { BusinessWorkspace } from '../../types/workspaces';
 import type { AcpConversation as Conversation } from './acpSession';
 import { acpIsLive, acpNeedsLogin, acpResumeKey, acpTurnActive } from './acpSession';
+import type { AcpStore } from './acpStore';
 import type { AccessAnswer } from './acp/AcpAccessCard';
 import { AcpAuthPanel } from './acp/AcpAuthPanel';
 import { AcpComposer, type AcpComposerHandle } from './acp/AcpComposer';
@@ -60,8 +61,7 @@ export type AcpConversationHandle = AcpComposerHandle & {
  * rail, the title bar, the split and the keyboard menu treat it like any other
  * session.
  */
-export const AcpConversation = forwardRef<AcpConversationHandle, {
-  conversation: Conversation;
+type AcpConversationProps = {
   toolName: string;
   active: boolean;
   focused?: boolean;
@@ -105,7 +105,27 @@ export const AcpConversation = forwardRef<AcpConversationHandle, {
   onNewConversation?: () => Promise<void>;
   /** Notifies the workbench when the conversation snapshot updates so find counts stay live. */
   onSearchRevision?: (sessionId: string) => void;
-}>(function AcpConversation({
+};
+
+/**
+ * The mounted conversation of one session. It subscribes to that session alone in the
+ * workbench's store, so a chunk streaming into another conversation never renders it.
+ * A retired session renders nothing until the workbench unmounts it.
+ */
+export const AcpConversation = forwardRef<AcpConversationHandle, AcpConversationProps & {
+  store: AcpStore;
+  sessionId: string;
+}>(function AcpConversation({ store, sessionId, ...props }, ref) {
+  const subscribe = useCallback((listener: () => void) => store.subscribe(sessionId, listener), [store, sessionId]);
+  const read = useCallback(() => store.get(sessionId), [store, sessionId]);
+  const conversation = useSyncExternalStore(subscribe, read);
+  if (!conversation) return null;
+  return <AcpConversationView ref={ref} conversation={conversation} {...props} />;
+});
+
+const AcpConversationView = forwardRef<AcpConversationHandle, AcpConversationProps & {
+  conversation: Conversation;
+}>(function AcpConversationView({
   conversation,
   toolName,
   active,

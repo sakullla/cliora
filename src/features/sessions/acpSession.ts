@@ -7,7 +7,7 @@ import type { WorkbenchSession } from '../../types/launch';
 export type AcpConversation = { snapshot: AcpSessionSnapshot };
 
 /** A conversation the host still owns: it can accept a prompt or report a turn. */
-export function acpIsLive(snapshot: AcpSessionSnapshot): boolean {
+export function acpIsLive(snapshot: Pick<AcpSessionSnapshot, 'state'>): boolean {
   return snapshot.state !== 'closed' && snapshot.state !== 'failed';
 }
 
@@ -18,7 +18,7 @@ export function acpTurnActive(snapshot: AcpSessionSnapshot): boolean {
 
 /** The rail row of a conversation. Only the fields the shared rail reads are set;
  *  a conversation has no exit code, so an ended one reports none instead of 0. */
-export function acpRow(snapshot: AcpSessionSnapshot): WorkbenchSession {
+export function acpRow(snapshot: Pick<AcpSessionSnapshot, 'id' | 'toolId' | 'projectId' | 'directory' | 'mode' | 'state'>): WorkbenchSession {
   return {
     id: snapshot.id,
     toolId: snapshot.toolId,
@@ -31,33 +31,89 @@ export function acpRow(snapshot: AcpSessionSnapshot): WorkbenchSession {
   };
 }
 
+/**
+ * Where each id stands in a timeline. A timeline is never edited in place once it is
+ * published, and an item never moves, so an index is shared by every timeline derived
+ * from the same one: a replacement keeps every position, an append adds one. `length`
+ * is the longest timeline the index was extended for; a timeline of another length that
+ * appends again has branched off, so it gets an index of its own. A position read from
+ * the index is trusted only when the timeline really holds that id there.
+ */
+type TimelineIndex = { ids: Map<string, number>; length: number };
+const timelineIndexes = new WeakMap<readonly AcpTimelineItem[], TimelineIndex>();
+
+function buildIndex(timeline: readonly AcpTimelineItem[]): TimelineIndex {
+  const ids = new Map<string, number>();
+  // The first occurrence wins, as a linear search would find it.
+  timeline.forEach((item, position) => { if (!ids.has(item.id)) ids.set(item.id, position); });
+  const index = { ids, length: timeline.length };
+  timelineIndexes.set(timeline, index);
+  return index;
+}
+
+function indexOf(timeline: readonly AcpTimelineItem[]): TimelineIndex {
+  return timelineIndexes.get(timeline) ?? buildIndex(timeline);
+}
+
+/** The position of an id in a timeline, or -1. */
+function locate(timeline: readonly AcpTimelineItem[], id: string): number {
+  const position = indexOf(timeline).ids.get(id);
+  return position !== undefined && position < timeline.length && timeline[position].id === id ? position : -1;
+}
+
+/** Timelines created inside one batch fold. Nobody else holds them until the batch
+ *  returns, so the batch edits them in place instead of copying once per event. */
+type Draft = WeakSet<AcpTimelineItem[]>;
+
+/** A timeline this fold may edit: the one it already owns, or a copy sharing its index. */
+function writable(timeline: AcpTimelineItem[], draft: Draft | null): AcpTimelineItem[] {
+  if (draft?.has(timeline)) return timeline;
+  const next = timeline.slice();
+  const index = timelineIndexes.get(timeline);
+  if (index) timelineIndexes.set(next, index);
+  draft?.add(next);
+  return next;
+}
+
+function replaceAt(timeline: AcpTimelineItem[], position: number, item: AcpTimelineItem, draft: Draft | null): AcpTimelineItem[] {
+  const next = writable(timeline, draft);
+  next[position] = item;
+  return next;
+}
+
+function append(timeline: AcpTimelineItem[], item: AcpTimelineItem, draft: Draft | null): AcpTimelineItem[] {
+  const next = writable(timeline, draft);
+  let index = indexOf(next);
+  // Another timeline sharing this index already appended past this one.
+  if (index.length !== next.length) index = buildIndex(next);
+  next.push(item);
+  index.ids.set(item.id, next.length - 1);
+  index.length = next.length;
+  return next;
+}
+
 /** Insert an item at the end, or replace the item with the same id where it stands:
  *  an item's place in the timeline is fixed when it first appears. */
-function upsertItem(timeline: AcpTimelineItem[], item: AcpTimelineItem): AcpTimelineItem[] {
-  const index = timeline.findIndex((entry) => entry.id === item.id);
-  if (index < 0) return [...timeline, item];
-  const next = [...timeline];
-  next[index] = item;
-  return next;
+function upsertItem(timeline: AcpTimelineItem[], item: AcpTimelineItem, draft: Draft | null): AcpTimelineItem[] {
+  const position = locate(timeline, item.id);
+  return position < 0 ? append(timeline, item, draft) : replaceAt(timeline, position, item, draft);
 }
 
 type ChunkUpdate = Extract<AcpUpdate, { kind: 'chunk' }>;
 
 /** Append a chunk to exactly one message. A message id the view does not hold yet
  *  starts a new message at the end, exactly where the host placed it. */
-function appendChunk(timeline: AcpTimelineItem[], chunk: ChunkUpdate): AcpTimelineItem[] {
-  const index = timeline.findIndex((entry) => entry.id === chunk.messageId);
-  if (index < 0) {
-    return [...timeline, {
+function appendChunk(timeline: AcpTimelineItem[], chunk: ChunkUpdate, draft: Draft | null): AcpTimelineItem[] {
+  const position = locate(timeline, chunk.messageId);
+  if (position < 0) {
+    return append(timeline, {
       kind: 'message', id: chunk.messageId, role: chunk.role, text: chunk.text, truncated: !!chunk.truncated,
       turnId: typeof chunk.turnId === 'string' ? chunk.turnId : '', subagent: chunk.subagent ?? null,
-    }];
+    }, draft);
   }
-  const current = timeline[index];
+  const current = timeline[position];
   if (current.kind !== 'message') return timeline;
-  const next = [...timeline];
-  next[index] = { ...current, text: current.text + chunk.text, truncated: current.truncated || !!chunk.truncated };
-  return next;
+  return replaceAt(timeline, position, { ...current, text: current.text + chunk.text, truncated: current.truncated || !!chunk.truncated }, draft);
 }
 
 type TerminalOutputUpdate = Extract<AcpUpdate, { kind: 'terminalOutput' }>;
@@ -104,10 +160,16 @@ function validItem(item: unknown): item is AcpTimelineItem {
  * replayed, so a remount or a switching pane never duplicates a reply.
  */
 export function applyAcpEvent(current: AcpConversation | undefined, event: AcpEvent): AcpConversation | null {
+  return applyEvent(current, event, null);
+}
+
+function applyEvent(current: AcpConversation | undefined, event: AcpEvent, draft: Draft | null): AcpConversation | null {
   if (!event || typeof event.sessionId !== 'string' || typeof event.seq !== 'number') return null;
   if (event.kind === 'snapshot') {
     const snapshot = event.snapshot;
     if (!snapshot || snapshot.id !== event.sessionId) return null;
+    // The host may have trimmed the timeline: positions are read again from scratch.
+    if (Array.isArray(snapshot.timeline)) buildIndex(snapshot.timeline);
     return { snapshot };
   }
   if (!current) return null;
@@ -118,15 +180,15 @@ export function applyAcpEvent(current: AcpConversation | undefined, event: AcpEv
     case 'chunk': {
       if (typeof event.messageId !== 'string' || typeof event.text !== 'string') return current;
       const role = event.role ?? 'agent';
-      return { snapshot: { ...base, timeline: appendChunk(snapshot.timeline, { ...event, role }) } };
+      return { snapshot: { ...base, timeline: appendChunk(snapshot.timeline, { ...event, role }, draft) } };
     }
     case 'tool': {
       if (!event.call || typeof event.call.id !== 'string') return current;
-      return { snapshot: { ...base, timeline: upsertItem(snapshot.timeline, { kind: 'tool', ...event.call }) } };
+      return { snapshot: { ...base, timeline: upsertItem(snapshot.timeline, { kind: 'tool', ...event.call }, draft) } };
     }
     case 'item': {
       if (!validItem(event.item)) return current;
-      return { snapshot: { ...base, timeline: upsertItem(snapshot.timeline, event.item) } };
+      return { snapshot: { ...base, timeline: upsertItem(snapshot.timeline, event.item, draft) } };
     }
     case 'plan': {
       if (!Array.isArray(event.entries)) return current;
@@ -166,15 +228,18 @@ export function applyAcpEvent(current: AcpConversation | undefined, event: AcpEv
   }
 }
 
-/** Fold an ordered batch; used when several events arrived before one render. */
+/** Fold an ordered batch; used when several events arrived before one render. The
+ *  result equals folding them one by one, but the timeline is copied once per batch
+ *  instead of once per event. */
 export function applyAcpEvents(current: AcpConversation | undefined, events: AcpEvent[]): AcpConversation | null {
+  const draft: Draft = new WeakSet();
   let next = current ?? null;
-  for (const event of events) next = applyAcpEvent(next ?? undefined, event) ?? next;
+  for (const event of events) next = applyEvent(next ?? undefined, event, draft) ?? next;
   return next;
 }
 
 /** Requests still waiting for this person. A closed conversation asks nothing. */
-export function acpPendingCount(snapshot: AcpSessionSnapshot): number {
+export function acpPendingCount(snapshot: Pick<AcpSessionSnapshot, 'state' | 'pending'>): number {
   return acpIsLive(snapshot) ? snapshot.pending.length : 0;
 }
 
