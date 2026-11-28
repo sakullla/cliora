@@ -11,7 +11,7 @@
 .truncatedNote { margin: 0; color: var(--term-warning); font-size: var(--fs-micro); }
 .plainText { margin: 0; color: var(--term-fg); font-size: var(--fs-control); line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
 /* The app's base code chip uses app surfaces; inside the pane it uses the well. */
-.timelineFrame code, .sessionBar code { background: var(--term-well); color: var(--term-fg); }
+.timelineFrame code { background: var(--term-well); color: var(--term-fg); }
 .fieldLabel { color: var(--term-text-3); font-size: var(--fs-micro); font-weight: var(--fw-semibold); }
 
 /* A disclosure chevron turns with its <details> or aria-expanded toggle. */
@@ -27,15 +27,15 @@ details[open] > summary > .disclosure,
 /* Buttons inside cards and rows. The app's base button style (app tokens, nowrap,
    hover shadow, press offset) never reaches into the pane. */
 .action, .linkAction, .iconAction, .toolToggle, .toolGroupToggle, .diffToggle,
-.locationLink, .jumpLatest, .badge, .codeToggle, .pendingLocate, .emptyAction { appearance: none; box-shadow: none; }
+.locationLink, .jumpLatest, .codeToggle, .pendingLocate, .emptyAction { appearance: none; box-shadow: none; }
 .linkAction, .toolToggle, .toolGroupToggle, .diffToggle, .locationLink { min-height: 0; white-space: normal; }
 .linkAction:hover:not(:disabled), .toolToggle:hover:not(:disabled), .toolGroupToggle:hover:not(:disabled),
 .diffToggle:hover:not(:disabled), .locationLink:hover:not(:disabled) { border-color: transparent; background: none; box-shadow: none; }
 .action:active:not(:disabled), .linkAction:active:not(:disabled), .iconAction:active:not(:disabled),
 .toolToggle:active:not(:disabled), .toolGroupToggle:active:not(:disabled), .diffToggle:active:not(:disabled),
-.locationLink:active:not(:disabled), .badge:active:not(:disabled), .codeToggle:active:not(:disabled),
+.locationLink:active:not(:disabled), .codeToggle:active:not(:disabled),
 .pendingLocate:active:not(:disabled), .emptyAction:active:not(:disabled) { transform: none; box-shadow: none; }
-.action:hover:not(:disabled), .iconAction:hover:not(:disabled), .badge:hover:not(:disabled),
+.action:hover:not(:disabled), .iconAction:hover:not(:disabled),
 .jumpLatest:hover:not(:disabled), .codeToggle:hover:not(:disabled), .pendingLocate:hover:not(:disabled),
 .emptyAction:hover:not(:disabled) { box-shadow: none; }
 
@@ -67,39 +67,17 @@ details[open] > summary > .disclosure,
 
 .action:focus-visible, .linkAction:focus-visible, .iconAction:focus-visible, .toolToggle:focus-visible,
 .toolGroupToggle:focus-visible, .diffToggle:focus-visible, .locationLink:focus-visible,
-.jumpLatest:focus-visible, .badge:focus-visible, .codeToggle:focus-visible, .pendingLocate:focus-visible,
+.jumpLatest:focus-visible, .codeToggle:focus-visible, .pendingLocate:focus-visible,
 .emptyAction:focus-visible, .timelineFrame summary:focus-visible, .plan > summary:focus-visible,
-.timeline:focus-visible, .terminalOutput:focus-visible {
+.terminalOutput:focus-visible {
   outline: 2px solid var(--term-accent); outline-offset: 1px;
 }
+/* The timeline is one large focus target: the keyboard gets a thin, quiet inset line
+   instead of a ring around the whole conversation, and a click or scroll gets none. */
+.timeline:focus { outline: none; }
+.timeline:focus-visible { outline: 1px solid color-mix(in srgb, var(--term-accent) 55%, var(--term-line)); outline-offset: -1px; }
+.timelineFrame :focus:not(:focus-visible) { outline: none; }
 .inlineActions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
-
-/* Session bar: compact ACP-only metadata centered to the reading column. */
-.sessionBarEmpty { position: absolute; width: 1px; height: 1px; margin: 0; padding: 0; overflow: hidden; clip-path: inset(50%); border: 0; pointer-events: none; }
-.sessionBar {
-  display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2);
-  width: 100%; max-width: 860px; margin-inline: auto; min-width: 0;
-  padding-bottom: var(--space-1); border-bottom: 1px solid var(--term-line);
-  color: var(--term-text-3); font-size: var(--fs-micro);
-}
-.barItem { display: inline-flex; align-items: center; gap: var(--space-1); min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.barAgent { padding: 1px var(--space-1_5); border: 1px solid var(--term-line); border-radius: var(--radius-pill); background: var(--term-well); color: var(--term-text-2); }
-.barTitle { color: var(--term-text-2); font-weight: var(--fw-semibold); }
-.barMuted { color: var(--term-text-3); }
-.barBadges { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); margin-left: auto; min-width: 0; }
-.usageMeter { position: relative; display: inline-block; flex: none; width: 40px; height: 4px; overflow: hidden; border-radius: var(--radius-pill); background: var(--term-line); }
-.usageMeter > span { position: absolute; inset: 0 auto 0 0; background: var(--term-accent-2); }
-.badge {
-  display: inline-flex; align-items: center; gap: var(--space-1); min-height: 20px; padding: 0 var(--space-1_5);
-  border: 1px solid color-mix(in srgb, var(--term-warning) 45%, var(--term-line)); border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--term-warning) 10%, transparent); color: var(--term-warning);
-  font: inherit; font-weight: var(--fw-semibold); line-height: 1.2; white-space: nowrap;
-}
-button.badge { cursor: pointer; }
-button.badge:hover:not(:disabled) { border-color: color-mix(in srgb, var(--term-warning) 45%, var(--term-line)); background: color-mix(in srgb, var(--term-warning) 18%, transparent); }
-button.badge:disabled { cursor: progress; opacity: .6; }
-.badge[data-badge='grant'] { border-color: color-mix(in srgb, var(--term-accent-2) 45%, var(--term-line)); background: color-mix(in srgb, var(--term-accent-2) 10%, transparent); color: var(--term-accent-2); }
-button.badge[data-badge='grant']:hover:not(:disabled) { border-color: color-mix(in srgb, var(--term-accent-2) 45%, var(--term-line)); background: color-mix(in srgb, var(--term-accent-2) 18%, transparent); }
 
 /* Plan: compact header with collapsed active-step summary and highlighted active row. */
 .plan {
@@ -491,7 +469,7 @@ button.badge[data-badge='grant']:hover:not(:disabled) { border-color: color-mix(
 
 /* Medium / split panes: fluid full-width column. */
 @container acp-body (max-width: 900px) {
-  .sessionBar, .plan, .timelineInner, .pendingBar { max-width: none; }
+  .plan, .timelineInner, .pendingBar { max-width: none; }
 }
 
 /* Narrow panes: a 720px window or one half of a split. */
@@ -500,7 +478,6 @@ button.badge[data-badge='grant']:hover:not(:disabled) { border-color: color-mix(
   .toolBody { padding-left: 0; }
   .subagentBody { padding-left: 0; }
   .userBubble { max-width: 100%; }
-  .barBadges { margin-left: 0; }
   .diffLineNo { width: 3ch; padding: 0 var(--space-0_5); }
   .emptyCard { padding: var(--space-3); }
 }

@@ -201,9 +201,22 @@ export function pendingRequest(item: AcpTimelineItem): string | null {
   }
 }
 
-/** Large numbers in a compact, locale-aware form. */
-export function compactNumber(value: number, locale?: string): string {
-  try {
-    return new Intl.NumberFormat(locale, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
-  } catch { return String(value); }
+const TOKENS = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
+
+/** A token count in K/M/B (thousand, million, billion) in every language: 132000 is
+ *  132K, 1200000 is 1.2M, never 13.2万. */
+export function formatTokens(value: number): string {
+  if (!Number.isFinite(value)) return String(value);
+  return TOKENS.format(value);
+}
+
+/** From this share of the context window on, usage reads as near the limit. */
+export const USAGE_HIGH = 0.8;
+
+/** What the usage meter shows: the share used (null without a known size) and whether
+ *  it is near the limit. */
+export function usageLevel(used: number, size: number): { ratio: number | null; high: boolean } {
+  if (!(size > 0)) return { ratio: null, high: false };
+  const ratio = Math.max(0, used / size);
+  return { ratio, high: ratio >= USAGE_HIGH };
 }

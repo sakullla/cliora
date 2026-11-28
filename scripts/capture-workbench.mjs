@@ -794,7 +794,7 @@ for (const width of widths) {
   }, false, null, null, null, false, null, 'split');
   // Cliora's own approval card (not the agent's authorization card): a read outside the
   // session directory waits on 允许一次 / 本会话都允许 / 拒绝, and a write category already
-  // granted for this session shows as a revocable badge in the session bar.
+  // granted for this session shows as a revocable shield in the input card.
   await shot('workbench-acp-access-' + theme + '-' + width, theme, width, async (page) => {
     const panel = page.locator('[data-acp="true"][data-pane-session="acp1"]');
     const card = panel.locator('[data-card="access"][data-decision="pending"]');
@@ -862,13 +862,19 @@ for (const width of widths) {
     await form.getByRole('alert').first().waitFor();
     await form.scrollIntoViewIfNeeded();
   }, false, null, null, null, false, null, 'form');
+  // History opens from the pane's "⋯" menu; the conversation itself has no entry for it.
+  const openAcpHistory = async (page) => {
+    await acpPanel(page).locator('[data-acp-composer]').waitFor();
+    await page.getByRole('button', { name: copy('更多终端操作', 'More terminal actions') }).click();
+    await page.getByRole('menuitem', { name: copy('历史会话…', 'Session history…'), exact: true }).click();
+  };
   await shot('workbench-acp-history-' + theme + '-' + width, theme, width, async (page) => {
-    await acpPanel(page).getByRole('button', { name: copy('历史会话…', 'Session history…'), exact: true }).click();
+    await openAcpHistory(page);
     await page.locator('[data-acp-history] [data-native-id]').first().waitFor();
   }, false, null, null, null, false, null, 'composer');
   // An agent without session listing: the reason, and a new conversation instead.
   await shot('workbench-acp-history-unsupported-' + theme + '-' + width, theme, width, async (page) => {
-    await acpPanel(page).getByRole('button', { name: copy('历史会话…', 'Session history…'), exact: true }).click();
+    await openAcpHistory(page);
     await page.locator('[data-acp-history-unsupported]').waitFor();
   }, false, null, null, null, false, null, 'conversation');
   // The task comes first; the context it will use is a compact summary under it, and the

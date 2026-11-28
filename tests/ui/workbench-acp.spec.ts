@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { agentMessage, installAcpMock, openWorkbench, snapshot, toolCall } from './acpMock';
 
 test('the settings row picks ACP independently of the terminal and keeps the stored value on failure', async ({ page }) => {
@@ -55,9 +55,9 @@ test('a launch opens a conversation, streams one reply, merges its tool call and
 
   const panel = page.locator('[data-acp="true"][data-pane-session="a1"]');
   await expect(panel).toBeVisible();
-  // Single-pane view keeps the directory in the workbench stage bar without repeating it in the ACP bar.
+  // Single-pane view keeps the directory in the workbench stage bar without repeating it in the pane.
   await expect(page.getByRole('region', { name: '当前会话' }).locator('header')).toContainText('work');
-  await expect(panel.locator('[data-acp-bar]')).not.toContainText('C:/work');
+  await expect(panel.locator('[data-acp-body]')).not.toContainText('C:/work');
   await expect(panel).toContainText('first prompt');
   // The launch's own first prompt was submitted natively: nothing is sent again.
   expect(await page.evaluate(() => (window as any).__acpTest.prompts)).toEqual([]);
@@ -412,7 +412,7 @@ test('Ctrl+Shift+F searches ACP conversations, toggles case, auto-expands folded
   await expect(panel.getByRole('textbox', { name: '给 Codex 的消息', exact: true })).toBeFocused();
 });
 
-test('split ACP panes dim unfocused body, show pane-level badges only in split, and keep terminal controls intact', async ({ page }) => {
+test('split ACP panes dim unfocused body, tell panes apart by their heads without a strip, and keep terminal controls intact', async ({ page }) => {
   await installAcpMock(page, {
     interaction: 'acp',
     sessions: [{ id: 't1', toolId: 'codex', projectId: null, directory: 'C:/term', mode: 'normal', running: true, exitCode: null, startedAt: Date.now() }],
@@ -427,30 +427,38 @@ test('split ACP panes dim unfocused body, show pane-level badges only in split, 
   const first = page.locator('[data-acp="true"][data-pane-session="a1"]');
   const second = page.locator('[data-acp="true"][data-pane-session="a2"]');
 
-  // Single-pane ACP hides duplicate quick-input/interrupt controls and keeps ACP bar clean.
+  // Single-pane ACP hides duplicate quick-input/interrupt controls; the title lives in the stage bar only.
   await page.locator('[data-session-id="a1"]').first().click();
   await expect(first).toBeVisible();
   await expect(stage.getByRole('button', { name: '查找对话内容', exact: true })).toBeVisible();
   await expect(stage.getByRole('button', { name: '快捷输入', exact: true })).toHaveCount(0);
-  await expect(first.locator('[data-acp-title]')).toHaveCount(0);
+  await expect(stage.locator('header')).toContainText('主对话');
+  await expect(first.locator('[data-acp-body]')).not.toContainText('主对话');
 
-  // Switch to YOLO conversation a2 in single pane: YOLO is on the stage bar, not duplicated in AcpSessionBar.
+  // Switch to YOLO conversation a2 in single pane: YOLO is on the stage bar, not repeated in the pane.
   await page.locator('[data-session-id="a2"]').first().click();
   await expect(second).toBeVisible();
   await expect(stage.locator('header [data-mode="yolo"]')).toBeVisible();
   await expect(second.locator('[data-badge="yolo"]')).toHaveCount(0);
-  await expect(second.locator('[data-acp-title]')).toHaveCount(0);
+  await expect(second.locator('[data-acp-body]')).not.toContainText('YOLO');
 
-  // Enter split view with a1 and a2 side by side: unfocused ACP body dims to 0.8 and pane-level YOLO/title appear in AcpSessionBar.
+  // Enter split view with a1 and a2 side by side: unfocused ACP body dims to 0.8; each pane's
+  // shared head names its own conversation, so no strip is added inside either pane.
   await page.locator('[data-session-id="a1"]').first().click({ button: 'right' });
   await page.getByRole('menuitem', { name: '与 Codex 并排显示', exact: true }).click();
   await expect(first).toBeVisible();
   await expect(second).toBeVisible();
   await expect(first).toHaveAttribute('data-focused', 'true');
   await expect(second).not.toHaveAttribute('data-focused', 'true');
-  await expect(second.locator('[data-badge="yolo"]')).toContainText('YOLO');
-  await expect(second.locator('[data-acp-title]')).toHaveText('分屏 YOLO 对话');
-  await expect(first.locator('[data-acp-title]')).toHaveText('主对话');
+  const firstHead = first.locator('[class*="paneHead"]');
+  const secondHead = second.locator('[class*="paneHead"]');
+  await expect(firstHead).toContainText('主对话');
+  await expect(firstHead).not.toContainText('分屏 YOLO 对话');
+  await expect(secondHead).toContainText('分屏 YOLO 对话');
+  await expect(secondHead).not.toContainText('主对话');
+  await expect(first.locator('[data-acp-body]')).not.toContainText('主对话');
+  await expect(second.locator('[data-badge="yolo"]')).toHaveCount(0);
+  await expect(stage.locator('header [data-mode="yolo"]')).toHaveCount(0);
   const firstOpacity = await first.locator('[data-acp-body]').evaluate((node) => Number(getComputedStyle(node).opacity));
   const secondOpacity = await second.locator('[data-acp-body]').evaluate((node) => Number(getComputedStyle(node).opacity));
   expect(firstOpacity).toBeGreaterThan(0.95);
@@ -460,6 +468,8 @@ test('split ACP panes dim unfocused body, show pane-level badges only in split, 
   await second.locator('[data-acp-body]').click();
   await expect(second).toHaveAttribute('data-focused', 'true');
   await expect(first).not.toHaveAttribute('data-focused', 'true');
+  // The YOLO state stays visible on the shared stage bar once that pane is in front.
+  await expect(stage.locator('header [data-mode="yolo"]')).toBeVisible();
 
   // Exit split and switch to a terminal session: terminal toolbar controls remain intact.
   await stage.getByRole('button', { name: '分屏', exact: true }).click();
@@ -467,4 +477,271 @@ test('split ACP panes dim unfocused body, show pane-level badges only in split, 
   await expect(stage.getByRole('button', { name: '快捷输入', exact: true })).toBeVisible();
   await expect(stage.getByRole('button', { name: /发送中断/ })).toBeVisible();
   await expect(stage.getByRole('button', { name: '查找输出', exact: true })).toBeVisible();
+});
+
+/** The screenshot's session: the pi ACP adapter with one diagnostic, usage reported,
+ *  and the same two choices declared three ways (modes that are thinking levels, the
+ *  legacy model list and the config options). */
+function piSession(overrides: Partial<ReturnType<typeof snapshot>> = {}) {
+  const choice = (value: string, name: string) => ({ value, name, description: null, group: null });
+  return snapshot({
+    id: 'a1',
+    info: { title: null, updatedAt: null, usage: { used: 132000, size: 500000, cost: null } },
+    agent: {
+      protocolVersion: 1, agentInfo: { name: 'pi-acp', title: 'pi ACP adapter', version: '0.0.35' },
+      promptCapabilities: { image: true, audio: false, embeddedContext: false },
+      sessionCapabilities: { list: false, resume: false, delete: false, close: false }, loadSession: false, authMethods: [],
+    },
+    config: {
+      modes: { currentModeId: 'high', availableModes: [{ id: 'low', name: 'Thinking: low', description: null }, { id: 'high', name: 'Thinking: high', description: null }] },
+      models: { currentModelId: 'claude-sonnet', availableModels: [{ modelId: 'claude-sonnet', name: 'claude-sonnet', description: null }, { modelId: 'claude-opus', name: 'claude-opus', description: null }] },
+      options: [
+        { id: 'model', name: 'Model', description: null, category: 'model', type: 'select', currentValue: 'claude-sonnet', options: [choice('claude-sonnet', 'claude-sonnet'), choice('claude-opus', 'claude-opus')] },
+        { id: 'thinking', name: 'Thinking', description: null, category: 'thought_level', type: 'select', currentValue: 'high', options: [choice('low', 'low'), choice('high', 'high')] },
+      ],
+    },
+    commands: [{ name: 'requirement', description: '整理需求', hint: null }],
+    diagnostics: ['[pi-acp] warning: extension x failed to load (redacted)'],
+    timeline: [
+      agentMessage('m0', '## Context\n\n- AGENTS.md\n\n## Extensions\n\n- review', { turnId: '' }),
+      { kind: 'message', id: 'u1', role: 'user', text: 'hi', truncated: false, turnId: 'turn-1', subagent: null },
+      agentMessage('m1', 'Hello! What would you like to work on?'),
+      { kind: 'turn', id: 'turn-1-end', turnId: 'turn-1', reason: 'end_turn' },
+    ] as any,
+    ...overrides,
+  });
+}
+
+async function noHorizontalOverflow(page: Page) {
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+}
+
+const paneOf = (page: Page, id = 'a1') => page.locator(`[data-acp="true"][data-pane-session="${id}"]`);
+
+test('the pane opens straight onto the timeline: one row of icon actions, value-only settings, usage in the card and diagnostics in the pane menu', async ({ page }) => {
+  await page.addInitScript(() => {
+    const copied: string[] = [];
+    Object.assign(window, { __copied: copied });
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (value: string) => { copied.push(value); } } });
+  });
+  await page.setViewportSize({ width: 1360, height: 820 });
+  await installAcpMock(page, { interaction: 'acp', conversations: [piSession()] });
+  await openWorkbench(page);
+  const panel = paneOf(page);
+  const body = panel.locator('[data-acp-body]');
+  const timeline = panel.getByRole('log');
+  await expect(panel.locator('[data-item-id="m1"]')).toBeVisible();
+
+  // Nothing above the timeline: no adapter label, no usage strip, no clock button.
+  await expect(panel.locator('[data-acp-bar]')).toHaveCount(0);
+  await expect(body).not.toContainText('pi ACP adapter');
+  await expect(body).not.toContainText('0.0.35');
+  await expect(panel.getByRole('button', { name: '历史会话…', exact: true })).toHaveCount(0);
+  const bodyTop = (await body.boundingBox())!.y;
+  const logTop = (await timeline.boundingBox())!.y;
+  expect(logTop - bodyTop).toBeLessThanOrEqual(12);
+  // A running conversation keeps its diagnostics out of the conversation.
+  await expect(panel.locator('[data-acp-diagnostics]')).toHaveCount(0);
+  await expect(body).not.toContainText('诊断信息');
+
+  // The input card: the input and one row of actions, no standing explanation.
+  const composer = panel.locator('[data-acp-composer]');
+  const actions = panel.locator('[data-acp-actions]');
+  // One row: every control sits within a row no taller than one control plus its padding.
+  const row = (await actions.boundingBox())!;
+  expect(row.height).toBeLessThanOrEqual(44);
+  for (const control of await actions.locator('button:visible, select:visible, [role="meter"]').all()) {
+    const box = (await control.boundingBox())!;
+    expect(box.y).toBeGreaterThanOrEqual(row.y - 1);
+    expect(box.y + box.height).toBeLessThanOrEqual(row.y + row.height + 1);
+  }
+  await expect(composer).not.toContainText('Enter');
+  await expect(composer).not.toContainText('本轮进行中');
+  await expect(actions.getByRole('button', { name: '提示词库', exact: true })).toBeVisible();
+  await expect(actions.getByRole('button', { name: '引用文件', exact: true })).toBeVisible();
+  await expect(actions.getByRole('button', { name: '附加图片', exact: true })).toBeVisible();
+  await expect(actions.getByRole('button', { name: '发送', exact: true })).toHaveAttribute('title', /Enter 发送/);
+  await expect(panel.getByRole('textbox', { name: '给 Codex 的消息', exact: true })).toHaveAttribute('placeholder', '输入消息；/ 使用命令，@ 引用文件，可粘贴图片');
+
+  // Two settings, each showing only its value; the names are their labels.
+  await expect(composer.getByRole('combobox')).toHaveCount(2);
+  const model = composer.getByRole('combobox', { name: '模型', exact: true });
+  const thinking = composer.getByRole('combobox', { name: '思考强度', exact: true });
+  await expect(model).toHaveValue('claude-sonnet');
+  await expect(thinking).toHaveValue('high');
+  await expect(model).toHaveAttribute('title', /模型：claude-sonnet/);
+  await expect(composer).not.toContainText('模式');
+  await expect(composer).not.toContainText('Model');
+  await expect(composer).not.toContainText('Thinking');
+  await model.selectOption('claude-opus');
+  await expect.poll(() => page.evaluate(() => (window as any).__acpTest.configs)).toEqual([['a1', 'model', 'claude-opus']]);
+  expect(await page.evaluate(() => (window as any).__acpTest.modes)).toEqual([]);
+
+  // Usage sits in the card in K/M/B, without a warning.
+  const usage = actions.locator('[data-acp-usage]');
+  await expect(usage).toHaveText(/^132K \/ 500K/);
+  await expect(usage).toHaveAttribute('data-level', 'normal');
+  await expect(usage).toHaveAttribute('aria-valuetext', '上下文 132,000 / 500,000（26%）');
+
+  // The pane menu holds history and the diagnostics; the dialog copies the full text and
+  // gives the keyboard back to the menu button.
+  const stage = page.getByRole('region', { name: '当前会话' });
+  const more = stage.getByRole('button', { name: '更多终端操作', exact: true });
+  await more.click();
+  await expect(page.getByRole('menuitem', { name: '历史会话…', exact: true })).toBeVisible();
+  await page.getByRole('menuitem', { name: '诊断信息（1 条）', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Codex 的诊断信息' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('pi ACP adapter 0.0.35');
+  await expect(dialog.locator('pre')).toHaveText('[pi-acp] warning: extension x failed to load (redacted)');
+  await dialog.getByRole('button', { name: '复制诊断信息', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__copied.at(-1))).toBe('[pi-acp] warning: extension x failed to load (redacted)');
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(more).toBeFocused();
+
+  // A conversation without diagnostics has no such entry.
+  await page.evaluate(() => (window as any).__acpSessionState('a1', { diagnostics: [], seq: 2 }));
+  await expect(panel.locator('[data-acp-state]')).toHaveAttribute('data-acp-state', 'ready');
+  await expect.poll(async () => {
+    await more.click();
+    const visible = await page.getByRole('menuitem', { name: '历史会话…', exact: true }).isVisible();
+    const diagnostics = await page.getByRole('menuitem', { name: /诊断信息/ }).count();
+    await page.keyboard.press('Escape');
+    return visible && diagnostics === 0;
+  }).toBe(true);
+
+  // A 720px window keeps the card on one line without overflow; the settings fold.
+  await page.setViewportSize({ width: 720, height: 720 });
+  await expect(panel.locator('[data-acp-settings]')).toHaveAttribute('data-acp-settings', 'menu');
+  await expect(usage).toHaveText(/^26%/);
+  await noHorizontalOverflow(page);
+});
+
+test('usage reads in K/M/B, warns from 80% and shows only what was used without a size', async ({ page }) => {
+  await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', timeline: [agentMessage('m1', '开始')] })] });
+  await page.setViewportSize({ width: 1360, height: 820 });
+  await openWorkbench(page);
+  const panel = paneOf(page);
+  await expect(panel.locator('[data-item-id="m1"]')).toBeVisible();
+  const usage = panel.locator('[data-acp-actions] [data-acp-usage]');
+  // Not reported: nothing, not even a placeholder.
+  await expect(panel.locator('[data-acp-usage]')).toHaveCount(0);
+  const info = (used: number, size: number, seq: number, cost: unknown = null) => page.evaluate((event) => (window as any).__acpEvent(event),
+    { sessionId: 'a1', seq, kind: 'info', info: { title: null, updatedAt: null, usage: { used, size, cost } } });
+
+  // The color once the reduced-motion reset's 0.01ms transition has run.
+  const settledColor = () => usage.evaluate((node) => new Promise<string>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(getComputedStyle(node).color)))));
+  await info(1200000, 2000000, 2);
+  await expect(usage).toHaveText(/^1\.2M \/ 2M/);
+  await expect(usage).toHaveAttribute('data-level', 'normal');
+  await expect(usage).not.toHaveAttribute('aria-valuetext', /接近上限/);
+  const normal = await settledColor();
+
+  await info(425000, 500000, 3, { amount: 0.42, currency: 'USD' });
+  await expect(usage).toHaveAttribute('data-level', 'high');
+  await expect(usage).toHaveText(/^425K \/ 500K/);
+  await expect(usage).toHaveAttribute('aria-valuetext', '上下文 425,000 / 500,000（85%） · 费用 0.42 USD · 接近上限');
+  const tip = usage.locator('[data-acp-usage-tip]');
+  await expect(tip).toBeHidden();
+  await usage.hover();
+  await expect(tip).toBeVisible();
+  await expect(tip).toContainText('接近上限');
+  // The warning is a color as well as words.
+  expect(await settledColor()).not.toBe(normal);
+
+  // An unknown size: only what was used, and no ring share.
+  await info(12000, 0, 5);
+  await expect(usage).toHaveText(/^12K/);
+  await expect(usage).not.toContainText('/');
+  await expect(usage.locator('svg')).toHaveCount(0);
+  await expect(usage).toHaveAttribute('data-level', 'normal');
+  // Usage is never shown above the conversation.
+  await expect(panel.locator('[data-acp-usage]')).toHaveCount(1);
+});
+
+test('a session grant is a shield in the input card that revokes itself, and a refused revoke says why', async ({ page }) => {
+  await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', grants: ['write'], timeline: [agentMessage('m1', '已写入')] })] });
+  await openWorkbench(page);
+  const panel = paneOf(page);
+  const actions = panel.locator('[data-acp-actions]');
+  const shield = actions.getByRole('button', { name: '撤销本会话的写入放行', exact: true });
+  await expect(shield).toBeVisible();
+  await expect(shield).toHaveAttribute('data-grant', 'write');
+  await expect(shield).toHaveAttribute('title', /本会话已放行写入/);
+
+  // Refused: the shield stays and the reason is in the action row.
+  await page.evaluate(() => { (window as any).__acpTest.failRevoke = 'host 拒绝撤销'; });
+  await shield.click();
+  await expect(actions.getByRole('alert')).toHaveText('撤销没有完成：host 拒绝撤销');
+  await expect(shield).toBeEnabled();
+
+  await page.evaluate(() => { (window as any).__acpTest.failRevoke = null; });
+  await shield.click();
+  await expect.poll(() => page.evaluate(() => (window as any).__acpTest.revokes)).toEqual([['a1', ['write']], ['a1', ['write']]]);
+  await expect(actions.getByRole('alert')).toHaveCount(0);
+  await page.evaluate(() => (window as any).__acpSessionState('a1', { grants: [], seq: 2 }));
+  await expect(panel.locator('[data-badge="grant"]')).toHaveCount(0);
+  // Without grants the shield takes no room at all.
+  await expect(actions.locator('[data-acp-grants]')).toHaveCount(0);
+});
+
+test('a mouse click on the timeline draws no ring and the keyboard gets a thin one', async ({ page }) => {
+  await installAcpMock(page, { interaction: 'acp', conversations: [piSession()] });
+  await page.setViewportSize({ width: 1360, height: 820 });
+  await openWorkbench(page);
+  const panel = paneOf(page);
+  const timeline = panel.getByRole('log');
+  await expect(panel.locator('[data-item-id="m1"]')).toBeVisible();
+  const outline = () => timeline.evaluate((node) => { const style = getComputedStyle(node); return { style: style.outlineStyle, width: parseFloat(style.outlineWidth) }; });
+
+  // The reduced-motion reset gives every property a 0.01ms transition, so the settled style is polled.
+  const box = (await timeline.boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height - 20);
+  await expect(timeline).toBeFocused();
+  await expect.poll(async () => (await outline()).style).toBe('none');
+
+  // From inside the timeline, Shift+Tab lands on it by keyboard: a thin line, not a thick ring.
+  await page.keyboard.press('Tab');
+  await expect(timeline).not.toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(timeline).toBeFocused();
+  await expect.poll(outline).toEqual({ style: 'solid', width: 1 });
+
+  // A select clicked with the mouse gets no thick ring or halo either (the browser counts a
+  // select as keyboard-focused, so at most a thin line).
+  const thinking = panel.getByRole('combobox', { name: '思考强度', exact: true });
+  await thinking.click();
+  await expect(thinking).toBeFocused();
+  const ring = () => thinking.evaluate((node) => { const style = getComputedStyle(node); return { thin: style.outlineStyle === 'none' || parseFloat(style.outlineWidth) <= 1, shadow: style.boxShadow }; });
+  await expect.poll(ring).toEqual({ thin: true, shadow: 'none' });
+});
+
+test('two conversations side by side stay apart without a strip and fit a split', async ({ page }) => {
+  await installAcpMock(page, {
+    interaction: 'acp',
+    conversations: [
+      piSession({ info: { title: '整理需求', updatedAt: null, usage: { used: 132000, size: 500000, cost: null } }, grants: ['write', 'execute'] }),
+      snapshot({ id: 'a2', info: { title: '修复终端', updatedAt: null, usage: { used: 450000, size: 500000, cost: null } }, timeline: [agentMessage('n1', '第二个对话')] }),
+    ],
+  });
+  await page.setViewportSize({ width: 1360, height: 820 });
+  await openWorkbench(page);
+  await expect(paneOf(page).locator('[data-item-id="m1"]')).toBeVisible();
+  await page.getByRole('button', { name: '分屏', exact: true }).first().click();
+  const first = paneOf(page);
+  const second = paneOf(page, 'a2');
+  await expect(second).toBeVisible();
+  await expect(first.locator('[class*="paneHead"]')).toContainText('整理需求');
+  await expect(second.locator('[class*="paneHead"]')).toContainText('修复终端');
+  for (const pane of [first, second]) {
+    await expect(pane.locator('[data-acp-bar]')).toHaveCount(0);
+    await expect(pane.locator('[data-acp-actions] [data-acp-usage]')).toBeVisible();
+    // A narrow pane keeps the ring and the share only.
+    await expect(pane.locator('[data-acp-usage]')).toHaveText(/^\d+%/);
+  }
+  await expect(second.locator('[data-acp-usage]')).toHaveAttribute('data-level', 'high');
+  await expect(first.locator('[data-acp-settings]')).toHaveAttribute('data-acp-settings', 'menu');
+  await noHorizontalOverflow(page);
 });

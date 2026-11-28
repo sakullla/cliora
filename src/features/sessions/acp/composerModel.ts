@@ -104,14 +104,41 @@ function categoryRank(category: string | null): number {
   return index < 0 ? CATEGORY_ORDER.length : index;
 }
 
+/** The localized names of the categories the protocol defines. */
+export type AcpSettingLabels = { mode: string; model: string; thought: string };
+
+function categoryName(category: string | null, labels: AcpSettingLabels): string | null {
+  switch (category) {
+    case 'mode': return labels.mode;
+    case 'model': return labels.model;
+    case 'thought_level': return labels.thought;
+    default: return null;
+  }
+}
+
 /**
- * The selectors the agent declared, in a stable order: the mode, then models (the
- * legacy list and options of the model category side by side), then thought level,
- * then everything else. A setting the agent did not declare has no selector.
+ * The selectors the agent declared, in a stable order: the mode, then the model, then
+ * thought level, then everything else. An agent that declares configuration options
+ * gets selectors for those alone: ACP v1 has a client that supports them use them
+ * instead of the session modes and the legacy model list, which an agent may still
+ * send for older clients and which would repeat the same choice. Without options, the
+ * modes and the legacy models are shown. A category the protocol names reads with its
+ * own localized name; any other keeps the agent's. A setting the agent did not declare
+ * has no selector.
  */
-export function acpSettings(config: AcpSessionConfig | null | undefined, legacyModelId: string, labels: { mode: string; model: string }): AcpSetting[] {
+export function acpSettings(config: AcpSessionConfig | null | undefined, legacyModelId: string, labels: AcpSettingLabels): AcpSetting[] {
   if (!config) return [];
   const settings: AcpSetting[] = [];
+  const options = (config.options ?? []).filter((option: AcpConfigOption) => option.type === 'boolean' || option.options.length > 0);
+  if (options.length > 0) {
+    for (const option of options) {
+      settings.push({
+        key: `config:${option.id}`, target: { kind: 'config', configId: option.id }, name: categoryName(option.category, labels) ?? (option.name || option.id),
+        description: option.description, category: option.category, type: option.type, value: option.currentValue, options: option.options,
+      });
+    }
+    return ordered(settings);
+  }
   const modes = config.modes;
   if (modes && modes.availableModes.length > 0) {
     settings.push({
@@ -126,17 +153,34 @@ export function acpSettings(config: AcpSessionConfig | null | undefined, legacyM
       options: models.availableModels.map((model) => ({ value: model.modelId, name: model.name || model.modelId, description: model.description, group: null })),
     });
   }
-  const options = (config.options ?? []).filter((option: AcpConfigOption) => option.type === 'boolean' || option.options.length > 0);
-  for (const option of options) {
-    settings.push({
-      key: `config:${option.id}`, target: { kind: 'config', configId: option.id }, name: option.name || option.id, description: option.description, category: option.category,
-      type: option.type, value: option.currentValue, options: option.options,
-    });
-  }
+  return ordered(settings);
+}
+
+function ordered(settings: AcpSetting[]): AcpSetting[] {
   return settings
     .map((setting, index) => ({ setting, index }))
     .sort((a, b) => categoryRank(a.setting.category) - categoryRank(b.setting.category) || a.index - b.index)
     .map((entry) => entry.setting);
+}
+
+/** What the agent can take besides text, which the input's placeholder mentions. */
+export type ComposerCapabilities = { commands: boolean; files: boolean; image: boolean };
+
+/**
+ * The input's placeholder: it names only what this agent and this session offer, so a
+ * `/` is mentioned only with declared commands, `@` only where files can be looked up,
+ * and pictures only when the agent accepts images.
+ */
+export function composerPlaceholder(capabilities: ComposerCapabilities, labels: {
+  base: string; command: string; file: string; image: string;
+  /** Between the base and the hints, and between hints. */
+  lead: string; separator: string;
+}): string {
+  const hints: string[] = [];
+  if (capabilities.commands) hints.push(labels.command);
+  if (capabilities.files) hints.push(labels.file);
+  if (capabilities.image) hints.push(labels.image);
+  return hints.length ? `${labels.base}${labels.lead}${hints.join(labels.separator)}` : labels.base;
 }
 
 /** The value shown for a select: the declared choice's name, else the raw value. */

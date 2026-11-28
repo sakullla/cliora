@@ -6,21 +6,22 @@ import type { AcpAccessKind, AcpAttachment, AcpFileList, AcpImageFile, AcpNative
 import type { PromptContext } from '../../types/prompts';
 import type { BusinessWorkspace } from '../../types/workspaces';
 import type { AcpConversation as Conversation } from './acpSession';
-import { acpIsLive, acpNeedsLogin, acpResumeKey, acpTurnActive } from './acpSession';
+import { acpIsLive, acpNeedsLogin, acpResumeKey, acpStateKey, acpTurnActive } from './acpSession';
 import type { AcpStore } from './acpStore';
 import type { AccessAnswer } from './acp/AcpAccessCard';
 import { AcpAuthPanel } from './acp/AcpAuthPanel';
 import { AcpComposer, type AcpComposerHandle } from './acp/AcpComposer';
 import { AcpCopyButton } from './acp/AcpCopyButton';
+import { AcpDiagnosticsDialog } from './acp/AcpDiagnosticsDialog';
 import type { ElicitationAction } from './acp/AcpElicitationForm';
 import { AcpEndedBar } from './acp/AcpEndedBar';
 import { AcpHistoryDialog } from './acp/AcpHistoryDialog';
 import { AcpPendingBar } from './acp/AcpPendingBar';
 import { AcpPlan } from './acp/AcpPlan';
-import { AcpSessionBar } from './acp/AcpSessionBar';
 import { AcpTimeline, type AcpTimelineHandle } from './acp/AcpTimeline';
 import { searchAcpTimeline, type AcpFindMatch } from './acp/acpSearch';
 import { pendingItems, pendingRequest } from './acp/acpView';
+import acpStyles from './acp/acp.module.css';
 import workbenchStyles from './SessionWorkbench.module.css';
 import styles from './AcpConversation.module.css';
 
@@ -43,23 +44,28 @@ function turnWaiting(snapshot: AcpSessionSnapshot): boolean {
 
 /** What the workbench may ask of a mounted conversation: native drops route paths
  *  here, Ctrl+Shift+F searches and reveals matches symmetrically to SessionTerminal,
- *  history opens from the pane menu, and focus/fillDraft address the composer. */
+ *  history and diagnostics open from the pane menu, and focus/fillDraft address the
+ *  composer. */
 export type AcpConversationHandle = AcpComposerHandle & {
   openHistory: () => void;
+  openDiagnostics: () => void;
   findMatches: (query: string, caseSensitive?: boolean) => AcpFindMatch[];
   revealMatch: (match: AcpFindMatch | null) => void;
 };
 
 /**
- * One ACP conversation: a native chat view, not a terminal. The session bar says
- * what ACP-exclusive metadata applies; the plan is pinned above the ordered
- * timeline (messages, grouped lightweight tool calls, tool cards with their
+ * One ACP conversation: a native chat view, not a terminal. The timeline starts at
+ * the top of the pane: the stage bar (or, in a split, the pane head) already names
+ * the session, its state and YOLO, and the input card carries context usage and the
+ * session grants, so there is no metadata strip above it. The plan is pinned above the
+ * ordered timeline (messages, grouped lightweight tool calls, tool cards with their
  * authorization cards, approval cards, forms and records, notices, turn ends,
  * subagents); "N items wait for you" sits above the unified composer card, which
  * gives way to the login panel during auth_required or the recovery banner once
- * the conversation has ended. The pane frame is the shared session card, so the
- * rail, the title bar, the split and the keyboard menu treat it like any other
- * session.
+ * the conversation has ended. While it runs, diagnostics and history open from the
+ * pane menu; an ended conversation keeps its diagnostics in view to help find out
+ * why. The pane frame is the shared session card, so the rail, the title bar, the
+ * split and the keyboard menu treat it like any other session.
  */
 type AcpConversationProps = {
   toolName: string;
@@ -168,6 +174,7 @@ const AcpConversationView = forwardRef<AcpConversationHandle, AcpConversationPro
   const [pending, setPending] = useState('');
   const [error, setError] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [searchState, setSearchState] = useState<{
     query: string;
@@ -213,6 +220,7 @@ const AcpConversationView = forwardRef<AcpConversationHandle, AcpConversationPro
       else bodyRef.current?.querySelector<HTMLElement>('[role="log"]')?.focus();
     },
     openHistory: () => setHistoryOpen(true),
+    openDiagnostics: () => setDiagnosticsOpen(true),
     findMatches: (query, caseSensitive = false) => {
       const matches = searchAcpTimeline(snapshotRef.current, query, caseSensitive);
       setSearchState((current) => (current.query === query && current.caseSensitive === caseSensitive
@@ -258,6 +266,8 @@ const AcpConversationView = forwardRef<AcpConversationHandle, AcpConversationPro
   }
 
   const diagnosticsText = snapshot.diagnostics.join('\n');
+  // A running conversation keeps them in the pane menu; once it ends they help explain why.
+  const showDiagnostics = !live && snapshot.diagnostics.length > 0;
 
   return <div className={workbenchStyles.terminalInstance} hidden={!active} style={placement} data-pane-session={snapshot.id} data-acp="true" data-focused={(active && focused) || undefined} data-running={live || undefined}>
     {header}
@@ -283,7 +293,9 @@ const AcpConversationView = forwardRef<AcpConversationHandle, AcpConversationPro
         composerRef.current?.addFiles(files);
       }}
     >
-      <AcpSessionBar snapshot={snapshot} toolName={toolName} inSplit={pane != null} onRevoke={onRevokeGrants} onHistory={() => setHistoryOpen(true)} />
+      {/* The stage bar shows the session's state; this node keeps it for assistive
+          tech only, so the pane never shows two differently worded states. */}
+      <span className={acpStyles.srOnly} data-acp-state={snapshot.state} role="status">{t(acpStateKey(snapshot.state))}</span>
       <AcpPlan entries={snapshot.plan} />
       <AcpTimeline
         ref={timelineRef}
@@ -305,9 +317,9 @@ const AcpConversationView = forwardRef<AcpConversationHandle, AcpConversationPro
         activeFindGroupId={searchState.active?.groupId ?? null}
         activeFindOccurrence={searchState.active?.occurrence ?? 0}
       />
-      {(resumeKey || snapshot.diagnostics.length > 0) && <div className={styles.acpFooter}>
+      {(resumeKey || showDiagnostics) && <div className={styles.acpFooter}>
         {resumeKey && <p className={styles.acpResume} data-resume={snapshot.resume} role="status">{t(resumeKey)}</p>}
-        {snapshot.diagnostics.length > 0 && <div className={styles.acpDiagnosticsWrap} data-acp-diagnostics="">
+        {showDiagnostics && <div className={styles.acpDiagnosticsWrap} data-acp-diagnostics="">
           <details className={styles.acpDiagnostics}>
             <summary className={styles.acpDiagnosticsSummary}>
               <Icon name="chevronRight" size={12} className={styles.acpDiagnosticsChevron} />
@@ -345,6 +357,7 @@ const AcpConversationView = forwardRef<AcpConversationHandle, AcpConversationPro
           onWithdrawAccess={(requestId) => onAnswerAccess(requestId, 'deny')}
           onSetMode={onSetMode}
           onSetConfig={onSetConfig}
+          onRevokeGrants={onRevokeGrants}
         />
       </> : <AcpEndedBar
         snapshot={snapshot}
@@ -362,6 +375,7 @@ const AcpConversationView = forwardRef<AcpConversationHandle, AcpConversationPro
         </div>
       </div>}
     </div>
+    {diagnosticsOpen && createPortal(<AcpDiagnosticsDialog open={diagnosticsOpen} snapshot={snapshot} toolName={toolName} onClose={() => setDiagnosticsOpen(false)} />, document.body)}
     {historyOpen && createPortal(<AcpHistoryDialog open={historyOpen} snapshot={snapshot} toolName={toolName} onClose={() => setHistoryOpen(false)} onList={onNativeSessions} onDelete={onDeleteNativeSession} onResume={onResumeNative} onNewConversation={onNewConversation} />, document.body)}
   </div>;
 });
