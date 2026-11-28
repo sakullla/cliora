@@ -190,13 +190,19 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
     // (the scene steps type them and push the host's later snapshots); 'images' is a
     // ready conversation whose earlier message was replayed without its picture data.
     // Long conversations (R13): 'large' is a screenshot of one, 'large-perf' and
-    // 'large-perf-2x' the measured scenes (600 and 1200 finished rounds, about 1M and 2M
-    // characters, 3000 and 6000 entries), each with two small conversations that keep
-    // streaming in the background; the large one starts hidden behind the first of them.
+    // 'large-perf-2x' the measured scenes (600 and 1200 finished rounds, 4204 and 8404
+    // entries; the 2x timeline holds about 1.9M characters as the host counts them, just
+    // under its 2M MAX_TIMELINE_CHARS budget). Each round has a diff and a command whose
+    // output sits in a terminal; the host keeps the last 32 finished terminals and names
+    // older ones as omitted. 'large-perf-ref' is the same page with only the open turn:
+    // the heap reference before a large conversation exists. Each measured scene has two
+    // small conversations that keep streaming in the background; the large one starts
+    // hidden behind the first of them.
     const acpLargeRounds = acpMode === 'large' || acpMode === 'large-perf' ? 600 : acpMode === 'large-perf-2x' ? 1200 : 0;
-    const acpPerf = acpMode === 'large-perf' || acpMode === 'large-perf-2x';
+    const acpPerf = acpMode === 'large-perf' || acpMode === 'large-perf-2x' || acpMode === 'large-perf-ref';
+    const acpLargeScene = acpLargeRounds > 0 || acpPerf;
     const acpState = acpMode === 'starting' ? 'starting' : acpMode === 'stopping' ? 'stopping' : acpMode === 'permission' || acpMode === 'form' || acpMode === 'access' ? 'waiting_permission' : acpMode === 'login' ? 'auth_required'
-      : acpMode === 'disconnected' ? 'closed' : acpMode === 'tools' || acpMode === 'process' || acpMode === 'queue' || acpLargeRounds ? 'running' : 'ready';
+      : acpMode === 'disconnected' ? 'closed' : acpMode === 'tools' || acpMode === 'process' || acpMode === 'queue' || acpLargeScene ? 'running' : 'ready';
     const acpNativeId = acpMode === 'login' ? null : 'native-acp-1';
     const acpAuthError = acpMode === 'login' ? 'agent 要求先登录：没有找到有效的凭据' : null;
     const acpEnd = (turnId, reason = 'end_turn') => ({ kind: 'turn', id: turnId + '-end', turnId, reason });
@@ -215,6 +221,19 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
         return [acpTurnMessage('u' + index, 'user', question, turn), acpTurnMessage('a' + index, 'agent', answer, turn), acpEnd(turn)];
       });
     };
+    const acpLargePath = (index) => 'src/features/module-' + index + '/Toolbar.module.css';
+    const acpLargeDiff = (index) => ({
+      type: 'diff', path: acpLargePath(index), truncated: false,
+      oldText: '.toolbar {\n  display: flex;\n  align-items: center;\n  padding: 6px 10px;\n  gap: 6px;\n  border-bottom: 1px solid #d0d7de;\n}\n\n.button {\n  height: 28px;\n  padding: 0 8px;\n  border-radius: 4px;\n}\n',
+      newText: '.toolbar {\n  display: flex;\n  align-items: center;\n  padding: var(--space-1) calc(var(--space-1) + var(--space-2));\n  gap: var(--space-1_5);\n  border-bottom: 1px solid var(--border-subtle);\n}\n\n.button {\n  height: var(--control-height-sm);\n  padding: 0 var(--space-2);\n  border-radius: var(--radius-sm);\n}\n\n/* module-' + index + ': spacing now comes from the shared tokens. */\n',
+    });
+    const acpLargeOutput = (index) => '> cliora@0.5.0 build:module\n> vite build --filter module-' + index + '\n\n'
+      + Array.from({ length: 8 }, (_, line) => 'transforming (' + (line + 1) * 37 + ') src/features/module-' + index + '/part-' + line + '.tsx\n').join('')
+      + '✓ module-' + index + ' built in 1.' + (index % 10) + 's\n';
+    const acpLargeTerminal = (index) => ({
+      terminalId: 'term-' + index, command: 'npm run build:module -- --filter module-' + index, cwd: 'C:\\Projects\\cliora',
+      output: acpLargeOutput(index), truncated: false, exitStatus: { exitCode: 0, signal: null }, released: true, subagent: null, agentOwned: false,
+    });
     const acpLarge = (count) => {
       const items = [];
       for (let index = 1; index <= count; index += 1) {
@@ -226,15 +245,30 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
         items.push(
           acpTurnMessage('u' + index, 'user', '第 ' + index + ' 轮：检查模块 ' + index + ' 的样式，改用令牌并跑一次检查。' + '确认深浅主题与窄窗口都不溢出。'.repeat(4), turn),
           acpTurnMessage('th' + index, 'thought', '先读模块 ' + index + ' 的样式定义，找出写死的像素值，再跑样式检查。'.repeat(3), turn),
-          { ...acpTool('x' + index, 'node --test tests/native/style-tokens.test.mjs --module ' + index, 'execute', 'completed', { rawInput: '{"command":"node --test tests/native/style-tokens.test.mjs"}', content: [{ type: 'text', text: ('ok module-' + index + ' uses tokens\n').repeat(12), truncated: false }] }), turnId: turn },
+          { ...acpTool('x' + index, 'node --test tests/native/style-tokens.test.mjs --module ' + index, 'execute', 'completed', { rawInput: '{"command":"node --test tests/native/style-tokens.test.mjs"}', content: [{ type: 'text', text: ('ok module-' + index + ' uses tokens\n').repeat(5), truncated: false }] }), turnId: turn },
+          { ...acpTool('e' + index, '编辑 ' + acpLargePath(index), 'edit', 'completed', { locations: [{ path: acpLargePath(index), line: 1 }], content: [acpLargeDiff(index)] }), turnId: turn },
+          { ...acpTool('b' + index, 'npm run build:module -- --filter module-' + index, 'execute', 'completed', { rawInput: '{"command":"npm run build:module -- --filter module-' + index + '"}', content: [{ type: 'terminal', terminalId: 'term-' + index }] }), turnId: turn },
           acpTurnMessage('a' + index, 'agent', reply, turn),
           acpEnd(turn),
         );
       }
+      // The open turn: a diff and a command still running in a live terminal, then the
+      // reply that streams. The measurement opens both steps and streams into both.
       const open = 'turn-open';
-      items.push(acpTurnMessage('u' + (count + 1), 'user', '继续下一个模块。', open), acpTurnMessage('live', 'agent', '正在处理：', open));
+      items.push(
+        acpTurnMessage('u' + (count + 1), 'user', '继续下一个模块。', open),
+        { ...acpTool('live-edit', '编辑 ' + acpLargePath(count + 1), 'edit', 'completed', { locations: [{ path: acpLargePath(count + 1), line: 1 }], content: [acpLargeDiff(count + 1)] }), turnId: open },
+        { ...acpTool('live-run', 'npm run build:module -- --filter module-' + (count + 1), 'execute', 'in_progress', { rawInput: '{"command":"npm run build:module -- --filter module-' + (count + 1) + '"}', content: [{ type: 'terminal', terminalId: 'term-live' }] }), turnId: open },
+        acpTurnMessage('live', 'agent', '正在处理：', open),
+      );
       return items;
     };
+    // The host retains the last 32 finished terminals and names up to 1024 older ones.
+    const acpLargeTerminals = (count) => [
+      ...Array.from({ length: Math.min(32, count) }, (_, offset) => acpLargeTerminal(count - Math.min(32, count) + 1 + offset)),
+      { terminalId: 'term-live', command: 'npm run build:module -- --filter module-' + (count + 1), cwd: 'C:\\Projects\\cliora', output: '> cliora@0.5.0 build:module\n', truncated: false, exitStatus: null, released: false, subagent: null, agentOwned: false },
+    ];
+    const acpLargeOmitted = (count) => Array.from({ length: Math.max(0, Math.min(1024, count - 32)) }, (_, offset) => 'term-' + (Math.max(1, count - 32 - 1023) + offset));
     const acpStartup = () => [
       { ...acpMessage('s1', 'agent', '## Context\n\n- AGENTS.md\n- docs/requirements\n\n## Extensions\n\n- pi-acp-bridge 0.0.35\n- git-worktrees'), turnId: '' },
       acpMessage('m1', 'user', 'hi'),
@@ -309,7 +343,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
       acpTurnMessage('i1', 'agent', '截图里按钮之间的间距是 6px，和令牌不一致。我改成 `--space-1_5`。', 'turn-0'),
       acpEnd('turn-0'),
     ];
-    const acpTimeline = acpMode === 'empty' || acpMode === 'starting' ? [] : acpLargeRounds ? acpLarge(acpLargeRounds) : acpMode === 'long' ? acpLong() : acpMode === 'startup' ? acpStartup()
+    const acpTimeline = acpMode === 'empty' || acpMode === 'starting' ? [] : acpLargeScene ? acpLarge(acpLargeRounds) : acpMode === 'long' ? acpLong() : acpMode === 'startup' ? acpStartup()
       : acpMode === 'process' || acpMode === 'process-done' || acpMode === 'queue' ? acpProcess(acpMode === 'process-done') : acpMode === 'tools' ? acpTools() : acpMode === 'yolo' ? acpYolo() : acpMode === 'disconnected' ? acpDisconnected() : acpMode === 'access' ? acpAccess()
         : acpMode === 'images' ? acpImages() : null;
     const acpFixture = acpMode ? [{
@@ -350,9 +384,9 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
       ],
       pending: acpMode === 'permission' ? ['r1'] : acpMode === 'form' ? ['q1'] : acpMode === 'access' ? ['access-r1-request'] : [],
       grants: acpMode === 'access' ? ['write'] : [],
-      terminals: acpTerminals,
-      omittedTerminalIds: [],
-      plan: acpLargeRounds || acpMode === 'empty' || acpMode === 'starting' || acpMode === 'long' || acpMode === 'yolo' || acpMode === 'startup' || acpMode === 'process' || acpMode === 'process-done' || acpMode === 'queue' || acpMode === 'images' ? [] : acpMode === 'tools' ? [
+      terminals: acpLargeScene ? acpLargeTerminals(acpLargeRounds) : acpTerminals,
+      omittedTerminalIds: acpLargeScene ? acpLargeOmitted(acpLargeRounds) : [],
+      plan: acpLargeScene || acpMode === 'empty' || acpMode === 'starting' || acpMode === 'long' || acpMode === 'yolo' || acpMode === 'startup' || acpMode === 'process' || acpMode === 'process-done' || acpMode === 'queue' || acpMode === 'images' ? [] : acpMode === 'tools' ? [
         { content: '读取工具栏样式与令牌', priority: 'high', status: 'completed' },
         { content: '把固定像素换成令牌相加', priority: 'high', status: 'completed' },
         { content: '运行样式检查', priority: 'medium', status: 'completed' },
@@ -392,7 +426,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
         ] : [],
       },
       diagnostics: acpMode === 'stopping' ? ['agent 标准错误：正在结束本轮（已脱敏）'] : acpMode === 'disconnected' ? ['agent 标准错误：unexpected EOF on stdin（已脱敏）'] : [],
-      lastTurnReason: acpLargeRounds || acpMode === 'starting' || acpMode === 'stopping' || acpMode === 'empty' || acpMode === 'tools' || acpMode === 'permission' || acpMode === 'access' || acpMode === 'process' || acpMode === 'queue' ? '' : acpMode === 'disconnected' ? 'disconnected' : 'end_turn',
+      lastTurnReason: acpLargeScene || acpMode === 'starting' || acpMode === 'stopping' || acpMode === 'empty' || acpMode === 'tools' || acpMode === 'permission' || acpMode === 'access' || acpMode === 'process' || acpMode === 'queue' ? '' : acpMode === 'disconnected' ? 'disconnected' : 'end_turn',
       seq: 24,
     }, ...(acpMode === 'split' ? [{
       id: 'acp2', toolId: 'claude_code', projectId: 'site', directory: 'C:\\Projects\\personal-site', mode: 'yolo', interaction: 'acp',
@@ -619,18 +653,42 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
   }, blank: empty, language: english ? 'en' : 'zh', remoteState, promptFailure, directoryMode, writeRecovery, acpMode });
 }
 
+/** Characters a timeline holds against the host's budget, counted as
+ *  src-tauri/src/acp/timeline.rs `weight()` does (Unicode scalar values). */
+function hostTimelineChars(timeline) {
+  const chars = (text) => (text == null ? 0 : [...String(text)].length);
+  return timeline.reduce((sum, item) => {
+    if (item.kind === 'message') return sum + chars(item.text) + (item.attachments ?? []).reduce((total, label) => total + chars(label.name), 0);
+    if (item.kind === 'tool') {
+      return sum + chars(item.title) + chars(item.rawInput) + item.locations.reduce((total, location) => total + chars(location.path), 0)
+        + item.content.reduce((total, content) => total + (content.type === 'text' ? chars(content.text)
+          : content.type === 'diff' ? chars(content.path) + chars(content.oldText) + chars(content.newText)
+            : content.type === 'terminal' ? chars(content.terminalId) : 0), 0);
+    }
+    if (item.kind === 'notice') return sum + chars(item.text);
+    return sum;
+  }, 0);
+}
+
 /**
  * The long-conversation measurement (R13), on the synthetic host only. The large
  * conversation starts hidden behind a small one. Recorded: the GC'd heap and DOM after
  * loading; how long switching to the large conversation takes until its latest entry is
- * laid out in view (and one more frame); the DOM and rendered entries then; long tasks
- * while it streams 200 chunks, one every 16ms when the page keeps up, with two
- * background conversations streaming as many; and the GC'd heap after closing it. Browser observations of a preview
- * build, not native WebView2 or long-duration leak acceptance.
+ * laid out in view (and one more frame); the DOM and rendered entries then, after its
+ * open turn's diff and live terminal are opened the way a reader would; long tasks
+ * while it streams 200 reply chunks and 200 terminal lines, one of each every 16ms when
+ * the page keeps up, with two background conversations streaming a chunk each as often;
+ * and the GC'd heap after closing it. Browser observations of a preview build, not
+ * native WebView2 or long-duration leak acceptance.
  */
 async function measureLargeConversation(page, rounds) {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Performance.enable');
+  const fixture = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('acp_session', { sessionId: 'acp1' }));
+  const timelineChars = hostTimelineChars(fixture.timeline);
+  const timelineEntries = fixture.timeline.length;
+  const terminalsRetained = fixture.terminals.length;
+  const terminalsOmitted = fixture.omittedTerminalIds.length;
   const sample = async () => {
     await cdp.send('HeapProfiler.collectGarbage');
     await cdp.send('HeapProfiler.collectGarbage');
@@ -662,8 +720,19 @@ async function measureLargeConversation(page, rounds) {
     };
     requestAnimationFrame(check);
   }));
+  // Open the open turn's diff and running command, as a reader checking them would. A
+  // build that already shows a step's body leaves it as it is.
+  for (const id of ['tool:live-edit', 'tool:live-run']) {
+    const toggle = page.locator(`[data-pane-session="acp1"] [data-item-id="${id}"] button[aria-expanded]`).first();
+    if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
+  }
+  await page.locator('[data-pane-session="acp1"] [data-item-id="tool:live-edit"] [data-op="insert"]').first().waitFor({ timeout: 30000 });
   await page.waitForTimeout(800);
   const shown = await sample();
+  const openedBodies = await page.evaluate(() => ({
+    diffLines: document.querySelectorAll('[data-pane-session="acp1"] [data-item-id="tool:live-edit"] [data-op]').length,
+    terminalText: document.querySelector('[data-pane-session="acp1"] [data-item-id="tool:live-run"]')?.textContent?.includes('build:module') ?? false,
+  }));
   const stream = await page.evaluate(async () => {
     const tasks = [];
     const observer = new PerformanceObserver((list) => { for (const entry of list.getEntries()) tasks.push(entry.duration); });
@@ -671,12 +740,14 @@ async function measureLargeConversation(page, rounds) {
     const seq = { acp1: 1000, acp2: 1000, acp3: 1000 };
     const started = performance.now();
     let events = 0;
-    // A fixed workload, so every build receives the same events: 200 rounds of three
-    // chunks, one every 16ms (about 60 per second per conversation) when it keeps up.
+    // A fixed workload, so every build receives the same events: 200 rounds of a reply
+    // chunk and a terminal line for the large conversation and a chunk for each
+    // background one, one round every 16ms (about 60 per second) when it keeps up.
     for (let round = 0; round < 200; round += 1) {
       window.__acpEvent({ sessionId: 'acp1', seq: seq.acp1++, kind: 'chunk', messageId: 'live', role: 'agent', text: '流式输出的一段文字，含 `code` 与 **强调**。', truncated: false, turnId: 'turn-open', subagent: null });
+      window.__acpEvent({ sessionId: 'acp1', seq: seq.acp1++, kind: 'terminalOutput', terminalId: 'term-live', text: 'transforming (' + (round + 1) + ') src/features/module-live/part-' + round + '.tsx\n', dropped: 0, truncated: false, exitStatus: null, released: false });
       for (const id of ['acp2', 'acp3']) window.__acpEvent({ sessionId: id, seq: seq[id]++, kind: 'chunk', messageId: 'bg-live', role: 'agent', text: '后台输出。', truncated: false, turnId: 'turn-1', subagent: null });
-      events += 3;
+      events += 4;
       await new Promise((resolve) => setTimeout(resolve, 16));
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -691,7 +762,7 @@ async function measureLargeConversation(page, rounds) {
   await page.waitForTimeout(500);
   const afterClose = await sample();
   await cdp.detach();
-  return { synthetic: true, kind: 'browser-acp-large-conversation', rounds, entries: rounds * 5 + 2, afterLoad, switchMs, shown, stream, afterClose,
+  return { synthetic: true, kind: 'browser-acp-large-conversation', rounds, entries: timelineEntries, timelineChars, terminalsRetained, terminalsOmitted, afterLoad, switchMs, shown, openedBodies, stream, afterClose,
     nativePlatform: 'unverified', note: 'Browser preview with synthetic IPC; not native WebView2, CPU/memory or long-duration leak acceptance.' };
 }
 
@@ -958,7 +1029,7 @@ for (const width of widths) {
   }, false, null, null, null, false, null, 'large');
   // A long conversation measured (R13), once, like the remote stream: --performance.
   if (process.argv.includes('--performance') && theme === themes[0] && width === widths[0]) {
-    for (const [mode, rounds] of [['large-perf', 600], ['large-perf-2x', 1200]]) {
+    for (const [mode, rounds] of [['large-perf-ref', 0], ['large-perf', 600], ['large-perf-2x', 1200]]) {
       await shot('workbench-acp-' + mode + '-' + theme + '-' + width, theme, width, (page) => measureLargeConversation(page, rounds), false, null, null, null, false, null, mode);
     }
   }
@@ -1616,7 +1687,7 @@ fs.writeFileSync(out + '/README.md', [
   'CLIORA_PREVIEW_URL=http://127.0.0.1:14736 node scripts/capture-workbench.mjs',
   '```',
   '',
-  '`--theme all|light|dark`、`--size all|1360,900,720`（640 需显式指定或 CLIORA_CAPTURE_640=1）和 `--only "workbench-remote-*"` 可缩小范围；`CLIORA_CAPTURE_OUT` 指定输出目录，`CLIORA_CAPTURE_LOCALE=en-US` 捕获英文界面并写入独立目录。预览服务器需运行当前 frontend build。远程连接状态覆盖连接中、已连接、断开、未知和远端结束；`--only "workbench-remote-prompts-*"` 捕获快捷输入与新建会话提示词读取失败、旧成功陈旧标记及重试入口，保留输入草稿；`--performance` 仅在首个主题/尺寸执行一次 stream 压力场景，在三会话持续输出和切换后记录 GC 后 heap、DOM/listener、CPU task duration 等浏览器观察，并对长 ACP 对话（600 与 1200 轮，`workbench-acp-large-perf*`）记录 DOM、切换后首次渲染时间、流式期间长任务与关闭后的 GC 后 heap；均不构成原生或长时间泄漏验收。',
+  '`--theme all|light|dark`、`--size all|1360,900,720`（640 需显式指定或 CLIORA_CAPTURE_640=1）和 `--only "workbench-remote-*"` 可缩小范围；`CLIORA_CAPTURE_OUT` 指定输出目录，`CLIORA_CAPTURE_LOCALE=en-US` 捕获英文界面并写入独立目录。预览服务器需运行当前 frontend build。远程连接状态覆盖连接中、已连接、断开、未知和远端结束；`--only "workbench-remote-prompts-*"` 捕获快捷输入与新建会话提示词读取失败、旧成功陈旧标记及重试入口，保留输入草稿；`--performance` 仅在首个主题/尺寸执行一次 stream 压力场景，在三会话持续输出和切换后记录 GC 后 heap、DOM/listener、CPU task duration 等浏览器观察，并对长 ACP 对话（600 与 1200 轮，含 diff 与终端输出，2× 约 1.92M 宿主字符；另有只含进行中一轮的参照场景，`workbench-acp-large-perf*`）记录 DOM、切换后首次渲染时间、流式期间长任务与关闭后的 GC 后 heap；均不构成原生或长时间泄漏验收。',
   '',
   '终端文本、项目与提示词均为合成数据。' + acceptanceNote + '真实登录与计费也未验证。',
   '',

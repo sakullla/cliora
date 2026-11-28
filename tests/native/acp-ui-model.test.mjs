@@ -20,6 +20,7 @@ import {
 } from '../../src/features/sessions/acp/acpSearch.ts';
 import { acpSettings, composerPlaceholder, settingLabel } from '../../src/features/sessions/acp/composerModel.ts';
 import { formatTokens, usageLevel } from '../../src/features/sessions/acp/acpView.ts';
+import { toolBodyPropsEqual, toolBodySnapshotEqual } from '../../src/features/sessions/acp/acpRenderCache.ts';
 
 function toolItem(id, overrides = {}) {
   return {
@@ -858,4 +859,29 @@ test('formatTokens uses K/M/B in every language and usageLevel marks 80% and abo
   assert.equal(usageLevel(400000, 500000).high, true);
   assert.equal(usageLevel(425000, 500000).high, true);
   assert.deepEqual(usageLevel(12000, 0), { ratio: null, high: false });
+});
+
+test('toolBodySnapshotEqual ignores output streaming into another call and sees its own terminal', () => {
+  const terminal = (terminalId, output) => ({ terminalId, command: 'npm run build', cwd: 'C:/p', output, truncated: false, exitStatus: null, released: false, subagent: null, agentOwned: false });
+  const own = terminal('term-own', 'a\n');
+  const other = terminal('term-other', 'x\n');
+  const base = { state: 'running', directory: 'C:/p', terminals: [own, other], omittedTerminalIds: [] };
+  const edit = toolItem('e1', { toolKind: 'edit', content: [{ type: 'diff', path: 'a.css', oldText: 'a', newText: 'b', truncated: false }] });
+  const run = toolItem('r1', { toolKind: 'execute', content: [{ type: 'terminal', terminalId: 'term-own' }] });
+  // Output for another terminal: a new snapshot, the same body for both calls.
+  const otherOutput = { ...base, terminals: [own, terminal('term-other', 'x\ny\n')] };
+  assert.equal(toolBodySnapshotEqual(edit, base, otherOutput), true);
+  assert.equal(toolBodySnapshotEqual(run, base, otherOutput), true);
+  // Output for the call's own terminal, its omission, liveness and directory redraw it.
+  const ownOutput = { ...base, terminals: [terminal('term-own', 'a\nb\n'), other] };
+  assert.equal(toolBodySnapshotEqual(run, base, ownOutput), false);
+  assert.equal(toolBodySnapshotEqual(edit, base, ownOutput), true);
+  assert.equal(toolBodySnapshotEqual(run, base, { ...base, terminals: [other], omittedTerminalIds: ['term-own'] }), false);
+  assert.equal(toolBodySnapshotEqual(edit, base, { ...base, state: 'closed' }), false);
+  assert.equal(toolBodySnapshotEqual(edit, base, { ...base, directory: 'C:/q' }), false);
+  // Every other prop compares by identity.
+  const props = { id: 'b', call: edit, snapshot: base, searchQuery: '', forceOpen: false };
+  assert.equal(toolBodyPropsEqual(props, { ...props, snapshot: otherOutput }), true);
+  assert.equal(toolBodyPropsEqual(props, { ...props, searchQuery: 'a' }), false);
+  assert.equal(toolBodyPropsEqual(props, { ...props, call: { ...edit } }), false);
 });

@@ -1,4 +1,6 @@
 import { useCallback, useContext, useState } from 'react';
+import type { AcpSessionSnapshot, AcpToolCall } from '../../../types/acp';
+import { acpIsLive, acpTerminal } from '../acpSession.ts';
 import type { HighlightRun } from './acpHighlight';
 import { AcpSessionContext } from './acpImageCache.ts';
 
@@ -78,6 +80,34 @@ export function clearAcpRenderCache(sessionId: string) {
 /** Whether anything is still held for a session (tests and measurements). */
 export function hasAcpRenderCache(sessionId: string): boolean {
   return sessions.has(sessionId);
+}
+
+/**
+ * Whether an open tool body would draw the same from either snapshot. A body reads
+ * only whether the session is live, its directory and, for each terminal the call
+ * names, that terminal and whether it was omitted. Output streaming into another
+ * call's terminal changes the row's snapshot but not this; a body that compared the
+ * whole snapshot would diff its edit again on every line of that output.
+ */
+export function toolBodySnapshotEqual(call: AcpToolCall, previous: AcpSessionSnapshot, next: AcpSessionSnapshot): boolean {
+  if (previous === next) return true;
+  if (acpIsLive(previous) !== acpIsLive(next) || previous.directory !== next.directory) return false;
+  for (const content of call.content) {
+    if (content.type !== 'terminal') continue;
+    if (acpTerminal(previous, content.terminalId) !== acpTerminal(next, content.terminalId)) return false;
+    const omitted = (snapshot: AcpSessionSnapshot) => (snapshot.omittedTerminalIds ?? []).includes(content.terminalId);
+    if (omitted(previous) !== omitted(next)) return false;
+  }
+  return true;
+}
+
+/** Props comparison for a memoized tool body: every prop the same, the snapshot as far
+ *  as the body reads it (toolBodySnapshotEqual). */
+export function toolBodyPropsEqual<P extends { call: AcpToolCall; snapshot: AcpSessionSnapshot }>(previous: P, next: P): boolean {
+  const keys = Object.keys(next) as (keyof P)[];
+  if (keys.length !== Object.keys(previous).length) return false;
+  for (const key of keys) if (key !== 'snapshot' && !Object.is(previous[key], next[key])) return false;
+  return toolBodySnapshotEqual(next.call, previous.snapshot, next.snapshot);
 }
 
 /**

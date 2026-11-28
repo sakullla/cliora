@@ -4,9 +4,12 @@ import { Icon, type IconName } from '../../../components/Icon';
 import type { AcpSessionSnapshot, AcpToolCall } from '../../../types/acp';
 import { AcpToolBody, renderRuns, toolSummaryOf } from './AcpToolBody';
 import { stepSummaryShown, type ProcessItem } from './timelineModel';
-import { useViewMemory } from './acpRenderCache';
+import { toolBodyPropsEqual, useViewMemory } from './acpRenderCache';
 import { toolKindOf, toolKindView, toolStatusKey } from './acpView';
 import styles from './acp.module.css';
+
+/** The open body redraws only when what it shows changes, not on every snapshot. */
+const ToolBody = memo(AcpToolBody, toolBodyPropsEqual);
 
 type StepStatus = AcpToolCall['status'] | 'interrupted';
 
@@ -172,7 +175,7 @@ export const AcpStep = memo(function AcpStep({
       : <span className={styles.stepStatus} data-status={status} data-active={(latest && status === 'in_progress') || undefined}>
           <Icon name={statusIcon(status)} size={12} />{statusWord}
         </span>}
-    {open && <AcpToolBody
+    {open && <ToolBody
       id={bodyId}
       call={call}
       snapshot={snapshot}

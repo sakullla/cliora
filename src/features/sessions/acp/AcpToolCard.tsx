@@ -5,9 +5,12 @@ import type { AcpSessionSnapshot, AcpToolCall } from '../../../types/acp';
 import { acpCardAnswerable } from '../acpSession';
 import { AcpPermissionCard } from './AcpPermissionCard';
 import { AcpToolBody, renderRuns, toolSummaryOf } from './AcpToolBody';
-import { useViewMemory } from './acpRenderCache';
+import { toolBodyPropsEqual, useViewMemory } from './acpRenderCache';
 import { toolKindOf, toolKindView, toolStatusIcon, toolStatusKey } from './acpView';
 import styles from './acp.module.css';
+
+/** The open body redraws only when what it shows changes, not on every snapshot. */
+const ToolBody = memo(AcpToolBody, toolBodyPropsEqual);
 
 /**
  * One tool call, merged in place by its call id. Kind glyph and status are told
@@ -81,7 +84,7 @@ export const AcpToolCard = memo(function AcpToolCard({
       </button>
       <span className={styles.toolStatus}><Icon name={toolStatusIcon(call.status)} size={12} />{t(request?.userQuestion && answerable ? 'sessions.taskNeedsAnswer' : toolStatusKey(call.status))}</span>
     </div>
-    {open && <AcpToolBody
+    {open && <ToolBody
       id={bodyId}
       call={call}
       snapshot={snapshot}
