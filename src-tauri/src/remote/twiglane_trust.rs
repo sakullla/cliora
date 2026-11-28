@@ -306,6 +306,13 @@ mod tests {
 
     #[test]
     fn windows_openssh_default_known_hosts_are_absolute_snapshot_operands() {
+        // This checks Windows OpenSSH. A shell such as Git Bash may put another ssh
+        // (MSYS, with POSIX /etc paths) first on PATH; that client is not the subject.
+        let version = Command::new("ssh").arg("-V").output();
+        if !version.is_ok_and(|output| String::from_utf8_lossy(&output.stderr).contains("OpenSSH_for_Windows")) {
+            eprintln!("SKIP: ssh on PATH is not Windows OpenSSH");
+            return;
+        }
         let mut command = Command::new("ssh");
         command.args(["-G", "-F", "none", "--", "cliora-default.invalid"]);
         let profile = Profile::read(&command).unwrap();

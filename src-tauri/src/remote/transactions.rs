@@ -395,6 +395,7 @@ exec /usr/bin/mv "$@"
 
     #[test]
     fn failed_restore_can_retry_through_public_inspection_after_the_fault_is_removed() {
+        if !super::super::fixture_tools::gnu_wsl_fixture("failed_restore_can_retry_through_public_inspection_after_the_fault_is_removed") { return; }
         local_fixture(|target| {
             let receipt = interrupted_restore(target);
             let staging = format!("$HOME/a.cliora-{}-restore", receipt.id);
@@ -438,6 +439,7 @@ exec /usr/bin/mv "$@"
 
     #[test]
     fn restore_rejects_wrong_staging_hash_symlink_hardlink_and_destination_changes_without_overwrite() {
+        if !super::super::fixture_tools::gnu_wsl_fixture("restore_rejects_wrong_staging_hash_symlink_hardlink_and_destination_changes_without_overwrite") { return; }
         for fault in ["wrong-hash", "symlink", "hardlink", "destination", "during-restore"] {
             local_fixture(|target| {
                 let receipt = interrupted_restore(target);
@@ -492,6 +494,7 @@ exec /usr/bin/sha256sum "$@"
     }
     #[test]
     fn interrupted_partial_restore_keeps_a_durable_barrier_between_files_and_can_finish_later() {
+        if !super::super::fixture_tools::gnu_wsl_fixture("interrupted_partial_restore_keeps_a_durable_barrier_between_files_and_can_finish_later") { return; }
         local_fixture(|target| {
             run_command(target, "printf base-a > \"$HOME/a\"; printf base-b > \"$HOME/b\"").unwrap();
             submit(target, &[("$HOME/a", b"A-a"), ("$HOME/b", b"A-b")]).unwrap();

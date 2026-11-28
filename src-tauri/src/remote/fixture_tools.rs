@@ -171,3 +171,33 @@ mod tests {
         assert!(!missing.stderr.is_empty());
     }
 }
+
+/// Windows runs the POSIX fixtures through WSL's default distribution. The
+/// transaction and upload fixtures need the GNU/Linux contract (GNU tools at
+/// /usr/bin, `flock`) and the Windows drives mounted under /mnt; Docker Desktop's
+/// BusyBox distribution has neither. Report SKIP instead of failing on an
+/// unsuitable host; native acceptance remains required there.
+pub(super) fn gnu_wsl_fixture(test: &str) -> bool {
+    #[cfg(windows)]
+    {
+        static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let available = *AVAILABLE.get_or_init(|| {
+            let mut command = std::process::Command::new("wsl.exe");
+            command.args([
+                "--exec", "sh", "-c",
+                "test -x /usr/bin/mv && command -v flock >/dev/null && test -d /mnt/c",
+            ]);
+            super::hide_console_window(&mut command);
+            command.output().is_ok_and(|output| output.status.success())
+        });
+        if !available {
+            eprintln!("SKIP {test}: the default WSL distribution is not GNU/Linux with /mnt drives; set one as default to run it");
+        }
+        available
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = test;
+        true
+    }
+}

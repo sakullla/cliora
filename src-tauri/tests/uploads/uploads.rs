@@ -209,11 +209,15 @@ fn claim_command_links_first_free_name_and_never_overwrites() {
 
 /// Map a Windows temp path to its WSL view so the claim commands run in a real
 /// POSIX shell through the local transport while the assertions stay native.
+/// None (reported as SKIP) when WSL cannot run the GNU/Linux fixture or see the drive.
 #[cfg(windows)]
-fn wsl_path(windows_path: &Path) -> String {
+fn wsl_path(windows_path: &Path) -> Option<String> {
+    if !super::super::fixture_tools::gnu_wsl_fixture("upload transport fixture") {
+        return None;
+    }
     let text = windows_path.to_string_lossy().replace('\\', "/");
     let drive = text.chars().next().unwrap_or('c').to_ascii_lowercase();
-    format!("/mnt/{drive}/{}", &text[3..])
+    Some(format!("/mnt/{drive}/{}", &text[3..]))
 }
 
 /// The channel test keeps the remote side inside the WSL tree; the fixture sftp
@@ -380,7 +384,7 @@ fn upload_files_moves_through_sftp_temp_and_atomic_claim() {
     let project_root = fixture.path().join("project");
     std::fs::create_dir(&project_root).unwrap();
     #[cfg(windows)]
-    let project_path = wsl_path(&project_root);
+    let Some(project_path) = wsl_path(&project_root) else { return };
     #[cfg(not(windows))]
     let project_path = project_root.to_string_lossy().into_owned();
     let uploads_directory = upload_directory(&project_path).unwrap();
@@ -477,7 +481,7 @@ fn upload_session_files_records_claimed_paths_for_the_active_session() {
     let project_root = fixture.path().join("project");
     std::fs::create_dir(&project_root).unwrap();
     #[cfg(windows)]
-    let project_path = wsl_path(&project_root);
+    let Some(project_path) = wsl_path(&project_root) else { return };
     #[cfg(not(windows))]
     let project_path = project_root.to_string_lossy().into_owned();
     let target = upload_target_with("command-success-fixture.invalid");
@@ -549,7 +553,7 @@ fn upload_session_files_failure_records_the_landed_residue_of_the_attempt() {
     let project_root = fixture.path().join("project");
     std::fs::create_dir(&project_root).unwrap();
     #[cfg(windows)]
-    let project_path = wsl_path(&project_root);
+    let Some(project_path) = wsl_path(&project_root) else { return };
     #[cfg(not(windows))]
     let project_path = project_root.to_string_lossy().into_owned();
     let target = upload_target_with("command-failure-fixture.invalid");
@@ -601,7 +605,7 @@ fn upload_transport_failure_is_never_replayed_under_a_write_request() {
     let project_root = fixture.path().join("project");
     std::fs::create_dir(&project_root).unwrap();
     #[cfg(windows)]
-    let project_path = wsl_path(&project_root);
+    let Some(project_path) = wsl_path(&project_root) else { return };
     #[cfg(not(windows))]
     let project_path = project_root.to_string_lossy().into_owned();
     let target = upload_target_with("command-retry-fixture.invalid");
@@ -732,7 +736,7 @@ fn recovery_after_confirmed_end_removes_only_recorded_paths_and_rows() {
     let project_root = fixture.path().join("project");
     std::fs::create_dir(&project_root).unwrap();
     #[cfg(windows)]
-    let project_path = wsl_path(&project_root);
+    let Some(project_path) = wsl_path(&project_root) else { return };
     #[cfg(not(windows))]
     let project_path = project_root.to_string_lossy().into_owned();
     let target = upload_target_with("recovery-fixture.invalid");
@@ -806,7 +810,7 @@ fn pending_upload_sweep_recovers_only_confirmed_absent_sessions() {
     let project_root = fixture.path().join("project");
     std::fs::create_dir(&project_root).unwrap();
     #[cfg(windows)]
-    let project_path = wsl_path(&project_root);
+    let Some(project_path) = wsl_path(&project_root) else { return };
     #[cfg(not(windows))]
     let project_path = project_root.to_string_lossy().into_owned();
     let target = upload_target_with("sweep-fixture.invalid");
@@ -861,7 +865,7 @@ fn upload_failure_report_never_drops_a_record_error() {
     let project_root = fixture.path().join("project");
     std::fs::create_dir(&project_root).unwrap();
     #[cfg(windows)]
-    let project_path = wsl_path(&project_root);
+    let Some(project_path) = wsl_path(&project_root) else { return };
     #[cfg(not(windows))]
     let project_path = project_root.to_string_lossy().into_owned();
     let target = upload_target_with("record-error-fixture.invalid");

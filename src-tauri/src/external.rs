@@ -95,27 +95,29 @@ mod tests {
             "twiglane://workspace?v=2&file=C%3A%2Fwork%2Fmy%20team%2Fshared.dev-workspace.json&repository={repository}"
         );
         assert_eq!(validated_url(&valid).unwrap(), valid);
+        // An absolute path on this platform, so only the rule under test can reject a case.
+        let file = if cfg!(windows) { "C%3A%2Fwork%2Fa" } else { "%2Fwork%2Fa" };
         for extended in [
-            format!("twiglane://workspace?v=2&file=%2Fwork%2Fa.json&adopt=1&repository={repository}"),
-            format!("twiglane://workspace?v=3&file=%2Fwork%2Fa.json&repository={repository}"),
+            format!("twiglane://workspace?v=2&file={file}.json&adopt=1&repository={repository}"),
+            format!("twiglane://workspace?v=3&file={file}.json&repository={repository}"),
         ] {
             assert_eq!(validated_url(&extended).unwrap(), extended);
         }
 
         for invalid in [
             // Old project links carry no source repository: they are refused, not downgraded.
-            "twiglane://workspace?v=1&file=%2Fwork%2Fa.json".to_string(),
+            format!("twiglane://workspace?v=1&file={file}.json"),
             format!(
-                "twiglane://workspace?v=2&file=%2Fwork%2Fa.json&repository={repository}&repository={repository}"
+                "twiglane://workspace?v=2&file={file}.json&repository={repository}&repository={repository}"
             ),
-            "twiglane://workspace?v=2&file=%2Fwork%2Fa.json&repository=not-a-uuid".to_string(),
-            "twiglane://workspace?v=2&file=%2Fwork%2Fa.json".to_string(),
+            format!("twiglane://workspace?v=2&file={file}.json&repository=not-a-uuid"),
+            format!("twiglane://workspace?v=2&file={file}.json"),
             "twiglane://workspace?v=2&repository=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8".to_string(),
-            "twiglane://workspace?v=two&file=%2Fwork%2Fa.json&repository=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8".to_string(),
+            format!("twiglane://workspace?v=two&file={file}.json&repository=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8"),
             "twiglane://workspace?v=2&file=relative.json&repository=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8".to_string(),
-            "twiglane://workspace?v=2&file=%2Fwork%2Fa+b.json&repository=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8".to_string(),
-            "twiglane://workspace?v=2&file=%2Fwork%2Fa.json&repository=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8#frag".to_string(),
-            "twiglane://other?v=2&file=%2Fwork%2Fa.json&repository=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8".to_string(),
+            format!("twiglane://workspace?v=2&file={file}+b.json&repository=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8"),
+            format!("twiglane://workspace?v=2&file={file}.json&repository=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8#frag"),
+            format!("twiglane://other?v=2&file={file}.json&repository=6f1a2b3c-4d5e-4f60-8172-93a4b5c6d7e8"),
         ] {
             assert!(validated_url(&invalid).is_err(), "{invalid}");
         }
