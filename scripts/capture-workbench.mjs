@@ -185,9 +185,12 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
     // prompt into one line and names the agent once in the round; 'process' is a turn
     // still at work (compact steps, older ones folded, the current action on its last
     // line); 'process-done' is the same turn ended, folded into its summary with a failed
-    // step listed and the reply after it. The queue and image scenes join once their data exists.
+    // step listed and the reply after it.
+    // Queue and picture scenes: 'queue' is a turn at work that prompts are queued behind
+    // (the scene steps type them and push the host's later snapshots); 'images' is a
+    // ready conversation whose earlier message was replayed without its picture data.
     const acpState = acpMode === 'starting' ? 'starting' : acpMode === 'stopping' ? 'stopping' : acpMode === 'permission' || acpMode === 'form' || acpMode === 'access' ? 'waiting_permission' : acpMode === 'login' ? 'auth_required'
-      : acpMode === 'disconnected' ? 'closed' : acpMode === 'tools' || acpMode === 'process' ? 'running' : 'ready';
+      : acpMode === 'disconnected' ? 'closed' : acpMode === 'tools' || acpMode === 'process' || acpMode === 'queue' ? 'running' : 'ready';
     const acpNativeId = acpMode === 'login' ? null : 'native-acp-1';
     const acpAuthError = acpMode === 'login' ? 'agent 要求先登录：没有找到有效的凭据' : null;
     const acpEnd = (turnId, reason = 'end_turn') => ({ kind: 'turn', id: turnId + '-end', turnId, reason });
@@ -275,8 +278,14 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
       acpTool('c5', '读取 D:\\shared\\tokens.css', 'read', 'in_progress', { locations: [{ path: 'D:\\shared\\tokens.css', line: null }] }),
       { kind: 'access', id: 'access-r1', accessKind: 'read', path: 'D:\\shared\\tokens.css', detail: null, decision: 'pending', requestId: 'access-r1-request', diff: null, turnId: 'turn-1', subagent: null, userPath: null },
     ];
+    const acpImages = () => [
+      { ...acpTurnMessage('i0', 'user', '照着这张截图调整工具栏的间距。', 'turn-0'), attachments: [{ type: 'image', name: 'image/png', delivery: null }, { type: 'file', name: 'src/features/sessions/SessionWorkbench.module.css', delivery: 'link' }] },
+      acpTurnMessage('i1', 'agent', '截图里按钮之间的间距是 6px，和令牌不一致。我改成 `--space-1_5`。', 'turn-0'),
+      acpEnd('turn-0'),
+    ];
     const acpTimeline = acpMode === 'empty' || acpMode === 'starting' ? [] : acpMode === 'long' ? acpLong() : acpMode === 'startup' ? acpStartup()
-      : acpMode === 'process' || acpMode === 'process-done' ? acpProcess(acpMode === 'process-done') : acpMode === 'tools' ? acpTools() : acpMode === 'yolo' ? acpYolo() : acpMode === 'disconnected' ? acpDisconnected() : acpMode === 'access' ? acpAccess() : null;
+      : acpMode === 'process' || acpMode === 'process-done' || acpMode === 'queue' ? acpProcess(acpMode === 'process-done') : acpMode === 'tools' ? acpTools() : acpMode === 'yolo' ? acpYolo() : acpMode === 'disconnected' ? acpDisconnected() : acpMode === 'access' ? acpAccess()
+        : acpMode === 'images' ? acpImages() : null;
     const acpFixture = acpMode ? [{
       id: 'acp1', toolId: 'codex', projectId: 'cliora', directory: 'C:\\Projects\\cliora', mode: acpMode === 'yolo' ? 'yolo' : 'normal', interaction: 'acp',
       state: acpState,
@@ -317,7 +326,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
       grants: acpMode === 'access' ? ['write'] : [],
       terminals: acpTerminals,
       omittedTerminalIds: [],
-      plan: acpMode === 'empty' || acpMode === 'starting' || acpMode === 'long' || acpMode === 'yolo' || acpMode === 'startup' || acpMode === 'process' || acpMode === 'process-done' ? [] : acpMode === 'tools' ? [
+      plan: acpMode === 'empty' || acpMode === 'starting' || acpMode === 'long' || acpMode === 'yolo' || acpMode === 'startup' || acpMode === 'process' || acpMode === 'process-done' || acpMode === 'queue' || acpMode === 'images' ? [] : acpMode === 'tools' ? [
         { content: '读取工具栏样式与令牌', priority: 'high', status: 'completed' },
         { content: '把固定像素换成令牌相加', priority: 'high', status: 'completed' },
         { content: '运行样式检查', priority: 'medium', status: 'completed' },
@@ -349,7 +358,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
         : { title: '工具栏间距改用令牌', updatedAt: null, usage: acpMode === 'tools' || acpMode === 'long' ? { used: 48200, size: 200000, cost: acpMode === 'tools' ? { amount: 0.0412, currency: 'USD' } : null } : null },
       agent: {
         protocolVersion: 1, agentInfo: { name: 'codex-acp', title: 'Codex', version: '0.1.0' },
-        promptCapabilities: { image: acpMode === 'composer', audio: false, embeddedContext: acpMode === 'composer' },
+        promptCapabilities: { image: acpMode === 'composer' || acpMode === 'images', audio: false, embeddedContext: acpMode === 'composer' },
         sessionCapabilities: { list: acpMode === 'composer', resume: acpMode === 'composer', delete: acpMode === 'composer', close: false }, loadSession: false,
         authMethods: acpMode === 'login' ? [
           { id: 'chatgpt', name: 'ChatGPT 账号', description: '在浏览器里完成登录', type: 'agent' },
@@ -357,7 +366,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
         ] : [],
       },
       diagnostics: acpMode === 'stopping' ? ['agent 标准错误：正在结束本轮（已脱敏）'] : acpMode === 'disconnected' ? ['agent 标准错误：unexpected EOF on stdin（已脱敏）'] : [],
-      lastTurnReason: acpMode === 'starting' || acpMode === 'stopping' || acpMode === 'empty' || acpMode === 'tools' || acpMode === 'permission' || acpMode === 'access' || acpMode === 'process' ? '' : acpMode === 'disconnected' ? 'disconnected' : 'end_turn',
+      lastTurnReason: acpMode === 'starting' || acpMode === 'stopping' || acpMode === 'empty' || acpMode === 'tools' || acpMode === 'permission' || acpMode === 'access' || acpMode === 'process' || acpMode === 'queue' ? '' : acpMode === 'disconnected' ? 'disconnected' : 'end_turn',
       seq: 24,
     }, ...(acpMode === 'split' ? [{
       id: 'acp2', toolId: 'claude_code', projectId: 'site', directory: 'C:\\Projects\\personal-site', mode: 'yolo', interaction: 'acp',
@@ -533,6 +542,14 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
         const bytes = new TextEncoder().encode(text);
         const data = btoa(String.fromCharCode(...bytes));
         bridge.handlers[bridge.listens['cliora:session-output']]?.({ payload: { sessionId, dataBase64: data } });
+      },
+      /** The host publishes a later snapshot of the first conversation (the queue and
+       *  picture scenes): `patch` replaces fields, `items` are appended to its timeline. */
+      __acpPush: (patch = {}, items = []) => {
+        const conversation = acpFixture?.[0];
+        if (!conversation) return;
+        Object.assign(conversation, patch, { timeline: [...conversation.timeline, ...items], seq: conversation.seq + 1 });
+        bridge.handlers[bridge.listens['cliora:acp-event']]?.({ payload: { sessionId: conversation.id, seq: conversation.seq, kind: 'snapshot', snapshot: JSON.parse(JSON.stringify(conversation)) } });
       },
       /** A native (desktop) drop of paths at a CSS-pixel point. */
       __drop: (paths, point) => {
@@ -883,6 +900,63 @@ for (const width of widths) {
     await acpPanel(page).locator('[data-attachment="image"]').waitFor();
     await acpPanel(page).locator('[data-attachment="reading"]').waitFor();
   }, false, null, null, null, false, 'windows', 'composer');
+  // The queue (R11): prompts typed while a turn works wait above the input card, the one
+  // sent with Ctrl+Enter first ("next after stop"); a failed turn pauses the queue until
+  // "continue sending"; prompts still queued when the conversation ends stay readable.
+  const queuePrompts = async (page, texts) => {
+    const input = acpInput(page);
+    await acpPanel(page).locator('[data-acp-composer]').waitFor();
+    for (const text of texts) {
+      await input.fill(text);
+      await input.press('Enter');
+    }
+    await acpPanel(page).locator('[data-acp-queue-item]').nth(texts.length - 1).waitFor();
+  };
+  await shot('workbench-acp-queue-' + theme + '-' + width, theme, width, async (page) => {
+    await queuePrompts(page, [copy('构建通过后，把 R13 的验收也补进测试计划。', 'Once the build passes, add the R13 acceptance to the test plan.'), copy('顺便检查一下 720px 下的输入卡。', 'Also check the input card at 720px.')]);
+    await acpInput(page).fill(copy('先停一下，R13 的编号写错了，应当是 R12。', 'Stop for a moment: R13 is misnumbered, it should be R12.'));
+    await acpInput(page).press('ControlOrMeta+Enter');
+    await acpPanel(page).locator('[data-acp-queue-item][data-immediate]').waitFor();
+  }, false, null, null, null, false, null, 'queue');
+  await shot('workbench-acp-queue-paused-' + theme + '-' + width, theme, width, async (page) => {
+    await queuePrompts(page, [copy('构建通过后，把 R13 的验收也补进测试计划。', 'Once the build passes, add the R13 acceptance to the test plan.')]);
+    await page.evaluate(() => window.__acpPush({ state: 'ready', lastTurnReason: 'failed' }, [{ kind: 'turn', id: 'turn-1-end', turnId: 'turn-1', reason: 'failed' }]));
+    await acpPanel(page).locator('[data-acp-queue-paused]').waitFor();
+  }, false, null, null, null, false, null, 'queue');
+  await shot('workbench-acp-queue-unsent-' + theme + '-' + width, theme, width, async (page) => {
+    await queuePrompts(page, [copy('构建通过后，把 R13 的验收也补进测试计划。', 'Once the build passes, add the R13 acceptance to the test plan.'), copy('顺便检查一下 720px 下的输入卡。', 'Also check the input card at 720px.')]);
+    await page.evaluate(() => window.__acpPush({ state: 'closed', lastTurnReason: 'disconnected' }));
+    await acpPanel(page).locator('[data-acp-unsent]').waitFor();
+    await acpPanel(page).locator('[data-acp-ended]').waitFor();
+  }, false, null, null, null, false, null, 'queue');
+  // Pictures in the person's messages (R12): a sent pasted PNG and a dropped photo.jpg
+  // as thumbnails; the earlier, replayed message has no picture data and shows a named
+  // placeholder instead of the media type.
+  await shot('workbench-acp-images-' + theme + '-' + width, theme, width, async (page) => {
+    const input = acpInput(page);
+    await acpPanel(page).locator('[data-acp-image-placeholder]').waitFor();
+    await input.click();
+    await input.evaluate((node) => {
+      const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+      const bytes = Uint8Array.from(atob(png), (char) => char.charCodeAt(0));
+      const pasted = new DataTransfer();
+      pasted.items.add(new File([bytes], '', { type: 'image/png' }));
+      node.dispatchEvent(new ClipboardEvent('paste', { clipboardData: pasted, bubbles: true, cancelable: true }));
+      const dropped = new DataTransfer();
+      dropped.items.add(new File([bytes], 'photo.jpg', { type: 'image/jpeg' }));
+      node.dispatchEvent(new DragEvent('dragover', { dataTransfer: dropped, bubbles: true, cancelable: true }));
+      node.dispatchEvent(new DragEvent('drop', { dataTransfer: dropped, bubbles: true, cancelable: true }));
+    });
+    await acpPanel(page).locator('[data-attachment="image"]').nth(1).waitFor();
+    await input.fill(copy('这两张是改完后的效果，对比一下。', 'These two show the result; compare them.'));
+    await input.press('Enter');
+    await acpPanel(page).locator('[data-attachment="image"]').first().waitFor({ state: 'detached' });
+    await page.evaluate((text) => window.__acpPush({ state: 'running' }, [{ kind: 'message', id: 'turn-2-user', role: 'user', text, truncated: false, turnId: 'turn-2', subagent: null,
+      attachments: [{ type: 'image', name: 'image/png', delivery: null }, { type: 'image', name: 'image/jpeg', delivery: null }] }]), copy('这两张是改完后的效果，对比一下。', 'These two show the result; compare them.'));
+    const thumbs = acpPanel(page).locator('[data-item-id="turn-2-user"] [data-acp-image-thumb] img');
+    await thumbs.nth(1).waitFor();
+    await page.waitForFunction(() => [...document.querySelectorAll('[data-acp-image-thumb] img')].every((node) => node.complete && node.naturalWidth > 0));
+  }, false, null, null, null, false, null, 'images');
   await shot('workbench-acp-login-' + theme + '-' + width, theme, width, async (page) => {
     await acpPanel(page).locator('[data-acp-auth]').waitFor();
   }, false, null, null, null, false, null, 'login');

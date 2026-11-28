@@ -4,6 +4,7 @@ import { Icon } from '../../../components/Icon';
 import type { AcpMessage as Message } from '../../../types/acp';
 import { AcpCodeBlock } from './AcpCodeBlock';
 import { AcpCopyButton } from './AcpCopyButton';
+import { AcpUserImages } from './AcpImagePreview';
 import { splitMatchRuns } from './acpSearch';
 import { visibleControls } from './acpView';
 import styles from './acp.module.css';
@@ -28,8 +29,8 @@ function containsQuery(text: string, query: string, caseSensitive: boolean): boo
 /**
  * One message of the timeline. An agent reply reads as Markdown in the pane's
  * terminal tone (HTML and escape sequences stay literal text); the person's own
- * message is plain text with attachment labels and an optional refill-to-input
- * action; a thought folds by default with a single-line preview and expands to
+ * message is plain text with its pictures (thumbnails, or named placeholders once
+ * their data is gone), file labels and an optional refill-to-input action; a thought folds by default with a single-line preview and expands to
  * calm secondary text. Every message can be copied whole, exactly as it arrived.
  * An agent reply carries the agent's name only when it opens its round (`head`);
  * otherwise its copy action floats over its corner on hover or focus.
@@ -114,6 +115,8 @@ export function AcpMessage({
 
   if (role === 'user') {
     const showReuse = canReuse && !!onReuse && message.text.trim().length > 0;
+    const imageCount = message.attachments?.filter((attachment) => attachment.type === 'image').length ?? 0;
+    const files = message.attachments?.filter((attachment) => attachment.type !== 'image') ?? [];
     return <div
       className={styles.message}
       data-item-id={message.id}
@@ -125,9 +128,10 @@ export function AcpMessage({
       <div className={styles.userBubble}>
         <span className={styles.srOnly}>{roleLabel}</span>
         <p className={styles.plainText}>{message.text ? renderRuns(message.text, searchQuery, searchCase) : ' '}{truncated}</p>
-        {!!message.attachments?.length && <ul className={styles.attachments} aria-label={t('sessions.acpAttachments')}>
-          {message.attachments.map((attachment, index) => <li key={index} className={styles.attachment} data-type={attachment.type}>
-            <Icon name={attachment.type === 'image' ? 'eye' : 'file'} size={12} />
+        <AcpUserImages messageId={message.id} count={imageCount} />
+        {files.length > 0 && <ul className={styles.attachments} aria-label={t('sessions.acpAttachments')}>
+          {files.map((attachment, index) => <li key={index} className={styles.attachment} data-type={attachment.type}>
+            <Icon name="file" size={12} />
             <span className={styles.attachmentName}>{renderRuns(attachment.name, searchQuery, searchCase)}</span>
             {attachment.delivery && <span className={styles.attachmentNote}>{t(attachment.delivery === 'embedded' ? 'sessions.acpAttachmentEmbedded' : 'sessions.acpAttachmentLink')}</span>}
           </li>)}

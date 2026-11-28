@@ -46,6 +46,8 @@ import uploadStyles from './sessionUploads.module.css';
 import { AcpConversation, type AcpConversationHandle, type AcpFindMatch } from './AcpConversation';
 import { acpIsLive, acpRow, acpStateKey } from './acpSession';
 import { createAcpStore, type AcpSummary } from './acpStore';
+import { releaseAcpImages } from './acp/acpImageCache';
+import { clearAcpQueue } from './acp/acpQueue.ts';
 import type { AcpAttachment, AcpEvent, AcpSessionSnapshot } from '../../types/acp';
 import { WorkbenchComposer } from './WorkbenchComposer';
 import { PromptPicker } from './PromptPicker';
@@ -2878,11 +2880,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   }
 
   /** Closing a conversation is a native close plus a local row removal: the host may still
-   *  report its own exit, and a later list read must not put the row back. */
+   *  report its own exit, and a later list read must not put the row back. Its queued
+   *  prompts and the pictures kept for its messages go with it. */
   async function closeConversationNow(sessionId: string) {
     const order = arrangedSessions.map((item) => item.id);
     await acp.close(sessionId);
     acpStore.retire(sessionId);
+    clearAcpQueue(sessionId);
+    releaseAcpImages(sessionId);
     forgetSession(sessionId);
     const rest = sessionsRef.current.filter((item) => item.id !== sessionId);
     setSelectedId((current) => selectionAfterClose(current, new Set([sessionId]), order, rest));
@@ -3008,7 +3013,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       if (!text.replace(/[\u0000-\u001f]/g, '').trim()) return false;
       try {
         // A mounted conversation sends its attachment tray along (files pasted into the
-        // quick input land there); otherwise the text goes alone.
+        // quick input land there), and queues the prompt while a turn runs; otherwise the
+        // text goes alone.
         const handle = acpHandles.current.get(session.id);
         if (handle) await handle.submitText(text);
         else await acp.prompt(session.id, text);

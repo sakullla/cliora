@@ -70,18 +70,27 @@ test('Enter waits for the input method, Shift+Enter adds a line, a running turn 
   await input.press('Enter');
   await expect.poll(async () => (await testState(page)).prompts.at(-1)).toEqual(['a1', '第一行\n第二行']);
 
-  // A running turn: the draft stays editable, Enter does not send, the main button stops.
+  // A running turn: the draft stays editable, Enter queues it instead of sending, and
+  // the main button stops the turn.
   await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'running', seq: 5 }));
   await expect(panel.getByRole('button', { name: '停止', exact: true })).toBeVisible();
   await expect(panel.getByRole('button', { name: '发送', exact: true })).toHaveCount(0);
   await expect(input).toBeEnabled();
   await input.fill('下一步：跑单测');
+  await expect(panel.getByRole('button', { name: '加入队列', exact: true })).toBeVisible();
   await input.press('Enter');
+  await expect(panel.locator('[data-acp-queue-item]')).toHaveCount(1);
+  await expect(input).toHaveValue('');
   expect((await testState(page)).prompts).toHaveLength(2);
   await panel.getByRole('button', { name: '停止', exact: true }).click();
   expect((await testState(page)).cancels).toEqual(['a1']);
   await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'ready', seq: 6 }));
+  // The stop paused the queue: nothing goes out, and the prompt comes back to edit.
+  await expect(panel.locator('[data-acp-queue-paused]')).toBeVisible();
+  expect((await testState(page)).prompts).toHaveLength(2);
+  await panel.locator('[data-acp-queue-edit]').click();
   await expect(input).toHaveValue('下一步：跑单测');
+  await expect(panel.locator('[data-acp-queue]')).toHaveCount(0);
 
   // A refused send keeps the draft and its attachment and says why.
   await pasteImages(input, ['shot.png']);
@@ -513,7 +522,7 @@ test('an agent without session listing explains why instead of listing', async (
   expect((await testState(page)).historyQueries).toEqual([]);
 });
 
-test('the unified ACP composer card supports panel-wide drop, explicit @ and image tools, running-turn Enter feedback and Ctrl+Shift+M focus', async ({ page }) => {
+test('the unified ACP composer card supports panel-wide drop, explicit @ and image tools, running-turn Enter queueing and Ctrl+Shift+M focus', async ({ page }) => {
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
   await installAcpMock(page, {
     interaction: 'acp',
@@ -563,13 +572,17 @@ test('the unified ACP composer card supports panel-wide drop, explicit @ and ima
   expect((await testState(page)).attachments).toEqual([['a1', [{ type: 'image', mimeType: 'image/png', dataBase64: PNG }]]]);
   await expect(panel.locator('[data-attachment]')).toHaveCount(0);
 
-  // Pressing Enter while a turn is busy displays lightweight feedback and clears once ready.
+  // Enter while a turn is busy queues the draft (no refusal); once the session is idle it goes out.
   await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'running', seq: 2 }));
+  await expect(panel.getByRole('button', { name: '停止', exact: true })).toBeVisible();
   await input.fill('下一轮内容');
   await input.press('Enter');
-  await expect(panel.getByRole('status').filter({ hasText: '当前轮次仍在处理中' })).toBeVisible();
+  await expect(panel.locator('[data-acp-queue-item]')).toHaveCount(1);
+  await expect(input).toHaveValue('');
+  expect((await testState(page)).prompts).toHaveLength(1);
   await page.evaluate(() => (window as any).__acpSessionState('a1', { state: 'ready', seq: 3 }));
-  await expect(panel.getByRole('status').filter({ hasText: '当前轮次仍在处理中' })).toHaveCount(0);
+  await expect.poll(async () => (await testState(page)).prompts).toEqual([['a1', '这张图里的报错'], ['a1', '下一轮内容']]);
+  await expect(panel.locator('[data-acp-queue]')).toHaveCount(0);
 
   // A text-only agent hides the image picker button.
   await page.locator('[data-session-id="a2"]').first().click();
@@ -1027,4 +1040,282 @@ test('starting and ready empty states, ended recovery banner and copyable diagno
   await page.locator('[data-session-id="a1"]').first().click();
   await ended.getByRole('button', { name: '在同一目录新开对话', exact: true }).click();
   await expect.poll(async () => (await testState(page)).launches.at(-1)).toMatchObject({ toolId: 'codex', interaction: 'acp', directory: 'C:/work/app', sessionId: null });
+});
+
+/* The queue (R11). The host's view changes by whole snapshots here: a turn's end and the
+   state it settles in arrive together, and each step waits for what it shows before
+   the next one, since the store applies events at the next frame. */
+
+const userTurn = (turnId: string, text: string, extra: Record<string, unknown> = {}) => ({ kind: 'message' as const, id: `${turnId}-user`, role: 'user' as const, text, truncated: false, turnId, subagent: null, ...extra });
+const turnEnd = (turnId: string, reason: string) => ({ kind: 'turn' as const, id: `${turnId}-end`, turnId, reason });
+const hostState = (page: Page, patch: Record<string, unknown>, id = 'a1') => page.evaluate(({ id, patch }) => (window as any).__acpSessionState(id, patch), { id, patch });
+
+/** A conversation whose first turn is running, and its queue. */
+async function runningConversation(page: Page, extra: Record<string, unknown> = {}) {
+  const timeline: any[] = [userTurn('turn-1', '开始')];
+  await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', state: 'running', timeline, ...extra })] });
+  await openWorkbench(page);
+  const panel = panelOf(page);
+  const input = inputOf(panel);
+  await expect(panel.getByRole('button', { name: '停止', exact: true })).toBeVisible();
+  return { panel, input, timeline, queue: panel.locator('[data-acp-queue-item]'), primary: panel.locator('[data-acp-primary]') };
+}
+
+test('while a turn runs, Enter queues prompts, and each normal turn end sends the next one exactly once', async ({ page }) => {
+  const { panel, input, timeline, queue, primary } = await runningConversation(page);
+  // With a draft the main button queues and a stop icon stays next to it.
+  await input.fill('第一条');
+  const enqueue = primary.getByRole('button', { name: '加入队列', exact: true });
+  await expect(enqueue).toBeVisible();
+  await expect(enqueue).toHaveAttribute('title', /(Ctrl|⌘)\+Enter/);
+  await expect(primary.getByRole('button', { name: '停止', exact: true })).toBeVisible();
+  await input.press('Enter');
+  await expect(queue).toHaveCount(1);
+  await input.fill('第二条');
+  await enqueue.click();
+  await expect(queue).toHaveCount(2);
+  await expect(queue.nth(0)).toContainText('第一条');
+  await expect(queue.nth(1)).toContainText('第二条');
+  await expect(input).toHaveValue('');
+  // An empty draft: the main button is Stop again.
+  await expect(primary.getByRole('button')).toHaveText('停止');
+  expect((await testState(page)).prompts).toEqual([]);
+
+  // Turn 1 ends normally: the first prompt goes out, the second waits for its turn.
+  timeline.push(turnEnd('turn-1', 'end_turn'));
+  await hostState(page, { state: 'ready', timeline, seq: 2 });
+  await expect.poll(async () => (await testState(page)).prompts).toEqual([['a1', '第一条']]);
+  await expect(queue).toHaveCount(1);
+  timeline.push(userTurn('turn-2', '第一条'));
+  await hostState(page, { state: 'running', timeline, seq: 3 });
+  await expect(panel.locator('[data-item-id="turn-2-user"]')).toBeVisible();
+  expect((await testState(page)).prompts).toHaveLength(1);
+  timeline.push(turnEnd('turn-2', 'end_turn'));
+  await hostState(page, { state: 'ready', timeline, seq: 4 });
+  await expect.poll(async () => (await testState(page)).prompts).toEqual([['a1', '第一条'], ['a1', '第二条']]);
+  await expect(panel.locator('[data-acp-queue]')).toHaveCount(0);
+  timeline.push(userTurn('turn-3', '第二条'));
+  await hostState(page, { state: 'running', timeline, seq: 5 });
+  await expect(panel.locator('[data-item-id="turn-3-user"]')).toBeVisible();
+  timeline.push(turnEnd('turn-3', 'end_turn'));
+  await hostState(page, { state: 'ready', timeline, seq: 6 });
+  const send = panel.getByRole('button', { name: '发送', exact: true });
+  await expect(send).toBeVisible();
+  expect((await testState(page)).prompts).toHaveLength(2);
+  // The send button's hover text names both keys.
+  await expect(send).toHaveAttribute('title', /Enter 发送（进行中时加入队列）.*(Ctrl|⌘)\+Enter 立即发送/);
+});
+
+test('Ctrl+Enter stops the turn and sends that prompt once the turn is cancelled; the other entries stay', async ({ page }) => {
+  const { panel, input, timeline, queue } = await runningConversation(page);
+  await input.fill('排队的');
+  await input.press('Enter');
+  await expect(queue).toHaveCount(1);
+  await input.fill('马上做');
+  await input.press('ControlOrMeta+Enter');
+  await expect.poll(async () => (await testState(page)).cancels).toEqual(['a1']);
+  await expect(queue).toHaveCount(2);
+  await expect(queue.nth(0)).toContainText('马上做');
+  await expect(queue.nth(0)).toHaveAttribute('data-immediate', 'true');
+  await expect(queue.nth(1)).toContainText('排队的');
+  await expect(input).toHaveValue('');
+  expect((await testState(page)).prompts).toEqual([]);
+
+  await hostState(page, { state: 'stopping', seq: 2 });
+  await expect(panel.getByRole('button', { name: '正在停止…', exact: true })).toBeVisible();
+  expect((await testState(page)).prompts).toEqual([]);
+  timeline.push(turnEnd('turn-1', 'cancelled'));
+  await hostState(page, { state: 'ready', timeline, seq: 3 });
+  await expect.poll(async () => (await testState(page)).prompts).toEqual([['a1', '马上做']]);
+  await expect(queue).toHaveCount(1);
+  await expect(queue.nth(0)).toContainText('排队的');
+  await expect(panel.locator('[data-acp-queue-paused]')).toHaveCount(0);
+  expect((await testState(page)).cancels).toEqual(['a1']);
+
+  // The prompt sent now runs its turn; when it ends, the rest of the queue follows.
+  timeline.push(userTurn('turn-2', '马上做'));
+  await hostState(page, { state: 'running', timeline, seq: 4 });
+  await expect(panel.locator('[data-item-id="turn-2-user"]')).toBeVisible();
+  // "Send now" on a queued entry stops the turn the same way.
+  await queue.nth(0).locator('[data-acp-queue-now]').click();
+  await expect.poll(async () => (await testState(page)).cancels).toEqual(['a1', 'a1']);
+  await expect(queue.nth(0)).toHaveAttribute('data-immediate', 'true');
+  timeline.push(turnEnd('turn-2', 'cancelled'));
+  await hostState(page, { state: 'ready', timeline, seq: 5 });
+  await expect.poll(async () => (await testState(page)).prompts).toEqual([['a1', '马上做'], ['a1', '排队的']]);
+  await expect(panel.locator('[data-acp-queue]')).toHaveCount(0);
+});
+
+test('a failed turn pauses the queue until "continue sending"; a refused send stays first with its reason', async ({ page }) => {
+  const { panel, input, timeline, queue } = await runningConversation(page);
+  await input.fill('修好再跑');
+  await input.press('Enter');
+  await expect(queue).toHaveCount(1);
+  timeline.push(turnEnd('turn-1', 'failed'));
+  await hostState(page, { state: 'ready', timeline, seq: 2 });
+  const paused = panel.locator('[data-acp-queue-paused]');
+  await expect(paused).toContainText('队列已暂停');
+  await expect(panel.getByRole('button', { name: '发送', exact: true })).toBeVisible();
+  expect((await testState(page)).prompts).toEqual([]);
+
+  // Continuing on an idle session sends at once; the host refuses it: it stays first, paused, with the reason.
+  await page.evaluate(() => { (window as any).__acpTest.failPrompt = 'agent 拒绝：额度已用完'; });
+  await paused.getByRole('button', { name: '继续发送', exact: true }).click();
+  await expect(panel.locator('[data-acp-queue-error]')).toContainText('发送失败：agent 拒绝：额度已用完');
+  await expect(queue).toHaveCount(1);
+  await expect(queue.nth(0)).toContainText('修好再跑');
+  expect((await testState(page)).prompts).toEqual([]);
+  await page.evaluate(() => { (window as any).__acpTest.failPrompt = null; });
+  await paused.getByRole('button', { name: '继续发送', exact: true }).click();
+  await expect.poll(async () => (await testState(page)).prompts).toEqual([['a1', '修好再跑']]);
+  await expect(panel.locator('[data-acp-queue]')).toHaveCount(0);
+});
+
+test('deleting and editing queued prompts changes exactly what is sent', async ({ page }) => {
+  const { panel, input, timeline, queue } = await runningConversation(page);
+  for (const text of ['甲', '乙', '丙']) {
+    await input.fill(text);
+    await input.press('Enter');
+  }
+  await expect(queue).toHaveCount(3);
+  await queue.filter({ hasText: '乙' }).locator('[data-acp-queue-delete]').click();
+  await expect(queue).toHaveCount(2);
+  // Editing takes it out of the queue and into the input; Enter queues the new text at the end.
+  await queue.filter({ hasText: '甲' }).locator('[data-acp-queue-edit]').click();
+  await expect(input).toHaveValue('甲');
+  await expect(queue).toHaveCount(1);
+  await input.press('End');
+  await input.pressSequentially('（改）');
+  await input.press('Enter');
+  await expect(queue).toHaveCount(2);
+  await expect(queue.nth(0)).toContainText('丙');
+  await expect(queue.nth(1)).toContainText('甲（改）');
+
+  timeline.push(turnEnd('turn-1', 'end_turn'));
+  await hostState(page, { state: 'ready', timeline, seq: 2 });
+  await expect.poll(async () => (await testState(page)).prompts).toEqual([['a1', '丙']]);
+  timeline.push(userTurn('turn-2', '丙'));
+  await hostState(page, { state: 'running', timeline, seq: 3 });
+  await expect(panel.locator('[data-item-id="turn-2-user"]')).toBeVisible();
+  timeline.push(turnEnd('turn-2', 'end_turn'));
+  await hostState(page, { state: 'ready', timeline, seq: 4 });
+  await expect.poll(async () => (await testState(page)).prompts).toEqual([['a1', '丙'], ['a1', '甲（改）']]);
+});
+
+test('a login pauses the queue; after it the queue is back, still paused, until the person continues', async ({ page }) => {
+  const { panel, input, queue } = await runningConversation(page);
+  await input.fill('登录后再发');
+  await input.press('Enter');
+  await expect(queue).toHaveCount(1);
+  await hostState(page, { state: 'auth_required', seq: 2 });
+  await expect(panel.locator('[data-acp-auth]')).toBeVisible();
+  await expect(panel.locator('[data-acp-queue]')).toBeHidden();
+  await hostState(page, { state: 'ready', seq: 3 });
+  await expect(panel.locator('[data-acp-queue-paused]')).toBeVisible();
+  await expect(queue).toHaveCount(1);
+  await expect(panel.getByRole('button', { name: '发送', exact: true })).toBeVisible();
+  expect((await testState(page)).prompts).toEqual([]);
+  await panel.getByRole('button', { name: '继续发送', exact: true }).click();
+  await expect.poll(async () => (await testState(page)).prompts).toEqual([['a1', '登录后再发']]);
+});
+
+test('prompts still queued when the conversation ends stay readable and copyable, never sent', async ({ page }) => {
+  await page.addInitScript(() => {
+    const copied: string[] = [];
+    Object.assign(window, { __copied: copied });
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (value: string) => { copied.push(value); } } });
+  });
+  const { panel, input, queue } = await runningConversation(page);
+  const long = Array.from({ length: 10 }, (_, index) => `第 ${index + 1} 行：很长的说明`).join('\n');
+  await input.fill('短的那条');
+  await input.press('Enter');
+  await input.fill(long);
+  await input.press('Enter');
+  await expect(queue).toHaveCount(2);
+  await hostState(page, { state: 'closed', lastTurnReason: 'disconnected', seq: 2 });
+  await expect(panel.locator('[data-acp-ended]')).toBeVisible();
+  const unsent = panel.locator('[data-acp-unsent]');
+  await expect(unsent).toContainText('未发送的消息（2 条）');
+  const items = unsent.locator('[data-acp-unsent-item]');
+  await expect(items).toHaveCount(2);
+  await expect(items.nth(0)).toContainText('短的那条');
+  // A long prompt folds until expanded.
+  await expect(items.nth(1)).toHaveAttribute('data-folded', 'true');
+  await items.nth(1).getByRole('button', { name: '展开', exact: true }).click();
+  await expect(items.nth(1)).not.toHaveAttribute('data-folded', 'true');
+  await items.nth(1).getByRole('button', { name: '复制这条消息', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__copied.at(-1))).toBe(long);
+  await unsent.getByRole('button', { name: '全部复制', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__copied.at(-1))).toBe(`短的那条\n\n${long}`);
+  // Nothing edits or sends them any more.
+  await expect(unsent.getByRole('button', { name: /继续发送|立即发送|编辑/ })).toHaveCount(0);
+  expect((await testState(page)).prompts).toEqual([]);
+});
+
+/* Pictures in the person's own messages (R12). */
+
+test('sent pictures show as thumbnails that open full size; without data a named placeholder shows; closing releases them', async ({ page }) => {
+  await page.addInitScript(() => {
+    const revoked: string[] = [];
+    Object.assign(window, { __revoked: revoked });
+    const revoke = URL.revokeObjectURL.bind(URL);
+    URL.revokeObjectURL = (url: string) => { revoked.push(url); revoke(url); };
+  });
+  const replayed = [
+    userTurn('turn-1', '上次的截图', { attachments: [{ type: 'image', name: 'image/png', delivery: null }, { type: 'file', name: 'src/a.ts', delivery: 'link' }] }),
+    turnEnd('turn-1', 'end_turn'),
+  ];
+  await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', agent: imageAgent, timeline: replayed as any })] });
+  await openWorkbench(page);
+  const panel = panelOf(page);
+  const input = inputOf(panel);
+
+  // A replayed message has no picture data in this run: a named placeholder, no media type.
+  const replayedBubble = panel.locator('[data-item-id="turn-1-user"]');
+  await expect(replayedBubble.locator('[data-acp-image-placeholder]')).toHaveCount(1);
+  await expect(replayedBubble.locator('[data-acp-image-placeholder]')).toContainText('图片');
+  await expect(replayedBubble).toContainText('src/a.ts');
+  await expect(replayedBubble).not.toContainText('image/png');
+
+  // One pasted PNG without a file name and one dropped photo.jpg.
+  await pasteImages(input, ['']);
+  await input.evaluate((node, data) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([Uint8Array.from(atob(data), (char) => char.charCodeAt(0))], 'photo.jpg', { type: 'image/jpeg' }));
+    node.dispatchEvent(new DragEvent('dragover', { dataTransfer: transfer, bubbles: true, cancelable: true }));
+    node.dispatchEvent(new DragEvent('drop', { dataTransfer: transfer, bubbles: true, cancelable: true }));
+  }, PNG);
+  await expect(panel.locator('[data-attachment="image"]')).toHaveCount(2);
+  await input.fill('看这两张图');
+  await input.press('Enter');
+  await expect.poll(async () => (await testState(page)).prompts).toEqual([['a1', '看这两张图']]);
+  // The host publishes the message with image labels (media types only) and runs the turn.
+  const timeline = [...replayed, userTurn('turn-2', '看这两张图', { attachments: [{ type: 'image', name: 'image/png', delivery: null }, { type: 'image', name: 'image/jpeg', delivery: null }] })];
+  await hostState(page, { state: 'running', timeline, seq: 2 });
+  const bubble = panel.locator('[data-item-id="turn-2-user"]');
+  const thumbs = bubble.locator('[data-acp-image-thumb]');
+  await expect(thumbs).toHaveCount(2);
+  await expect(bubble.locator('[data-acp-image-placeholder]')).toHaveCount(0);
+  await expect(bubble).not.toContainText('image/png');
+  await expect(bubble).not.toContainText('image/jpeg');
+  await expect(thumbs.nth(0).locator('img')).toHaveAttribute('alt', '图片');
+  await expect(thumbs.nth(1).locator('img')).toHaveAttribute('alt', 'photo.jpg');
+  const urls = await thumbs.locator('img').evaluateAll((nodes) => nodes.map((node) => (node as HTMLImageElement).src));
+  expect(urls.every((url) => url.startsWith('blob:'))).toBe(true);
+  await expect.poll(() => thumbs.nth(1).locator('img').evaluate((node) => (node as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+
+  // A thumbnail opens the full picture; Escape closes it and focus returns to the thumbnail.
+  await thumbs.nth(1).click();
+  const preview = page.getByRole('dialog', { name: 'photo.jpg' });
+  await expect(preview).toBeVisible();
+  await expect(preview.locator('[data-acp-image-preview] img')).toHaveAttribute('src', urls[1]);
+  await page.keyboard.press('Escape');
+  await expect(preview).toHaveCount(0);
+  await expect(thumbs.nth(1)).toBeFocused();
+
+  // Closing the conversation revokes its picture URLs.
+  await hostState(page, { state: 'closed', timeline, seq: 3 });
+  await panel.locator('[data-acp-ended]').getByRole('button', { name: '关闭对话', exact: true }).click();
+  await expect.poll(async () => (await testState(page)).closes).toEqual(['a1']);
+  await expect.poll(() => page.evaluate(() => (window as any).__revoked)).toEqual(expect.arrayContaining(urls));
 });

@@ -18,6 +18,8 @@ import { AcpEndedBar } from './acp/AcpEndedBar';
 import { AcpHistoryDialog } from './acp/AcpHistoryDialog';
 import { AcpPendingBar } from './acp/AcpPendingBar';
 import { AcpPlan } from './acp/AcpPlan';
+import { AcpUnsentQueue } from './acp/AcpQueue.tsx';
+import { AcpSessionContext } from './acp/acpImageCache';
 import { AcpTimeline, type AcpTimelineHandle } from './acp/AcpTimeline';
 import { searchAcpTimeline, type AcpFindMatch } from './acp/acpSearch';
 import { pendingItems, pendingRequest } from './acp/acpView';
@@ -60,9 +62,10 @@ export type AcpConversationHandle = AcpComposerHandle & {
  * session grants, so there is no metadata strip above it. The plan is pinned above the
  * ordered timeline (messages, grouped lightweight tool calls, tool cards with their
  * authorization cards, approval cards, forms and records, notices, turn ends,
- * subagents); "N items wait for you" sits above the unified composer card, which
- * gives way to the login panel during auth_required or the recovery banner once
- * the conversation has ended. While it runs, diagnostics and history open from the
+ * subagents); "N items wait for you" sits above the unified composer card (and the
+ * prompts queued while a turn runs), which gives way to the login panel during
+ * auth_required or the recovery banner once the conversation has ended; prompts still
+ * queued then stay readable and copyable above the banner, never sent. While it runs, diagnostics and history open from the
  * pane menu; an ended conversation keeps its diagnostics in view to help find out
  * why. The pane frame is the shared session card, so the rail, the title bar, the
  * split and the keyboard menu treat it like any other session.
@@ -269,7 +272,7 @@ const AcpConversationView = forwardRef<AcpConversationHandle, AcpConversationPro
   // A running conversation keeps them in the pane menu; once it ends they help explain why.
   const showDiagnostics = !live && snapshot.diagnostics.length > 0;
 
-  return <div className={workbenchStyles.terminalInstance} hidden={!active} style={placement} data-pane-session={snapshot.id} data-acp="true" data-focused={(active && focused) || undefined} data-running={live || undefined}>
+  return <AcpSessionContext.Provider value={snapshot.id}><div className={workbenchStyles.terminalInstance} hidden={!active} style={placement} data-pane-session={snapshot.id} data-acp="true" data-focused={(active && focused) || undefined} data-running={live || undefined}>
     {header}
     <div
       ref={bodyRef}
@@ -359,14 +362,17 @@ const AcpConversationView = forwardRef<AcpConversationHandle, AcpConversationPro
           onSetConfig={onSetConfig}
           onRevokeGrants={onRevokeGrants}
         />
-      </> : <AcpEndedBar
-        snapshot={snapshot}
-        busy={!!pending}
-        onNewConversation={onNewConversation}
-        onOpenTerminal={onOpenTerminal ?? onLoginTerminal}
-        onHistory={() => setHistoryOpen(true)}
-        onClose={onClose}
-      />}
+      </> : <>
+        <AcpUnsentQueue sessionId={snapshot.id} />
+        <AcpEndedBar
+          snapshot={snapshot}
+          busy={!!pending}
+          onNewConversation={onNewConversation}
+          onOpenTerminal={onOpenTerminal ?? onLoginTerminal}
+          onHistory={() => setHistoryOpen(true)}
+          onClose={onClose}
+        />
+      </>}
       {showDropOverlay && <div className={styles.dropOverlay} data-acp-drop-overlay="" aria-hidden="true">
         <div className={styles.dropCard}>
           <span className={styles.dropGlyph}><Icon name="upload" size={22} /></span>
@@ -377,5 +383,5 @@ const AcpConversationView = forwardRef<AcpConversationHandle, AcpConversationPro
     </div>
     {diagnosticsOpen && createPortal(<AcpDiagnosticsDialog open={diagnosticsOpen} snapshot={snapshot} toolName={toolName} onClose={() => setDiagnosticsOpen(false)} />, document.body)}
     {historyOpen && createPortal(<AcpHistoryDialog open={historyOpen} snapshot={snapshot} toolName={toolName} onClose={() => setHistoryOpen(false)} onList={onNativeSessions} onDelete={onDeleteNativeSession} onResume={onResumeNative} onNewConversation={onNewConversation} />, document.body)}
-  </div>;
+  </div></AcpSessionContext.Provider>;
 });
