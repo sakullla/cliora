@@ -154,6 +154,9 @@ test('every serialized Rust struct has a TypeScript type with the same field nam
   assert.ok(structs.get('AcpTerminal').includes('agentOwned'), 'AcpTerminal lacks agentOwned in Rust');
   assert.ok(types.get('AcpTerminal').includes('agentOwned'), 'AcpTerminal lacks agentOwned in TypeScript');
   assert.match(block(typesTs, 'export type AcpTerminal = {'), /agentOwned: boolean;/);
+  // A card naming a dropped terminal says its output was omitted; both sides carry the ids.
+  assert.ok(structs.get('AcpSessionSnapshot').includes('omittedTerminalIds'), 'AcpSessionSnapshot lacks omittedTerminalIds in Rust');
+  assert.match(block(typesTs, 'export type AcpSessionSnapshot = {'), /omittedTerminalIds: string\[\];/);
 });
 
 test('event kinds and their fields match between the Rust host and the TypeScript union', () => {

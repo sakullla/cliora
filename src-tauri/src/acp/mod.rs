@@ -301,6 +301,10 @@ pub struct AcpSessionSnapshot {
     pub grants: Vec<&'static str>,
     /// Terminals the agent created, with their bounded output.
     pub terminals: Vec<AcpTerminal>,
+    /// Ids of terminal records dropped past the retention bound that a tool
+    /// call in the timeline may still name: their output was omitted, not
+    /// empty. Bounded, and only ids the timeline still names.
+    pub omitted_terminal_ids: Vec<String>,
     /// The agent's current plan; empty when it has none.
     pub plan: Vec<AcpPlanEntry>,
     /// The slash commands the agent currently offers.
@@ -634,6 +638,11 @@ impl Session {
     /// event has been numbered is in it, none whose event has not.
     fn snapshot(&self) -> AcpSessionSnapshot {
         let _order = self.order();
+        // One lock for both: a second guard in the literal below would wait on the first.
+        let (terminals, omitted_terminal_ids) = {
+            let terminals = guard(&self.terminals);
+            (terminals.states(), terminals.omitted_ids())
+        };
         AcpSessionSnapshot {
             id: self.id.clone(),
             tool_id: self.tool_id.clone(),
@@ -648,7 +657,8 @@ impl Session {
             timeline: guard(&self.timeline).items().to_vec(),
             pending: self.pending_ids(),
             grants: guard(&self.grants).list(),
-            terminals: guard(&self.terminals).states(),
+            terminals,
+            omitted_terminal_ids,
             plan: guard(&self.plan).clone(),
             commands: guard(&self.commands).clone(),
             config: guard(&self.config).clone(),
@@ -743,6 +753,21 @@ impl Session {
         let turn = guard(&self.turn).as_ref().map(|turn| turn.id.clone());
         let trimmed = guard(&self.timeline).trim(turn.as_deref());
         if trimmed {
+            // A dropped terminal record only matters while a card names it.
+            let named: std::collections::HashSet<String> = guard(&self.timeline)
+                .items()
+                .iter()
+                .filter_map(|item| match item {
+                    AcpTimelineItem::Tool(call) => Some(call),
+                    _ => None,
+                })
+                .flat_map(|call| call.content.iter())
+                .filter_map(|content| match content {
+                    AcpToolContent::Terminal { terminal_id } => Some(terminal_id.clone()),
+                    _ => None,
+                })
+                .collect();
+            guard(&self.terminals).retain_omitted(|id| named.contains(id));
             self.publish();
         }
     }
@@ -1249,7 +1274,7 @@ impl Session {
         };
         // A command the agent ran itself, reported through `_meta`: its terminal
         // record goes out before the card that embeds it.
-        self.observe_agent_terminal(update, &call.title, subagent);
+        self.observe_agent_terminal(update, &call, subagent);
         self.emit_update(AcpUpdate::Tool { call });
         self.trim_timeline();
     }

@@ -35,7 +35,13 @@
 //! terminal as a read-only, agent-owned record: it has no process here, takes
 //! no live slot, answers no terminal request and cannot be stopped; its output
 //! keeps the same bounded tail and its record the same released retention.
-//! Only the protocol fields decide this, never the agent's identity.
+//! Only the protocol fields decide this, never the agent's identity. When the
+//! tool call that embeds such a record completes or fails without a
+//! `terminal_exit`, the record is released with no exit status.
+//!
+//! A record dropped past the retention bound leaves its id in a bounded
+//! omitted list, so a card that still names it says the output was omitted
+//! instead of claiming the command printed nothing.
 
 use std::collections::VecDeque;
 use std::io::Read;
@@ -49,6 +55,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use super::access::AccessKind;
+use super::timeline::{AcpToolCall, AcpToolContent};
 use super::{guard, AcpUpdate, Session};
 use crate::safe_fs::Expect;
 
@@ -68,6 +75,10 @@ const DRAIN_WAIT: Duration = Duration::from_secs(2);
 /// Retained characters of an agent-owned terminal id, the same bound a tool
 /// call's terminal content keeps.
 const MAX_TERMINAL_ID_CHARS: usize = 200;
+/// Ids of dropped terminal records the snapshot still reports as omitted. Ids
+/// no timeline item names any more leave the list first (see
+/// `Terminals::retain_omitted`); this is only the hard ceiling.
+pub(crate) const MAX_OMITTED: usize = 1_024;
 /// The refusal for a terminal request on an agent-owned record.
 const AGENT_OWNED: &str = "该终端由 agent 自行运行，Cliora 只能显示其输出，不能操作或终止";
 
@@ -157,6 +168,8 @@ struct Entry {
 pub(crate) struct Terminals {
     entries: VecDeque<Entry>,
     next: u64,
+    /// Ids of records `prune` dropped, oldest first, bounded by `MAX_OMITTED`.
+    omitted: VecDeque<String>,
 }
 
 impl Terminals {
@@ -173,8 +186,31 @@ impl Terminals {
         self.entries.iter().filter(|entry| !entry.state.released && !entry.state.agent_owned).count()
     }
 
+    /// Ids of dropped records that a card may still name.
+    pub fn omitted_ids(&self) -> Vec<String> {
+        self.omitted.iter().cloned().collect()
+    }
+
+    /// Keep only the omitted ids some timeline item still names: once its card
+    /// is trimmed from the timeline, nobody asks about a dropped record.
+    pub fn retain_omitted(&mut self, named: impl Fn(&str) -> bool) {
+        self.omitted.retain(|id| named(id));
+    }
+
+    /// Remember a dropped record's id, within the hard ceiling.
+    fn omit(&mut self, id: String) {
+        if self.omitted.iter().any(|known| *known == id) {
+            return;
+        }
+        self.omitted.push_back(id);
+        while self.omitted.len() > MAX_OMITTED {
+            self.omitted.pop_front();
+        }
+    }
+
     /// Drop the oldest retained records past the retention bound. Released
     /// terminals and agent-owned records share it; a released one goes first.
+    /// A dropped id joins the omitted list.
     fn prune(&mut self) {
         let retained = |entry: &Entry| entry.state.released || entry.state.agent_owned;
         while self.entries.iter().filter(|entry| retained(entry)).count() > MAX_RELEASED {
@@ -184,17 +220,19 @@ impl Terminals {
                 .position(|entry| entry.state.released)
                 .or_else(|| self.entries.iter().position(|entry| entry.state.agent_owned));
             let Some(index) = index else { break };
-            self.entries.remove(index);
+            if let Some(entry) = self.entries.remove(index) {
+                self.omit(entry.state.terminal_id);
+            }
         }
     }
 
     /// The next id of a terminal the host starts, never one an agent-owned
-    /// record already uses.
+    /// record already uses or a dropped record left behind.
     fn next_id(&mut self) -> String {
         loop {
             self.next += 1;
             let id = format!("term-{}", self.next);
-            if !self.entries.iter().any(|entry| entry.state.terminal_id == id) {
+            if !self.entries.iter().any(|entry| entry.state.terminal_id == id) && !self.omitted.contains(&id) {
                 return id;
             }
         }
@@ -895,8 +933,13 @@ impl Session {
     /// order when one update carries several. An id that names a terminal the
     /// host started is left alone. The events go out before the tool call's
     /// own, so the card that embeds the terminal finds it.
-    pub(super) fn observe_agent_terminal(&self, update: &Value, command: &str, subagent: Option<&str>) {
-        let Some(meta) = update.get("_meta").filter(|meta| meta.is_object()) else { return };
+    ///
+    /// Once `call` has completed or failed, an agent-owned record it embeds
+    /// that never got a `terminal_exit` is released without an exit status:
+    /// nothing more will arrive for it.
+    pub(super) fn observe_agent_terminal(&self, update: &Value, call: &AcpToolCall, subagent: Option<&str>) {
+        let null = Value::Null;
+        let meta = update.get("_meta").filter(|meta| meta.is_object()).unwrap_or(&null);
         let id_of = |key: &str| {
             meta.get(key)
                 .and_then(|value| value.get("terminal_id"))
@@ -907,9 +950,21 @@ impl Session {
         let info = id_of("terminal_info");
         let output = id_of("terminal_output");
         let exit = id_of("terminal_exit");
-        if info.is_none() && output.is_none() && exit.is_none() {
+        let ended = matches!(call.status, "completed" | "failed");
+        let embedded: Vec<&str> = call
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                AcpToolContent::Terminal { terminal_id } => Some(terminal_id.as_str()),
+                _ => None,
+            })
+            .chain(info.as_deref())
+            .chain(output.as_deref())
+            .collect();
+        if info.is_none() && output.is_none() && exit.is_none() && !(ended && !embedded.is_empty()) {
             return;
         }
+        let command = call.title.as_str();
         let mut conflicts: Vec<String> = Vec::new();
         {
             let _order = self.order();
@@ -932,12 +987,16 @@ impl Session {
                     }
                     return true;
                 }
+                // A late report for a record already dropped starts over without
+                // its earlier output, and says so.
+                let reopened = terminals.omitted.iter().any(|known| known == id);
+                terminals.omitted.retain(|known| known != id);
                 let state = AcpTerminal {
                     terminal_id: id.to_owned(),
                     command: label(command),
                     cwd: cwd.clone(),
                     output: String::new(),
-                    truncated: false,
+                    truncated: reopened,
                     exit_status: None,
                     released: false,
                     subagent: subagent.map(ToOwned::to_owned),
@@ -992,6 +1051,23 @@ impl Session {
                     }
                 }
             }
+            if ended {
+                for id in &embedded {
+                    let Some(entry) = terminals.get_mut(id) else { continue };
+                    if !entry.state.agent_owned || entry.state.released {
+                        continue;
+                    }
+                    entry.state.released = true;
+                    self.emit_update(AcpUpdate::TerminalOutput {
+                        terminal_id: (*id).to_owned(),
+                        text: String::new(),
+                        dropped: 0,
+                        truncated: entry.state.truncated,
+                        exit_status: entry.state.exit_status.clone(),
+                        released: true,
+                    });
+                }
+            }
             terminals.prune();
         }
         for id in conflicts {
@@ -1020,6 +1096,32 @@ impl TreeProbe {
     pub fn alive(&self) -> bool {
         self.0.alive()
     }
+}
+
+/// Release `count` agent-owned records named `{prefix}{index}` through the
+/// retention bound, then keep only the omitted ids `named` accepts; returns
+/// the omitted list and the next host id.
+#[cfg(test)]
+pub(crate) fn omitted_for_tests(prefix: &str, count: usize, named: impl Fn(&str) -> bool) -> (Vec<String>, String) {
+    let mut terminals = Terminals::default();
+    for index in 0..count {
+        let state = AcpTerminal {
+            terminal_id: format!("{prefix}{index}"),
+            command: String::new(),
+            cwd: String::new(),
+            output: String::new(),
+            truncated: false,
+            exit_status: None,
+            released: true,
+            subagent: None,
+            agent_owned: true,
+        };
+        terminals.entries.push_back(Entry { state, limit: MAX_OUTPUT_BYTES, tree: None });
+        terminals.prune();
+    }
+    terminals.retain_omitted(named);
+    let next = terminals.next_id();
+    (terminals.omitted_ids(), next)
 }
 
 #[cfg(test)]
