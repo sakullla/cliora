@@ -181,8 +181,13 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
     // 'disconnected' is a conversation whose agent process went away mid-turn.
     // 'access' waits on Cliora's own approval card for a read outside the session
     // directory, while an earlier session grant for writes shows as a revocable badge.
+    // Timeline reading scenes: 'startup' folds what the agent said before the first
+    // prompt into one line and names the agent once in the round; 'process' is a turn
+    // still at work (compact steps, older ones folded, the current action on its last
+    // line); 'process-done' is the same turn ended, folded into its summary with a failed
+    // step listed and the reply after it. The queue and image scenes join once their data exists.
     const acpState = acpMode === 'starting' ? 'starting' : acpMode === 'stopping' ? 'stopping' : acpMode === 'permission' || acpMode === 'form' || acpMode === 'access' ? 'waiting_permission' : acpMode === 'login' ? 'auth_required'
-      : acpMode === 'disconnected' ? 'closed' : acpMode === 'tools' ? 'running' : 'ready';
+      : acpMode === 'disconnected' ? 'closed' : acpMode === 'tools' || acpMode === 'process' ? 'running' : 'ready';
     const acpNativeId = acpMode === 'login' ? null : 'native-acp-1';
     const acpAuthError = acpMode === 'login' ? 'agent 要求先登录：没有找到有效的凭据' : null;
     const acpEnd = (turnId, reason = 'end_turn') => ({ kind: 'turn', id: turnId + '-end', turnId, reason });
@@ -201,6 +206,30 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
         return [acpTurnMessage('u' + index, 'user', question, turn), acpTurnMessage('a' + index, 'agent', answer, turn), acpEnd(turn)];
       });
     };
+    const acpStartup = () => [
+      { ...acpMessage('s1', 'agent', '## Context\n\n- AGENTS.md\n- docs/requirements\n\n## Extensions\n\n- pi-acp-bridge 0.0.35\n- git-worktrees'), turnId: '' },
+      acpMessage('m1', 'user', 'hi'),
+      acpMessage('m2', 'thought', '用户在打招呼，简单回应并询问要做什么。'),
+      acpMessage('m3', 'agent', '你好！要处理哪一部分？\n\n### 可以帮你\n\n- 修改工具栏样式\n- 跑一次样式检查'),
+      acpEnd('turn-1'),
+    ];
+    const acpProcess = (done) => [
+      acpMessage('m1', 'user', '把 R13 补进需求，然后跑一遍检查和构建。'),
+      acpMessage('p0', 'thought', '先看需求文档的结构，确认 R13 放在哪里。'),
+      acpTool('x0', 'git status --short', 'execute', 'completed', { rawInput: '{"command":"git status --short"}' }),
+      acpMessage('p1', 'thought', '需要确认 R13 的编号没有被占用。'),
+      acpTool('r0', '读取 docs/requirements/2026-11-28-ACP对话界面体验优化.md', 'read', 'completed', { locations: [{ path: 'docs/requirements/2026-11-28-ACP对话界面体验优化.md', line: 186 }] }),
+      acpTool('x1', 'rg -n "R13" docs/requirements', 'execute', 'completed'),
+      acpMessage('p2', 'thought', '编号没有冲突，可以直接追加。'),
+      acpTool('e0', '编辑 docs/requirements/2026-11-28-ACP对话界面体验优化.md', 'edit', 'completed', { content: [{ type: 'diff', path: 'docs/requirements/2026-11-28-ACP对话界面体验优化.md', oldText: '### R14', newText: '### R13 超大会话的性能与内存\n\n### R14', truncated: false }] }),
+      acpMessage('p3', 'agent', 'Now I\'ll add R13 to the requirement and run the checks.'),
+      acpMessage('p4', 'thought', '写完后跑检查。'),
+      acpTool('x2', 'node --test tests/native/acp-ui-model.test.mjs', 'execute', done ? 'failed' : 'completed', { content: done ? [{ type: 'text', text: '✖ buildSegments counts steps (2ms)\nℹ fail 1', truncated: false }] : [] }),
+      acpTool('x3', 'npm run lint', 'execute', 'completed'),
+      acpMessage('p5', 'thought', '最后构建一次。'),
+      acpTool('x4', 'npm run build', 'execute', done ? 'completed' : 'in_progress', { rawInput: '{"command":"npm run build"}' }),
+      ...(done ? [acpMessage('m9', 'agent', 'R13 已补进需求。构建通过，但 `acp-ui-model` 有 1 个用例失败，原因见上方失败的步骤。'), acpEnd('turn-1')] : []),
+    ];
     const acpTools = () => [
       acpMessage('m1', 'user', '把工具栏间距改成令牌，跑一次样式检查，再看看还有哪些地方写死了像素。'),
       acpTool('t1', '读取 SessionWorkbench.module.css', 'read', 'completed', { locations: [{ path: acpStyles, line: 86 }, { path: 'D:\\shared\\tokens.css', line: 12 }] }),
@@ -215,8 +244,8 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
       acpTool('t6', '运行 npm run build', 'execute', 'in_progress', { rawInput: '{"command":"npm run build"}', content: [{ type: 'terminal', terminalId: 'term-2' }] }),
     ];
     const acpTerminals = acpMode === 'tools' ? [
-      { terminalId: 'term-1', command: 'node --test tests/native/style-tokens.test.mjs', cwd: 'C:\\Projects\\cliora', output: '✔ tokens are used for spacing (12ms)\n✔ no raw pixel values (8ms)\nℹ tests 2\nℹ pass 2\nℹ fail 0\n', truncated: false, exitStatus: { exitCode: 0, signal: null }, released: true, subagent: null },
-      { terminalId: 'term-2', command: 'npm run build', cwd: 'C:\\Projects\\cliora', output: '> cliora@0.5.0 build\n> tsc -b && vite build\n\nvite v6 building for production...\ntransforming (812) src/features/sessions/AcpConversation.tsx\n', truncated: false, exitStatus: null, released: false, subagent: null },
+      { terminalId: 'term-1', command: 'node --test tests/native/style-tokens.test.mjs', cwd: 'C:\\Projects\\cliora', output: '✔ tokens are used for spacing (12ms)\n✔ no raw pixel values (8ms)\nℹ tests 2\nℹ pass 2\nℹ fail 0\n', truncated: false, exitStatus: { exitCode: 0, signal: null }, released: true, subagent: null, agentOwned: false },
+      { terminalId: 'term-2', command: 'npm run build', cwd: 'C:\\Projects\\cliora', output: '> cliora@0.5.0 build\n> tsc -b && vite build\n\nvite v6 building for production...\ntransforming (812) src/features/sessions/AcpConversation.tsx\n', truncated: false, exitStatus: null, released: false, subagent: null, agentOwned: false },
     ] : [];
     const acpYolo = () => [
       acpMessage('m1', 'user', '在 D:\\shared 下生成一份令牌报告，然后跑一次测试。'),
@@ -246,7 +275,8 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
       acpTool('c5', '读取 D:\\shared\\tokens.css', 'read', 'in_progress', { locations: [{ path: 'D:\\shared\\tokens.css', line: null }] }),
       { kind: 'access', id: 'access-r1', accessKind: 'read', path: 'D:\\shared\\tokens.css', detail: null, decision: 'pending', requestId: 'access-r1-request', diff: null, turnId: 'turn-1', subagent: null, userPath: null },
     ];
-    const acpTimeline = acpMode === 'empty' || acpMode === 'starting' ? [] : acpMode === 'long' ? acpLong() : acpMode === 'tools' ? acpTools() : acpMode === 'yolo' ? acpYolo() : acpMode === 'disconnected' ? acpDisconnected() : acpMode === 'access' ? acpAccess() : null;
+    const acpTimeline = acpMode === 'empty' || acpMode === 'starting' ? [] : acpMode === 'long' ? acpLong() : acpMode === 'startup' ? acpStartup()
+      : acpMode === 'process' || acpMode === 'process-done' ? acpProcess(acpMode === 'process-done') : acpMode === 'tools' ? acpTools() : acpMode === 'yolo' ? acpYolo() : acpMode === 'disconnected' ? acpDisconnected() : acpMode === 'access' ? acpAccess() : null;
     const acpFixture = acpMode ? [{
       id: 'acp1', toolId: 'codex', projectId: 'cliora', directory: 'C:\\Projects\\cliora', mode: acpMode === 'yolo' ? 'yolo' : 'normal', interaction: 'acp',
       state: acpState,
@@ -257,8 +287,9 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
         acpMessage('m3', 'agent', '我先读工具栏样式和令牌定义，确认间距现在来自哪里。'),
         acpTool('c1', 'read_file', 'read', 'completed', { locations: [{ path: acpStyles, line: 86 }] }),
         acpTool('c2', 'edit_file', 'edit', 'completed', { content: [{ type: 'diff', path: acpStyles, oldText: 'gap: 6px;', newText: 'gap: var(--space-1_5);', truncated: false }] }),
-        acpMessage('m4', 'agent', '间距来自两处固定像素值：工具栏内边距和按钮之间的 gap。改成 --space-1 与 --space-2 相加后，深浅主题与 760px 窄窗口都不再溢出。'),
         acpTool('c3', 'run_command', 'execute', acpMode === 'stopping' ? 'in_progress' : 'completed', { rawInput: '{"command":"node --test tests/native/style-tokens.test.mjs"}' }),
+        // The reply follows the turn's last tool call, after its folded work process.
+        acpMessage('m4', 'agent', '间距来自两处固定像素值：工具栏内边距和按钮之间的 gap。改成 --space-1 与 --space-2 相加后，深浅主题与 760px 窄窗口都不再溢出。'),
         ...(acpMode === 'permission' ? [acpTool('c4', '运行 npm run verify', 'execute', 'pending', {
           rawInput: '{"command":"npm run verify","cwd":"C:\\\\Projects\\\\cliora"}',
           permission: {
@@ -286,7 +317,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
       grants: acpMode === 'access' ? ['write'] : [],
       terminals: acpTerminals,
       omittedTerminalIds: [],
-      plan: acpMode === 'empty' || acpMode === 'starting' || acpMode === 'long' || acpMode === 'yolo' ? [] : acpMode === 'tools' ? [
+      plan: acpMode === 'empty' || acpMode === 'starting' || acpMode === 'long' || acpMode === 'yolo' || acpMode === 'startup' || acpMode === 'process' || acpMode === 'process-done' ? [] : acpMode === 'tools' ? [
         { content: '读取工具栏样式与令牌', priority: 'high', status: 'completed' },
         { content: '把固定像素换成令牌相加', priority: 'high', status: 'completed' },
         { content: '运行样式检查', priority: 'medium', status: 'completed' },
@@ -326,7 +357,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
         ] : [],
       },
       diagnostics: acpMode === 'stopping' ? ['agent 标准错误：正在结束本轮（已脱敏）'] : acpMode === 'disconnected' ? ['agent 标准错误：unexpected EOF on stdin（已脱敏）'] : [],
-      lastTurnReason: acpMode === 'starting' || acpMode === 'stopping' || acpMode === 'empty' || acpMode === 'tools' || acpMode === 'permission' || acpMode === 'access' ? '' : acpMode === 'disconnected' ? 'disconnected' : 'end_turn',
+      lastTurnReason: acpMode === 'starting' || acpMode === 'stopping' || acpMode === 'empty' || acpMode === 'tools' || acpMode === 'permission' || acpMode === 'access' || acpMode === 'process' ? '' : acpMode === 'disconnected' ? 'disconnected' : 'end_turn',
       seq: 24,
     }, ...(acpMode === 'split' ? [{
       id: 'acp2', toolId: 'claude_code', projectId: 'site', directory: 'C:\\Projects\\personal-site', mode: 'yolo', interaction: 'acp',
@@ -552,7 +583,7 @@ async function shot(name, theme, width, run, empty = false, remoteState = null, 
       // A conversation is a native panel, not an xterm: wait for its own content.
       const panel = page.locator('[data-acp="true"][data-pane-session="acp1"]');
       await panel.waitFor();
-      await panel.locator(acpMode === 'empty' || acpMode === 'starting' ? '[data-acp-empty]' : '[data-role="agent"]').first().waitFor();
+      await panel.locator(acpMode === 'empty' || acpMode === 'starting' ? '[data-acp-empty]' : '[data-role="agent"], [data-acp-process]').first().waitFor();
       // The input, the login panel, or the ended recovery banner standing in for it.
       await panel.locator('[data-acp-composer], [data-acp-auth], [data-acp-ended]').first().waitFor();
     } else if (remoteState) {
@@ -777,7 +808,7 @@ for (const width of widths) {
   // merged by call id, the turn's own result, and a stop that reports "stopping".
   // T6 adds a fresh session, a long Markdown conversation, the tool shapes, YOLO and a
   // disconnected agent.
-  for (const mode of ['conversation', 'permission', 'stopping', 'starting', 'empty', 'long', 'tools', 'yolo', 'disconnected']) {
+  for (const mode of ['conversation', 'permission', 'stopping', 'starting', 'empty', 'long', 'tools', 'yolo', 'disconnected', 'startup', 'process', 'process-done']) {
     await shot('workbench-acp-' + mode + '-' + theme + '-' + width, theme, width, null, false, null, null, null, false, null, mode);
   }
   await shot('workbench-acp-find-' + theme + '-' + width, theme, width, async (page) => {

@@ -31,10 +31,13 @@ function containsQuery(text: string, query: string, caseSensitive: boolean): boo
  * message is plain text with attachment labels and an optional refill-to-input
  * action; a thought folds by default with a single-line preview and expands to
  * calm secondary text. Every message can be copied whole, exactly as it arrived.
+ * An agent reply carries the agent's name only when it opens its round (`head`);
+ * otherwise its copy action floats over its corner on hover or focus.
  */
 export function AcpMessage({
   message,
   toolName,
+  head = true,
   streaming,
   renderMarkdown,
   canReuse = false,
@@ -47,6 +50,8 @@ export function AcpMessage({
 }: {
   message: Message;
   toolName: string;
+  /** Show the agent's name above a reply: the first agent content of its round. */
+  head?: boolean;
   streaming: boolean;
   renderMarkdown: boolean;
   /** Whether the conversation is live and accepts refilling user messages into the composer. */
@@ -164,11 +169,14 @@ export function AcpMessage({
     data-streaming={streaming || undefined}
     data-find-hit={findState}
     data-located={located || undefined}
+    data-head={head || undefined}
   >
-    <div className={styles.messageHead}>
-      <span className={styles.roleLabel}>{roleLabel}</span>
-      {copy}
-    </div>
+    {head
+      ? <div className={styles.messageHead}>
+          <span className={styles.roleLabel} data-acp-agent-head={role === 'agent' ? '' : undefined}>{roleLabel}</span>
+          {copy}
+        </div>
+      : copy && <div className={styles.messageFloat}>{copy}</div>}
     <div className={styles.agentBody}>
       {renderMarkdown && message.text ? <Suspense fallback={plain}><MarkdownView text={message.text} tone="terminal" codeBlock={renderCode} highlight={markdownHighlight} /></Suspense> : null}
       {truncated}

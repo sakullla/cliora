@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, Fragment, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../../components/Icon';
 import type { AcpElicitation, AcpSessionSnapshot, AcpSubagent, AcpTimelineItem } from '../../../types/acp';
@@ -6,10 +6,12 @@ import { acpCardAnswerable, acpIsLive, acpNeedsLogin, acpTurnKey } from '../acpS
 import { AcpAccessCard, type AccessAnswer } from './AcpAccessCard';
 import { AcpElicitationForm, type ElicitationAction } from './AcpElicitationForm';
 import { AcpMessage } from './AcpMessage';
+import { AcpProcess } from './AcpProcess';
+import { AcpStartupGroup } from './AcpStartupGroup';
 import { AcpToolCard } from './AcpToolCard';
 import { AcpToolGroup } from './AcpToolGroup';
 import { splitMatchRuns } from './acpSearch';
-import { groupTimelineItems, toolGroupIdByItem } from './timelineModel';
+import { agentHeadIds, buildSegments, groupIdByItem, segmentKey, segmentOptions, type TimelineSegment } from './timelineModel';
 import { subagentStateKey, visibleControls } from './acpView';
 import styles from './acp.module.css';
 
@@ -91,11 +93,13 @@ function focusItemAction(item: HTMLElement) {
 }
 
 /**
- * The ordered timeline. Every item keeps the place it first appeared in, while
- * consecutive completed lightweight tool calls fold into compact step groups in
- * the view layer. A reader at the bottom follows new output through a fixed
- * two-target ResizeObserver; a reader who scrolled up is never moved and sees
- * "back to latest" with the unread count.
+ * The ordered timeline. Every item keeps the place it first appeared in; the view
+ * layer folds what came before the first prompt into the startup entry, each turn's
+ * work between its prompt and its last tool call into a process of compact steps,
+ * and (outside a turn) consecutive completed lightweight tool calls into a group.
+ * The agent's name shows once per round. A reader at the bottom follows new output
+ * through a fixed two-target ResizeObserver; a reader who scrolled up is never moved
+ * and sees "back to latest" with the unread count.
  */
 export const AcpTimeline = forwardRef<AcpTimelineHandle, {
   snapshot: AcpSessionSnapshot;
@@ -159,9 +163,18 @@ export const AcpTimeline = forwardRef<AcpTimelineHandle, {
   const live = acpIsLive(snapshot);
   const login = acpNeedsLogin(snapshot);
   const canReuse = live && !login && snapshot.state !== 'starting' && !!onReuseMessage;
-  const segments = useMemo(() => groupTimelineItems(timeline), [timeline]);
-  const groupByItem = useMemo(() => toolGroupIdByItem(segments), [segments]);
-  const resolvedFindGroupId = activeFindGroupId ?? (activeFindItemId ? groupByItem.get(activeFindItemId) ?? null : null);
+  const pendingList = snapshot.pending;
+  const segments = useMemo(
+    () => buildSegments(timeline, segmentOptions({ state: snapshot.state, pending: pendingList })),
+    [timeline, snapshot.state, pendingList],
+  );
+  const heads = useMemo(() => agentHeadIds(segments), [segments]);
+  const groupByItem = useMemo(() => groupIdByItem(segments), [segments]);
+  // The segment that holds an item now; a match's own group id may predate a regrouping.
+  const resolvedFindGroupId = activeFindItemId ? groupByItem.get(activeFindItemId) ?? activeFindGroupId ?? null : activeFindGroupId;
+  /** Processes the reader opened or folded, kept for as long as this view lives. */
+  const processMemory = useRef(new Map<string, boolean>()).current;
+  const streamingId = running && last && !(last.kind === 'message' && last.role === 'user') ? last.id : null;
 
   useEffect(() => () => {
     window.clearTimeout(smoothTimerRef.current);
@@ -225,7 +238,7 @@ export const AcpTimeline = forwardRef<AcpTimelineHandle, {
       const node = logRef.current;
       if (!node) return;
       const shouldFocus = options?.focus !== false;
-      const groupId = options?.groupId ?? groupByItem.get(id) ?? null;
+      const groupId = groupByItem.get(id) ?? options?.groupId ?? null;
       setLocatedId(id);
       setLocatedGroupId(groupId);
       window.clearTimeout(locateTimerRef.current);
@@ -287,6 +300,7 @@ export const AcpTimeline = forwardRef<AcpTimelineHandle, {
           message={item}
           renderMarkdown={active || !following}
           toolName={toolName}
+          head={item.role !== 'agent' || item.subagent != null || heads.has(item.id)}
           streaming={running && item === last && item.role !== 'user'}
           canReuse={canReuse}
           onReuse={onReuseMessage}
@@ -344,8 +358,19 @@ export const AcpTimeline = forwardRef<AcpTimelineHandle, {
         </p>;
       }
       case 'turn': {
+        // A normal end says nothing: the reply already ended the turn. The node keeps
+        // the entry's place for locate and unread counts.
+        if (item.reason === 'end_turn') return <span key={item.id} className={styles.srOnly} data-item-id={item.id} data-reason={item.reason} aria-hidden="true" />;
+        // A stop the person asked for: a quiet mark, no rule across the column.
+        if (item.reason === 'cancelled') {
+          return <p key={item.id} className={styles.turnStopped} data-item-id={item.id} data-reason={item.reason}>
+            <Icon name="square" size={10} />
+            <span>{t('sessions.acpTurnStopped')}</span>
+          </p>;
+        }
         const key = acpTurnKey(item.reason);
-        return key ? <p key={item.id} className={styles.turn} data-item-id={item.id} data-reason={item.reason}><span>{t(key)}</span></p> : null;
+        const icon = item.reason === 'limit' || item.reason === 'refusal' ? 'alert' : item.reason === 'unknown' ? 'info' : 'alert';
+        return key ? <p key={item.id} className={styles.turn} data-item-id={item.id} data-reason={item.reason}><Icon name={icon} size={12} /><span>{t(key)}</span></p> : null;
       }
       case 'subagent':
         return <SubagentItem
@@ -384,6 +409,70 @@ export const AcpTimeline = forwardRef<AcpTimelineHandle, {
       default:
         return null;
     }
+  }
+
+  function segmentBody(segment: TimelineSegment): ReactNode {
+    const forced = segment.kind !== 'item' && (resolvedFindGroupId === segment.id || locatedGroupId === segment.id);
+    switch (segment.kind) {
+      case 'item':
+        return itemView(segment.item);
+      case 'toolGroup':
+        return <AcpToolGroup
+          id={segment.id}
+          items={segment.items}
+          kindCounts={segment.kindCounts}
+          snapshot={snapshot}
+          busyKey={busyKey}
+          onAnswer={onAnswer}
+          onKillTerminal={onKillTerminal}
+          onOpenPath={onOpenPath}
+          forceOpen={forced}
+          activeFindItemId={activeFindItemId}
+          locatedId={locatedId}
+          searchQuery={searchQuery}
+          searchCase={searchCase}
+        />;
+      case 'startup':
+        return <AcpStartupGroup
+          id={segment.id}
+          items={segment.items}
+          toolName={toolName}
+          renderMarkdown={active || !following}
+          forceOpen={forced}
+          activeFindItemId={activeFindItemId}
+          locatedId={locatedId}
+          searchQuery={searchQuery}
+          searchCase={searchCase}
+        />;
+      case 'process':
+        return <AcpProcess
+          segment={segment}
+          snapshot={snapshot}
+          memory={processMemory}
+          streamingId={streamingId}
+          onKillTerminal={onKillTerminal}
+          onOpenPath={onOpenPath}
+          forceOpen={forced}
+          activeFindItemId={activeFindItemId}
+          locatedId={locatedId}
+          searchQuery={searchQuery}
+          searchCase={searchCase}
+        />;
+      default:
+        return null;
+    }
+  }
+
+  /** A segment, with the agent's name above it when it opens a round. An agent reply
+   *  carries the name itself. */
+  function segmentView(segment: TimelineSegment) {
+    const key = segmentKey(segment);
+    const ownHead = segment.kind === 'item' && segment.item.kind === 'message' && segment.item.role === 'agent';
+    const head = heads.has(key) && !ownHead;
+    return <Fragment key={key}>
+      {head && <div className={styles.agentHead} data-acp-agent-head="">{t('sessions.acpRoleAgent', { tool: toolName })}</div>}
+      {segmentBody(segment)}
+    </Fragment>;
   }
 
   function renderEmptyState() {
@@ -470,24 +559,7 @@ export const AcpTimeline = forwardRef<AcpTimelineHandle, {
     >
       <div ref={innerRef} className={styles.timelineInner}>
         {!timeline.length && renderEmptyState()}
-        {segments.map((segment) => segment.kind === 'toolGroup'
-          ? <AcpToolGroup
-              key={segment.id}
-              id={segment.id}
-              items={segment.items}
-              kindCounts={segment.kindCounts}
-              snapshot={snapshot}
-              busyKey={busyKey}
-              onAnswer={onAnswer}
-              onKillTerminal={onKillTerminal}
-              onOpenPath={onOpenPath}
-              forceOpen={resolvedFindGroupId === segment.id || locatedGroupId === segment.id}
-              activeFindItemId={activeFindItemId}
-              locatedId={locatedId}
-              searchQuery={searchQuery}
-              searchCase={searchCase}
-            />
-          : itemView(segment.item))}
+        {segments.map(segmentView)}
       </div>
     </div>
     {!following && timeline.length > 0 && <button type="button" className={styles.jumpLatest} data-acp-jump="" onClick={jumpToLatest}>
