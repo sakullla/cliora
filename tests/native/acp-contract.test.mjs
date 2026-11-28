@@ -150,6 +150,10 @@ test('every serialized Rust struct has a TypeScript type with the same field nam
     assert.ok(types.has(name), `src/types/acp.ts lacks ${name}`);
     assert.deepEqual(types.get(name), fields, `${name} fields differ between Rust and TypeScript`);
   }
+  // An agent-owned terminal is read-only in the view; both sides must carry the flag.
+  assert.ok(structs.get('AcpTerminal').includes('agentOwned'), 'AcpTerminal lacks agentOwned in Rust');
+  assert.ok(types.get('AcpTerminal').includes('agentOwned'), 'AcpTerminal lacks agentOwned in TypeScript');
+  assert.match(block(typesTs, 'export type AcpTerminal = {'), /agentOwned: boolean;/);
 });
 
 test('event kinds and their fields match between the Rust host and the TypeScript union', () => {

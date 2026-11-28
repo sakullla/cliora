@@ -37,12 +37,17 @@ function renderRuns(text: string, query: string, caseSensitive: boolean) {
 /**
  * A terminal a tool call embeds: the command, its live output as plain text, and
  * how it ended. While it runs, "Stop" ends its whole process tree through the
- * host; the output stays readable after it ends or is released.
+ * host; the output stays readable after it ends or is released. A terminal the
+ * agent ran itself (`agentOwned`) is read-only: the host shows it but cannot
+ * stop it. Before any record arrives the card only says whether output is
+ * still expected (`active`: the tool call is pending or in progress).
  */
-export function AcpTerminalOutput({ terminalId, terminal, live, onKill, searchQuery = '', searchCase = false }: {
+export function AcpTerminalOutput({ terminalId, terminal, live, active = false, onKill, searchQuery = '', searchCase = false }: {
   terminalId: string;
   terminal: AcpTerminal | null;
   live: boolean;
+  /** The tool call that embeds the terminal is still pending or in progress. */
+  active?: boolean;
   onKill: (terminalId: string) => Promise<void>;
   searchQuery?: string;
   searchCase?: boolean;
@@ -61,7 +66,7 @@ export function AcpTerminalOutput({ terminalId, terminal, live, onKill, searchQu
 
   if (!terminal) {
     return <div className={styles.terminal} data-content="terminal" data-terminal-id={terminalId}>
-      <p className={styles.note}>{t('sessions.acpTerminalMissing', { id: terminalId })}</p>
+      <p className={styles.note} data-terminal-state={live && active ? 'waiting' : 'empty'}>{live && active ? t('sessions.acpTerminalWaiting') : t('sessions.acpTerminalNoOutput')}</p>
     </div>;
   }
   const exit = terminal.exitStatus;
@@ -70,13 +75,13 @@ export function AcpTerminalOutput({ terminalId, terminal, live, onKill, searchQu
     ? exit.signal ? t('sessions.acpTerminalSignal', { signal: exit.signal }) : t('sessions.acpTerminalExit', { code: exit.exitCode ?? '?' })
     : terminal.released ? t('sessions.acpTerminalReleased') : t('sessions.acpTerminalRunning');
   const failed = !!exit && (exit.signal != null || (exit.exitCode != null && exit.exitCode !== 0));
-  return <div className={styles.terminal} data-content="terminal" data-terminal-id={terminalId} data-running={running || undefined}>
+  return <div className={styles.terminal} data-content="terminal" data-terminal-id={terminalId} data-running={running || undefined} data-agent-owned={terminal.agentOwned || undefined}>
     <div className={styles.terminalHead}>
       <Icon name="terminal" size={12} />
       <code className={styles.terminalCommand} title={terminal.cwd}>{renderRuns(visibleControls(terminal.command), searchQuery, searchCase)}</code>
       <span className={styles.terminalStatus} data-failed={failed || undefined} role="status">{status}</span>
       <AcpCopyButton text={terminalText(terminal.output)} label={t('sessions.acpCopyOutput')} />
-      {running && live && <button type="button" className={styles.action} data-variant="danger" disabled={busy} onClick={() => {
+      {running && live && !terminal.agentOwned && <button type="button" className={styles.action} data-variant="danger" disabled={busy} onClick={() => {
         setBusy(true);
         setError('');
         void onKill(terminalId)
@@ -88,7 +93,7 @@ export function AcpTerminalOutput({ terminalId, terminal, live, onKill, searchQu
     <pre ref={outputRef} className={styles.terminalOutput} tabIndex={0} aria-label={t('sessions.acpTerminalOutput', { command: terminal.command })} onScroll={(event) => {
       const node = event.currentTarget;
       followRef.current = node.scrollHeight - node.scrollTop - node.clientHeight <= 8;
-    }}>{text ? renderRuns(text, searchQuery, searchCase) : <span className={styles.muted}>{t('sessions.acpTerminalEmpty')}</span>}</pre>
+    }}>{text ? renderRuns(text, searchQuery, searchCase) : <span className={styles.muted} data-terminal-state={running ? 'waiting' : 'empty'}>{running ? t('sessions.acpTerminalWaiting') : t('sessions.acpTerminalNoOutput')}</span>}</pre>
     {error && <p className={styles.error} role="alert">{error}</p>}
   </div>;
 }

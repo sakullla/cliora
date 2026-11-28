@@ -28,6 +28,14 @@
 //! exceeds the agent's byte limit, always on a character boundary. Output is
 //! decoded as UTF-8; on Windows a stream that turns out not to be UTF-8 is read
 //! in the system ANSI code page, so cmd output on a Chinese system stays legible.
+//!
+//! An agent that runs commands itself (not through `terminal/create`) may
+//! still describe them on its tool calls with `_meta.terminal_info`,
+//! `_meta.terminal_output` and `_meta.terminal_exit`. The host keeps such a
+//! terminal as a read-only, agent-owned record: it has no process here, takes
+//! no live slot, answers no terminal request and cannot be stopped; its output
+//! keeps the same bounded tail and its record the same released retention.
+//! Only the protocol fields decide this, never the agent's identity.
 
 use std::collections::VecDeque;
 use std::io::Read;
@@ -51,12 +59,17 @@ pub const DEFAULT_OUTPUT_BYTES: usize = 1024 * 1024;
 /// The host's own ceiling on any terminal's output.
 pub const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 /// Released terminals whose output stays visible in the conversation.
-const MAX_RELEASED: usize = 32;
+pub(crate) const MAX_RELEASED: usize = 32;
 /// Retained characters of a command line or working directory.
 const MAX_LABEL_CHARS: usize = 2_000;
 /// How long the exit report waits for the output pipes to drain after the
 /// process itself exited (a descendant may still hold them).
 const DRAIN_WAIT: Duration = Duration::from_secs(2);
+/// Retained characters of an agent-owned terminal id, the same bound a tool
+/// call's terminal content keeps.
+const MAX_TERMINAL_ID_CHARS: usize = 200;
+/// The refusal for a terminal request on an agent-owned record.
+const AGENT_OWNED: &str = "该终端由 agent 自行运行，Cliora 只能显示其输出，不能操作或终止";
 
 /// How a terminal's command ended.
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -84,6 +97,9 @@ pub struct AcpTerminal {
     /// longer answers terminal requests, but its output stays visible.
     pub released: bool,
     pub subagent: Option<String>,
+    /// The agent ran the command itself and reported it through `_meta`; the
+    /// host only shows it and cannot stop it.
+    pub agent_owned: bool,
 }
 
 /// The handle that ends a terminal's process tree.
@@ -152,15 +168,35 @@ impl Terminals {
         self.entries.iter_mut().find(|entry| entry.state.terminal_id == id)
     }
 
+    /// Terminals whose process the host runs: an agent-owned record has none.
     fn live(&self) -> usize {
-        self.entries.iter().filter(|entry| !entry.state.released).count()
+        self.entries.iter().filter(|entry| !entry.state.released && !entry.state.agent_owned).count()
     }
 
-    /// Drop the oldest released terminals past the retention bound.
+    /// Drop the oldest retained records past the retention bound. Released
+    /// terminals and agent-owned records share it; a released one goes first.
     fn prune(&mut self) {
-        while self.entries.iter().filter(|entry| entry.state.released).count() > MAX_RELEASED {
-            let Some(index) = self.entries.iter().position(|entry| entry.state.released) else { break };
+        let retained = |entry: &Entry| entry.state.released || entry.state.agent_owned;
+        while self.entries.iter().filter(|entry| retained(entry)).count() > MAX_RELEASED {
+            let index = self
+                .entries
+                .iter()
+                .position(|entry| entry.state.released)
+                .or_else(|| self.entries.iter().position(|entry| entry.state.agent_owned));
+            let Some(index) = index else { break };
             self.entries.remove(index);
+        }
+    }
+
+    /// The next id of a terminal the host starts, never one an agent-owned
+    /// record already uses.
+    fn next_id(&mut self) -> String {
+        loop {
+            self.next += 1;
+            let id = format!("term-{}", self.next);
+            if !self.entries.iter().any(|entry| entry.state.terminal_id == id) {
+                return id;
+            }
         }
     }
 }
@@ -631,9 +667,8 @@ impl Session {
                 let _ = child.wait();
                 return Err("会话已结束或终端数已满，命令未保留".into());
             }
-            terminals.next += 1;
             let state = AcpTerminal {
-                terminal_id: format!("term-{}", terminals.next),
+                terminal_id: terminals.next_id(),
                 command: label(&line),
                 cwd: label(&crate::safe_fs::display(&cwd)),
                 output: String::new(),
@@ -641,6 +676,7 @@ impl Session {
                 exit_status: None,
                 released: false,
                 subagent: subagent.map(ToOwned::to_owned),
+                agent_owned: false,
             };
             terminals.entries.push_back(Entry { state: state.clone(), limit, tree: Some(Arc::clone(&tree)) });
             terminals.prune();
@@ -750,6 +786,9 @@ impl Session {
     fn live_entry<T>(&self, id: &str, read: impl FnOnce(&mut Entry) -> T) -> Result<T, String> {
         let mut terminals = guard(&self.terminals);
         let entry = terminals.get_mut(id).ok_or("终端不存在")?;
+        if entry.state.agent_owned {
+            return Err(AGENT_OWNED.into());
+        }
         if entry.state.released {
             return Err("终端已释放".into());
         }
@@ -775,6 +814,9 @@ impl Session {
         let mut terminals = guard(&self.terminals);
         loop {
             let entry = terminals.get_mut(id).ok_or("终端不存在")?;
+            if entry.state.agent_owned {
+                return Err(AGENT_OWNED.into());
+            }
             if let Some(exit) = &entry.state.exit_status {
                 return Ok(json!({ "exitCode": exit.exit_code, "signal": exit.signal }));
             }
@@ -845,6 +887,116 @@ impl Session {
             tree.close();
         }
         self.terminal_changed.notify_all();
+    }
+
+    /// Record what a tool call's `_meta` reports about a command the agent ran
+    /// itself: `terminal_info` opens the record, `terminal_output` appends to it
+    /// (opening it when no info came first) and `terminal_exit` ends it, in that
+    /// order when one update carries several. An id that names a terminal the
+    /// host started is left alone. The events go out before the tool call's
+    /// own, so the card that embeds the terminal finds it.
+    pub(super) fn observe_agent_terminal(&self, update: &Value, command: &str, subagent: Option<&str>) {
+        let Some(meta) = update.get("_meta").filter(|meta| meta.is_object()) else { return };
+        let id_of = |key: &str| {
+            meta.get(key)
+                .and_then(|value| value.get("terminal_id"))
+                .and_then(Value::as_str)
+                .filter(|id| !id.trim().is_empty())
+                .map(|id| super::timeline::cap(id, MAX_TERMINAL_ID_CHARS).0)
+        };
+        let info = id_of("terminal_info");
+        let output = id_of("terminal_output");
+        let exit = id_of("terminal_exit");
+        if info.is_none() && output.is_none() && exit.is_none() {
+            return;
+        }
+        let mut conflicts: Vec<String> = Vec::new();
+        {
+            let _order = self.order();
+            let mut terminals = guard(&self.terminals);
+            let cwd = meta
+                .get("terminal_info")
+                .and_then(|value| value.get("cwd"))
+                .and_then(Value::as_str)
+                .filter(|cwd| !cwd.is_empty())
+                .map(label)
+                .unwrap_or_else(|| label(&crate::safe_fs::display(&self.directory)));
+            // Open (or find) the record; None when the id is the host's own.
+            let mut open = |terminals: &mut Terminals, id: &str| -> bool {
+                if let Some(entry) = terminals.get_mut(id) {
+                    if !entry.state.agent_owned {
+                        if !conflicts.iter().any(|known| known == id) {
+                            conflicts.push(id.to_owned());
+                        }
+                        return false;
+                    }
+                    return true;
+                }
+                let state = AcpTerminal {
+                    terminal_id: id.to_owned(),
+                    command: label(command),
+                    cwd: cwd.clone(),
+                    output: String::new(),
+                    truncated: false,
+                    exit_status: None,
+                    released: false,
+                    subagent: subagent.map(ToOwned::to_owned),
+                    agent_owned: true,
+                };
+                terminals.entries.push_back(Entry { state: state.clone(), limit: MAX_OUTPUT_BYTES, tree: None });
+                self.emit_update(AcpUpdate::Terminal { terminal: state });
+                true
+            };
+            if let Some(id) = &info {
+                open(&mut terminals, id);
+            }
+            if let Some(id) = &output {
+                let text = meta["terminal_output"].get("data").and_then(Value::as_str).unwrap_or_default();
+                if open(&mut terminals, id) && !text.is_empty() {
+                    if let Some(entry) = terminals.get_mut(id) {
+                        let dropped = append_bounded(&mut entry.state.output, text, entry.limit);
+                        if dropped > 0 {
+                            entry.state.truncated = true;
+                        }
+                        self.emit_update(AcpUpdate::TerminalOutput {
+                            terminal_id: id.clone(),
+                            text: text.to_owned(),
+                            dropped,
+                            truncated: entry.state.truncated,
+                            exit_status: entry.state.exit_status.clone(),
+                            released: entry.state.released,
+                        });
+                    }
+                }
+            }
+            if let Some(id) = &exit {
+                let report = &meta["terminal_exit"];
+                let status = AcpTerminalExit {
+                    exit_code: report.get("exit_code").and_then(Value::as_i64).and_then(|code| i32::try_from(code).ok()),
+                    signal: report.get("signal").and_then(Value::as_str).map(|signal| super::timeline::cap(signal, 100).0),
+                };
+                if open(&mut terminals, id) {
+                    if let Some(entry) = terminals.get_mut(id) {
+                        if entry.state.exit_status.is_none() {
+                            entry.state.exit_status = Some(status);
+                        }
+                        entry.state.released = true;
+                        self.emit_update(AcpUpdate::TerminalOutput {
+                            terminal_id: id.clone(),
+                            text: String::new(),
+                            dropped: 0,
+                            truncated: entry.state.truncated,
+                            exit_status: entry.state.exit_status.clone(),
+                            released: true,
+                        });
+                    }
+                }
+            }
+            terminals.prune();
+        }
+        for id in conflicts {
+            self.diagnostic(&format!("工具调用报告的终端 {id} 与 Cliora 启动的终端同名，已忽略其终端信息"));
+        }
     }
 
     /// Whether any process of a terminal's tree is still running. Tests use it
