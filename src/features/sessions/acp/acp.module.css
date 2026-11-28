@@ -124,12 +124,22 @@ details[open] > summary > .disclosure,
   display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; min-width: 0;
   overflow-x: hidden; overflow-y: auto; padding: var(--space-2) var(--space-3) var(--space-3) var(--space-1);
   scrollbar-gutter: stable; border-radius: var(--radius-xs);
+  /* The timeline keeps the reading position itself when rows above it are measured or
+     change height; the browser's own anchoring would move it a second time. */
+  overflow-anchor: none;
 }
 .timelineInner {
   display: flex; flex: 1 0 auto; flex-direction: column; gap: var(--space-3);
   width: 100%; max-width: 860px; margin-inline: auto; min-width: 0;
+  /* The paddings stand for the rows not rendered: they change in one step. (Reduced
+     motion shortens every transition to .01ms, which would still lag them a frame.) */
+  transition: none;
 }
 .timelineInner > * { min-width: 0; }
+/* One rendered segment: the agent's name (when it opens a round) above its content,
+   spaced like the column itself. The column's gap separates rows. */
+.segmentRow { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.segmentRow > * { min-width: 0; }
 
 /* Empty states (starting vs ready vs ended). */
 .empty { margin: auto 0; color: var(--term-text-3); font-size: var(--fs-caption); text-align: center; }

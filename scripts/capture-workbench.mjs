@@ -189,8 +189,14 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
     // Queue and picture scenes: 'queue' is a turn at work that prompts are queued behind
     // (the scene steps type them and push the host's later snapshots); 'images' is a
     // ready conversation whose earlier message was replayed without its picture data.
+    // Long conversations (R13): 'large' is a screenshot of one, 'large-perf' and
+    // 'large-perf-2x' the measured scenes (600 and 1200 finished rounds, about 1M and 2M
+    // characters, 3000 and 6000 entries), each with two small conversations that keep
+    // streaming in the background; the large one starts hidden behind the first of them.
+    const acpLargeRounds = acpMode === 'large' || acpMode === 'large-perf' ? 600 : acpMode === 'large-perf-2x' ? 1200 : 0;
+    const acpPerf = acpMode === 'large-perf' || acpMode === 'large-perf-2x';
     const acpState = acpMode === 'starting' ? 'starting' : acpMode === 'stopping' ? 'stopping' : acpMode === 'permission' || acpMode === 'form' || acpMode === 'access' ? 'waiting_permission' : acpMode === 'login' ? 'auth_required'
-      : acpMode === 'disconnected' ? 'closed' : acpMode === 'tools' || acpMode === 'process' || acpMode === 'queue' ? 'running' : 'ready';
+      : acpMode === 'disconnected' ? 'closed' : acpMode === 'tools' || acpMode === 'process' || acpMode === 'queue' || acpLargeRounds ? 'running' : 'ready';
     const acpNativeId = acpMode === 'login' ? null : 'native-acp-1';
     const acpAuthError = acpMode === 'login' ? 'agent 要求先登录：没有找到有效的凭据' : null;
     const acpEnd = (turnId, reason = 'end_turn') => ({ kind: 'turn', id: turnId + '-end', turnId, reason });
@@ -208,6 +214,26 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
         const turn = 'turn-' + (index + 1);
         return [acpTurnMessage('u' + index, 'user', question, turn), acpTurnMessage('a' + index, 'agent', answer, turn), acpEnd(turn)];
       });
+    };
+    const acpLarge = (count) => {
+      const items = [];
+      for (let index = 1; index <= count; index += 1) {
+        const turn = 'turn-' + index;
+        const reply = '### 模块 ' + index + '\n\n检查通过。这一轮把 `module-' + index + '` 的间距改成令牌相加，并删除了写死的像素值：\n\n'
+          + '- 工具栏内边距改为 `var(--space-1)` 与 `var(--space-2)` 相加\n- 按钮之间的 gap 改为 `var(--space-1_5)`\n- 深浅主题共用同一组令牌\n\n'
+          + (index % 4 === 0 ? '```ts\nexport const spacing' + index + ' = { inline: 4, block: 8, gap: 6 } as const;\nexport function pad(value: number) {\n  return value + 1;\n}\n```\n\n' : '')
+          + '| 宽度 | 改前 | 改后 |\n| --- | --- | --- |\n| 1360 | 正常 | 正常 |\n| 720 | 溢出 4px | 正常 |\n\n下一步继续处理模块 ' + (index + 1) + '，' + '保持每一处都使用共享令牌。'.repeat(8);
+        items.push(
+          acpTurnMessage('u' + index, 'user', '第 ' + index + ' 轮：检查模块 ' + index + ' 的样式，改用令牌并跑一次检查。' + '确认深浅主题与窄窗口都不溢出。'.repeat(4), turn),
+          acpTurnMessage('th' + index, 'thought', '先读模块 ' + index + ' 的样式定义，找出写死的像素值，再跑样式检查。'.repeat(3), turn),
+          { ...acpTool('x' + index, 'node --test tests/native/style-tokens.test.mjs --module ' + index, 'execute', 'completed', { rawInput: '{"command":"node --test tests/native/style-tokens.test.mjs"}', content: [{ type: 'text', text: ('ok module-' + index + ' uses tokens\n').repeat(12), truncated: false }] }), turnId: turn },
+          acpTurnMessage('a' + index, 'agent', reply, turn),
+          acpEnd(turn),
+        );
+      }
+      const open = 'turn-open';
+      items.push(acpTurnMessage('u' + (count + 1), 'user', '继续下一个模块。', open), acpTurnMessage('live', 'agent', '正在处理：', open));
+      return items;
     };
     const acpStartup = () => [
       { ...acpMessage('s1', 'agent', '## Context\n\n- AGENTS.md\n- docs/requirements\n\n## Extensions\n\n- pi-acp-bridge 0.0.35\n- git-worktrees'), turnId: '' },
@@ -283,7 +309,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
       acpTurnMessage('i1', 'agent', '截图里按钮之间的间距是 6px，和令牌不一致。我改成 `--space-1_5`。', 'turn-0'),
       acpEnd('turn-0'),
     ];
-    const acpTimeline = acpMode === 'empty' || acpMode === 'starting' ? [] : acpMode === 'long' ? acpLong() : acpMode === 'startup' ? acpStartup()
+    const acpTimeline = acpMode === 'empty' || acpMode === 'starting' ? [] : acpLargeRounds ? acpLarge(acpLargeRounds) : acpMode === 'long' ? acpLong() : acpMode === 'startup' ? acpStartup()
       : acpMode === 'process' || acpMode === 'process-done' || acpMode === 'queue' ? acpProcess(acpMode === 'process-done') : acpMode === 'tools' ? acpTools() : acpMode === 'yolo' ? acpYolo() : acpMode === 'disconnected' ? acpDisconnected() : acpMode === 'access' ? acpAccess()
         : acpMode === 'images' ? acpImages() : null;
     const acpFixture = acpMode ? [{
@@ -326,7 +352,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
       grants: acpMode === 'access' ? ['write'] : [],
       terminals: acpTerminals,
       omittedTerminalIds: [],
-      plan: acpMode === 'empty' || acpMode === 'starting' || acpMode === 'long' || acpMode === 'yolo' || acpMode === 'startup' || acpMode === 'process' || acpMode === 'process-done' || acpMode === 'queue' || acpMode === 'images' ? [] : acpMode === 'tools' ? [
+      plan: acpLargeRounds || acpMode === 'empty' || acpMode === 'starting' || acpMode === 'long' || acpMode === 'yolo' || acpMode === 'startup' || acpMode === 'process' || acpMode === 'process-done' || acpMode === 'queue' || acpMode === 'images' ? [] : acpMode === 'tools' ? [
         { content: '读取工具栏样式与令牌', priority: 'high', status: 'completed' },
         { content: '把固定像素换成令牌相加', priority: 'high', status: 'completed' },
         { content: '运行样式检查', priority: 'medium', status: 'completed' },
@@ -366,7 +392,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
         ] : [],
       },
       diagnostics: acpMode === 'stopping' ? ['agent 标准错误：正在结束本轮（已脱敏）'] : acpMode === 'disconnected' ? ['agent 标准错误：unexpected EOF on stdin（已脱敏）'] : [],
-      lastTurnReason: acpMode === 'starting' || acpMode === 'stopping' || acpMode === 'empty' || acpMode === 'tools' || acpMode === 'permission' || acpMode === 'access' || acpMode === 'process' || acpMode === 'queue' ? '' : acpMode === 'disconnected' ? 'disconnected' : 'end_turn',
+      lastTurnReason: acpLargeRounds || acpMode === 'starting' || acpMode === 'stopping' || acpMode === 'empty' || acpMode === 'tools' || acpMode === 'permission' || acpMode === 'access' || acpMode === 'process' || acpMode === 'queue' ? '' : acpMode === 'disconnected' ? 'disconnected' : 'end_turn',
       seq: 24,
     }, ...(acpMode === 'split' ? [{
       id: 'acp2', toolId: 'claude_code', projectId: 'site', directory: 'C:\\Projects\\personal-site', mode: 'yolo', interaction: 'acp',
@@ -380,9 +406,22 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
         sessionCapabilities: { list: false, resume: false, delete: false, close: false }, loadSession: false, authMethods: [],
       },
       diagnostics: [], lastTurnReason: 'end_turn', seq: 12,
-    }] : [])] : null;
+    }] : []), ...(acpPerf ? ['acp2', 'acp3'].map((id, index) => ({
+      id, toolId: index ? 'claude_code' : 'pi', projectId: 'site', directory: 'C:\\Projects\\personal-site', mode: 'normal', interaction: 'acp',
+      state: 'running', nativeSessionId: 'native-' + id, resume: 'none', authError: null,
+      timeline: [acpTurnMessage(id + '-u', 'user', '后台会话：持续输出。', 'turn-1'), acpTurnMessage('bg-live', 'agent', '后台输出：', 'turn-1')],
+      pending: [], grants: [], terminals: [], omittedTerminalIds: [], plan: [], commands: [],
+      config: { modes: null, options: [], models: null },
+      info: { title: '后台会话 ' + (index + 1), updatedAt: null, usage: null },
+      agent: {
+        protocolVersion: 1, agentInfo: { name: 'bridge-acp', title: 'Bridge', version: '0.2.0' },
+        promptCapabilities: { image: false, audio: false, embeddedContext: false },
+        sessionCapabilities: { list: false, resume: false, delete: false, close: false }, loadSession: false, authMethods: [],
+      },
+      diagnostics: [], lastTurnReason: '', seq: 2,
+    })) : [])] : null;
     if (acpMode) {
-      localStorage.setItem('cliora:workbench-selected', 'acp1');
+      localStorage.setItem('cliora:workbench-selected', acpPerf ? 'acp2' : 'acp1');
       localStorage.setItem('cliora:remote-target', 'local');
     }
     Object.assign(window, {
@@ -433,6 +472,12 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
           if (command === 'list_acp_sessions') return acpFixture ? acpFixture.map((item) => ({ ...item })) : [];
           if (command === 'acp_session') return acpFixture?.find((item) => item.id === args.sessionId) ?? null;
           if (command === 'acp_dependency_installed') return true;
+          // A closed conversation is gone from the host, as natively: nothing here keeps its data.
+          if (command === 'acp_close' && acpFixture) {
+            const index = acpFixture.findIndex((item) => item.id === args.sessionId);
+            if (index >= 0) acpFixture.splice(index, 1);
+            return null;
+          }
           if (command === 'acp_prompt' || command === 'acp_cancel' || command === 'acp_respond_permission' || command === 'acp_respond_access' || command === 'acp_revoke_grants' || command === 'acp_kill_terminal' || command === 'acp_set_mode' || command === 'acp_set_config' || command === 'acp_close'
             || command === 'acp_authenticate' || command === 'acp_respond_elicitation' || command === 'acp_delete_native_session') return null;
           // A dropped picture: a tiny PNG the tray previews; one named "reading" stays
@@ -551,6 +596,8 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
         Object.assign(conversation, patch, { timeline: [...conversation.timeline, ...items], seq: conversation.seq + 1 });
         bridge.handlers[bridge.listens['cliora:acp-event']]?.({ payload: { sessionId: conversation.id, seq: conversation.seq, kind: 'snapshot', snapshot: JSON.parse(JSON.stringify(conversation)) } });
       },
+      /** One host event for an ACP conversation (the measured long-conversation scenes). */
+      __acpEvent: (payload) => bridge.handlers[bridge.listens['cliora:acp-event']]?.({ payload }),
       /** A native (desktop) drop of paths at a CSS-pixel point. */
       __drop: (paths, point) => {
         const scale = window.devicePixelRatio || 1;
@@ -572,13 +619,89 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
   }, blank: empty, language: english ? 'en' : 'zh', remoteState, promptFailure, directoryMode, writeRecovery, acpMode });
 }
 
+/**
+ * The long-conversation measurement (R13), on the synthetic host only. The large
+ * conversation starts hidden behind a small one. Recorded: the GC'd heap and DOM after
+ * loading; how long switching to the large conversation takes until its latest entry is
+ * laid out in view (and one more frame); the DOM and rendered entries then; long tasks
+ * while it streams 200 chunks, one every 16ms when the page keeps up, with two
+ * background conversations streaming as many; and the GC'd heap after closing it. Browser observations of a preview
+ * build, not native WebView2 or long-duration leak acceptance.
+ */
+async function measureLargeConversation(page, rounds) {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Performance.enable');
+  const sample = async () => {
+    await cdp.send('HeapProfiler.collectGarbage');
+    await cdp.send('HeapProfiler.collectGarbage');
+    const { metrics } = await cdp.send('Performance.getMetrics');
+    const counters = await cdp.send('Memory.getDOMCounters');
+    return {
+      heapUsedMB: Math.round(metrics.find((item) => item.name === 'JSHeapUsedSize').value / 1048576 * 10) / 10,
+      domNodes: counters.nodes,
+      listeners: counters.jsEventListeners,
+      renderedEntries: await page.locator('[data-pane-session="acp1"] [data-item-id]').count(),
+    };
+  };
+  await page.waitForTimeout(500);
+  const afterLoad = await sample();
+  const switchMs = await page.evaluate(() => new Promise((resolve, reject) => {
+    const tab = document.querySelector('[role="tab"][data-session-id="acp1"]');
+    if (!tab) { reject(new Error('no tab for acp1')); return; }
+    const started = performance.now();
+    tab.click();
+    const check = () => {
+      const node = document.querySelector('[data-pane-session="acp1"] [data-item-id="live"]');
+      const rect = node?.getBoundingClientRect();
+      if (rect && rect.height > 0 && rect.top >= 0 && rect.bottom <= window.innerHeight) {
+        requestAnimationFrame(() => resolve(Math.round(performance.now() - started)));
+        return;
+      }
+      if (performance.now() - started > 60000) { reject(new Error('acp1 did not render')); return; }
+      requestAnimationFrame(check);
+    };
+    requestAnimationFrame(check);
+  }));
+  await page.waitForTimeout(800);
+  const shown = await sample();
+  const stream = await page.evaluate(async () => {
+    const tasks = [];
+    const observer = new PerformanceObserver((list) => { for (const entry of list.getEntries()) tasks.push(entry.duration); });
+    observer.observe({ type: 'longtask' });
+    const seq = { acp1: 1000, acp2: 1000, acp3: 1000 };
+    const started = performance.now();
+    let events = 0;
+    // A fixed workload, so every build receives the same events: 200 rounds of three
+    // chunks, one every 16ms (about 60 per second per conversation) when it keeps up.
+    for (let round = 0; round < 200; round += 1) {
+      window.__acpEvent({ sessionId: 'acp1', seq: seq.acp1++, kind: 'chunk', messageId: 'live', role: 'agent', text: '流式输出的一段文字，含 `code` 与 **强调**。', truncated: false, turnId: 'turn-open', subagent: null });
+      for (const id of ['acp2', 'acp3']) window.__acpEvent({ sessionId: id, seq: seq[id]++, kind: 'chunk', messageId: 'bg-live', role: 'agent', text: '后台输出。', truncated: false, turnId: 'turn-1', subagent: null });
+      events += 3;
+      await new Promise((resolve) => setTimeout(resolve, 16));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    observer.disconnect();
+    const total = tasks.reduce((sum, value) => sum + value, 0);
+    return { seconds: Math.round((performance.now() - started) / 100) / 10, events, eventsPerSecond: Math.round(events / ((performance.now() - started) / 1000)), longTasks: tasks.length, over50ms: tasks.filter((value) => value > 50).length, longestMs: Math.round(Math.max(0, ...tasks)), totalLongMs: Math.round(total) };
+  });
+  const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });
+  await stage.getByRole('button', { name: copy('结束此会话', 'End this session'), exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: copy('结束进程', 'End process'), exact: true }).click();
+  await page.locator('[data-pane-session="acp1"]').waitFor({ state: 'detached', timeout: 30000 });
+  await page.waitForTimeout(500);
+  const afterClose = await sample();
+  await cdp.detach();
+  return { synthetic: true, kind: 'browser-acp-large-conversation', rounds, entries: rounds * 5 + 2, afterLoad, switchMs, shown, stream, afterClose,
+    nativePlatform: 'unverified', note: 'Browser preview with synthetic IPC; not native WebView2, CPU/memory or long-duration leak acceptance.' };
+}
+
 const manifest = [];
 // Run-level failures (preview not ready, browser launch) are recorded here instead of crashing, so
 // the manifest, gallery and README are always written and the exit code is 1.
 const runErrors = [];
 let browser = null;
 async function shot(name, theme, width, run, empty = false, remoteState = null, promptFailure = null, directoryMode = null, writeRecovery = false, chrome = null, acpMode = null) {
-  if (curated && !name.startsWith('workbench-remote-stream-')) {
+  if (curated && !name.startsWith('workbench-remote-stream-') && !name.startsWith('workbench-acp-large-perf')) {
     const scene = name.slice(0, -`-${theme}-${width}`.length);
     const index = defaultScenes.indexOf(scene);
     if (index === -1 || theme !== sceneTheme(themes, widths, width, index)) return;
@@ -598,9 +721,9 @@ async function shot(name, theme, width, run, empty = false, remoteState = null, 
     await page.getByRole('navigation', { name: copy('页面', 'Pages') }).getByRole('button', { name: copy('工作台', 'Workbench'), exact: true }).click();
     if (acpMode) {
       // A conversation is a native panel, not an xterm: wait for its own content.
-      const panel = page.locator('[data-acp="true"][data-pane-session="acp1"]');
-      await panel.waitFor();
-      await panel.locator(acpMode === 'empty' || acpMode === 'starting' ? '[data-acp-empty]' : '[data-role="agent"], [data-acp-process]').first().waitFor();
+      const panel = page.locator(`[data-acp="true"][data-pane-session="${acpMode.startsWith('large-perf') ? 'acp2' : 'acp1'}"]`);
+      await panel.waitFor({ timeout: 60000 });
+      await panel.locator(acpMode === 'empty' || acpMode === 'starting' ? '[data-acp-empty]' : '[data-role="agent"], [data-acp-process]').first().waitFor({ timeout: 60000 });
       // The input, the login panel, or the ended recovery banner standing in for it.
       await panel.locator('[data-acp-composer], [data-acp-auth], [data-acp-ended]').first().waitFor();
     } else if (remoteState) {
@@ -827,6 +950,17 @@ for (const width of widths) {
   // disconnected agent.
   for (const mode of ['conversation', 'permission', 'stopping', 'starting', 'empty', 'long', 'tools', 'yolo', 'disconnected', 'startup', 'process', 'process-done']) {
     await shot('workbench-acp-' + mode + '-' + theme + '-' + width, theme, width, null, false, null, null, null, false, null, mode);
+  }
+  // A 600-round conversation: only the rows near the bottom are rendered; the shot waits
+  // for the last reply's Markdown to load.
+  await shot('workbench-acp-large-' + theme + '-' + width, theme, width, async (page) => {
+    await page.locator('[data-acp="true"][data-pane-session="acp1"] [data-item-id="a600"] h3').waitFor({ timeout: 30000 });
+  }, false, null, null, null, false, null, 'large');
+  // A long conversation measured (R13), once, like the remote stream: --performance.
+  if (process.argv.includes('--performance') && theme === themes[0] && width === widths[0]) {
+    for (const [mode, rounds] of [['large-perf', 600], ['large-perf-2x', 1200]]) {
+      await shot('workbench-acp-' + mode + '-' + theme + '-' + width, theme, width, (page) => measureLargeConversation(page, rounds), false, null, null, null, false, null, mode);
+    }
   }
   await shot('workbench-acp-find-' + theme + '-' + width, theme, width, async (page) => {
     const stage = page.getByRole('region', { name: copy('当前会话', 'Current session') });
@@ -1482,7 +1616,7 @@ fs.writeFileSync(out + '/README.md', [
   'CLIORA_PREVIEW_URL=http://127.0.0.1:14736 node scripts/capture-workbench.mjs',
   '```',
   '',
-  '`--theme all|light|dark`、`--size all|1360,900,720`（640 需显式指定或 CLIORA_CAPTURE_640=1）和 `--only "workbench-remote-*"` 可缩小范围；`CLIORA_CAPTURE_OUT` 指定输出目录，`CLIORA_CAPTURE_LOCALE=en-US` 捕获英文界面并写入独立目录。预览服务器需运行当前 frontend build。远程连接状态覆盖连接中、已连接、断开、未知和远端结束；`--only "workbench-remote-prompts-*"` 捕获快捷输入与新建会话提示词读取失败、旧成功陈旧标记及重试入口，保留输入草稿；`--performance` 仅在首个主题/尺寸执行一次 stream 压力场景，在三会话持续输出和切换后记录 GC 后 heap、DOM/listener、CPU task duration 等浏览器观察，不构成原生或长时间泄漏验收。',
+  '`--theme all|light|dark`、`--size all|1360,900,720`（640 需显式指定或 CLIORA_CAPTURE_640=1）和 `--only "workbench-remote-*"` 可缩小范围；`CLIORA_CAPTURE_OUT` 指定输出目录，`CLIORA_CAPTURE_LOCALE=en-US` 捕获英文界面并写入独立目录。预览服务器需运行当前 frontend build。远程连接状态覆盖连接中、已连接、断开、未知和远端结束；`--only "workbench-remote-prompts-*"` 捕获快捷输入与新建会话提示词读取失败、旧成功陈旧标记及重试入口，保留输入草稿；`--performance` 仅在首个主题/尺寸执行一次 stream 压力场景，在三会话持续输出和切换后记录 GC 后 heap、DOM/listener、CPU task duration 等浏览器观察，并对长 ACP 对话（600 与 1200 轮，`workbench-acp-large-perf*`）记录 DOM、切换后首次渲染时间、流式期间长任务与关闭后的 GC 后 heap；均不构成原生或长时间泄漏验收。',
   '',
   '终端文本、项目与提示词均为合成数据。' + acceptanceNote + '真实登录与计费也未验证。',
   '',

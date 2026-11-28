@@ -4,7 +4,9 @@ import {
   GROUPABLE_TOOL_KINDS,
   agentHeadIds,
   buildSegments,
+  createSegmentBuilder,
   groupIdByItem,
+  stepSummaryShown,
   groupTimelineItems,
   isGroupableTool,
   segmentKey,
@@ -570,6 +572,117 @@ test('groupIdByItem covers startup, process and tool group members', () => {
     'tool:c1': 'tool-group:tool:c1',
     'tool:c2': 'tool-group:tool:c1',
   });
+});
+
+/** A seeded stream of host updates: prompts, thoughts and replies that grow chunk by
+ *  chunk, tool calls merged in place, cards that wait, subagents and turn ends. Every
+ *  update replaces only the item objects it changes, as the host reducer does. */
+function syntheticStream(seed, steps) {
+  let state = seed;
+  const random = () => {
+    state = (state * 1103515245 + 12345) % 2147483648;
+    return state / 2147483648;
+  };
+  const frames = [];
+  let timeline = [];
+  let turn = 0;
+  let open = false;
+  let pending = [];
+  let counter = 0;
+  const replace = (index, item) => { timeline = timeline.map((current, at) => (at === index ? item : current)); };
+  for (let step = 0; step < steps; step += 1) {
+    const roll = random();
+    const turnId = `turn-${turn}`;
+    if (!open || roll < 0.06) {
+      if (open) timeline = [...timeline, turnEnd(turnId, random() < 0.2 ? 'cancelled' : 'end_turn')];
+      turn += 1;
+      open = true;
+      pending = [];
+      timeline = [...timeline, user(`u${turn}`, `turn-${turn}`)];
+    } else if (roll < 0.3) {
+      const last = timeline[timeline.length - 1];
+      if (last.kind === 'message' && last.role !== 'user') replace(timeline.length - 1, { ...last, text: last.text + ' more' });
+      else timeline = [...timeline, messageItem(`m${counter++}`, 'reply', { turnId, role: random() < 0.5 ? 'thought' : 'agent' })];
+    } else if (roll < 0.55) {
+      const asks = random() < 0.15;
+      const id = `c${counter++}`;
+      const permission = asks ? { requestId: `req-${id}`, turnId, options: [] } : null;
+      if (asks) pending = [...pending, `req-${id}`];
+      timeline = [...timeline, toolItem(id, { turnId, toolKind: random() < 0.5 ? 'read' : 'execute', status: random() < 0.5 ? 'completed' : 'in_progress', permission })];
+    } else if (roll < 0.7) {
+      const index = timeline.findLastIndex((item) => item.kind === 'tool' && item.status === 'in_progress');
+      if (index >= 0) replace(index, { ...timeline[index], status: random() < 0.2 ? 'failed' : 'completed' });
+    } else if (roll < 0.78 && pending.length) {
+      pending = pending.slice(1);
+    } else if (roll < 0.84) {
+      timeline = [...timeline, toolItem(`s${counter++}`, { turnId, subagent: 'child' })];
+    } else if (roll < 0.9) {
+      timeline = [...timeline, notice(`n${counter++}`, random() < 0.3 ? 'error' : 'info', turnId)];
+    } else if (roll < 0.94) {
+      timeline = [...timeline, accessItem(`acc${counter++}`, 'allowed_once')];
+    } else {
+      open = false;
+      timeline = [...timeline, turnEnd(turnId)];
+    }
+    frames.push({ timeline, options: { turnOpen: open, pending } });
+  }
+  return frames;
+}
+
+test('createSegmentBuilder always equals buildSegments while a conversation grows', () => {
+  for (const seed of [1, 7, 42, 2026]) {
+    const build = createSegmentBuilder();
+    for (const [index, frame] of syntheticStream(seed, 400).entries()) {
+      assert.deepEqual(build(frame.timeline, frame.options), buildSegments(frame.timeline, frame.options), `seed ${seed} step ${index}`);
+    }
+  }
+});
+
+test('createSegmentBuilder reuses the segments a change did not touch', () => {
+  const build = createSegmentBuilder();
+  const history = [
+    user('u1', 'turn-1'), thought('th1'), toolItem('x1', { toolKind: 'execute' }), messageItem('r1', 'done'), turnEnd('turn-1'),
+    user('u2', 'turn-2'), toolItem('x2', { turnId: 'turn-2', toolKind: 'execute' }), messageItem('r2', 'ok', { turnId: 'turn-2' }), turnEnd('turn-2'),
+    user('u3', 'turn-3'), thought('th3', 'go', { turnId: 'turn-3' }), toolItem('x3', { turnId: 'turn-3', status: 'in_progress' }),
+  ];
+  const options = { turnOpen: true, pending: [] };
+  const first = build(history, options);
+  assert.equal(build(history, options), first, '同一时间线返回同一结果');
+  assert.equal(build([...history], options), first, '条目对象都未变时结果数组也不变');
+
+  // A streamed reply in the last round: only that round's segments are new.
+  const streamed = [...history, messageItem('r3', 'par', { turnId: 'turn-3' })];
+  const second = build(streamed, options);
+  const grown = [...history, messageItem('r3', 'partial', { turnId: 'turn-3' })];
+  const third = build(grown, options);
+  assert.deepEqual(third, buildSegments(grown, options));
+  const keys = third.map(segmentKey);
+  for (const key of ['u1', 'process:th1', 'r1', 'turn-1-end', 'u2', 'process:tool:x2', 'r2', 'u3', 'process:th3']) {
+    assert.equal(third[keys.indexOf(key)], second[keys.indexOf(key)], `${key} 沿用旧对象`);
+  }
+  assert.notEqual(third[keys.indexOf('r3')], second[keys.indexOf('r3')], '变化的消息是新对象');
+  assert.equal(third[keys.indexOf('u1')], first[0], '前面的轮次一直沿用最初的对象');
+
+  // The running call completes: its process is new, the rounds before keep theirs.
+  const completed = grown.map((item) => (item.id === 'tool:x3' ? { ...item, status: 'completed' } : item));
+  const fourth = build(completed, options);
+  assert.notEqual(fourth[keys.indexOf('process:th3')], third[keys.indexOf('process:th3')]);
+  assert.equal(fourth[keys.indexOf('process:tool:x2')], third[keys.indexOf('process:tool:x2')]);
+
+  // A snapshot brings new objects for everything: the result is rebuilt, still equal.
+  const replayed = JSON.parse(JSON.stringify(completed));
+  const fifth = build(replayed, options);
+  assert.deepEqual(fifth, buildSegments(replayed, options));
+  assert.notEqual(fifth[0], fourth[0]);
+});
+
+test('stepSummaryShown drops a summary the step title already says', () => {
+  const diff = { type: 'diff', path: 'docs/a.md', oldText: 'a', newText: 'b', truncated: false };
+  assert.equal(stepSummaryShown(toolItem('e1', { title: '编辑 docs/a.md', content: [diff] }), 'docs/a.md'), '');
+  assert.equal(stepSummaryShown(toolItem('r1', { title: '读取 docs/a.md', locations: [{ path: 'docs/a.md', line: 186 }] }), 'docs/a.md:186'), '');
+  assert.equal(stepSummaryShown(toolItem('r2', { title: 'read_file', locations: [{ path: 'docs/a.md', line: 186 }] }), 'docs/a.md:186'), 'docs/a.md:186');
+  assert.equal(stepSummaryShown(toolItem('r3', { title: '', callId: 'docs/a.md' }), 'docs/a.md'), '');
+  assert.equal(stepSummaryShown(toolItem('r4', { title: 'x' }), ''), '');
 });
 
 test('segmentOptions reads a running turn and only live pending requests', () => {

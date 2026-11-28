@@ -1,5 +1,6 @@
 import type { AcpEvent, AcpSessionSnapshot } from '../../types/acp';
 import { acpPendingCount, applyAcpEvents, type AcpConversation } from './acpSession.ts';
+import { clearAcpRenderCache } from './acp/acpRenderCache.ts';
 
 /** What the workbench frame (rail, titles, tones, menus) reads of a conversation.
  *  It changes only when one of these fields does, never on a streamed chunk. */
@@ -12,6 +13,13 @@ export type AcpSummary = Pick<AcpSessionSnapshot, 'id' | 'toolId' | 'projectId' 
 
 /** Runs `flush` once, later; the returned function cancels it. */
 export type AcpFlushScheduler = (flush: () => void) => () => void;
+
+/** Told when one session's buffered events could not be applied. */
+export type AcpFoldErrorReporter = (sessionId: string, error: unknown) => void;
+
+const consoleReporter: AcpFoldErrorReporter = (sessionId, error) => {
+  console.error(`ACP events for session ${sessionId} could not be applied; its conversation keeps its previous state.`, error);
+};
 
 /**
  * The conversations one workbench holds, outside React. Events are buffered and folded
@@ -30,8 +38,8 @@ export type AcpStore = {
   push: (event: AcpEvent) => void;
   /** Applies every buffered event now. */
   flush: () => void;
-  /** The conversation was closed: its data and buffered events are dropped, and a later
-   *  snapshot or event for it is ignored. */
+  /** The conversation was closed: its data, buffered events and view cache are dropped,
+   *  and a later snapshot or event for it is ignored. */
   retire: (sessionId: string) => void;
   retired: (sessionId: string) => boolean;
   subscribe: (sessionId: string, listener: () => void) => () => void;
@@ -40,6 +48,8 @@ export type AcpStore = {
   summaries: () => ReadonlyMap<string, AcpSummary>;
   /** Cancels a scheduled flush; buffered events stay until the next push or flush. */
   dispose: () => void;
+  /** How many times a session's events could not be applied (each one was reported). */
+  foldFailures: () => number;
 };
 
 /** One flush per animation frame. A hidden window runs no frames, so a timer still
@@ -84,8 +94,10 @@ function sameSummary(a: AcpSummary | undefined, b: AcpSummary): boolean {
     && a.mode === b.mode && a.state === b.state && a.pendingCount === b.pendingCount && a.title === b.title;
 }
 
-export function createAcpStore(options: { schedule?: AcpFlushScheduler } = {}): AcpStore {
+export function createAcpStore(options: { schedule?: AcpFlushScheduler; onFoldError?: AcpFoldErrorReporter } = {}): AcpStore {
   const schedule = options.schedule ?? frameScheduler;
+  const reportFoldError = options.onFoldError ?? consoleReporter;
+  let failures = 0;
   const conversations = new Map<string, AcpConversation>();
   const buffer = new Map<string, AcpEvent[]>();
   const retiredIds = new Set<string>();
@@ -122,13 +134,22 @@ export function createAcpStore(options: { schedule?: AcpFlushScheduler } = {}): 
     if (nextSummaries) for (const listener of [...summaryListeners]) listener();
   }
 
-  /** Folds the buffered events of one session; true when its conversation changed. */
+  /** Folds the buffered events of one session; true when its conversation changed. A
+   *  batch that cannot be applied is dropped and reported: that session keeps its previous
+   *  conversation, and the other sessions of the same frame are not affected. */
   function fold(id: string): boolean {
     const events = buffer.get(id);
     if (!events) return false;
     buffer.delete(id);
     const current = conversations.get(id);
-    const updated = applyAcpEvents(current, events);
+    let updated: AcpConversation | null;
+    try {
+      updated = applyAcpEvents(current, events);
+    } catch (error) {
+      failures += 1;
+      try { reportFoldError(id, error); } catch { /* a failing reporter must not stop the frame */ }
+      return false;
+    }
     if (!updated || updated === current) return false;
     conversations.set(id, updated);
     return true;
@@ -139,8 +160,12 @@ export function createAcpStore(options: { schedule?: AcpFlushScheduler } = {}): 
     cancelScheduled = null;
     if (!buffer.size) return;
     const changed: string[] = [];
-    for (const id of [...buffer.keys()]) if (fold(id)) changed.push(id);
-    commit(changed);
+    try {
+      for (const id of [...buffer.keys()]) if (fold(id)) changed.push(id);
+    } finally {
+      // Whatever was folded is published, even if something above went wrong.
+      commit(changed);
+    }
   }
 
   return {
@@ -171,6 +196,7 @@ export function createAcpStore(options: { schedule?: AcpFlushScheduler } = {}): 
     retire(id) {
       retiredIds.add(id);
       buffer.delete(id);
+      clearAcpRenderCache(id);
       if (!conversations.delete(id) && !summaryMap.has(id)) return;
       commit([id]);
     },
@@ -195,5 +221,6 @@ export function createAcpStore(options: { schedule?: AcpFlushScheduler } = {}): 
       cancelScheduled?.();
       cancelScheduled = null;
     },
+    foldFailures: () => failures,
   };
 }

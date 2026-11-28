@@ -1,8 +1,9 @@
-import { useId, useState } from 'react';
+import { memo, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../../components/Icon';
 import type { AcpSessionSnapshot } from '../../../types/acp';
 import { AcpToolCard } from './AcpToolCard';
+import { useViewMemory } from './acpRenderCache';
 import type { AcpToolItem, ToolGroupKindCount } from './timelineModel';
 import { toolKindView } from './acpView';
 import styles from './acp.module.css';
@@ -12,8 +13,10 @@ import styles from './acp.module.css';
  * within the same turn and subagent (R3). Starts collapsed as a single-line
  * summary of step count and tool-kind breakdown; expands on click or when find
  * / locate targets an item inside the group, preserving each original tool card.
+ * The reader's choice is kept in the view memory, so it survives the group leaving the
+ * rendered range.
  */
-export function AcpToolGroup({
+export const AcpToolGroup = memo(function AcpToolGroup({
   id,
   items,
   kindCounts,
@@ -44,8 +47,8 @@ export function AcpToolGroup({
 }) {
   const { t } = useTranslation();
   const bodyId = useId();
-  const [open, setOpen] = useState(forceOpen);
-  const [prevForceOpen, setPrevForceOpen] = useState(forceOpen);
+  const [open, setOpen] = useViewMemory(id, false);
+  const [prevForceOpen, setPrevForceOpen] = useState(false);
   if (forceOpen !== prevForceOpen) {
     setPrevForceOpen(forceOpen);
     if (forceOpen) setOpen(true);
@@ -67,7 +70,7 @@ export function AcpToolGroup({
       aria-expanded={open}
       aria-controls={bodyId}
       aria-label={toggleLabel}
-      onClick={() => setOpen((value) => !value)}
+      onClick={() => setOpen(!open)}
     >
       <Icon name="chevronRight" size={12} className={styles.disclosure} />
       <span className={styles.toolGroupBadge} aria-hidden="true"><Icon name="check" size={11} /></span>
@@ -102,4 +105,4 @@ export function AcpToolGroup({
       })}
     </div>}
   </div>;
-}
+});

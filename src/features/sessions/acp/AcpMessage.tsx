@@ -1,15 +1,18 @@
-import { lazy, Suspense, useMemo, useState } from 'react';
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../../components/Icon';
 import type { AcpMessage as Message } from '../../../types/acp';
 import { AcpCodeBlock } from './AcpCodeBlock';
 import { AcpCopyButton } from './AcpCopyButton';
 import { AcpUserImages } from './AcpImagePreview';
+import { useViewMemory } from './acpRenderCache';
 import { splitMatchRuns } from './acpSearch';
 import { visibleControls } from './acpView';
 import styles from './acp.module.css';
 
-const MarkdownView = lazy(() => import('../../../components/MarkdownView'));
+// Memoized: a reply re-renders its Markdown only when its text, the find query or the
+// code renderer changes, never because another item of the conversation did.
+const MarkdownView = lazy(() => import('../../../components/MarkdownView').then((module) => ({ default: memo(module.default) })));
 
 function renderRuns(text: string, query: string, caseSensitive: boolean) {
   const safe = visibleControls(text);
@@ -17,6 +20,30 @@ function renderRuns(text: string, query: string, caseSensitive: boolean) {
   return splitMatchRuns(safe, query, caseSensitive).map((run, index) => run.hit
     ? <mark key={index} className={styles.findMark}>{run.text}</mark>
     : run.text);
+}
+
+/** While a reply streams, its Markdown is parsed again at most this often (R13): a
+ *  chunk arrives every frame, and parsing and laying out the whole growing reply on each
+ *  one is the largest cost of a streaming frame. The last text always shows once the
+ *  interval has passed, and at once when the reply ends. */
+export const STREAMING_MARKDOWN_MS = 100;
+
+function useStreamingText(text: string, streaming: boolean): string {
+  const [shown, setShown] = useState(text);
+  const lastRef = useRef(0);
+  // Outside streaming the text shows as it is; keeping `shown` with it means a reply
+  // that starts streaming again continues from what is on screen.
+  if (!streaming && shown !== text) setShown(text);
+  useEffect(() => {
+    if (!streaming || text === shown) return;
+    const wait = Math.max(0, STREAMING_MARKDOWN_MS - (performance.now() - lastRef.current));
+    const timer = window.setTimeout(() => {
+      lastRef.current = performance.now();
+      setShown(text);
+    }, wait);
+    return () => window.clearTimeout(timer);
+  }, [text, streaming, shown]);
+  return streaming ? shown : text;
 }
 
 function containsQuery(text: string, query: string, caseSensitive: boolean): boolean {
@@ -33,9 +60,12 @@ function containsQuery(text: string, query: string, caseSensitive: boolean): boo
  * their data is gone), file labels and an optional refill-to-input action; a thought folds by default with a single-line preview and expands to
  * calm secondary text. Every message can be copied whole, exactly as it arrived.
  * An agent reply carries the agent's name only when it opens its round (`head`);
- * otherwise its copy action floats over its corner on hover or focus.
+ * otherwise its copy action floats over its corner on hover or focus. It re-renders
+ * only when its own message or props change, and a thought keeps the reader's open or
+ * folded choice in the view memory, so scrolling it out of the rendered range and back
+ * changes nothing.
  */
-export function AcpMessage({
+export const AcpMessage = memo(function AcpMessage({
   message,
   toolName,
   head = true,
@@ -66,8 +96,9 @@ export function AcpMessage({
   located?: boolean;
 }) {
   const { t } = useTranslation();
-  const [thoughtOpen, setThoughtOpen] = useState(forceOpen);
-  const [prevForceOpen, setPrevForceOpen] = useState(forceOpen);
+  const [thoughtOpen, setThoughtOpen] = useViewMemory(`thought:${message.id}`, false);
+  // Starts unforced, so a message that mounts already targeted opens too.
+  const [prevForceOpen, setPrevForceOpen] = useState(false);
   if (forceOpen !== prevForceOpen) {
     setPrevForceOpen(forceOpen);
     if (forceOpen) setThoughtOpen(true);
@@ -153,6 +184,7 @@ export function AcpMessage({
     </div>;
   }
 
+  const markdownText = useStreamingText(message.text, streaming);
   const markdownHighlight = useMemo(
     () => (searchQuery.trim() ? { query: searchQuery, caseSensitive: searchCase } : undefined),
     [searchQuery, searchCase],
@@ -182,9 +214,9 @@ export function AcpMessage({
         </div>
       : copy && <div className={styles.messageFloat}>{copy}</div>}
     <div className={styles.agentBody}>
-      {renderMarkdown && message.text ? <Suspense fallback={plain}><MarkdownView text={message.text} tone="terminal" codeBlock={renderCode} highlight={markdownHighlight} /></Suspense> : null}
+      {renderMarkdown && message.text ? <Suspense fallback={plain}><MarkdownView text={markdownText} tone="terminal" codeBlock={renderCode} highlight={markdownHighlight} /></Suspense> : null}
       {truncated}
       {cursor}
     </div>
   </div>;
-}
+});

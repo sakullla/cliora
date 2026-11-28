@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { memo, useContext, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { HighlightRun } from './acpHighlight';
 import { AcpCopyButton } from './AcpCopyButton';
+import { AcpSessionContext } from './acpImageCache';
+import { readHighlight, writeHighlight } from './acpRenderCache';
 import { splitMatchRuns } from './acpSearch';
 import { visibleControls } from './acpView';
 import styles from './acp.module.css';
@@ -18,9 +20,11 @@ function renderCodeText(text: string, query: string, caseSensitive: boolean) {
  * One fenced block of an agent reply: its language, a wrap toggle, a copy
  * button that copies the source exactly, and static highlighting for a fixed
  * set of languages, loaded only when a block needs it. Other languages and long
- * blocks stay plain text.
+ * blocks stay plain text. A highlighted block is remembered for its session, so a
+ * reply that scrolls back into the rendered range shows its colors at once, without
+ * highlighting again.
  */
-export function AcpCodeBlock({
+export const AcpCodeBlock = memo(function AcpCodeBlock({
   code,
   language,
   searchQuery = '',
@@ -32,18 +36,25 @@ export function AcpCodeBlock({
   searchCase?: boolean;
 }) {
   const { t } = useTranslation();
+  const sessionId = useContext(AcpSessionContext);
   const [wrap, setWrap] = useState(false);
   const [runs, setRuns] = useState<{ code: string; language: string | null; runs: HighlightRun[] } | null>(null);
+  const cached = language ? readHighlight(sessionId, code, language) : null;
   useEffect(() => {
-    if (!language) return;
+    if (!language || readHighlight(sessionId, code, language)) return;
     let live = true;
     void import('./acpHighlight')
       .then((module) => module.highlight(code, language))
-      .then((found) => { if (live && found) setRuns({ code, language, runs: found }); })
+      .then((found) => {
+        // Unmounted (scrolled away or the session closed): nothing is kept for it.
+        if (!found || !live) return;
+        writeHighlight(sessionId, code, language, found);
+        setRuns({ code, language, runs: found });
+      })
       .catch(() => {});
     return () => { live = false; };
-  }, [code, language]);
-  const current = runs && runs.code === code && runs.language === language ? runs.runs : null;
+  }, [sessionId, code, language]);
+  const current = cached ?? (runs && runs.code === code && runs.language === language ? runs.runs : null);
   const wrapLabel = t('sessions.acpCodeWrap');
   const wrapTitle = wrap ? t('sessions.acpCodeNoWrap') : wrapLabel;
   return <div className={styles.codeBlock} data-acp-code="" data-language={language ?? undefined} data-wrap={wrap || undefined}>
@@ -70,4 +81,4 @@ export function AcpCodeBlock({
         : renderCodeText(run.text, searchQuery, searchCase))
       : renderCodeText(code, searchQuery, searchCase)}</code></pre>
   </div>;
-}
+});

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { applyAcpEvent } from '../../src/features/sessions/acpSession.ts';
 import { createAcpStore } from '../../src/features/sessions/acpStore.ts';
+import { hasAcpRenderCache, readTimelineAnchor, readViewMemory, writeHighlight, writeTimelineAnchor, writeViewMemory } from '../../src/features/sessions/acp/acpRenderCache.ts';
 
 function snapshot(id, overrides = {}) {
   return {
@@ -166,6 +167,54 @@ test('a retired session is deleted and never comes back', () => {
   const quiet = store.summaries();
   store.retire('a7');
   assert.equal(store.summaries(), quiet);
+});
+
+test('a session whose events cannot be applied keeps its state and does not hold back the others', () => {
+  const frames = manualFrames();
+  const reports = [];
+  const store = createAcpStore({ schedule: frames.schedule, onFoldError: (id, error) => reports.push([id, String(error?.message ?? error)]) });
+  for (const id of ['a1', 'a2', 'a3']) store.register(snapshot(id));
+  const one = counter(store, 'a1');
+  const two = counter(store, 'a2');
+  const three = counter(store, 'a3');
+  const broken = store.get('a2');
+  store.push(chunk('a1', 2, 'm1', '第一'));
+  // A malformed event: reading it throws while it is applied.
+  store.push({ sessionId: 'a2', get seq() { throw new Error('坏事件'); }, kind: 'chunk' });
+  store.push(chunk('a3', 2, 'm1', '第三'));
+  frames.frame();
+  assert.equal(store.get('a1').snapshot.timeline[0].text, '第一');
+  assert.equal(store.get('a3').snapshot.timeline[0].text, '第三', '同一帧中排在后面的会话照常应用');
+  assert.equal(one.count, 1);
+  assert.equal(three.count, 1, '其他会话照常收到通知');
+  assert.equal(two.count, 0);
+  assert.equal(store.get('a2'), broken, '出错的会话保持原状态');
+  assert.deepEqual(reports, [['a2', '坏事件']], '错误被报告而不是吞掉');
+  assert.equal(store.foldFailures(), 1);
+  // Its next valid event applies normally.
+  store.push(chunk('a2', 2, 'm1', '恢复'));
+  frames.frame();
+  assert.equal(store.get('a2').snapshot.timeline[0].text, '恢复');
+  assert.equal(two.count, 1);
+  assert.equal(store.foldFailures(), 1);
+});
+
+test('retiring a session drops its view cache with it', () => {
+  const frames = manualFrames();
+  const store = createAcpStore({ schedule: frames.schedule });
+  store.register(snapshot('c1'));
+  store.register(snapshot('c2'));
+  for (const id of ['c1', 'c2']) {
+    writeViewMemory(id, 'process:p1', true);
+    writeHighlight(id, 'let a = 1;', 'ts', [{ text: 'let a = 1;', className: '' }]);
+    writeTimelineAnchor(id, { following: false, key: 'u1', offset: 12 });
+  }
+  store.retire('c1');
+  assert.equal(hasAcpRenderCache('c1'), false);
+  assert.equal(readViewMemory('c1', 'process:p1'), undefined);
+  assert.equal(readTimelineAnchor('c1'), null);
+  assert.equal(readViewMemory('c2', 'process:p1'), true, '其他会话的缓存保留');
+  assert.deepEqual(readTimelineAnchor('c2'), { following: false, key: 'u1', offset: 12 });
 });
 
 test('the default scheduler flushes without a frame', async () => {

@@ -1,7 +1,8 @@
-import { useId, useState } from 'react';
+import { memo, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../../components/Icon';
 import { AcpMessage } from './AcpMessage';
+import { useViewMemory } from './acpRenderCache';
 import type { AcpMessageItem } from './timelineModel';
 import { visibleControls } from './acpView';
 import styles from './acp.module.css';
@@ -20,9 +21,10 @@ function previewOf(items: readonly AcpMessageItem[]): string {
 /**
  * What the agent said before the first prompt (R4): folded into one line with a
  * preview of its first line, opened to read every message whole. Find and locate
- * open it when they target a message inside.
+ * open it when they target a message inside. The reader's choice is kept in the view
+ * memory, so it survives the group leaving the rendered range.
  */
-export function AcpStartupGroup({
+export const AcpStartupGroup = memo(function AcpStartupGroup({
   id,
   items,
   toolName,
@@ -45,8 +47,9 @@ export function AcpStartupGroup({
 }) {
   const { t } = useTranslation();
   const bodyId = useId();
-  const [open, setOpen] = useState(forceOpen);
-  const [prevForceOpen, setPrevForceOpen] = useState(forceOpen);
+  const [open, setOpen] = useViewMemory(id, false);
+  // Starts unforced, so a group that mounts already targeted opens too.
+  const [prevForceOpen, setPrevForceOpen] = useState(false);
   if (forceOpen !== prevForceOpen) {
     setPrevForceOpen(forceOpen);
     if (forceOpen) setOpen(true);
@@ -54,7 +57,7 @@ export function AcpStartupGroup({
   const preview = previewOf(items);
 
   return <section className={styles.startup} data-acp-startup={id} data-open={open || undefined} aria-label={t('sessions.acpStartupTitle')}>
-    <button type="button" className={styles.startupToggle} aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen((value) => !value)}>
+    <button type="button" className={styles.startupToggle} aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen(!open)}>
       <Icon name="chevronRight" size={12} className={styles.disclosure} />
       <Icon name="info" size={12} />
       <span className={styles.startupTitle}>{t('sessions.acpStartupTitle')}</span>
@@ -80,4 +83,4 @@ export function AcpStartupGroup({
       })}
     </div>}
   </section>;
-}
+});

@@ -1,10 +1,11 @@
-import { useId, useState } from 'react';
+import { memo, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../../components/Icon';
 import type { AcpSessionSnapshot, AcpToolCall } from '../../../types/acp';
 import { acpCardAnswerable } from '../acpSession';
 import { AcpPermissionCard } from './AcpPermissionCard';
 import { AcpToolBody, renderRuns, toolSummaryOf } from './AcpToolBody';
+import { useViewMemory } from './acpRenderCache';
 import { toolKindOf, toolKindView, toolStatusIcon, toolStatusKey } from './acpView';
 import styles from './acp.module.css';
 
@@ -14,9 +15,10 @@ import styles from './acp.module.css';
  * running or failed one stays open, and the reader may fold or open any of them.
  * An authorization request is drawn on the call that asked, outside the fold.
  * Inside a turn's work process the same call reads as a compact step instead
- * (AcpStep); both open to the same AcpToolBody.
+ * (AcpStep); both open to the same AcpToolBody. The reader's choice is kept in the
+ * view memory, so it survives the card leaving the rendered range.
  */
-export function AcpToolCard({
+export const AcpToolCard = memo(function AcpToolCard({
   call,
   snapshot,
   busy,
@@ -44,8 +46,9 @@ export function AcpToolCard({
 }) {
   const { t } = useTranslation();
   const bodyId = useId();
-  const [override, setOverride] = useState<boolean | null>(forceOpen ? true : null);
-  const [prevForceOpen, setPrevForceOpen] = useState(forceOpen);
+  const [override, setOverride] = useViewMemory<boolean | null>(`card:${call.id}`, null);
+  // Starts unforced, so a card that mounts already targeted opens too.
+  const [prevForceOpen, setPrevForceOpen] = useState(false);
   if (forceOpen !== prevForceOpen) {
     setPrevForceOpen(forceOpen);
     if (forceOpen) setOverride(true);
@@ -90,4 +93,4 @@ export function AcpToolCard({
     />}
     {request && answerable && <AcpPermissionCard title={title} request={request} busy={busy} onAnswer={onAnswer} />}
   </div>;
-}
+});

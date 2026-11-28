@@ -416,9 +416,129 @@ export function buildSegments(timeline: readonly AcpTimelineItem[], options: Seg
   return segments;
 }
 
+/** A step's folded summary (its first location or diff path), unless the title already
+ *  says it: an edit titled with its path, or a read titled with the file it read, shows
+ *  the path once. */
+export function stepSummaryShown(call: Pick<AcpToolCall, 'title' | 'callId' | 'locations' | 'content'>, summary: string): string {
+  if (!summary) return '';
+  const title = call.title || call.callId;
+  if (title.includes(summary)) return '';
+  const location = call.locations[0];
+  const diff = call.content.find((content) => content.type === 'diff');
+  const path = location?.path ?? (diff && diff.type === 'diff' ? diff.path : '');
+  return path && title.includes(path) ? '' : summary;
+}
+
 /** The key the view renders a segment under. */
 export function segmentKey(segment: TimelineSegment): string {
   return segment.kind === 'item' ? segment.item.id : segment.id;
+}
+
+function sameItems(a: readonly AcpTimelineItem[], b: readonly AcpTimelineItem[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) if (a[index] !== b[index]) return false;
+  return true;
+}
+
+function sameActivity(a: ProcessActivity | null, b: ProcessActivity | null): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.kind !== b.kind) return false;
+  return a.kind !== 'running' || (b.kind === 'running' && a.title === b.title);
+}
+
+/** Two segments render the same: same kind and key, the very same item objects and the
+ *  same turn state. Counts and summaries derive from the items, so they match too. */
+export function sameSegment(a: TimelineSegment, b: TimelineSegment): boolean {
+  if (a === b) return true;
+  switch (a.kind) {
+    case 'item': return b.kind === 'item' && a.item === b.item;
+    case 'toolGroup': return b.kind === 'toolGroup' && a.id === b.id && a.turnId === b.turnId && a.subagent === b.subagent && sameItems(a.items, b.items);
+    case 'startup': return b.kind === 'startup' && a.id === b.id && sameItems(a.items, b.items);
+    case 'process': return b.kind === 'process' && a.id === b.id && a.turnId === b.turnId && a.ended === b.ended
+      && a.interrupted === b.interrupted && a.reason === b.reason && a.tail === b.tail
+      && sameActivity(a.activity, b.activity) && sameItems(a.items, b.items);
+    default: return false;
+  }
+}
+
+/** Builds the segments of one growing timeline, reusing what has not changed. */
+export type SegmentBuilder = (timeline: readonly AcpTimelineItem[], options?: SegmentOptions) => TimelineSegment[];
+
+/**
+ * An incremental `buildSegments` for one view (R13). The result always equals
+ * `buildSegments(timeline, options)`, but:
+ *
+ * - everything before the last round's prompt (when an earlier prompt exists) depends
+ *   only on those items and the pending requests, never on a running turn, so it is
+ *   rebuilt only when one of those item objects changed. A streamed chunk or a merged
+ *   tool update in the last round recomputes that round alone.
+ * - every segment that renders the same as before (same items by reference, same turn
+ *   state) is the previous object, and an unchanged result is the previous array, so
+ *   memoized rows and derived maps skip their work.
+ *
+ * The host replaces item objects only when they change, and a snapshot (a trim, a
+ * replay) brings new objects, which simply misses the cache.
+ */
+export function createSegmentBuilder(): SegmentBuilder {
+  let lastTimeline: readonly AcpTimelineItem[] | null = null;
+  let lastPendingKey = '';
+  let lastTurnOpen = false;
+  let result: TimelineSegment[] = [];
+  let prefix: { split: number; items: readonly AcpTimelineItem[]; pendingKey: string; segments: TimelineSegment[] } | null = null;
+
+  function prefixValid(timeline: readonly AcpTimelineItem[], split: number, pendingKey: string): boolean {
+    if (!prefix || prefix.split !== split || prefix.pendingKey !== pendingKey) return false;
+    const items = prefix.items;
+    for (let index = 0; index < split; index += 1) if (timeline[index] !== items[index]) return false;
+    return true;
+  }
+
+  return (timeline, options = {}) => {
+    const pendingList = [...(options.pending ?? [])];
+    const pendingKey = pendingList.join('\u0000');
+    const turnOpen = options.turnOpen ?? false;
+    if (timeline === lastTimeline && pendingKey === lastPendingKey && turnOpen === lastTurnOpen) return result;
+
+    let split = -1;
+    for (let index = timeline.length - 1; index >= 0; index -= 1) {
+      if (!startsRound(timeline[index])) continue;
+      split = index;
+      break;
+    }
+    let earlier = false;
+    for (let index = split - 1; index >= 0; index -= 1) {
+      if (startsRound(timeline[index])) { earlier = true; break; }
+    }
+
+    let next: TimelineSegment[];
+    if (split > 0 && earlier) {
+      if (!prefixValid(timeline, split, pendingKey)) {
+        const items = timeline.slice(0, split);
+        prefix = { split, items, pendingKey, segments: buildSegments(items, { turnOpen: false, pending: pendingList }) };
+      }
+      next = [...prefix!.segments, ...buildSegments(timeline.slice(split), { turnOpen, pending: pendingList })];
+    } else {
+      prefix = null;
+      next = buildSegments(timeline, { turnOpen, pending: pendingList });
+    }
+
+    const previous = new Map<string, TimelineSegment>();
+    for (const segment of result) previous.set(segmentKey(segment), segment);
+    let unchanged = next.length === result.length;
+    for (let index = 0; index < next.length; index += 1) {
+      const old = previous.get(segmentKey(next[index]));
+      if (old && sameSegment(old, next[index])) next[index] = old;
+      if (next[index] !== result[index]) unchanged = false;
+    }
+    // The cached prefix keeps the reused objects, so the next hit needs no reconciling.
+    if (prefix) prefix.segments = next.slice(0, prefix.segments.length);
+    lastTimeline = timeline;
+    lastPendingKey = pendingKey;
+    lastTurnOpen = turnOpen;
+    if (!unchanged) result = next;
+    return result;
+  };
 }
 
 function agentContent(segment: TimelineSegment): boolean {

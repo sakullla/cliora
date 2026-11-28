@@ -317,7 +317,9 @@
    paused line and "copy all" stay in view, and the timeline above keeps its room
    (at 720px a full list still leaves most of the pane to the conversation). */
 .queue > .queueList { max-height: min(132px, 18vh); overflow-y: auto; overscroll-behavior: contain; }
-.unsent > .queueList { max-height: min(220px, 16vh); overflow-y: auto; overscroll-behavior: contain; padding-right: var(--space-0_5); }
+/* An ended conversation's unsent list grows with the window: a tall one shows up to
+   260px of it, while at 720px it stops where the timeline would drop below 160px. */
+.unsent > .queueList { max-height: min(260px, max(16vh, 100vh - 590px)); overflow-y: auto; overscroll-behavior: contain; padding-right: var(--space-0_5); }
 .queueItem { display: flex; align-items: center; gap: var(--space-1); min-width: 0; color: var(--term-text-2); font-size: var(--fs-micro); }
 .queueItem[data-immediate] { color: var(--term-fg); }
 .queueGlyph { flex: none; color: var(--term-text-3); }

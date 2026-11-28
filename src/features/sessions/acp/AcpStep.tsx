@@ -1,9 +1,10 @@
-import { useId, useState } from 'react';
+import { memo, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon, type IconName } from '../../../components/Icon';
 import type { AcpSessionSnapshot, AcpToolCall } from '../../../types/acp';
 import { AcpToolBody, renderRuns, toolSummaryOf } from './AcpToolBody';
-import type { ProcessItem } from './timelineModel';
+import { stepSummaryShown, type ProcessItem } from './timelineModel';
+import { useViewMemory } from './acpRenderCache';
 import { toolKindOf, toolKindView, toolStatusKey } from './acpView';
 import styles from './acp.module.css';
 
@@ -33,9 +34,10 @@ function oneLine(text: string): string {
  * (plain text, never signed). A completed call shows only its check, with the word
  * for assistive tech; a failed, running or interrupted one says so. Clicking opens
  * the details in place: the tool body, the full thought or the full text. A quiet
- * notice reads as it does in the timeline.
+ * notice reads as it does in the timeline. The reader's choice is kept in the view
+ * memory, so it survives the step leaving the rendered range.
  */
-export function AcpStep({
+export const AcpStep = memo(function AcpStep({
   item,
   snapshot,
   latest = false,
@@ -66,8 +68,9 @@ export function AcpStep({
 }) {
   const { t } = useTranslation();
   const bodyId = useId();
-  const [override, setOverride] = useState<boolean | null>(forceOpen ? true : null);
-  const [prevForceOpen, setPrevForceOpen] = useState(forceOpen);
+  const [override, setOverride] = useViewMemory<boolean | null>(`step:${item.id}`, null);
+  // Starts unforced, so a step that mounts already targeted opens too.
+  const [prevForceOpen, setPrevForceOpen] = useState(false);
   if (forceOpen !== prevForceOpen) {
     setPrevForceOpen(forceOpen);
     if (forceOpen) setOverride(true);
@@ -146,7 +149,7 @@ export function AcpStep({
   const status: StepStatus = ended && (call.status === 'pending' || call.status === 'in_progress') ? 'interrupted' : call.status;
   const open = override ?? status === 'failed';
   const title = call.title || call.callId;
-  const summary = toolSummaryOf(call);
+  const summary = stepSummaryShown(call, toolSummaryOf(call));
   const statusWord = status === 'interrupted' ? t('sessions.acpStepInterrupted') : t(toolStatusKey(call.status));
   return <div
     className={styles.step}
@@ -162,7 +165,7 @@ export function AcpStep({
     <button type="button" className={styles.stepToggle} aria-expanded={open} aria-controls={bodyId} title={title} onClick={() => setOverride(!open)}>
       <span className={styles.stepIcon} role="img" aria-label={t(view.key)}><Icon name={view.icon} size={12} /></span>
       <span className={styles.stepTitle} data-mono={kind === 'execute' || undefined}>{renderRuns(title, searchQuery, searchCase)}</span>
-      {!open && summary && summary !== title && <span className={styles.stepSummary}>{renderRuns(summary, searchQuery, searchCase)}</span>}
+      {!open && summary && <span className={styles.stepSummary}>{renderRuns(summary, searchQuery, searchCase)}</span>}
     </button>
     {status === 'completed'
       ? <span className={styles.stepStatus} data-status={status} role="img" aria-label={statusWord}><Icon name="check" size={12} /></span>
@@ -180,4 +183,4 @@ export function AcpStep({
       searchCase={searchCase}
     />}
   </div>;
-}
+});

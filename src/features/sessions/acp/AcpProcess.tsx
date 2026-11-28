@@ -1,8 +1,9 @@
-import { useId, useState } from 'react';
+import { memo, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../../components/Icon';
 import type { AcpSessionSnapshot } from '../../../types/acp';
 import { AcpStep } from './AcpStep';
+import { useViewMemory } from './acpRenderCache';
 import type { ProcessActivity, TimelineSegment } from './timelineModel';
 import { toolKindView, visibleControls } from './acpView';
 import styles from './acp.module.css';
@@ -28,13 +29,13 @@ function activityKey(activity: ProcessActivity): string {
  * with a line that says what the agent is doing. Once the turn ends it folds into a
  * single summary line (step counts by kind, failures, changed files), with failed
  * steps still listed under it; a stopped or disconnected turn stays open. The reader's
- * own choice to open or fold a process is kept for this view in `memory`, and find or
- * locate opens it (and the step) when they target something inside.
+ * own choice to open or fold a process (and its earlier steps) is kept in the session's
+ * view memory, so it survives the process leaving the rendered range or a hidden pane;
+ * find or locate opens it (and the step) when they target something inside.
  */
-export function AcpProcess({
+export const AcpProcess = memo(function AcpProcess({
   segment,
   snapshot,
-  memory,
   streamingId = null,
   onKillTerminal,
   onOpenPath,
@@ -46,8 +47,6 @@ export function AcpProcess({
 }: {
   segment: ProcessSegment;
   snapshot: AcpSessionSnapshot;
-  /** The reader's open/fold choice per process id, kept while this view lives. */
-  memory: Map<string, boolean>;
   /** The item the agent is streaming into, if any. */
   streamingId?: string | null;
   onKillTerminal: (terminalId: string) => Promise<void>;
@@ -60,16 +59,14 @@ export function AcpProcess({
 }) {
   const { t } = useTranslation();
   const bodyId = useId();
-  const [choice, setChoice] = useState<boolean | null>(() => memory.get(segment.id) ?? null);
-  const [prevForceOpen, setPrevForceOpen] = useState(forceOpen);
+  const [choice, setChoice] = useViewMemory<boolean | null>(segment.id, null);
+  // Starts unforced, so a process that mounts already targeted opens too.
+  const [prevForceOpen, setPrevForceOpen] = useState(false);
   if (forceOpen !== prevForceOpen) {
     setPrevForceOpen(forceOpen);
-    if (forceOpen) {
-      setChoice(true);
-      memory.set(segment.id, true);
-    }
+    if (forceOpen) setChoice(true);
   }
-  const [earlierOpen, setEarlierOpen] = useState(false);
+  const [earlierOpen, setEarlierOpen] = useViewMemory(`earlier:${segment.id}`, false);
 
   const { items, summary, ended, interrupted, activity } = segment;
   const open = choice ?? (!ended || interrupted);
@@ -82,9 +79,7 @@ export function AcpProcess({
   const failedSteps = items.filter((item) => item.kind === 'tool' && item.status === 'failed');
 
   function toggle() {
-    const next = !open;
-    setChoice(next);
-    memory.set(segment.id, next);
+    setChoice(!open);
   }
 
   function step(item: (typeof items)[number]) {
@@ -143,4 +138,4 @@ export function AcpProcess({
           {failedSteps.map(step)}
         </div>}
   </section>;
-}
+});
