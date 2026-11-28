@@ -339,3 +339,127 @@ test('a user message keeps its attachment labels and a chunk-created message has
   const replied = applyAcpEvent(sent, chunk(3, 'm9', '好的'));
   assert.equal(replied.snapshot.timeline[1].attachments, undefined);
 });
+
+/** The fold before the id index: a linear search per event and a copy per event. */
+function referenceFold(current, event) {
+  if (event.kind === 'snapshot') return { snapshot: event.snapshot };
+  if (!current || event.seq <= current.snapshot.seq) return current;
+  const snapshot = current.snapshot;
+  const timeline = snapshot.timeline;
+  const base = { ...snapshot, seq: event.seq };
+  const upsert = (item) => {
+    const index = timeline.findIndex((entry) => entry.id === item.id);
+    if (index < 0) return [...timeline, item];
+    const next = [...timeline];
+    next[index] = item;
+    return next;
+  };
+  if (event.kind === 'chunk') {
+    const index = timeline.findIndex((entry) => entry.id === event.messageId);
+    if (index < 0) {
+      return { snapshot: { ...base, timeline: [...timeline, {
+        kind: 'message', id: event.messageId, role: event.role, text: event.text, truncated: !!event.truncated, turnId: event.turnId, subagent: event.subagent ?? null,
+      }] } };
+    }
+    const found = timeline[index];
+    if (found.kind !== 'message') return { snapshot: { ...base, timeline } };
+    const next = [...timeline];
+    next[index] = { ...found, text: found.text + event.text, truncated: found.truncated || !!event.truncated };
+    return { snapshot: { ...base, timeline: next } };
+  }
+  if (event.kind === 'tool') return { snapshot: { ...base, timeline: upsert({ kind: 'tool', ...event.call }) } };
+  if (event.kind === 'item') return { snapshot: { ...base, timeline: upsert(event.item) } };
+  return current;
+}
+
+/** A deterministic stream mixing chunks, tools, items, repeated and late sequence
+ *  numbers, and a snapshot that trims the timeline part way. */
+function stream(seed, count) {
+  let state = seed;
+  const random = (n) => { state = (state * 1103515245 + 12345) % 2147483648; return state % n; };
+  const events = [];
+  let seq = 1;
+  for (let i = 0; i < count; i += 1) {
+    const roll = random(20);
+    const at = roll === 0 ? Math.max(1, seq - random(4)) : ++seq;
+    if (roll === 1) {
+      const kept = [{ kind: 'message', id: `m${random(6)}`, role: 'agent', text: '保留', truncated: false, turnId: 'turn-1', subagent: null }];
+      events.push({ sessionId: 'a1', seq: at, kind: 'snapshot', snapshot: snapshot({ seq: at, timeline: kept }) });
+    } else if (roll < 12) {
+      events.push(chunk(at, `m${random(6)}`, `t${i}`, { truncated: random(9) === 0 }));
+    } else if (roll < 17) {
+      events.push({ sessionId: 'a1', seq: at, kind: 'tool', call: tool(`c${random(5)}`, { status: random(2) ? 'completed' : 'in_progress', title: `第${i}步` }) });
+    } else {
+      // An item that reuses a message id cannot take a chunk, exactly as before.
+      events.push({ sessionId: 'a1', seq: at, kind: 'item', item: { kind: 'notice', id: random(3) ? `n${random(3)}` : 'm5', level: 'info', code: '', text: `n${i}`, turnId: 'turn-1' } });
+    }
+  }
+  return events;
+}
+
+test('the indexed fold matches the linear fold for chunks, tools, items, repeats and trims', () => {
+  for (const seed of [1, 7, 42, 2024, 99991]) {
+    const events = stream(seed, 400);
+    let expected = start();
+    let actual = start();
+    for (const event of events) {
+      expected = referenceFold(expected, event);
+      actual = applyAcpEvent(actual, event) ?? actual;
+      assert.deepEqual(actual.snapshot, expected.snapshot, `seed ${seed} seq ${event.seq} ${event.kind}`);
+    }
+  }
+});
+
+test('one batch folds exactly like the same events one by one, and leaves its input untouched', () => {
+  for (const seed of [3, 11, 77, 512]) {
+    const events = stream(seed, 300);
+    const initial = applyAcpEvents(start(), [chunk(2, 'm0', '起点'), { sessionId: 'a1', seq: 3, kind: 'tool', call: tool('c0') }]);
+    const before = JSON.stringify(initial);
+    let oneByOne = initial;
+    for (const event of events) oneByOne = applyAcpEvent(oneByOne, event) ?? oneByOne;
+    // Split into frames of different sizes, as the store would.
+    let batched = initial;
+    for (let at = 0; at < events.length; at += 1 + (at % 13)) batched = applyAcpEvents(batched, events.slice(at, at + 1 + (at % 13)));
+    const whole = applyAcpEvents(initial, events);
+    assert.deepEqual(batched.snapshot, oneByOne.snapshot, `seed ${seed} 分帧`);
+    assert.deepEqual(whole.snapshot, oneByOne.snapshot, `seed ${seed} 一帧`);
+    assert.equal(JSON.stringify(initial), before, '批处理不改动传入的会话');
+  }
+  // A batch of only repeated events changes nothing.
+  const state = applyAcpEvent(start(), chunk(2, 'm1', 'x'));
+  assert.equal(applyAcpEvents(state, [chunk(2, 'm1', 'x'), chunk(1, 'm1', 'y')]), state);
+});
+
+test('timelines derived from one base keep their own positions', () => {
+  const base = applyAcpEvents(start(), [chunk(2, 'm1', 'a'), chunk(3, 'm2', 'b')]);
+  const left = applyAcpEvent(base, chunk(4, 'x', 'L'));
+  const right = applyAcpEvent(base, chunk(4, 'y', 'R'));
+  const leftAgain = applyAcpEvent(left, chunk(5, 'y', 'L2'));
+  const rightAgain = applyAcpEvent(right, chunk(5, 'x', 'R2'));
+  const rightMore = applyAcpEvent(rightAgain, chunk(6, 'y', '+'));
+  const replaced = applyAcpEvent(base, chunk(4, 'm1', '!'));
+  const grown = applyAcpEvent(replaced, chunk(5, 'z', 'Z'));
+  assert.deepEqual(ids(base), ['message:m1', 'message:m2']);
+  assert.deepEqual(ids(leftAgain), ['message:m1', 'message:m2', 'message:x', 'message:y']);
+  assert.deepEqual(ids(rightMore), ['message:m1', 'message:m2', 'message:y', 'message:x']);
+  assert.equal(rightMore.snapshot.timeline[2].text, 'R+');
+  assert.deepEqual(ids(grown), ['message:m1', 'message:m2', 'message:z']);
+  assert.equal(grown.snapshot.timeline[0].text, 'a!');
+  // The base itself still reads its own two messages.
+  assert.equal(applyAcpEvent(base, chunk(9, 'm2', '?')).snapshot.timeline[1].text, 'b?');
+  assert.equal(applyAcpEvent(base, chunk(9, 'x', '?')).snapshot.timeline.length, 3);
+});
+
+test('a snapshot rebuilds the positions from its own timeline', () => {
+  let state = applyAcpEvents(start(), [chunk(2, 'm1', 'a'), chunk(3, 'm2', 'b'), chunk(4, 'm3', 'c')]);
+  // The host trimmed the head: m3 now stands first, m1 is gone.
+  const trimmed = [
+    { kind: 'message', id: 'm3', role: 'agent', text: 'c', truncated: false, turnId: 'turn-1', subagent: null },
+    { kind: 'message', id: 'm2', role: 'agent', text: 'b', truncated: false, turnId: 'turn-1', subagent: null },
+  ];
+  state = applyAcpEvent(state, { sessionId: 'a1', seq: 5, kind: 'snapshot', snapshot: snapshot({ seq: 5, timeline: trimmed }) });
+  state = applyAcpEvents(state, [chunk(6, 'm3', '3'), chunk(7, 'm2', '2'), chunk(8, 'm1', '1')]);
+  assert.deepEqual(state.snapshot.timeline.map((item) => `${item.id}=${item.text}`), ['m3=c3', 'm2=b2', 'm1=1']);
+  assert.equal(trimmed[0].text, 'c', '快照中的条目不被就地修改');
+  assert.equal(trimmed.length, 2, '快照中的时间线不被就地追加');
+});
