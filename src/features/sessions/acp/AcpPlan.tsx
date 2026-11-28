@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../../components/Icon';
 import type { AcpPlanEntry } from '../../../types/acp';
@@ -20,12 +20,19 @@ export function AcpPlan({ entries }: { entries: AcpPlanEntry[] }) {
   const finished = entries.length > 0 && done === entries.length;
   const current = entries.find((entry) => entry.status === 'in_progress') ?? null;
   const [open, setOpen] = useState(!finished);
+  const detailsRef = useRef<HTMLDetailsElement>(null);
   // What the plan says, not which array carries it.
   const signature = useMemo(() => JSON.stringify(entries.map((entry) => [entry.status, entry.content])), [entries]);
-  // Each change of the plan decides afresh: finished folds, unfinished opens.
-  useEffect(() => { setOpen(!finished); }, [signature, finished]);
+  // Each change of the plan decides afresh: finished folds, unfinished opens. The
+  // reader's own fold reaches state only through a later toggle event, so state may
+  // still read the old value here; set the element too, or an update that lands in
+  // that gap would leave it folded.
+  useEffect(() => {
+    setOpen(!finished);
+    if (detailsRef.current) detailsRef.current.open = !finished;
+  }, [signature, finished]);
   if (!entries.length) return null;
-  return <details className={styles.plan} open={open} data-acp-plan="" data-finished={finished || undefined} onToggle={(event) => setOpen(event.currentTarget.open)}>
+  return <details ref={detailsRef} className={styles.plan} open={open} data-acp-plan="" data-finished={finished || undefined} onToggle={(event) => setOpen(event.currentTarget.open)}>
     <summary className={styles.planHead}>
       <Icon name="chevronRight" size={12} className={styles.disclosure} />
       <Icon name="list" size={12} />
