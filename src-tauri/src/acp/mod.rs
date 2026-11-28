@@ -73,9 +73,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, OnceLock};
-use std::time::Duration;
-#[cfg(test)]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -217,6 +215,10 @@ pub struct AcpStart {
     /// A session mode to switch to once the session exists: the entry's
     /// declared YOLO mode, for a YOLO launch only.
     pub yolo_mode: Option<String>,
+}
+
+pub(crate) fn remote_project(project_id: Option<&str>) -> bool {
+    project_id.is_some_and(|id| id.starts_with("remote:"))
 }
 
 impl AcpStart {
@@ -531,6 +533,8 @@ pub(crate) struct Session {
 }
 
 impl Session {
+    fn remote(&self) -> bool { remote_project(self.project_id.as_deref()) }
+
     fn new(
         id: String,
         spec: &AcpStart,
@@ -784,11 +788,24 @@ impl Session {
     /// One request with an explicit deadline, keeping the agent's error code.
     fn request_raw(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, RpcError> {
         let (id, receiver) = self.send_request(method, params).map_err(RpcError::local)?;
-        match receiver.recv_timeout(timeout) {
-            Ok(result) => result,
-            Err(_) => {
-                guard(&self.requests).remove(&id);
-                Err(RpcError::local(format!("等待 agent 回应 {method} 超时，请确认该 CLI 支持 ACP")))
+        let context = if self.remote() { crate::remote::operations::current() } else { None };
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let wait = if let Some(ctx) = &context {
+                if let Err(error) = ctx.check() {
+                    guard(&self.requests).remove(&id);
+                    return Err(RpcError::local(error.to_string()));
+                }
+                remaining.min(Duration::from_millis(100))
+            } else { remaining };
+            match receiver.recv_timeout(wait) {
+                Ok(result) => return result,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) if Instant::now() < deadline => continue,
+                Err(_) => {
+                    guard(&self.requests).remove(&id);
+                    return Err(RpcError::local(format!("等待 agent 回应 {method} 超时，请确认该 CLI 支持 ACP")));
+                }
             }
         }
     }
@@ -884,6 +901,10 @@ impl Session {
     /// approval card or a wait for exit must never stall the protocol reader.
     /// Each request is answered exactly once, with its result or an error.
     fn serve_client(self: &Arc<Self>, method: &str, id: Value, params: Value) {
+        if self.remote() {
+            self.answer_error(&id, -32601, "远程 ACP 会话不提供本机文件和终端能力");
+            return;
+        }
         let subagent = match self.scope_of(&params) {
             Scope::Root => None,
             Scope::Child(child) => Some(child),
@@ -998,7 +1019,13 @@ impl Session {
         // YOLO picks an allow-once option at once and records the decision.
         // A request without one (only allow-always, only rejections) still
         // reaches the user: an "always" rule could outlive this session.
-        if self.yolo {
+        let user_question = crate::adapters::Registry::builtins().get(&self.tool_id)
+            .is_some_and(|adapter| adapter.acp_user_question(&tool));
+        if user_question {
+            // The title and wire options already carry everything the user needs.
+            if let Some(call) = tool.as_object_mut() { call.remove("rawInput"); }
+        }
+        if self.yolo && !user_question {
             if let Some(option) = Self::yolo_option(&options).cloned() {
                 let call = {
                     let _order = self.order();
@@ -1023,6 +1050,7 @@ impl Session {
                     timeline.set_permission(
                         &call.id,
                         Some(AcpPermissionRequest {
+                            user_question,
                             request_id: request_id.clone(),
                             turn_id: turn_id.clone(),
                             options: options.clone(),
@@ -1054,7 +1082,7 @@ impl Session {
     fn withdraw(&self, pending: PendingPermission) {
         let _ = self.answer_permission(&pending.id, json!({ "outcome": "cancelled" }));
         let _order = self.order();
-        let call = guard(&self.timeline).set_permission(&pending.item_id, None);
+        let call = guard(&self.timeline).finish_permission(&pending.item_id, None);
         if let Some(call) = call {
             self.emit_update(AcpUpdate::Tool { call });
         }
@@ -1537,9 +1565,10 @@ impl Session {
             None => json!({ "outcome": "cancelled" }),
         };
         let written = self.answer_permission(&pending.id, outcome);
+        let chosen = option_id.filter(|_| written.is_ok()).and_then(|id| pending.options.iter().find(|o| o.option_id == id));
         {
             let _order = self.order();
-            let call = guard(&self.timeline).set_permission(&pending.item_id, None);
+            let call = guard(&self.timeline).finish_permission(&pending.item_id, chosen.map(|o| o.name.as_str()));
             if let Some(call) = call {
                 self.emit_update(AcpUpdate::Tool { call });
             }
@@ -1672,7 +1701,7 @@ impl Session {
         {
             let mut timeline = guard(&self.timeline);
             for pending in &dropped {
-                timeline.set_permission(&pending.item_id, None);
+                timeline.finish_permission(&pending.item_id, None);
             }
         }
         let waiting: Vec<u64> = guard(&self.requests).keys().copied().collect();
@@ -1757,6 +1786,17 @@ pub fn list() -> Vec<AcpSessionSnapshot> {
     snapshots
 }
 
+/// Route repository operations by live host identity without cloning a transcript.
+pub(crate) fn local_directory(id: &str) -> Result<Option<PathBuf>, String> {
+    let session = lookup(id)?;
+    Ok((!session.remote()).then(|| session.directory.clone()))
+}
+
+pub(crate) fn running_local_directories() -> Vec<(String, PathBuf)> {
+    sessions().values().filter(|s| !s.remote() && !matches!(*guard(&s.state), "failed" | "closed"))
+        .map(|s| (s.id.clone(), s.directory.clone())).collect()
+}
+
 pub fn snapshot(id: &str) -> Result<AcpSessionSnapshot, String> {
     Ok(lookup(id)?.snapshot())
 }
@@ -1802,7 +1842,9 @@ pub fn respond_elicitation(id: &str, request_id: &str, action: &str, content: Op
 
 /// Files inside the session directory, as relative paths, for `@` references.
 pub fn list_files(id: &str, query: &str, limit: usize) -> Result<AcpFileList, String> {
-    lookup(id)?.list_files(query, limit)
+    let session = lookup(id)?;
+    if session.remote() { return Err("远程 ACP 不索引本机文件".into()); }
+    session.list_files(query, limit)
 }
 
 /// Read an image file the user dropped on the composer, for its preview and an
@@ -1871,17 +1913,18 @@ pub fn set_config(id: &str, config_id: &str, value: &Value) -> Result<(), String
 }
 
 pub fn close(id: &str) -> Result<(), String> {
-    let session = {
-        let mut map = sessions();
-        map.remove(id).ok_or("ACP 会话不存在或已结束")?
-    };
-    session.exited(None);
+    let session = sessions().remove(id);
+    if let Some(session) = session {
+        crate::session_baseline::forget(id);
+        session.exited(None);
+    }
     Ok(())
 }
 
 pub fn shutdown() {
     let all: Vec<Arc<Session>> = sessions().drain().map(|(_, session)| session).collect();
     for session in all {
+        crate::session_baseline::forget(&session.id);
         session.exited(None);
     }
 }
@@ -1891,18 +1934,18 @@ fn lookup(id: &str) -> Result<Arc<Session>, String> {
 }
 
 /// Start a real conversation: spawn the agent, then run the shared handshake.
-pub fn start(spec: AcpStart, credential: Option<(String, String)>) -> Result<AcpSessionSnapshot, String> {
+pub(crate) fn start(spec: AcpStart, credential: Option<(String, String)>, restored: Option<Option<crate::session_baseline::SessionBaseline>>) -> Result<AcpSessionSnapshot, String> {
     let mut spec = spec;
     spec.credential = credential;
     let (io, secret_session) = spawn_io(&spec)?;
-    open_with(spec, io, Some(secret_session))
+    open_with(spec, io, secret_session, restored)
 }
 
 /// Start from an already connected stream pair: the tests use this, and the
 /// process start uses it once the child owns the pipes and its broker session.
 #[cfg(test)]
 pub(crate) fn open(spec: AcpStart, io: AcpIo) -> Result<AcpSessionSnapshot, String> {
-    open_with(spec, io, None)
+    open_with(spec, io, None, None)
 }
 
 /// The one start path. A session that cannot finish its handshake — or whose
@@ -1912,11 +1955,18 @@ fn open_with(
     spec: AcpStart,
     io: AcpIo,
     secret_session: Option<crate::secrets::session::LocalSession>,
+    restored: Option<Option<crate::session_baseline::SessionBaseline>>,
 ) -> Result<AcpSessionSnapshot, String> {
-    if !spec.directory.is_dir() {
+    if !remote_project(spec.project_id.as_deref()) && !spec.directory.is_dir() {
         return Err("工作目录不存在，无法在选定的目录创建 ACP 会话".into());
     }
     let id = uuid::Uuid::new_v4().to_string();
+    if !remote_project(spec.project_id.as_deref()) {
+        match restored {
+            Some(original) => crate::session_baseline::restore(&id, original),
+            None => crate::session_baseline::capture(&id, &spec.directory),
+        }
+    }
     let AcpIo { reader, writer, diagnostics, shutdown } = io;
     let session = Arc::new(Session::new(id.clone(), &spec, writer, shutdown, secret_session));
     sessions().insert(id.clone(), Arc::clone(&session));
@@ -1934,7 +1984,7 @@ fn open_with(
             json!({
                 "protocolVersion": capabilities::PROTOCOL_VERSION,
                 "clientInfo": capabilities::client_info(),
-                "clientCapabilities": capabilities::client_capabilities(),
+                "clientCapabilities": capabilities::client_capabilities(session.remote()),
             }),
         )?;
         capabilities::check_protocol(&result)?;
@@ -1973,11 +2023,13 @@ fn open_with(
 
 impl Session {
     /// Whether a failed session request means "log in first": the protocol's
-    /// auth_required code, or — for session/new only — any error the agent
-    /// returned while it declares login methods.
-    fn needs_login(&self, error: &RpcError, any_error_counts: bool) -> bool {
-        error.code == Some(AUTH_REQUIRED_CODE)
-            || (any_error_counts && error.code.is_some() && !guard(&self.agent).auth_methods.is_empty())
+    /// auth_required code, or a legacy session/new reply explicitly asking for login.
+    fn needs_login(&self, error: &RpcError, allow_legacy: bool) -> bool {
+        if error.code == Some(AUTH_REQUIRED_CODE) { return true; }
+        if !allow_legacy || error.code.is_none() || guard(&self.agent).auth_methods.is_empty() { return false; }
+        let message = error.message.to_lowercase();
+        ["not logged in", "authentication required", "login required", "please log in", "未登录", "需要登录"]
+            .iter().any(|phrase| message.contains(phrase))
     }
 
     /// Create the protocol session, or continue the one the launch named.
@@ -2174,6 +2226,7 @@ impl Session {
 /// by id, so a retry starts from a clean state instead of colliding with a
 /// half-started session.
 fn abandon(session: &Arc<Session>) {
+    crate::session_baseline::forget(&session.id);
     sessions().remove(&session.id);
     session.exited(None);
 }
@@ -2242,44 +2295,20 @@ pub(crate) fn child_environment(spec: &AcpStart) -> ChildEnvironment {
     // A session token belongs to the process that owns the broker session. The
     // child gets the token of its own session; whatever this process holds must
     // never be inherited, so the name is removed before that value is written.
-    let mut remove: Vec<String> = vec!["NO_COLOR".to_owned(), crate::secrets::session::ENV.to_owned()];
-    for name in spec.session_markers {
-        remove.push((*name).to_owned());
+    let mut forbidden = vec!["NO_COLOR".to_owned(), crate::secrets::session::ENV.to_owned()];
+    forbidden.extend(spec.session_markers.iter().map(|name| (*name).to_owned()));
+    forbidden.extend(spec.command.remove_environment.iter().cloned());
+    // Clear inherited account values first. An explicit binding then supplies
+    // its own directory and credential, exactly as the PTY launch does.
+    let mut remove = forbidden.clone();
+    for key in &spec.remove_environment {
+        if !remove.contains(key) { remove.push(key.clone()); }
     }
-    for name in spec
-        .remove_environment
-        .iter()
-        .chain(spec.command.remove_environment.iter())
-    {
-        if !remove.contains(name) {
-            remove.push(name.clone());
-        }
+    let mut set = std::collections::BTreeMap::new();
+    for (name, value) in spec.command.environment.iter().chain(&spec.environment).chain(&spec.credential) {
+        if !forbidden.contains(name) { set.insert(name.clone(), value.clone()); }
     }
-    // The adapter's own policy, then the plan's additions, so a caller that
-    // forwards only one of the two still isolates the child correctly.
-    let declared = spec
-        .command
-        .environment
-        .iter()
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .chain(spec.environment.iter().cloned());
-    let mut set: Vec<(String, String)> = Vec::new();
-    for (name, value) in &declared.collect::<Vec<_>>() {
-        if remove.iter().any(|key| key == name) {
-            continue;
-        }
-        if let Some(existing) = set.iter_mut().find(|(existing, _)| existing == name) {
-            existing.1 = value.clone();
-        } else {
-            set.push((name.clone(), value.clone()));
-        }
-    }
-    if let Some((name, value)) = &spec.credential {
-        if !remove.iter().any(|key| key == name) {
-            set.retain(|(existing, _)| existing != name);
-            set.push((name.clone(), value.clone()));
-        }
-    }
+    let set = set.into_iter().collect();
     ChildEnvironment { set, remove }
 }
 
@@ -2291,18 +2320,26 @@ pub(crate) fn child_environment(spec: &AcpStart) -> ChildEnvironment {
 /// guard is returned with the streams because dropping it revokes the session:
 /// the conversation keeps it for as long as the agent runs, exactly like the
 /// terminal launch, and a prompt body still only carries a reference.
-fn spawn_io(spec: &AcpStart) -> Result<(AcpIo, crate::secrets::session::LocalSession), String> {
+fn spawn_io(spec: &AcpStart) -> Result<(AcpIo, Option<crate::secrets::session::LocalSession>), String> {
     let program = &spec.command.program;
-    if !program.is_file() {
+    let remote = remote_project(spec.project_id.as_deref());
+    if !remote && !program.is_file() {
         return Err("ACP 入口程序不存在，请在工具页重新检测安装路径".into());
     }
     let cwd = crate::launch::terminal_path(&spec.directory)?;
     // A batch entry cannot be a process image; the command interpreter runs it
     // instead, and arguments stay literal through raw_arg. Terminal commands
     // share the same wrapping.
-    let mut command = terminal::program_command(program, &spec.command.args);
+    let mut command = if remote {
+        let mut ssh = crate::background_process::command(program);
+        ssh.args(&spec.command.args);
+        ssh
+    } else {
+        let mut agent = terminal::program_command(program, &spec.command.args);
+        agent.current_dir(&cwd);
+        agent
+    };
     command
-        .current_dir(&cwd)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
@@ -2323,11 +2360,18 @@ fn spawn_io(spec: &AcpStart) -> Result<(AcpIo, crate::secrets::session::LocalSes
     }
     // The broker session outlives this call: the token goes to the child, the
     // guard travels with the session so the grant ends when the agent does.
-    let secret_session = crate::secrets::session::LocalSession::new();
-    command.env(crate::secrets::session::ENV, secret_session.token());
+    let secret_session = (!remote).then(crate::secrets::session::LocalSession::new);
+    if let Some(session) = &secret_session {
+        command.env(crate::secrets::session::ENV, session.token());
+    }
+    let context = if remote { crate::remote::operations::current() } else { None };
+    let slot = context.as_ref().map(|ctx| crate::remote::operations::acquire_bound(ctx)).transpose().map_err(|e| e.to_string())?;
+    if let Some(ctx) = &context { ctx.check().map_err(|e| e.to_string())?; }
     let mut child = command.spawn().map_err(|error| format!("无法启动 ACP 入口：{error}"))?;
+    if let Some(ctx) = &context { ctx.dispatched(); }
+    drop(slot);
     #[cfg(target_os = "macos")]
-    secret_session.bind_root(child.id());
+    if let Some(session) = &secret_session { session.bind_root(child.id()); }
     // A pipe that cannot be taken would leave a running agent with no host, so
     // the child is terminated before the error travels up.
     let Some(stdin) = child.stdin.take() else {

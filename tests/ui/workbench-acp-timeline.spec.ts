@@ -22,6 +22,31 @@ async function noHorizontalOverflow(page: Page) {
   expect(overflow).toBeLessThanOrEqual(1);
 }
 
+test('a user question shows the wire choices and sends only the selected option', async ({ page }) => {
+  const question = toolItem('pi-ui-123', { title: '下一步怎么处理？', toolKind: 'other', status: 'pending',
+    permission: { requestId: 'select-1', turnId: 'turn-1', userQuestion: true, options: [
+      { optionId: 'choice-0', name: '开始研发', kind: 'allow_once' }, { optionId: 'choice-1', name: '仅保存', kind: 'allow_once' },
+    ] } });
+  await installAcpMock(page, { conversations: [snapshot({ id: 'a1', state: 'waiting_permission', mode: 'yolo', pending: ['select-1'], timeline: [question] as any })] });
+  await openWorkbench(page);
+  const card = page.locator('[data-card="question"]');
+  await expect(card).toContainText('等待回答');
+  expect(await page.evaluate(() => (window as any).__acpTest.answers)).toEqual([]);
+  await card.getByRole('button', { name: '仅保存' }).click();
+  expect(await page.evaluate(() => (window as any).__acpTest.answers)).toEqual([['a1', 'select-1', 'choice-1']]);
+});
+
+test('background conversations defer Markdown until selected', async ({ page }) => {
+  const conversations = Array.from({ length: 24 }, (_, index) => snapshot({ id: `a${index}`, timeline: [agentMessage('message', `## reply ${index}`)] }));
+  await installAcpMock(page, { conversations });
+  await openWorkbench(page);
+  const rendered = page.locator('[data-role="agent"] h2');
+  await expect(rendered).toHaveCount(1);
+  await page.locator('[role="tab"][data-session-id="a12"]').click();
+  await expect(rendered).toHaveCount(1);
+  await expect(rendered).toHaveText('reply 12');
+});
+
 test('a reply renders Markdown, copies a code block as its source and keeps HTML and escapes as text', async ({ page }) => {
   await page.addInitScript(() => {
     const copied: string[] = [];

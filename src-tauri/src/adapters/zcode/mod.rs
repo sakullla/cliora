@@ -93,6 +93,8 @@ impl CliAdapter for ZCode {
                 dependency: Some(super::AcpDependency {
                     name: "zcode-acp",
                     program: None,
+                    installer: Some(super::AcpInstaller::Pipx),
+                    obsolete_package: None,
                     install_hint: "pipx install zcode-acp，并保持 ZCode 应用已安装并登录",
                     help_url: "https://github.com/Liang-HZ/zcode-acp",
                 }),

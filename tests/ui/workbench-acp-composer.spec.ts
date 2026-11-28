@@ -327,7 +327,10 @@ test('the terminal login starts a terminal session in the conversation directory
   const login = panelOf(page).getByRole('region', { name: 'Codex 需要登录', exact: true });
   await expect(login).toContainText('Codex 没有声明可以在对话里完成的登录方式');
   await login.getByRole('button', { name: '用终端登录', exact: true }).click();
-  await expect.poll(async () => (await testState(page)).launches.at(-1)).toMatchObject({ toolId: 'codex', interaction: 'terminal', directory: 'C:/work/app', sessionId: null });
+  await expect.poll(async () => (await testState(page)).launches.at(-1)).toMatchObject({ toolId: 'codex', interaction: 'terminal', acpTerminalLogin: true, directory: 'C:/work/app', sessionId: null });
+  await expect(page.locator('[data-pane-session="t1"] textarea')).toBeVisible();
+  await expect(page.locator('[data-pane-session="t1"] textarea')).toBeEnabled();
+  await expect(page.getByText('正在读取会话', { exact: true })).toHaveCount(0);
 });
 
 test('an elicitation form checks its schema, sends nothing invalid, and declines or cancels with their own answers', async ({ page }) => {

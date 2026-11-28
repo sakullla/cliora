@@ -58,6 +58,8 @@ const FIXTURE_ENTRY: AcpEntry = AcpEntry {
     dependency: Some(AcpDependency {
         name: "fixture-bridge",
         program: Some("fixture-bridge-host"),
+        installer: None,
+        obsolete_package: None,
         install_hint: "安装 fixture-bridge 后重试",
         help_url: "https://example.invalid/fixture-bridge",
     }),
@@ -277,14 +279,9 @@ fn resolved_command_carries_arguments_and_environment() {
     assert!(environment.contains(&("FIXTURE_MODE".to_string(), "acp".to_string())));
     // The selected installation is bound, so the bridge runs that identity.
     assert!(environment.contains(&("FIXTURE_CLI".to_string(), cli.display().to_string())));
-    // ACP-only removals stay, and the account adapter's own list is merged in
-    // instead of being duplicated here.
-    assert!(command.remove_environment.contains(&"FIXTURE_LEAK".to_string()));
-    assert!(
-        command.remove_environment.contains(&"OPENAI_API_KEY".to_string()),
-        "账号环境隔离必须沿用共享账号适配器：{:?}",
-        command.remove_environment
-    );
+    // Unbound sessions keep the user's normal login environment. Only the
+    // selected account context contributes cross-account cleanup.
+    assert_eq!(command.remove_environment, ["FIXTURE_LEAK"]);
     let serialized = serde_json::to_value(command).unwrap();
     assert_eq!(serialized["origin"], "bridge");
     assert!(serialized["program"].is_string());

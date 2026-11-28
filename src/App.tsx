@@ -48,7 +48,7 @@ import type { LibraryMcpSpotlight } from './features/library/LibraryPage';
 import { failedInWorkbench, workbenchSessionId, type WorkbenchFailure } from './features/sessions/workbenchLaunch';
 import sessionStyles from './features/sessions/SessionWorkbench.module.css';
 import { applyStoredLanguage, readStoredLanguage } from './i18n';
-import { native, nativeAvailable } from './lib/native';
+import { acp, native, nativeAvailable } from './lib/native';
 import { formatFailure, launchFailureDetail } from './lib/feedback';
 import { confirmAction } from './lib/confirm';
 import { altLabel, isEditableTarget, modAria, modLabel, withMod } from './lib/shortcut';
@@ -455,7 +455,13 @@ export default function App() {
     };
     // 只有该 session 仍在工作台里且是本地会话时才跳转；否则停在当前页并说明原因。
     const sessionAvailable = async (sessionId: string, remote: boolean) => native.listWorkbenchSessions()
-      .then((list) => Array.isArray(list) ? list.some((item) => item.id === sessionId && !!item.projectId?.startsWith('remote:') === remote) : !remote)
+      .then(async (list) => {
+        if (!Array.isArray(list)) return !remote;
+        if (list.some(item => item.id === sessionId && !!item.projectId?.startsWith('remote:') === remote)) return true;
+        if (remote) return false;
+        const conversation = await acp.session(sessionId).catch(() => null);
+        return conversation?.id === sessionId && !conversation.projectId?.startsWith('remote:');
+      })
       // 读不到列表不是"会话已失效"的证据，保持原行为。
       .catch(() => !remote);
     let returnIntent = 0;

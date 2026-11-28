@@ -134,6 +134,7 @@ impl Session {
         if images > MAX_IMAGES {
             return Err(format!("一次最多附带 {MAX_IMAGES} 张图片"));
         }
+        if files > 0 && self.remote() { return Err("远程 ACP 不读取本机路径附件".into()); }
         if files > MAX_FILES {
             return Err(format!("一次最多附带 {MAX_FILES} 个文件"));
         }
@@ -219,6 +220,7 @@ impl Session {
     /// match the extension or the file is over the limit. Everything that can
     /// be refused is refused before an approval card is opened.
     pub(super) fn read_image(&self, requested: &str) -> Result<AcpImageFile, String> {
+        if self.remote() { return Err("远程 ACP 不读取本机图片路径".into()); }
         if requested.trim().is_empty() {
             return Err("图片路径为空".into());
         }

@@ -259,7 +259,7 @@ fn a_prompt_answered_with_auth_required_waits_for_a_login_that_keeps_the_session
 }
 
 #[test]
-fn any_session_error_counts_as_a_login_only_when_the_agent_declares_methods() {
+fn a_legacy_login_error_counts_only_when_the_agent_declares_methods() {
     // Declared methods: an ordinary error from session/new means "log in".
     let directory = temp_dir();
     let (io, mut agent) = pair();
@@ -276,6 +276,17 @@ fn any_session_error_counts_as_a_login_only_when_the_agent_declares_methods() {
     assert_eq!(snapshot.state, "auth_required");
     assert!(list_ids().contains(&snapshot.id));
     close(&snapshot.id).unwrap();
+    worker.join().unwrap();
+
+    // An agent may offer authentication even when the failure concerns its configuration.
+    let (io, mut agent) = pair();
+    let worker = std::thread::spawn(move || {
+        initialize(&mut agent, json!({ "protocolVersion": 1, "authMethods": [{ "id": "login" }] }));
+        let new = agent.next_line();
+        refuse(&agent, &new, -32603, "invalid model configuration");
+        drain(&mut agent);
+    });
+    assert!(open(spec(directory.path()), io).unwrap_err().contains("invalid model configuration"));
     worker.join().unwrap();
 
     // No methods: the same error is a failed start.
@@ -1247,7 +1258,7 @@ fn a_checkpoint_counts_open_conversations_and_closing_one_forgets_its_record() {
     let remaining: Vec<String> = restore::list(&db).unwrap().into_iter().map(|record| record.id).collect();
     assert_eq!(remaining, ["gone-conversation"], "关闭的对话不再被恢复");
     // A conversation the host no longer holds still loses its record.
-    assert!(restore::close_conversation(&db, "gone-conversation").is_err());
+    restore::close_conversation(&db, "gone-conversation").unwrap();
     assert!(restore::list(&db).unwrap().is_empty());
 }
 

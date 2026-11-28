@@ -89,6 +89,11 @@ impl CliAdapter for Pi {
     fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
         Some(self)
     }
+    fn acp_user_question(&self, tool: &Value) -> bool {
+        tool["toolCallId"].as_str().is_some_and(|id| id.starts_with("pi-ui-"))
+            && tool["kind"] == "other"
+            && matches!(tool.pointer("/rawInput/method").and_then(Value::as_str), Some("select" | "confirm"))
+    }
     fn id(&self) -> &'static str {
         "pi"
     }
@@ -111,6 +116,8 @@ impl CliAdapter for Pi {
                 dependency: Some(super::AcpDependency {
                     name: "pi-acp",
                     program: Some("pi"),
+                    installer: Some(super::AcpInstaller::Npm),
+                    obsolete_package: None,
                     install_hint: "npm install -g pi-acp，并保持 pi 0.81.0 起可用（桥接运行该 pi）",
                     help_url: "https://github.com/svkozak/pi-acp",
                 }),

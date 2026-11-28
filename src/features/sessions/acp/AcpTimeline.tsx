@@ -285,6 +285,7 @@ export const AcpTimeline = forwardRef<AcpTimelineHandle, {
         return <AcpMessage
           key={item.id}
           message={item}
+          renderMarkdown={active || !following}
           toolName={toolName}
           streaming={running && item === last && item.role !== 'user'}
           canReuse={canReuse}
@@ -408,7 +409,8 @@ export const AcpTimeline = forwardRef<AcpTimelineHandle, {
     }
     if (live) {
       const hasCommands = (snapshot.commands?.length ?? 0) > 0;
-      const hasQuickActions = Boolean((hasCommands && onQuickTrigger) || onQuickTrigger || onOpenPromptPicker);
+      const mentionAvailable = !!onQuickTrigger && !snapshot.projectId?.startsWith('remote:');
+      const hasQuickActions = (hasCommands && onQuickTrigger) || mentionAvailable || onOpenPromptPicker;
       return <div className={styles.emptyCard} data-acp-empty="ready">
         <div className={styles.emptyHead}>
           <span className={styles.emptyReadyDot} aria-hidden="true"><Icon name="sparkle" size={14} /></span>
@@ -420,7 +422,7 @@ export const AcpTimeline = forwardRef<AcpTimelineHandle, {
           {hasCommands && onQuickTrigger && <button type="button" className={styles.emptyAction} onClick={() => onQuickTrigger('/')}>
             <Icon name="command" size={12} />{t('sessions.acpQuickCommand')}
           </button>}
-          {onQuickTrigger && <button type="button" className={styles.emptyAction} onClick={() => onQuickTrigger('@')}>
+          {mentionAvailable && <button type="button" className={styles.emptyAction} onClick={() => onQuickTrigger('@')}>
             <Icon name="file" size={12} />{t('sessions.acpQuickMention')}
           </button>}
           {onOpenPromptPicker && <button type="button" className={styles.emptyAction} onClick={onOpenPromptPicker}>

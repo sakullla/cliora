@@ -98,8 +98,7 @@ pub fn forget(db: &Database, id: &str) -> Result<(), String> {
 
 /// The user closed a conversation tab: end the agent and drop its restore
 /// record, so a restart does not bring the tab back. The record is dropped
-/// even when the host no longer holds the conversation; the close error is
-/// still reported.
+/// even when a failed handshake has already removed the agent.
 pub fn close_conversation(db: &Database, id: &str) -> Result<(), String> {
     let closed = crate::acp::close(id);
     forget(db, id)?;
@@ -612,7 +611,7 @@ fn restore_conversation_items(
             // The conversation is identified by the protocol's own session id,
             // not by a CLI resume flag.
             plan.resume_native_id = Some(native);
-            let result = launch::spawn(db, plan)?;
+            let result = launch::spawn_with_baseline(db, plan, Some(saved_baseline(db, &session.id)?))?;
             let id = result.session_id.ok_or("未创建恢复会话")?;
             // Starting the agent is not the restore. Only the load the agent
             // itself negotiated continues the old conversation; a fresh session

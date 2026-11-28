@@ -36,6 +36,7 @@ export function AcpMessage({
   message,
   toolName,
   streaming,
+  renderMarkdown,
   canReuse = false,
   onReuse,
   forceOpen = false,
@@ -47,6 +48,7 @@ export function AcpMessage({
   message: Message;
   toolName: string;
   streaming: boolean;
+  renderMarkdown: boolean;
   /** Whether the conversation is live and accepts refilling user messages into the composer. */
   canReuse?: boolean;
   onReuse?: (text: string) => void;
@@ -168,7 +170,7 @@ export function AcpMessage({
       {copy}
     </div>
     <div className={styles.agentBody}>
-      {message.text ? <Suspense fallback={plain}><MarkdownView text={message.text} tone="terminal" codeBlock={renderCode} highlight={markdownHighlight} /></Suspense> : null}
+      {renderMarkdown && message.text ? <Suspense fallback={plain}><MarkdownView text={message.text} tone="terminal" codeBlock={renderCode} highlight={markdownHighlight} /></Suspense> : null}
       {truncated}
       {cursor}
     </div>

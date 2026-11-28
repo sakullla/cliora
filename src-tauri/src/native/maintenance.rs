@@ -37,6 +37,8 @@ pub fn cancel(tool: &str) {
 /// here: unknown sources simply have no adapter-declared command.
 fn script(adapter: &dyn CliAdapter, action: &str, source: &str, version: Option<&str>) -> Result<(String, Option<String>), String> {
     let resolved = match action {
+        "install_acp" => adapter.acp().entry.and_then(|e| e.dependency)
+            .and_then(|d| d.install_command(false)).map(|line| (line, None)),
         "install" => {
             let requested = (source != "unknown").then_some(source);
             adapter.source_install_command(requested).map(|command| (command, requested.map(str::to_owned)))
@@ -393,6 +395,11 @@ pub fn maintain(registry: &Registry, tool: &str, action: &str, source: &str, ver
     // Failures can also modify shims: never keep pre-install probe evidence.
     adapter::invalidate_probe_cache(tool);
     let output = output?;
+    if action == "install_acp" {
+        let entry = adapter.acp().entry.ok_or("此 CLI 没有 ACP 入口")?;
+        entry.locate(&adapter.acp_search_directories(home)).map_err(|issue| issue.reason)?;
+        return Ok(MaintenanceResult { output, version: None });
+    }
     if action.starts_with("uninstall") { return Ok(MaintenanceResult { output, version: None }); }
     // Verification follows the real source contract instead of guessing from a
     // command prefix: a Bun command must verify a Bun source on every platform.

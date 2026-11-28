@@ -252,6 +252,9 @@ pub struct LaunchEnvelope {
     pub task_text: Option<String>,
     #[serde(default)]
     pub worktree: WorktreeLaunchOptions,
+    /// Run the adapter's interactive authentication command in the conversation directory.
+    #[serde(default)]
+    pub acp_terminal_login: bool,
     /// The agent's own session to continue in a new ACP conversation (an
     /// entry of `acp_native_sessions`). The host prefers `session/resume`,
     /// then `session/load`; a resume that cannot happen starts a new session
@@ -299,6 +302,7 @@ impl From<LaunchRequest> for LaunchEnvelope {
             worktree_intent: WorktreeIntent::Given,
             task_text: None,
             worktree: WorktreeLaunchOptions::default(),
+            acp_terminal_login: false,
             resume_native_id: None,
         }
     }
@@ -665,6 +669,7 @@ fn remote_launch_plan(
     db: &Database,
     registry: &Registry,
     request: &LaunchRequest,
+    login: Option<Vec<String>>,
 ) -> Result<Option<LaunchPlan>, LaunchPlanError> {
     let Some(project_key) = remote_project_key(request.project_id.as_deref()) else {
         return Ok(None);
@@ -691,9 +696,19 @@ fn remote_launch_plan(
     let adapter = registry
         .get(&request.tool_id)
         .ok_or_else(|| LaunchPlanError::new(LaunchStage::Tool, "未注册的 CLI 不能启动".into()))?;
-    let mut launch_args = adapter
-        .launch_args(None, request.mode)
-        .map_err(|error| LaunchPlanError::new(LaunchStage::Tool, error))?;
+    let reattach = request.session_id.is_some() || matches!(request.remote_intent, Some(RemoteLaunchIntent::Reattach { .. }));
+    let interaction = if reattach { InteractionMode::Terminal } else if let Some(mode) = request.interaction {
+        mode
+    } else {
+        interaction_preference(db).map_err(|e| LaunchPlanError::new(LaunchStage::Tool, e))?.0
+    };
+    if interaction == InteractionMode::Acp {
+        return remote_acp_plan(adapter, &target, &project.path, request).map(Some);
+    }
+    let mut launch_args = match login {
+        Some(args) => args,
+        None => adapter.launch_args(None, request.mode).map_err(|e| LaunchPlanError::new(LaunchStage::Tool, e))?,
+    };
     // An agent selection only applies to a brand-new remote session; the
     // remote host runs the verified native line directly, so the selection
     // uses the adapter's flag without a local version probe.
@@ -780,7 +795,6 @@ fn remote_launch_plan(
         .map_err(|error| LaunchPlanError::new(LaunchStage::Terminal, error))?;
     Ok(Some(LaunchPlan {
         resume_native_id: None,
-        // A remote session stays a terminal: the ACP host is local only.
         interaction: InteractionMode::Terminal,
         acp: None,
         initial_prompt: None,
@@ -799,6 +813,49 @@ fn remote_launch_plan(
         remote_end_args: (!windows).then_some(remote_end_args),
         environment: crate::remote::password::askpass_environment(&target),
     }))
+}
+
+/// ACP frames travel on SSH stdin/stdout. The agent runs in the project and
+/// authenticates with that host's own CLI installation.
+fn remote_acp_plan(
+    adapter: &dyn CliAdapter,
+    target: &crate::remote::RemoteTarget,
+    directory: &str,
+    request: &LaunchRequest,
+) -> Result<LaunchPlan, LaunchPlanError> {
+    let issue = |message: String| LaunchPlanError::new(LaunchStage::Tool, message);
+    if !directory.starts_with('/') || directory.chars().any(char::is_control) {
+        return Err(issue("远程 ACP 需要 POSIX 主机上的绝对工作目录".into()));
+    }
+    if request.agent.is_some() || request.session_options.as_ref().is_some_and(|options| !options.is_empty()) {
+        return Err(issue("ACP 对话不接受终端启动参数".into()));
+    }
+    let capability = adapter.acp();
+    let entry = capability.entry.filter(|_| capability.state != "unsupported").ok_or_else(|| issue(capability.reason.into()))?;
+    if entry.version_range.is_some() {
+        let result = adapter.remote_probe(target).map_err(issue)?;
+        let version = crate::native::adapter::version_from_output(adapter, Path::new(adapter.command()), &result.stdout);
+        let checked = adapter.acp_for_version(version.as_deref());
+        if checked.state == "unsupported" { return Err(issue(checked.reason.into())); }
+    }
+    let ssh = std::env::var_os("CLIORA_SSH_BINARY").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("ssh"));
+    let mut command = apply_acp_yolo(AcpCommand {
+        program: ssh.clone(), args: entry.args.iter().map(|arg| arg.to_string()).collect(),
+        origin: entry.origin.as_str(), environment: Vec::new(), remove_environment: Vec::new(),
+        yolo: entry.yolo, yolo_mode: None,
+    }, request.mode)?;
+    let remote = entry.remote_stdio(adapter, directory, &command.args);
+    command.args = vec!["-T".into(), "-o".into(), "ForwardAgent=no".into(), "-o".into(), "ClearAllForwardings=yes".into()];
+    command.args.extend(crate::remote::workbench_connection_args(target));
+    command.args.push(remote);
+    Ok(LaunchPlan {
+        tool_id: request.tool_id.clone(), project_id: request.project_id.clone(), mode: request.mode,
+        directory: PathBuf::from(directory), terminal: TerminalId::Workbench, interaction: InteractionMode::Acp,
+        acp: Some(command), initial_prompt: request.initial_prompt.clone(), resume_native_id: None,
+        executable: ssh, cli_args: Vec::new(), environment: crate::remote::password::askpass_environment(target),
+        account_context: None, account_version: None, credential: None, session_markers: &[],
+        remote_session_id: None, remote_end_args: None,
+    })
 }
 
 fn on_path(name: &str) -> bool {
@@ -1445,12 +1502,36 @@ pub fn plan_envelope_with_progress(
 ) -> Result<LaunchPlan, LaunchPlanError> {
     let mut envelope = envelope;
     let resume = conversation_resume(&mut envelope)?;
+    let login = if envelope.acp_terminal_login {
+        let request = &envelope.request;
+        if request.interaction != Some(InteractionMode::Terminal) || request.mode != LaunchMode::Normal
+            || request.session_id.is_some() || request.resume_latest || request.agent.is_some()
+            || request.session_options.is_some() || request.initial_prompt.is_some() || resume.is_some()
+            || envelope.worktree_intent != WorktreeIntent::Given
+            || matches!(request.remote_intent, Some(RemoteLaunchIntent::Reattach { .. })) {
+            return Err(LaunchPlanError::new(LaunchStage::Tool, "登录需要在原目录新开普通终端".into()));
+        }
+        let adapter = registry.get(&request.tool_id).ok_or_else(|| LaunchPlanError::new(LaunchStage::Tool, "未注册的 CLI".into()))?;
+        let args = adapter.acp_terminal_login_args();
+        if let Some(mut plan) = remote_launch_plan(db, registry, request, args.clone())? {
+            plan.terminal = TerminalId::Workbench;
+            return Ok(plan);
+        }
+        args
+    } else { None };
     let worktree = WorktreeLaunch {
         intent: envelope.worktree_intent,
         task_text: envelope.task_text,
         options: envelope.worktree,
     };
     let mut plan = plan_with_stage_for(db, registry, home, envelope.request, worktree, progress)?;
+    if envelope.acp_terminal_login {
+        plan.terminal = TerminalId::Workbench;
+        if let Some(args) = login {
+            plan.cli_args = plan.account_context.as_ref().map(|(_, c)| c.cli_args.clone()).unwrap_or_default();
+            plan.cli_args.extend(args);
+        }
+    }
     if let Some(native) = resume {
         // The planner fell back to a terminal (a desktop app, for instance):
         // a protocol session id means nothing there.
@@ -1649,7 +1730,7 @@ fn plan_with_stage_at(
     worktree: WorktreePlan<'_>,
 ) -> Result<LaunchPlan, LaunchPlanError> {
     let WorktreePlan { launch: worktree, progress } = worktree;
-    if let Some(plan) = remote_launch_plan(db, registry, &request)? {
+    if let Some(plan) = remote_launch_plan(db, registry, &request, None)? {
         return Ok(plan);
     }
     if request.remote_intent.is_some() {
@@ -2658,7 +2739,7 @@ pub(crate) fn spawn_with_baseline(db: &Database, plan: LaunchPlan, restored: Opt
     if plan.interaction == InteractionMode::Acp {
         let saved = crate::workbench_restore::from_plan(&plan);
         let spec = crate::acp::AcpStart::from_plan(&plan, None)?;
-        let snapshot = crate::acp::start(spec, credential)?;
+        let snapshot = crate::acp::start(spec, credential, restored)?;
         if let Some(mut saved) = saved {
             saved.id = snapshot.id.clone();
             saved.native_id = snapshot.native_session_id.clone();
@@ -3354,6 +3435,7 @@ mod installed_desktop_launch {
             worktree_intent: WorktreeIntent::Preference,
             task_text: None,
             worktree: WorktreeLaunchOptions::default(),
+            acp_terminal_login: false,
             resume_native_id: None,
         };
         let isolated = plan_envelope(&db, &registry, temp.path(), base(false)).unwrap();
@@ -3377,6 +3459,7 @@ mod installed_desktop_launch {
             worktree_intent: WorktreeIntent::Preference,
             task_text: Some("feat: hello?".into()),
             worktree: WorktreeLaunchOptions::default(),
+            acp_terminal_login: false,
             resume_native_id: None,
         }).unwrap();
         assert_eq!(resumed.directory, canonical);
@@ -3449,6 +3532,7 @@ mod installed_desktop_launch {
             worktree_intent: intent,
             task_text: Some("feat: hello?".into()),
             worktree: WorktreeLaunchOptions::default(),
+            acp_terminal_login: false,
             resume_native_id: None,
         };
         let bare = plan_envelope(&db, &registry, temp.path(), envelope(WorktreeIntent::Preference, false)).unwrap();
@@ -3499,6 +3583,7 @@ mod installed_desktop_launch {
             worktree_intent: WorktreeIntent::Preference,
             task_text: Some("feat: hello?".into()),
             worktree: WorktreeLaunchOptions::default(),
+            acp_terminal_login: false,
             resume_native_id: None,
         }).unwrap();
         assert_eq!(resumed.directory, canonical);
@@ -3549,6 +3634,7 @@ mod installed_desktop_launch {
             worktree_intent: WorktreeIntent::Preference,
             task_text: None,
             worktree: WorktreeLaunchOptions::default(),
+            acp_terminal_login: false,
             resume_native_id: None,
         };
         let stayed = plan_envelope(&db, &registry, temp.path(), envelope.clone()).unwrap();
@@ -3707,6 +3793,7 @@ mod installed_desktop_launch {
             worktree_intent: WorktreeIntent::Explicit,
             task_text: Some("feat: hello?".into()),
             worktree: options,
+            acp_terminal_login: false,
             resume_native_id: None,
         }
     }
@@ -3868,6 +3955,7 @@ mod conversation_resume_tests {
             worktree_intent: WorktreeIntent::Given,
             task_text: None,
             worktree: WorktreeLaunchOptions::default(),
+            acp_terminal_login: false,
             resume_native_id: None,
         }
     }

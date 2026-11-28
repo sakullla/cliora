@@ -393,6 +393,48 @@ fn yolo_approves_outside_access_and_allow_once_and_still_shows_cards_without_one
     worker.join().unwrap();
 }
 
+#[test]
+fn pi_asks_the_user_to_select_even_in_yolo_and_records_their_answer() {
+    let directory = temp_dir();
+    let (io, mut agent) = pair();
+    let worker = std::thread::spawn(move || {
+        agent.handshake(false);
+        let prompt = agent.next_line();
+        for (id, choice) in [(88, Some("choice-1")), (89, None)] {
+            let reply = call(&mut agent, id, "session/request_permission", json!({
+                "sessionId":"session-1",
+                "toolCall":{"toolCallId":format!("pi-ui-{id}"), "kind":"other", "status":"pending", "title":"Next?",
+                    "rawInput":{"method":"select","title":"Next?", "options":["Implement", "Save only"]}},
+                "options":[{"optionId":"choice-0","kind":"allow_once","name":"Implement"},
+                           {"optionId":"choice-1","kind":"allow_once","name":"Save only"}]
+            }));
+            let expected = choice.map(|id| json!({"outcome":"selected","optionId":id})).unwrap_or(json!({"outcome":"cancelled"}));
+            assert_eq!(reply["result"]["outcome"], expected);
+        }
+        finish_prompt(&agent, &prompt);
+        agent.stay_connected();
+    });
+    let mut start = spec(directory.path());
+    start.tool_id = "pi".into();
+    start.mode = LaunchMode::Yolo;
+    let session = open(start, io).unwrap();
+    prompt(&session.id, "ask").unwrap();
+    for (id, answer) in [("88", Some("choice-1")), ("89", None)] {
+        wait_for(|| {
+            let s = snapshot_of(&session.id);
+            (s.pending.iter().any(|p| p == id) && tools(&s).iter().any(|c| c.permission.as_ref().is_some_and(|p| p.user_question))).then_some(())
+        }, "等待选择题");
+        respond_permission(&session.id, id, answer).unwrap();
+    }
+    wait_until_idle(&session.id, Duration::from_secs(8)).unwrap();
+    let calls = tools(&snapshot_of(&session.id));
+    assert_eq!(calls[0].status, "completed");
+    assert!(matches!(&calls[0].content[0], AcpToolContent::Text { text, .. } if text == "Save only"));
+    assert!(calls.iter().all(|call| call.permission.is_none() && call.raw_input.is_none()));
+    close(&session.id).unwrap();
+    worker.join().unwrap();
+}
+
 /// A device, a pipe or a directory outside the session directory is refused
 /// at once: no card is opened and YOLO records no allow for it.
 fn wrong_kind_targets_outside_are_refused_without_a_card(mode: LaunchMode) {

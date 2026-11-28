@@ -3706,6 +3706,38 @@ pub async fn cli_latest_version(
 }
 
 #[tauri::command]
+pub async fn acp_dependency_installed(
+    window: tauri::WebviewWindow,
+    operation: Option<crate::remote::operations::Request>,
+    tool_id: String,
+    target_id: Option<String>,
+) -> Result<bool, ApiError> {
+    let app = window.app_handle().clone();
+    remote_or_local_blocking(target_id.is_some(), window, operation, crate::remote::operations::Kind::Read, move || {
+        let registry = adapters::Registry::builtins();
+        let adapter = registry.get(&tool_id).ok_or_else(|| native_error("未注册的 CLI".into()))?;
+        let entry = adapter.acp().entry.ok_or_else(|| native_error("此 CLI 没有 ACP 入口".into()))?;
+        if let Some(id) = target_id {
+            let db = app.state::<AppState>().database(&app)?;
+            let target = enabled_target(&db, &id)?;
+            bind_remote_target(&target)?;
+            return entry.remote_installed(&target).map_err(native_error);
+        }
+        let mut dirs = adapter.acp_search_directories(&home()?);
+        let db = app.state::<AppState>().database(&app)?;
+        let selected = registered_tool_path(&db, &tool_id).map_err(native_error)?;
+        if let Some(parent) = selected.as_deref().and_then(std::path::Path::parent) {
+            dirs.insert(0, parent.to_path_buf());
+        }
+        match entry.locate(&dirs) {
+            Ok(_) => Ok(true),
+            Err(issue) if issue.code == "dependency-missing" || issue.code == "not-installed" => Ok(false),
+            Err(issue) => Err(native_error(issue.reason)),
+        }
+    }).await
+}
+
+#[tauri::command]
 pub async fn maintain_registered_cli(
     app: AppHandle,
     tool_id: String,
@@ -3756,6 +3788,13 @@ pub async fn maintain_remote_cli(
             .get(&tool_id)
             .ok_or_else(|| native_error("此 CLI 适配器未注册".into()))?;
         let result = match action.as_str() {
+            "install_acp" => (|| {
+                let entry = adapter.acp().entry.ok_or("此 CLI 没有 ACP 入口")?;
+                let script = entry.dependency.and_then(|d| d.install_command(true)).ok_or("此 ACP 入口没有自动安装命令")?;
+                let result = adapter.dispatch_remote_owned_command(&target, &script)?;
+                if !entry.remote_installed(&target)? { return Err("安装完成后找不到远程 ACP 入口".to_owned()); }
+                Ok(result)
+            })(),
             "install" | "install_native" => adapter.remote_install(&target),
             "upgrade" | "upgrade_major" => adapter.remote_upgrade(&target, source.as_deref().unwrap_or("npm_shim")),
             "uninstall_npm" => adapter.remote_uninstall(&target),
@@ -4094,10 +4133,14 @@ pub async fn replay_workbench_session(session_id: String) -> Result<crate::sessi
 }
 
 /// Branch and worktree of a local session directory; `None` when it is not in a repository or runs remotely.
+pub(crate) fn workbench_local_directory(id: &str) -> Result<Option<PathBuf>, String> {
+    crate::session_host::local_directory(id).or_else(|_| crate::acp::local_directory(id))
+}
+
 #[tauri::command]
 pub async fn workbench_git_context(session_id: String) -> Result<Option<crate::git_context::GitContext>, ApiError> {
     blocking(move || {
-        let directory = crate::session_host::local_directory(&session_id).map_err(native_error)?;
+        let directory = workbench_local_directory(&session_id).map_err(native_error)?;
         Ok(directory.and_then(|path| crate::git_context::read(&path)))
     }).await
 }
@@ -4172,7 +4215,7 @@ pub async fn workbench_code_status(app: AppHandle, session_id: String) -> Result
 }
 
 fn review_directory(session_id: &str) -> Result<PathBuf, ApiError> {
-    let directory = crate::session_host::local_directory(session_id)
+    let directory = workbench_local_directory(session_id)
         .map_err(|_| crate::twiglane::api_error("session_unknown"))?;
     crate::twiglane::review_target(directory).map_err(crate::twiglane::api_error)
 }
@@ -5095,6 +5138,7 @@ fn launch_now_reported(
                     task_text,
                     worktree: worktree_options,
                     resume_native_id,
+                    acp_terminal_login: envelope.acp_terminal_login,
                 },
                 &mut progress,
             ))
@@ -5140,7 +5184,8 @@ fn launch_now_reported(
         }
     }
     let _ = app.emit("cliora:projects-changed", project_id);
-    if result.remote_session_id.is_some() {
+    if result.remote_session_id.is_some() || (result.interaction == launch::InteractionMode::Acp
+        && result.project_id.as_deref().is_some_and(|id| id.starts_with("remote:"))) {
         if let Some(context) = crate::remote::operations::current() { context.accept_persistent_launch(); }
     }
     Ok((result, planned_directory))
@@ -7754,7 +7799,7 @@ pub async fn launch_workspace_cli(
         request.request.directory = Some(directory.clone());
         let mut result = launch_now(&app, request)?;
         if let Some(id) = &result.session_id {
-            let actual = crate::session_host::local_directory(id)
+            let actual = workbench_local_directory(id)
                 .ok()
                 .flatten()
                 .and_then(|p| p.to_str().map(str::to_owned))

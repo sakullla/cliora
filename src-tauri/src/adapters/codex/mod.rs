@@ -166,6 +166,8 @@ impl CliAdapter for Codex {
                 dependency: Some(super::AcpDependency {
                     name: "@agentclientprotocol/codex-acp",
                     program: None,
+                    installer: Some(super::AcpInstaller::Npm),
+                    obsolete_package: Some("@zed-industries/codex-acp"),
                     install_hint: "npm install -g @agentclientprotocol/codex-acp",
                     help_url: "https://github.com/agentclientprotocol/codex-acp",
                 }),

@@ -262,10 +262,10 @@ test('every launch entry point reads YOLO from the interaction the launch will a
   assert.equal(launchInteraction(tool, acp), 'acp');
   assert.equal(preferredYoloAvailable(tool, acp), true, '新的本地会话按 ACP 入口的 YOLO 声明');
   assert.equal(preferredYoloAvailable(tool, terminal), false, '终端启动按终端 YOLO 参数');
-  // A resume and a remote session run in a terminal, as the backend decides.
+  // A PTY resume keeps its transport. A new SSH session follows the preference.
   assert.equal(launchInteraction(tool, acp, { resume: true }), 'terminal');
   assert.equal(preferredYoloAvailable(tool, acp, { resume: true }), false);
-  assert.equal(preferredYoloAvailable(tool, acp, { remote: true }), false);
+  assert.equal(preferredYoloAvailable(tool, acp, { remote: true }), true);
   // An unreadable stored preference, a desktop app and a missing tool fall back to the terminal.
   assert.equal(launchInteraction(tool, { interaction: 'acp', interactionError: 'bad' }), 'terminal');
   assert.equal(launchInteraction({ ...tool, launchForm: 'desktop' }, acp), 'terminal');

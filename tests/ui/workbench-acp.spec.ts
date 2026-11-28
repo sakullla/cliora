@@ -191,6 +191,32 @@ test('a declared but unverified ACP entry may be tried and is never described as
   await expect(page.locator('[data-acp="true"][data-pane-session="a1"]')).toBeVisible();
 });
 
+for (const remoteHost of [false, true]) {
+  test(`confirm bridge installation on the selected ${remoteHost ? 'SSH' : 'local'} host before starting ACP`, async ({ page }) => {
+    const host = remoteHost ? 'SSH fixture' : '本机';
+    await installAcpMock(page, { interaction: 'acp', remoteHost, acp: { state: 'unverified', entry: {
+      executable: 'test-acp', args: [], origin: 'bridge', dependency: { name: 'test-bridge', installer: 'npm', installHint: '' },
+    } } });
+    await openWorkbench(page);
+    await page.getByRole('button', { name: '新建会话', exact: true }).first().click();
+    const start = page.getByRole('dialog', { name: '新建工作台会话' }).locator('[data-dialog-save]');
+    const confirmation = page.getByRole('dialog', { name: '安装 ACP 组件' });
+    await start.click();
+    await expect(confirmation).toContainText(host);
+    await confirmation.getByRole('button', { name: '取消' }).click();
+    expect(await page.evaluate(() => (window as any).__acpTest.installedOn)).toEqual([]);
+    expect(await page.evaluate(() => (window as any).__acpTest.launches)).toEqual([]);
+    await start.click();
+    await confirmation.getByRole('button', { name: '安装并继续' }).click();
+    await expect(page.locator('[data-pane-session="a1"]')).toBeVisible();
+    expect(await page.evaluate(() => (window as any).__acpTest.installedOn)).toEqual([remoteHost ? 'ssh-fixture' : 'local']);
+    const launches = await page.evaluate(() => (window as any).__acpTest.launches);
+    expect(launches).toHaveLength(1);
+    expect(launches[0]).toMatchObject({ interaction: 'acp', projectId: remoteHost ? 'remote:folder' : null });
+    if (remoteHost) await expect(page.locator('[data-acp-attach-file]')).toHaveCount(0);
+  });
+}
+
 test('the settings row states that ACP availability depends on the chosen tool', async ({ page }) => {
   await installAcpMock(page, { interaction: 'terminal', acp: { state: 'unverified', evidence: 'documented', reason: '入口尚未验证' } });
   await page.goto('/');

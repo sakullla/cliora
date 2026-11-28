@@ -158,8 +158,29 @@ pub struct AcpDependency {
     /// the entry itself uses.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub program: Option<&'static str>,
+    pub installer: Option<AcpInstaller>,
+    /// A retired npm package that ships the same executable name.
+    #[serde(skip)]
+    pub obsolete_package: Option<&'static str>,
     pub install_hint: &'static str,
     pub help_url: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AcpInstaller { Npm, Pipx }
+
+impl AcpDependency {
+    pub fn install_command(&self, remote: bool) -> Option<String> {
+        match self.installer? {
+            AcpInstaller::Npm => {
+                // The local maintenance runner starts in the user's home directory.
+                let prefix = if remote { "\"$HOME/.cliora/acp\"" } else { ".cliora/acp" };
+                Some(format!("npm install -g --prefix {prefix} {} --no-audit --no-fund", self.name))
+            }
+            AcpInstaller::Pipx => Some(format!("pipx install {}", self.name)),
+        }
+    }
 }
 
 /// Environment contract for one ACP entry. The shared host applies this before
@@ -175,8 +196,7 @@ pub struct AcpEnvironmentPolicy {
     /// at the selected install, otherwise ACP would silently use another
     /// identity than the terminal launch.
     pub bind_installation: &'static [&'static str],
-    /// Variables that must not reach the agent. ACP-only removals are merged
-    /// with the account adapter's own list by the shared resolver.
+    /// Variables that must not reach this agent, including explicit overrides.
     pub remove: &'static [&'static str],
 }
 
@@ -347,7 +367,15 @@ impl AcpEntry {
     /// Whether this candidate may answer the entry. A same-named system
     /// program is refused for entries that declare the collision.
     pub fn accepts_candidate(&self, path: &Path) -> bool {
-        !(self.rejects_system_program && acp_is_system_program(path))
+        if self.rejects_system_program && acp_is_system_program(path) { return false; }
+        if let Some(package) = self.dependency.and_then(|d| d.obsolete_package) {
+            let marker = format!("/{package}/");
+            let contains = |s: &str| s.replace('\\', "/").contains(&marker);
+            if path.canonicalize().is_ok_and(|p| contains(&p.to_string_lossy())) { return false; }
+            if acp_needs_command_interpreter(path) && path.metadata().is_ok_and(|m| m.len() <= 16 * 1024)
+                && std::fs::read_to_string(path).is_ok_and(|s| contains(&s)) { return false; }
+        }
+        true
     }
 
     /// Whether `path` names the same program as `executable`, ignoring the
@@ -1625,6 +1653,12 @@ pub trait CliAdapter: Sync {
     fn login_args(&self) -> Option<Vec<String>> {
         None
     }
+    /// Some bridges use an ACP permission request to ask a question. Its
+    /// answer always belongs to the user, including in YOLO mode.
+    fn acp_user_question(&self, _tool: &Value) -> bool { false }
+
+    fn acp_terminal_login_args(&self) -> Option<Vec<String>> { self.login_args() }
+
     fn login_hint(&self) -> &'static str {
         ""
     }
@@ -1653,6 +1687,10 @@ pub trait CliAdapter: Sync {
     /// process PATH that a terminal launch would also use.
     fn acp_search_directories(&self, home: &Path) -> Vec<PathBuf> {
         let mut directories = self.native_binary_directories(home);
+        if matches!(self.acp().entry.and_then(|e| e.dependency).and_then(|d| d.installer), Some(AcpInstaller::Npm)) {
+            let prefix = home.join(".cliora").join("acp");
+            directories.insert(0, if cfg!(windows) { prefix } else { prefix.join("bin") });
+        }
         for directory in self
             .native_installations(home)
             .into_iter()
@@ -1752,20 +1790,9 @@ pub trait CliAdapter: Sync {
                     .map(|key| ((*key).to_string(), value.clone())),
             );
         }
-        let mut remove_environment = entry
-            .environment
-            .remove
-            .iter()
-            .map(|key| (*key).to_string())
-            .collect::<Vec<_>>();
-        if let Some(accounts) = self.accounts() {
-            for key in accounts.remove_environment() {
-                let key = (*key).to_string();
-                if !remove_environment.contains(&key) {
-                    remove_environment.push(key);
-                }
-            }
-        }
+        // Account isolation belongs to the selected NativeContext. A native
+        // login without a managed binding inherits the same environment as a PTY.
+        let remove_environment = entry.environment.remove.iter().map(|key| (*key).to_owned()).collect();
         Ok(AcpCommand {
             program,
             args: entry.args.iter().map(|arg| (*arg).to_string()).collect(),

@@ -391,6 +391,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
           // ACP conversations come from the shared host, not from the PTY list.
           if (command === 'list_acp_sessions') return acpFixture ? acpFixture.map((item) => ({ ...item })) : [];
           if (command === 'acp_session') return acpFixture?.find((item) => item.id === args.sessionId) ?? null;
+          if (command === 'acp_dependency_installed') return true;
           if (command === 'acp_prompt' || command === 'acp_cancel' || command === 'acp_respond_permission' || command === 'acp_respond_access' || command === 'acp_revoke_grants' || command === 'acp_kill_terminal' || command === 'acp_set_mode' || command === 'acp_set_config' || command === 'acp_close'
             || command === 'acp_authenticate' || command === 'acp_respond_elicitation' || command === 'acp_delete_native_session') return null;
           // A dropped picture: a tiny PNG the tray previews; one named "reading" stays

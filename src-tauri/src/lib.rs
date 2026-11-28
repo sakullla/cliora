@@ -407,6 +407,7 @@ pub fn run() {
             commands::set_custom_terminal,
             commands::set_default_launch_mode,
             commands::set_launch_interaction,
+            commands::acp_dependency_installed,
             commands::list_acp_sessions,
             commands::acp_session,
             commands::acp_prompt,

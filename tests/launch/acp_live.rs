@@ -320,7 +320,7 @@ fn run_session(adapter: &dyn crate::adapters::CliAdapter, command: &AcpCommand, 
             diagnostics,
             shutdown,
         };
-        open_with(spec, io, Some(secret))
+        open_with(spec, io, secret, None)
     });
     let handshake_seconds = started.elapsed().as_secs_f32();
     let mut record = match &opened {

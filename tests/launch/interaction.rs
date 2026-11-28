@@ -40,6 +40,20 @@ fn request(tool: &str) -> LaunchRequest {
 }
 
 #[test]
+fn kimi_uses_its_declared_device_login_in_the_workbench() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("app.db")).unwrap();
+    let registry = Registry::builtins().with_fixture_installation("kimi_code", "2.7.2");
+    let mut login = LaunchEnvelope::from(request("kimi_code"));
+    login.request.interaction = Some(InteractionMode::Terminal);
+    login.request.directory = Some(temp.path().display().to_string());
+    login.acp_terminal_login = true;
+    let plan = plan_envelope(&db, &registry, temp.path(), login).unwrap();
+    assert_eq!(plan.terminal, TerminalId::Workbench);
+    assert_eq!(plan.cli_args, ["acp", "--login"]);
+}
+
+#[test]
 fn a_stored_interaction_reads_as_terminal_until_it_is_changed() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("app.db")).unwrap();

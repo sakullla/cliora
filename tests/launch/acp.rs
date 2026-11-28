@@ -1027,7 +1027,7 @@ fn the_child_receives_its_own_secret_session_token() {
     let seen = seen.trim().to_string();
     assert_ne!(seen, "stale-parent-token", "子进程不得继承旧令牌");
     assert_eq!(seen.len(), 36, "子进程必须拿到一个新会话令牌：{seen}");
-    assert_eq!(seen, token_guard.token().to_owned(), "令牌必须属于该会话本身的 broker 会话");
+    assert_eq!(seen, token_guard.unwrap().token().to_owned(), "令牌必须属于该会话本身的 broker 会话");
     if let Some(mut stop) = io.shutdown.take() {
         stop();
     }
@@ -1087,7 +1087,11 @@ fn closing_a_conversation_terminates_the_agents_process_tree() {
 fn the_child_environment_keeps_the_planned_boundaries() {
     let mut start = spec(Path::new("."));
     start.credential = Some(("FIXTURE_KEY".into(), "value".into()));
+    start.remove_environment.extend(["FIXTURE_HOME".into(), "FIXTURE_KEY".into()]);
+    start.environment.push(("FIXTURE_HOME".into(), "selected-account".into()));
     let environment = child_environment(&start);
+    assert!(environment.remove.contains(&"FIXTURE_KEY".to_owned()));
+    assert!(environment.set.contains(&("FIXTURE_HOME".into(), "selected-account".into())));
     assert!(environment.set.contains(&("FIXTURE_MODE".to_string(), "acp".to_string())));
     assert!(environment.set.iter().any(|(name, _)| name == "FIXTURE_KEY"));
     // The adapter's own removals, the plan's removals and the session markers
@@ -1108,17 +1112,56 @@ fn the_child_environment_keeps_the_planned_boundaries() {
 
 
 #[test]
+fn remote_acp_uses_the_agents_directory_and_rejects_local_file_and_terminal_requests() {
+    let directory = temp_dir();
+    let remote_dir = directory.path().join("remote-only");
+    let (checked, received) = channel();
+    let (io, mut agent) = pair();
+    let worker = std::thread::spawn(move || {
+        let init = agent.handshake(false);
+        let capabilities = &init["params"]["clientCapabilities"];
+        assert!(capabilities.get("fs").is_none() && capabilities.get("terminal").is_none());
+        for method in ["fs/read_text_file", "fs/write_text_file", "terminal/create"] {
+            agent.send(json!({"jsonrpc":"2.0","id":48,"method":method,"params":{"sessionId":"session-1"}}));
+            let reply = agent.next_line();
+            assert_eq!(reply["error"]["code"], -32601);
+        }
+        checked.send(()).unwrap();
+        agent.stay_connected();
+    });
+    let mut start = spec(&remote_dir);
+    start.project_id = Some("remote:fixture".into());
+    start.mode = LaunchMode::Yolo;
+    let snapshot = open(start, io).unwrap();
+    assert_eq!(snapshot.directory, remote_dir.display().to_string());
+    assert!(list_files(&snapshot.id, "", 10).is_err());
+    assert!(read_image(&snapshot.id, "test.png").is_err());
+    assert!(prompt_with(&snapshot.id, "", &[AcpAttachment::File { path: "Cargo.toml".into() }]).is_err());
+    assert!(crate::terminal_paths::resolve_for_session(&snapshot.id, directory.path(), ".").is_err());
+    // Keep the connection open until all three requests have received their response.
+    received.recv_timeout(Duration::from_secs(5)).unwrap();
+    close(&snapshot.id).unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
 fn a_conversation_id_opens_paths_inside_its_own_directory() {
     let directory = temp_dir();
     std::fs::create_dir_all(directory.path().join("src")).unwrap();
     std::fs::write(directory.path().join("src/a.ts"), "export {};\n").unwrap();
     let expected = directory.path().join("src/a.ts").canonicalize().unwrap();
+    std::process::Command::new("git").args(["init", "--quiet"]).arg(directory.path()).status().unwrap();
     let (io, mut agent) = pair();
     let worker = std::thread::spawn(move || {
         agent.handshake(false);
         agent.stay_connected();
     });
     let snapshot = open(spec(directory.path()), io).unwrap();
+    let cwd = crate::commands::workbench_local_directory(&snapshot.id).unwrap().unwrap();
+    let root = crate::twiglane::checked_worktree(&cwd).unwrap();
+    assert!(crate::session_baseline::for_root(&snapshot.id, &root).is_some());
+    assert_eq!(crate::twiglane::code_status(&snapshot.id, &cwd).state, "ready");
+    assert!(running_local_directories().iter().any(|(id, _)| id == &snapshot.id));
     let home = temp_dir();
     // A tool call's location resolves against the conversation's directory, with
     // or without a line number, exactly like a terminal session's path.

@@ -52,7 +52,8 @@ pub fn client_info() -> Value {
 /// which this client does not do, so it is not advertised. Subagents are
 /// served: a child session is registered, its updates and requests are
 /// attributed to it, and nothing is ever sent for a child.
-pub fn client_capabilities() -> Value {
+pub fn client_capabilities(remote: bool) -> Value {
+    if remote { return json!({"elicitation": {"form": {}}, "subagents": {}}); }
     json!({
         "fs": { "readTextFile": true, "writeTextFile": true },
         "terminal": true,

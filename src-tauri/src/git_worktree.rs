@@ -383,6 +383,7 @@ fn running_local_sessions() -> Vec<RunningSession> {
         .into_iter()
         .filter(|session| session.running && session.remote_session_id.is_none())
         .map(|session| RunningSession { session_id: session.id, directory: PathBuf::from(session.directory) })
+        .chain(crate::acp::running_local_directories().into_iter().map(|(session_id, directory)| RunningSession { session_id, directory }))
         .filter(|session| !session.directory.as_os_str().is_empty())
         .collect()
 }

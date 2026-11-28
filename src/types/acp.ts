@@ -108,6 +108,7 @@ export type AcpPermissionOption = {
 /** An open authorization request on the tool call it asks about. It is valid only
  *  while its request id is in the snapshot's pending list. */
 export type AcpPermissionRequest = {
+  userQuestion?: boolean;
   requestId: string;
   turnId: string;
   options: AcpPermissionOption[];

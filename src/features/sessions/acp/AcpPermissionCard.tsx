@@ -23,14 +23,14 @@ export function AcpPermissionCard({ title, request, busy, onAnswer }: {
   onAnswer: (requestId: string, optionId: string | null) => void;
 }) {
   const { t } = useTranslation();
-  return <section className={styles.card} role="group" aria-label={title} data-request-id={request.requestId} data-card="permission">
+  return <section className={styles.card} role="group" aria-label={title} data-request-id={request.requestId} data-card={request.userQuestion ? 'question' : 'permission'}>
     <div className={styles.cardHead}>
-      <strong className={styles.cardTitle}><Icon name="shield" size={13} />{t('sessions.acpPermissionTitle')}</strong>
-      <span className={styles.cardTag}>{t('sessions.acpCardPermission')}</span>
+      <strong className={styles.cardTitle}><Icon name={request.userQuestion ? 'user' : 'shield'} size={13} />{t(request.userQuestion ? 'sessions.taskNeedsAnswer' : 'sessions.acpPermissionTitle')}</strong>
+      {!request.userQuestion && <span className={styles.cardTag}>{t('sessions.acpCardPermission')}</span>}
     </div>
     <div className={styles.cardActions}>
-      {request.options.map((option) => <button key={option.optionId} type="button" className={styles.action} data-variant={optionVariant(option.kind)} data-option-kind={option.kind} disabled={busy} onClick={() => onAnswer(request.requestId, option.optionId)}>{option.name}</button>)}
-      <button type="button" className={styles.action} data-variant="quiet" disabled={busy} onClick={() => onAnswer(request.requestId, null)}>{t('sessions.acpPermissionDismiss')}</button>
+      {request.options.map((option) => <button key={option.optionId} type="button" className={styles.action} data-variant={request.userQuestion ? 'secondary' : optionVariant(option.kind)} data-option-kind={option.kind} disabled={busy} onClick={() => onAnswer(request.requestId, option.optionId)}>{option.name}</button>)}
+      <button type="button" className={styles.action} data-variant="quiet" disabled={busy} onClick={() => onAnswer(request.requestId, null)}>{t(request.userQuestion ? 'common.dialog.cancel' : 'sessions.acpPermissionDismiss')}</button>
     </div>
   </section>;
 }

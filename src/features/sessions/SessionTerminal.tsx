@@ -321,13 +321,30 @@ export function guardReplayReplies(term: Terminal): { replaying: boolean; dispos
 // terminals trim their scrollback after an idle grace period to keep WebView
 // memory low when many sessions run in parallel.
 const TERMINAL_SCROLLBACK_ACTIVE = 3500;
-const TERMINAL_SCROLLBACK_HIDDEN = 1000;
+// Background panes share these history rows across hosts. The visible screen
+// is separate from scrollback and remains available to each live parser.
+const BACKGROUND_SCROLLBACK_ROWS = 6000;
+export function backgroundScrollbackRows(panes: number): number {
+  return Math.min(1000, Math.floor(BACKGROUND_SCROLLBACK_ROWS / Math.max(1, panes)));
+}
 const HIDDEN_SCROLLBACK_TRIM_MS = 15_000;
 const ACTIVE_WRITE_FLUSH_MS = 16;
 const HIDDEN_WRITE_FLUSH_MS = 80;
 const ACTIVE_ACTIVITY_INSPECT_MS = 80;
 const HIDDEN_ACTIVITY_INSPECT_MS = 300;
 const APP_WHEEL_PACE_MS = 12;
+
+// xterm sizes its persistent UTF-32 decoder to its largest write. Feed byte
+// views in order so a large replay or output burst cannot grow every decoder.
+const TERMINAL_WRITE_BYTES = 8 * 1024;
+function writeTerminalBytes(term: Terminal, bytes: Uint8Array, done?: () => void) {
+  let start = 0;
+  while (bytes.length - start > TERMINAL_WRITE_BYTES) {
+    term.write(bytes.subarray(start, start + TERMINAL_WRITE_BYTES));
+    start += TERMINAL_WRITE_BYTES;
+  }
+  term.write(start ? bytes.subarray(start) : bytes, done);
+}
 
 /** An open menu or dialog owns the keyboard for as long as it is up. A focus intent that is
  *  only a frame or more away must check this first: the frame that opens a popup runs long
@@ -362,13 +379,14 @@ export type TerminalBridge = {
  * `active` means the terminal is on screen (one pane, or either pane of a split).
  * `focused` marks the one pane that owns keyboard input.
  */
-export function SessionTerminal({ sessionId, toolId, label, active, keepRendererWarm = false, focused = active, suspendInput = false, peeking = false, running, remote = false, startedAt, fontSize, lineHeight = 1.35, scrollSpeed = 'standard', theme, cursorBlink, pane, header, overlay, footer, onFilesPaste, writers, pending, handles, bridge }: {
+export function SessionTerminal({ sessionId, toolId, label, active, backgroundScrollback, keepRendererWarm = false, focused = active, suspendInput = false, peeking = false, running, remote = false, startedAt, fontSize, lineHeight = 1.35, scrollSpeed = 'standard', theme, cursorBlink, pane, header, overlay, footer, onFilesPaste, writers, pending, handles, bridge }: {
   sessionId: string;
   toolId: string;
   /** Start time (ms). A replay of a session this young still answers its device queries. */
   startedAt?: number;
   label: string;
   active: boolean;
+  backgroundScrollback: number;
   /** Allow a bounded warm renderer only while the workbench is visible. */
   keepRendererWarm?: boolean;
   focused?: boolean;
@@ -419,6 +437,8 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
   const startedAtRef = useRef(startedAt);
   startedAtRef.current = startedAt;
   const activeRef = useRef(active);
+  const backgroundScrollbackRef = useRef(backgroundScrollback);
+  backgroundScrollbackRef.current = backgroundScrollback;
   const focusedRef = useRef(focused);
   const suspendInputRef = useRef(suspendInput);
   const runningRef = useRef(running);
@@ -452,7 +472,7 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       cursorWidth: 2,
       cursorInactiveStyle: 'outline',
       disableStdin: !runningRef.current,
-      scrollback: activeRef.current ? TERMINAL_SCROLLBACK_ACTIVE : TERMINAL_SCROLLBACK_HIDDEN,
+      scrollback: activeRef.current ? TERMINAL_SCROLLBACK_ACTIVE : backgroundScrollbackRef.current,
       scrollOnUserInput: true,
       smoothScrollDuration: 0,
       scrollSensitivity: TERMINAL_SCROLL_MULTIPLIER[scrollSpeedRef.current] ?? TERMINAL_SCROLL_MULTIPLIER.standard,
@@ -535,7 +555,7 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
       if (!frameChunks.length) return;
       const merged = frameChunks.length === 1 ? frameChunks[0] : concatBytes(frameChunks);
       frameChunks.length = 0;
-      try { term.write(merged); }
+      try { writeTerminalBytes(term, merged); }
       catch { /* Malformed bytes stay out of the terminal. */ }
     };
     const scheduleWriteBytes = (bytes: Uint8Array) => {
@@ -1245,10 +1265,10 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
         // bell or a palette query would act on a session that already consumed them once.
         const history = replies.replaying ? stripHistorySideEffects(snapshot) : snapshot;
         if (snapshot.length && suffix.length) {
-          term.write(history, () => { replies.replaying = false; });
-          term.write(suffix, finishReplay);
+          writeTerminalBytes(term, history, () => { replies.replaying = false; });
+          writeTerminalBytes(term, suffix, finishReplay);
         } else if (snapshot.length || suffix.length) {
-          term.write(history.length ? history : suffix, finishReplay);
+          writeTerminalBytes(term, history.length ? history : suffix, finishReplay);
         } else finishReplay();
       } catch { finishReplay(); }
     }).catch(() => {
@@ -1330,18 +1350,22 @@ export function SessionTerminal({ sessionId, toolId, label, active, keepRenderer
     const term = termRef.current;
     if (!term) return;
     if (active || peeking) {
-      if (term.options.scrollback !== TERMINAL_SCROLLBACK_ACTIVE) {
-        term.options.scrollback = TERMINAL_SCROLLBACK_ACTIVE;
-      }
+      term.options.scrollback = TERMINAL_SCROLLBACK_ACTIVE;
       return;
     }
+    if (term.options.scrollback !== TERMINAL_SCROLLBACK_ACTIVE) return;
     const timer = window.setTimeout(() => {
-      if (termRef.current === term && !activeRef.current && term.options.scrollback !== TERMINAL_SCROLLBACK_HIDDEN) {
-        term.options.scrollback = TERMINAL_SCROLLBACK_HIDDEN;
-      }
+      if (termRef.current === term && !activeRef.current) term.options.scrollback = backgroundScrollbackRef.current;
     }, HIDDEN_SCROLLBACK_TRIM_MS);
     return () => window.clearTimeout(timer);
   }, [active, peeking]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    // Rebalance cold panes immediately. A recently visible pane's existing
+    // timer applies the latest share when its grace period expires.
+    if (term && term.options.scrollback !== TERMINAL_SCROLLBACK_ACTIVE) term.options.scrollback = backgroundScrollback;
+  }, [backgroundScrollback]);
 
   useEffect(() => {
     const term = termRef.current;

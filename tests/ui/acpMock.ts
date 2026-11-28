@@ -12,7 +12,7 @@ type AcpDeclaration = {
   state: 'supported' | 'unverified' | 'unsupported';
   evidence?: 'interactive' | 'handshake' | 'documented' | 'none';
   reason?: string;
-  entry?: { executable: string; args: string[]; origin: 'native' | 'vendor' | 'bridge'; dependency?: { name: string; installHint: string }; capabilities?: Record<string, boolean>; yolo?: { kind: 'client' } | { kind: 'args'; args: string[] } | { kind: 'mode'; modeId: string } };
+  entry?: { executable: string; args: string[]; origin: 'native' | 'vendor' | 'bridge'; dependency?: { name: string; installHint: string; installer?: 'npm' | 'pipx' }; capabilities?: Record<string, boolean>; yolo?: { kind: 'client' } | { kind: 'args'; args: string[] } | { kind: 'mode'; modeId: string } };
 };
 
 type Config = {
@@ -21,6 +21,7 @@ type Config = {
   acp?: AcpDeclaration;
   interactionError?: string | null;
   conversations?: Snapshot[];
+  remoteHost?: boolean;
   failInteractionSave?: boolean;
   failLaunch?: string | null;
   sessions?: Array<Record<string, unknown>>;
@@ -46,6 +47,7 @@ type Snapshot = AcpSessionSnapshot;
 
 export async function installAcpMock(page: Page, config: Config = {}) {
   await page.addInitScript((config: Config) => {
+    if (config.remoteHost) localStorage.setItem('cliora:remote-target', 'ssh-fixture');
     const bridge: { handlers: Array<(event: { payload: unknown }) => void>; listens: Record<string, number> } = { handlers: [], listens: {} };
     const conversations: Snapshot[] = (config.conversations ?? []).map((item) => JSON.parse(JSON.stringify(item)));
     const state = {
@@ -54,6 +56,7 @@ export async function installAcpMock(page: Page, config: Config = {}) {
       failInteractionSave: config.failInteractionSave ?? false,
       failLaunch: config.failLaunch ?? null,
       conversations,
+      installedOn: [] as string[],
       interactionSaves: [] as string[],
       launches: [] as Array<Record<string, unknown>>,
       prompts: [] as Array<[string, string]>,
@@ -126,7 +129,7 @@ export async function installAcpMock(page: Page, config: Config = {}) {
         metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } },
         transformCallback: (callback: (event: { payload: unknown }) => void) => { bridge.handlers.push(callback); return bridge.handlers.length - 1; },
         invoke: async (command: string, args: Record<string, any> = {}) => {
-          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: config.theme ?? 'light' }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: config.theme ?? 'light', remote_ssh_enabled: !!config.remoteHost }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
           if (command === 'list_cli_adapters') return {
             registered: [{
               id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: config.yoloAvailable ?? true, resumeLatestAvailable: false, projectModelOverride: false,
@@ -151,8 +154,13 @@ export async function installAcpMock(page: Page, config: Config = {}) {
           if (command === 'list_workbench_restore_sessions') return [];
           if (command === 'list_projects') return [];
           if (command === 'list_business_workspaces' || command === 'list_workspace_session_contexts') return [];
-          if (command === 'list_remote_projects') return [];
-          if (command === 'list_remote_targets') return [];
+          if (command === 'list_remote_projects') return config.remoteHost ? [{ id: 'folder', targetId: 'ssh-fixture', name: 'repo', path: '/srv/repo', updatedAt: 1 }] : [];
+          if (command === 'list_remote_targets') return config.remoteHost ? [{ id: 'ssh-fixture', name: 'SSH fixture', host: 'example.test', user: 'fixture', port: 22, authMethod: 'key', enabled: true, defaultPath: '/srv/repo', updatedAt: 1 }] : [];
+          if (command === 'acp_dependency_installed') return state.installedOn.includes(args.targetId ?? 'local');
+          if ((command === 'maintain_registered_cli' || command === 'maintain_remote_cli') && args.action === 'install_acp') {
+            state.installedOn.push(command === 'maintain_remote_cli' ? args.targetId : 'local');
+            return { output: 'installed', version: null };
+          }
           if (command === 'list_remote_sessions') return [];
           if (command === 'list_worktree_ledger') return [];
           if (command === 'list_acp_sessions') return conversations;

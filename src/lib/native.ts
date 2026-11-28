@@ -569,8 +569,8 @@ export const native = {
   reattachWorkbenchSession: (sessionId: string, size?: WorkbenchTerminalSize) => command<void>('reattach_workbench_session', { sessionId, ...size }),
   cliLatestVersion: (toolId: string, version?: string) => command<string>('cli_latest_version', { toolId, version: version || null }),
   cancelCliMaintenance: (toolId: string) => command<void>('cancel_cli_maintenance', { toolId }),
-  maintainRegisteredCli: (toolId: string, action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm' | 'upgrade_major', source?: string, version?: string) => command<MaintenanceResult>('maintain_registered_cli', { toolId, action, source: source ?? null, version: version || null }),
-  maintainRemoteCli: (targetId: string, toolId: string, action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm' | 'upgrade_major', source?: string, version?: string, options?: RemoteOperationOptions) => remoteCommand<MaintenanceResult>('maintain_remote_cli', { targetId, toolId, action, source: source ?? null, version: version || null }, 'write', options),
+  maintainRegisteredCli: (toolId: string, action: 'install_acp' | 'install' | 'upgrade' | 'install_native' | 'uninstall_npm' | 'upgrade_major', source?: string, version?: string) => command<MaintenanceResult>('maintain_registered_cli', { toolId, action, source: source ?? null, version: version || null }),
+  maintainRemoteCli: (targetId: string, toolId: string, action: 'install_acp' | 'install' | 'upgrade' | 'install_native' | 'uninstall_npm' | 'upgrade_major', source?: string, version?: string, options?: RemoteOperationOptions) => remoteCommand<MaintenanceResult>('maintain_remote_cli', { targetId, toolId, action, source: source ?? null, version: version || null }, 'write', options),
   getTrayStatus: () => command<TrayStatus>('get_tray_status'),
   quitApp: () => command<void>('quit_app'),
   listCliAdapters: () => command<AdapterCatalog>('list_cli_adapters'),
@@ -646,6 +646,9 @@ export const native = {
 export const acpEventName = 'cliora:acp-event';
 
 export const acp = {
+  dependencyInstalled: (toolId: string, targetId: string | null) => targetId
+    ? remoteCommand<boolean>('acp_dependency_installed', { toolId, targetId }, 'read', { fresh: true })
+    : command<boolean>('acp_dependency_installed', { toolId, targetId: null }),
   list: () => command<AcpSessionSnapshot[]>('list_acp_sessions'),
   session: (sessionId: string) => command<AcpSessionSnapshot>('acp_session', { sessionId }),
   /** Submit one turn. Attachments: images only when the agent declared the image

@@ -139,6 +139,7 @@ pub struct AcpPermissionOption {
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpPermissionRequest {
+    pub user_question: bool,
     pub request_id: String,
     pub turn_id: String,
     pub options: Vec<AcpPermissionOption>,
@@ -727,6 +728,21 @@ impl Timeline {
         let AcpTimelineItem::Tool(call) = &mut self.items[index] else { return None };
         call.permission = permission;
         Some(call.clone())
+    }
+
+    /// Pi UI questions are synthetic tool calls with no later completion event.
+    pub fn finish_permission(&mut self, id: &str, answer: Option<&str>) -> Option<AcpToolCall> {
+        let AcpTimelineItem::Tool(call) = self.get(id)? else { return None };
+        if !call.permission.as_ref().is_some_and(|request| request.user_question) {
+            return self.set_permission(id, None);
+        }
+        let mut call = call.clone();
+        call.permission = None;
+        call.status = if answer.is_some() { "completed" } else { "failed" };
+        let (text, truncated) = cap(answer.unwrap_or("已取消"), MAX_RAW_INPUT_CHARS);
+        call.content = vec![AcpToolContent::Text { text, truncated }];
+        self.upsert(AcpTimelineItem::Tool(call.clone()));
+        Some(call)
     }
 
     /// The tail of the latest reply a child produced.

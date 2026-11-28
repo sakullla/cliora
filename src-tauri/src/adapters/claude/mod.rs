@@ -102,6 +102,8 @@ impl CliAdapter for Claude {
                 dependency: Some(super::AcpDependency {
                     name: "@agentclientprotocol/claude-agent-acp",
                     program: None,
+                    installer: Some(super::AcpInstaller::Npm),
+                    obsolete_package: None,
                     install_hint: "npm install -g @agentclientprotocol/claude-agent-acp，或使用其独立发布包",
                     help_url: "https://github.com/agentclientprotocol/claude-agent-acp",
                 }),

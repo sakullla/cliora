@@ -128,8 +128,9 @@ fn reveal_only(path: &Path) -> bool {
 pub(crate) fn resolve_for_session(session_id: &str, home: &Path, value: &str) -> Result<PathBuf, String> {
     match crate::session_host::local_directory(session_id) {
         Ok(directory) => resolve(directory.as_deref(), home, value),
-        Err(error) => match crate::acp::snapshot(session_id) {
-            Ok(snapshot) if !snapshot.directory.trim().is_empty() => resolve_inside(Path::new(&snapshot.directory), home, value),
+        Err(error) => match crate::acp::local_directory(session_id) {
+            Ok(Some(directory)) => resolve_inside(&directory, home, value),
+            Ok(None) => Err("远程 ACP 路径不能在本机打开".into()),
             _ => Err(error),
         },
     }

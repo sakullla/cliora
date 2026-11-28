@@ -31,7 +31,7 @@ import { launchYoloSupport, type AdapterDescriptor } from '../../types/native';
 import type { TerminalSemantics } from '../../adapters/contract';
 import type { RemoteProject, RemoteTarget } from '../../types/remote';
 import { SessionTitle, stableTitle } from './SessionTitle';
-import { SessionTerminal, cleanTerminalTitle, encodeBase64, popupOwnsFocus, type OutputChunk, type TerminalBridge, type TerminalHandle, type TerminalMatch } from './SessionTerminal';
+import { SessionTerminal, backgroundScrollbackRows, cleanTerminalTitle, encodeBase64, popupOwnsFocus, type OutputChunk, type TerminalBridge, type TerminalHandle, type TerminalMatch } from './SessionTerminal';
 import { PendingTerminalOutput } from './pendingOutput';
 import { SessionActivityIcon, sessionBadgeTone } from './SessionActivityIcon';
 import type { TerminalTheme } from './terminalTheme';
@@ -727,18 +727,12 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const [pruningRemote, setPruningRemote] = useState(false);
   const remotePicker = useRemoteFolderPicker();
 
-  /** The rail rows of this window's conversations. They join the same list as the
-   *  terminal sessions, so selection, ordering, splitting and the attention entry treat
-   *  both kinds the same way. The ACP host runs on this machine, so remote hosts never
-   *  list one. */
-  const conversationRows = useMemo<WorkbenchSession[]>(
-    () => (activeTargetId !== 'local' ? [] : [...conversations.values()].map((item) => acpRow(item.snapshot))),
-    [activeTargetId, conversations],
-  );
+  const conversationRows = useMemo(() => [...conversations.values()].map(item => acpRow(item.snapshot)), [conversations]);
   const scopedSessions = useMemo(() => {
-    if (activeTargetId === 'local') return [...sessions.filter((item) => !item.projectId?.startsWith('remote:')), ...conversationRows];
-    const remoteProjectIds = new Set(remoteProjects.filter((item) => item.targetId === activeTargetId).map((item) => `remote:${item.id}`));
-    return sessions.filter((item) => !!item.projectId && remoteProjectIds.has(item.projectId));
+    const rows = [...sessions, ...conversationRows];
+    if (activeTargetId === 'local') return rows.filter(item => !item.projectId?.startsWith('remote:'));
+    const remoteProjectIds = new Set(remoteProjects.filter(item => item.targetId === activeTargetId).map(item => `remote:${item.id}`));
+    return rows.filter(item => !!item.projectId && remoteProjectIds.has(item.projectId));
   }, [activeTargetId, remoteProjects, sessions, conversationRows]);
   useEffect(() => {
     const targetChanged = selectionTarget.current !== activeTargetId;
@@ -1098,6 +1092,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     if (!active || !nativeAvailable) return;
     let alive = true;
     let stop: (() => void) | undefined;
+    const reading = new Set<string>();
     void acp.list().then((listed) => {
       if (!alive || !Array.isArray(listed)) return;
       for (const snapshot of listed) registerConversation(snapshot);
@@ -1115,7 +1110,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       });
       // A conversation this window has not seen yet (another window started it): read the
       // full snapshot rather than rendering a fragment of its event stream.
-      if (!known) void acp.session(event.sessionId).then(registerConversation).catch(() => {});
+      if (!known && event.kind !== 'snapshot' && !reading.has(event.sessionId)) {
+        reading.add(event.sessionId);
+        void acp.session(event.sessionId).then(snapshot => { if (alive) registerConversation(snapshot); })
+          .catch(() => {}).finally(() => reading.delete(event.sessionId));
+      }
     }).then((unlisten) => { if (alive) stop = unlisten; else unlisten(); }).catch(() => {});
     return () => { alive = false; stop?.(); };
   }, [active]);
@@ -1265,6 +1264,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     () => terminalTools.some((item) => item.id === launchToolId) ? launchToolId : terminalTools[0]?.id ?? '',
     [terminalTools, launchToolId],
   );
+  const launchSelection = useRef({ host: activeTargetId, tool: effectiveLaunchToolId, workspace: workspaceValue, open: newDialogOpen });
+  launchSelection.current = { host: activeTargetId, tool: effectiveLaunchToolId, workspace: workspaceValue, open: newDialogOpen };
   const selectedLaunchTool = useMemo(
     () => terminalTools.find((item) => item.id === effectiveLaunchToolId) ?? null,
     [terminalTools, effectiveLaunchToolId],
@@ -1303,7 +1304,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   const returnedReviewId = selectedReview?.status === 'returned' ? reviewResultKey(selectedReview) : null;
   const codeStatusNeeded = worktreeMenuOpen || (!!gitTarget && !!returnedReviewId);
   useEffect(() => {
-    const ids = new Set(sessions.map((session) => session.id));
+    const ids = new Set([...sessions.map(session => session.id), ...conversations.keys()]);
     const retain = <T,>(current: Map<string, T>) => {
       if ([...current.keys()].every((id) => ids.has(id))) return current;
       return new Map([...current].filter(([id]) => ids.has(id)));
@@ -1314,7 +1315,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setCodeStatusReviews(retain);
     setReviewReadKeys(retain);
     setReviewStates(retain);
-  }, [sessions]);
+  }, [sessions, conversations]);
   useEffect(() => {
     const reviews = new Set([...reviewStates.values()].map(reviewResultKey));
     for (const id of announcedReviews.current) {
@@ -2468,6 +2469,19 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setPruningRemote(false);
   }
 
+  async function ensureAcpDependency(tool: AdapterDescriptor | null | undefined, targetId: string, isCurrent: () => boolean) {
+    const dependency = tool?.acp?.entry?.dependency;
+    if (!tool || !dependency?.installer) return true;
+    if (await acp.dependencyInstalled(tool.id, targetId === 'local' ? null : targetId)) return isCurrent();
+    const host = targetId === 'local' ? t('common.host.local') : remoteTargets.find(item => item.id === targetId)?.name ?? targetId;
+    const confirmed = await confirmAction(t('sessions.acpInstallConfirm', { name: dependency.name, host }), isCurrent,
+      { title: t('sessions.acpInstallTitle'), confirmLabel: t('sessions.acpInstallContinue') });
+    if (!confirmed) return false;
+    if (targetId === 'local') await native.maintainRegisteredCli(tool.id, 'install_acp');
+    else await native.maintainRemoteCli(targetId, tool.id, 'install_acp');
+    return isCurrent();
+  }
+
   async function launchRemoteProject(project: RemoteProject, toolOverride?: string) {
     const toolId = toolOverride && terminalTools.some((item) => item.id === toolOverride)
       ? toolOverride
@@ -2482,11 +2496,13 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setNotice('');
     try {
       const tool = terminalTools.find((item) => item.id === toolId);
-      const mode = preferredLaunchMode(launchSettings, 'project', !!tool?.yoloAvailable);
+      if (savedInteraction === 'acp' && !await ensureAcpDependency(tool, project.targetId, () => launchSelection.current.host === project.targetId)) return;
+      const mode = preferredLaunchMode(launchSettings, 'project', launchYoloSupport(tool, savedInteraction).available);
       const result = await native.launchCli({
         toolId,
         projectId: `remote:${project.id}`,
         sessionId: null,
+        ...(savedInteraction === 'acp' ? { interaction: savedInteraction } : {}),
         remoteIntent: { kind: 'new' },
         mode,
         directory: null,
@@ -2577,6 +2593,11 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     setActionError('');
     setNotice('');
     try {
+      if (activeTargetId !== 'local' && !activeRemoteTarget) throw new Error(t('sessions.workspaceUnavailable', { path: activeTargetId }));
+      if (!fallback && savedInteraction === 'acp' && !await ensureAcpDependency(selectedLaunchTool, activeTargetId, () => {
+        const latest = launchSelection.current;
+        return latest.open && latest.tool === effectiveLaunchToolId && latest.host === activeTargetId && latest.workspace === workspaceValue;
+      })) return;
       let useWorkbench = launchSettings?.selected === 'workbench';
       if (launchSettings && launchSettings.selected !== 'workbench') {
         const updated = await native.setPreferredTerminal('workbench').catch(() => null);
@@ -2655,9 +2676,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         projectId,
         sessionId: null,
         ...(remoteLaunch ? { remoteIntent: { kind: 'new' as const } } : {}),
-        // A terminal retry or a remote project uses the terminal's YOLO arguments; a
+        // A terminal retry uses the terminal's YOLO arguments; a
         // conversation uses its entry's declaration.
-        mode: (fallback === 'terminal' || remoteLaunch ? !!selectedLaunchTool?.yoloAvailable : dialogYolo.available) ? launchMode : 'normal',
+        mode: (fallback === 'terminal' ? !!selectedLaunchTool?.yoloAvailable : dialogYolo.available) ? launchMode : 'normal',
         directory,
         ...(promptText ? { initialPrompt: promptText } : {}),
         ...(resume ? { resumeLatest: true } : {}),
@@ -2903,17 +2924,24 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
    * (a fresh native session, nothing replayed) or an explicit terminal start that reuses
    * the directory and project configuration an earlier attempt created.
    */
-  async function launchInDirectory(session: WorkbenchSession, interaction: 'acp' | 'terminal') {
+  async function launchInDirectory(session: WorkbenchSession, interaction: 'acp' | 'terminal', login = false) {
     if (busy) return;
     setBusy(session.id);
     setActionError('');
     setNotice('');
     try {
+      if (interaction === 'acp') {
+        const target = libraryHostId(session.projectId, remoteProjects);
+        if (!target) throw new Error(t('sessions.workspaceUnavailable', { path: session.directory }));
+        if (!await ensureAcpDependency(terminalTools.find(tool => tool.id === session.toolId), target,
+          () => launchSelection.current.host === target)) return;
+      }
       const result = await native.launchCli({
         toolId: session.toolId,
         projectId: session.projectId,
         sessionId: null,
-        mode: session.mode,
+        mode: login ? 'normal' : session.mode,
+        ...(login ? { acpTerminalLogin: true } : {}),
         directory: session.directory || null,
         worktreeIntent: 'given',
         initialPrompt: null,
@@ -2921,8 +2949,21 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         interaction,
       });
       if (result.warnings?.length) setNotice(result.warnings.join('\n'));
-      const opened = await adoptLaunchResult(result);
-      if (opened) { onFailure(null); selectPendingSession(opened); return; }
+      const opened = workbenchSessionId(result);
+      if (opened) {
+        if (isAcpLaunch(result)) {
+          const snapshot = await acp.session(opened);
+          if (!snapshot) throw new Error(t('sessions.startedSessionMissing'));
+          registerConversation(snapshot);
+        } else {
+          const listed = await native.listWorkbenchSessions();
+          if (!listed.some(row => row.id === opened)) throw new Error(t('sessions.startedSessionMissing'));
+          applyListedSessions(listed);
+        }
+        onFailure(null);
+        selectPendingSession(opened);
+        return;
+      }
       setNotice(result.status === 'desktop_requested' ? t('sessions.desktopOpened') : t('sessions.externalOpened'));
     } catch (value) {
       setActionError(formatFailure(value, t('sessions.launchFailed'), t('sessions.failureHint')));
@@ -3044,6 +3085,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
     // 目标会话已经不在工作台里（可能已关闭或属于别的窗口）：此时连 CLI 都查不到，不指向任何
     // 按钮，只说这批意见能做什么。
     if (!session) return t('sessions.feedbackDetached');
+    if (conversationOf(session.id)) return t('sessions.feedbackAcpCopy');
     // 远程会话不在本机 PTY 里，原因是远程而不是"界面不可输入"。
     if (session.projectId?.startsWith('remote:')) return t('sessions.feedbackRemoteCopy');
     if (!onTarget) return t('sessions.feedbackOtherWindow');
@@ -3651,7 +3693,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
 
   /** A running local session keeps a checkout in use; cleanup names it instead of failing. */
   function worktreeUser(row: WorktreeLedgerEntry): WorkbenchSession | undefined {
-    return sessions.find((session) => session.running
+    return [...sessions, ...conversationRows].find((session) => session.running
       && !session.projectId?.startsWith('remote:')
       && !!session.directory
       && withinDirectory(row.worktreePath, session.directory));
@@ -4124,6 +4166,9 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
   // Conversations join the same mount set: a live one stays mounted so its stream keeps
   // arriving while another session is selected.
   const mountedSessions = [...sessions, ...conversationRows].filter((session) => session.running || visibleIds.includes(session.id) || recentSessionIds.includes(session.id) || session.id === peekSessionId || session.id === menu?.sessionId);
+  const backgroundScrollback = backgroundScrollbackRows(mountedSessions.filter(session =>
+    !conversations.has(session.id) && session.id !== peekSessionId && !(renderActive && visibleIds.includes(session.id)),
+  ).length);
   // A pending selection has no input target until that identity has been listed.
   const stageSession = selected;
 
@@ -4318,7 +4363,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           const canSwitchWorktree = !!current && !remote && worktrees.length > 1;
           const { shown: shownTrees, matched: matchedTrees, hits: worktreeHits } = menuWorktrees(worktrees, worktreeQuery);
           // 只有一个 checkout 时菜单没有别的选择，但仍然要提供审查入口和真实状态。
-          const canOpenGitMenu = !!current && (remote || canSwitchWorktree || !!gitLabel);
+          const canOpenGitMenu = !!current && !(remote && currentIsAcp) && (remote || canSwitchWorktree || !!gitLabel);
           const review = current ? reviewStates.get(current.id) ?? null : null;
           const codeStatus = review?.remoteCheck ?? (current ? codeStatuses.get(current.id) ?? null : null);
           const codeStatusStale = !!current && (!!codeStatusUnknown.get(current.id) || !codeStatus || codeStatus.state !== 'ready');
@@ -4330,7 +4375,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
           const gitChipTitle = [gitTitle, t('sessions.gitScopeHint')].filter(Boolean).join('\n');
           // 反馈面板归属：属于本窗口列表里的会话时只在选中它时出现；属于别的主机（远程会话）
           // 或已经离开工作台的会话时保留只读副本，否则一次切换就把意见正文弄丢了。
-          const feedbackPanelTarget = feedback ? sessions.find((item) => item.id === feedback.sessionId) ?? null : null;
+          const feedbackPanelTarget = feedback ? sessions.find(item => item.id === feedback.sessionId) ?? conversationRows.find(item => item.id === feedback.sessionId) ?? null : null;
           const feedbackPanelHere = !!feedback && (current?.id === feedback.sessionId || !scopedSessions.some((item) => item.id === feedback.sessionId));
           return <div className={styles.window} hidden={!current && !feedbackPanelHere} data-split={split ? 'true' : undefined} data-tone={tone}>
             {current && <header className={styles.stageBar} data-window-titlebar={windowChrome ?? undefined} data-tauri-drag-region={windowChrome ? 'deep' : undefined} onDoubleClick={(event) => {
@@ -4399,7 +4444,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                 // 只有看着这个会话（并且它还在本窗口）时才允许原生写入；别的主机或已离开的
                 // 会话只保留只读正文与复制入口。
                 const onTarget = !!current && current.id === feedback.sessionId;
-                const canSend = onTarget && !!target && feedbackCanSend(feedback, target);
+                const canSend = onTarget && !!target && !conversationOf(target.id) && feedbackCanSend(feedback, target);
                 const hint = feedback.state === 'prepared' ? feedbackHint(feedback, target, onTarget) : '';
                 return <section className={styles.feedbackPanel} aria-label={t('sessions.feedbackTitle')} data-state={feedback.state}>
                   <header className={styles.feedbackHead}>
@@ -4488,14 +4533,14 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
                     conversation={conversation} toolName={toolName(session)} active={visible} focused={focused} pane={split ? pane : undefined} header={split && visible ? paneHeader(session) : null}
                     promptContext={sessionPromptContext(session)} workspaces={businessWorkspaces} dropActive={visible && dropTarget === session.id}
                     onSend={(text, attachments) => promptConversation(session.id, text, attachments)} onStop={() => stopConversation(session.id)} onAnswer={(requestId, optionId) => answerConversation(session.id, requestId, optionId)}
-                    onAnswerAccess={(accessId, decision) => answerConversationAccess(session.id, accessId, decision)} onRevokeGrants={(kinds) => acp.revokeGrants(session.id, kinds)} onKillTerminal={(terminalId) => acp.killTerminal(session.id, terminalId)} onOpenPath={nativeAvailable ? (target) => openConversationPath(session.id, target) : undefined} onClose={() => endSession(session)}
+                    onAnswerAccess={(accessId, decision) => answerConversationAccess(session.id, accessId, decision)} onRevokeGrants={(kinds) => acp.revokeGrants(session.id, kinds)} onKillTerminal={(terminalId) => acp.killTerminal(session.id, terminalId)} onOpenPath={nativeAvailable && !remotePane ? (target) => openConversationPath(session.id, target) : undefined} onClose={() => endSession(session)}
                     onSetMode={(modeId) => acp.setMode(session.id, modeId)} onSetConfig={(configId, value) => acp.setConfig(session.id, configId, value)}
-                    onAuthenticate={(methodId) => acp.authenticate(session.id, methodId)} onLoginTerminal={() => launchInDirectory(session, 'terminal')} onOpenTerminal={() => launchInDirectory(session, 'terminal')}
+                    onAuthenticate={(methodId) => acp.authenticate(session.id, methodId)} onLoginTerminal={() => launchInDirectory(session, 'terminal', true)} onOpenTerminal={() => launchInDirectory(session, 'terminal')}
                     onRespondElicitation={(requestId, action, content) => acp.respondElicitation(session.id, requestId, action, content)}
                     onListFiles={(query) => acp.listFiles(session.id, query, 50)} onReadImage={(path) => acp.readImage(session.id, path)} onNativeSessions={(cursor) => acp.nativeSessions(session.id, cursor)}
                     onDeleteNativeSession={(nativeId) => acp.deleteNativeSession(session.id, nativeId)} onResumeNative={(nativeId) => resumeNativeConversation(session, nativeId)} onNewConversation={() => launchInDirectory(session, 'acp')}
                     onSearchRevision={scheduleFindRefresh} />;
-                  return <SessionTerminal key={session.id} sessionId={session.id} toolId={session.toolId} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} suspendInput={!!peekSession && session.id === selectedId} peeking={peeking} keepRendererWarm={renderActive && scopedSessionIds.has(session.id)} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onFilesPaste={(inputs) => uploads.enqueueUpload(session.id, remotePane || null, inputs)} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={TERMINAL_LINE_HEIGHT[density]} scrollSpeed={scrollSpeed} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
+                  return <SessionTerminal key={session.id} sessionId={session.id} toolId={session.toolId} label={t('sessions.terminalLabel', { tool: toolName(session) })} active={visible} backgroundScrollback={backgroundScrollback} suspendInput={!!peekSession && session.id === selectedId} peeking={peeking} keepRendererWarm={renderActive && scopedSessionIds.has(session.id)} focused={focused} pane={split ? pane : undefined} running={session.running} remote={!!remotePane} onFilesPaste={(inputs) => uploads.enqueueUpload(session.id, remotePane || null, inputs)} startedAt={session.startedAt ?? firstSeenAt.current.get(session.id)} fontSize={fontSize} lineHeight={TERMINAL_LINE_HEIGHT[density]} scrollSpeed={scrollSpeed} theme={terminalMode} cursorBlink={cursorBlink} writers={writers} pending={pending} handles={handles} bridge={bridge}
                     header={split && visible ? paneHeader(session) : null}
                     overlay={<>
                       {visible && scrolledIds.has(session.id) && <button type="button" className={styles.jumpLatest} aria-label={t('sessions.jumpToBottom')} title={t('sessions.jumpToBottom')} onClick={() => { const handle = handles.current.get(session.id); handle?.scrollToBottom(); handle?.focus(); }}><Icon name="arrowDown" size={14} /><span>{t('sessions.jumpToBottom')}</span></button>}
@@ -4677,7 +4722,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         </> : menu.kind === 'terminal' ? <>
           {/* Title-bar menu: the next step for this session. Text actions live on right-click,
               list arrangement on the session list, the interrupt and display on the toolbar. */}
-          {session.directory && !conversation && <button role="menuitem" disabled={!!reviewBusy || !!busy} title={t('sessions.reviewHint')} onClick={() => { selectSession(session.id, false); void startReview(session); }}><Icon name="branch" size={14} /><span>{t('sessions.taskChanges')}</span></button>}
+          {session.directory && !(conversation && session.projectId?.startsWith('remote:')) && <button role="menuitem" disabled={!!reviewBusy || !!busy} title={t('sessions.reviewHint')} onClick={() => { selectSession(session.id, false); void startReview(session); }}><Icon name="branch" size={14} /><span>{t('sessions.taskChanges')}</span></button>}
           {session.projectId && !session.projectId.startsWith('remote:') && <button role="menuitem" onClick={() => void native.openProjectDirectory(session.projectId!).catch(() => {})}><Icon name="arrowUpRight" size={14} /><span>{t('sessions.openFolder')}</span></button>}
           {session.directory && <button role="menuitem" onClick={() => void copySessionPath(session)}><Icon name="folder" size={14} /><span>{t('sessions.copyPath')}</span></button>}
           <span className={styles.menuDivider} role="separator" />
@@ -4804,7 +4849,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
             ? t('sessions.launchInteractionAcpPlace', { place: workspaceValueLabel(workspaceValue) })
             : launchAcp.reason || t('sessions.launchAcpUnavailable', { tool: selectedLaunchTool?.name ?? '' })}</span>
           {launchAcp.state === 'unverified' && <span className={styles.baseHint} data-acp-unverified="">{t('sessions.launchInteractionAcpUnverified')}</span>}
-          {launchAcp.capability?.entry?.dependency && <span className={styles.baseHint} data-acp-dependency="">{t('sessions.launchInteractionAcpDependency', { name: launchAcp.capability.entry.dependency.name, hint: launchAcp.capability.entry.dependency.installHint })}</span>}
+          {launchAcp.capability?.entry?.dependency && !launchAcp.capability.entry.dependency.installer && <span className={styles.baseHint} data-acp-dependency="">{t('sessions.launchInteractionAcpDependency', { name: launchAcp.capability.entry.dependency.name, hint: launchAcp.capability.entry.dependency.installHint })}</span>}
           {!launchAcp.usable && <span className={styles.workspaceMissingActions}>
             <Button size="sm" variant="secondary" disabled={launchingNew} onClick={() => void launchFromDialog('terminal')} icon={<Icon name="terminal" size={13} />}>{t('sessions.launchInteractionAcpTerminal')}</Button>
           </span>}
@@ -4812,9 +4857,8 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
         <div className={styles.dialogField}><span className={styles.fieldLabel}>{t('sessions.launchModeLabel')}</span><div className={styles.modeCards} role="radiogroup" aria-label={t('sessions.launchModeLabel')}>
           <button type="button" role="radio" aria-checked={launchMode === 'normal'} className={styles.modeCard} onClick={() => { launchModeTouched.current = true; setLaunchMode('normal'); }}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="shield" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeNormal')}</strong><small>{t('sessions.modeNormalDesc')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>
           {(() => {
-            // A remote project never becomes a conversation: it keeps the terminal's YOLO.
-            const yolo = activeRemoteTarget ? launchYoloSupport(selectedLaunchTool, 'terminal') : dialogYolo;
-            const conversation = !activeRemoteTarget && savedInteraction === 'acp';
+            const yolo = dialogYolo;
+            const conversation = savedInteraction === 'acp';
             const unavailable = yolo.reason === 'acp' ? t('sessions.yoloUnsupportedAcp') : t('sessions.yoloUnsupported');
             return <button type="button" role="radio" aria-checked={launchMode === 'yolo'} disabled={!yolo.available} title={yolo.available ? undefined : unavailable} data-yolo-route={conversation ? 'acp' : 'terminal'} className={styles.modeCard} onClick={() => { launchModeTouched.current = true; setLaunchMode('yolo'); }}><span className={styles.modeCardGlyph} aria-hidden="true"><Icon name="sparkle" size={16} /></span><span className={styles.modeCardCopy}><strong>{t('sessions.modeYolo')}</strong><small>{!yolo.available ? unavailable : conversation ? t('sessions.modeYoloAcpDesc') : t('sessions.modeYoloDesc')}</small></span><span className={styles.modeCardCheck}><Icon name="check" size={12} /></span></button>;
           })()}

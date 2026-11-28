@@ -8,6 +8,7 @@ pub mod codebuddy;
 pub mod codex;
 pub(crate) mod command_code;
 pub mod configuration;
+mod acp_remote;
 mod contract;
 pub(crate) mod cursor;
 pub(crate) mod deepseek;

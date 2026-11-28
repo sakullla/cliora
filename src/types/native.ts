@@ -139,6 +139,7 @@ export type AcpOrigin = 'native' | 'vendor' | 'bridge';
 export type AcpDependency = {
   name: string;
   program?: string;
+  installer?: 'npm' | 'pipx' | null;
   installHint: string;
   helpUrl: string;
 };
@@ -217,8 +218,8 @@ export function launchYoloSupport(descriptor: AdapterDescriptor | null | undefin
 
 /**
  * The interaction a launch from a shared entry point will actually get, mirroring the
- * backend: the stored preference applies only to a new local session of a terminal-form
- * CLI. A resume, a remote session, a desktop app or an unreadable stored value runs as a
+ * backend: the stored preference applies only to a new session of a terminal-form
+ * CLI. A resume, a desktop app or an unreadable stored value runs as a
  * terminal.
  */
 export function launchInteraction(
@@ -226,7 +227,7 @@ export function launchInteraction(
   settings: { interaction?: 'terminal' | 'acp'; interactionError?: string | null } | null | undefined,
   context: { remote?: boolean; resume?: boolean } = {},
 ): 'terminal' | 'acp' {
-  if (!descriptor || descriptor.launchForm === 'desktop' || context.remote || context.resume) return 'terminal';
+  if (!descriptor || descriptor.launchForm === 'desktop' || context.resume) return 'terminal';
   return settings?.interaction === 'acp' && !settings.interactionError ? 'acp' : 'terminal';
 }
 

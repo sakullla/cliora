@@ -156,6 +156,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   const awaitingRef = useRef<{ text: string; items: ComposerAttachment[]; before: Set<string> } | null>(null);
   const [compact, setCompact] = useState(false);
 
+  const localFiles = !snapshot.projectId?.startsWith('remote:');
   const imageAllowed = !!snapshot.agent?.promptCapabilities?.image;
   const commands = snapshot.commands ?? [];
 
@@ -185,7 +186,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
 
   const slash = commands.length ? slashQuery(draft, caret) : null;
   const slashMatches = useMemo(() => (slash == null ? [] : matchCommands(commands, slash)), [commands, slash]);
-  const mention = slash == null && live ? mentionQuery(draft, caret) : null;
+  const mention = localFiles && slash == null && live ? mentionQuery(draft, caret) : null;
   const slashKey = slash != null ? `slash:${slash}` : null;
   const mentionKey = mention ? `mention:${mention.start}` : null;
   const slashOpen = slash != null && slashMatches.length > 0 && dismissed !== slashKey;
@@ -328,6 +329,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   useEffect(() => { withdrawAbandoned(); }, [snapshot.timeline, snapshot.pending]);
 
   function addPaths(paths: string[]) {
+    if (!localFiles) { setNotices([t('sessions.acpRemoteFilePath')]); return; }
     const reasons: string[] = [];
     const known = new Set([
       ...attachmentsRef.current.flatMap((item) => (item.type === 'file' ? [item.path] : item.source ? [item.source] : [])),
@@ -687,7 +689,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
             triggerLabelClassName={styles.toolLabel}
             onPick={(prompt) => insertPromptBody(prompt.body)}
           />
-          <button
+          {localFiles && <button
             type="button"
             className={styles.toolButton}
             data-acp-attach-file=""
@@ -698,7 +700,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
           >
             <Icon name="file" size={13} />
             <span className={styles.toolLabel} aria-hidden="true">{t('sessions.acpAttachFile')}</span>
-          </button>
+          </button>}
           {imageAllowed && <>
             <input
               ref={imageInputRef}

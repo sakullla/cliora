@@ -2464,6 +2464,34 @@ test('hidden live terminals answer cursor queries without accepting keyboard inp
   await expect(page.locator('[data-pane-session="s2"] textarea')).toBeEnabled();
 });
 
+test('forty live terminals keep background output within the workbench memory budget', async ({ page }) => {
+  await page.addInitScript(() => {
+    const sessions = Array.from({ length: 39 }, (_, index) => ({
+      id: `load-${index}`, toolId: 'codex', projectId: null, directory: `C:/work/${index}`,
+      mode: 'normal', running: true, exitCode: null, startedAt: Date.now(),
+    }));
+    Object.assign(window, { __moreSessions: sessions });
+  });
+  await openWorkbench(page);
+  await page.evaluate(() => {
+    const output = (window as unknown as { __output: (text: string, id: string) => void }).__output;
+    const lines = Array.from({ length: 1600 }, (_, index) => `row-${index} ${'x'.repeat(64)}\r\n`).join('');
+    for (const id of ['s1', ...Array.from({ length: 39 }, (_, index) => `load-${index}`)]) {
+      output(lines + '\x1b[6n', id);
+    }
+  });
+  await expect.poll(() => page.evaluate(() => {
+    const log = (window as unknown as { __writeLog: Array<{ sessionId: string; text: string }> }).__writeLog;
+    return new Set(log.filter(entry => /\x1b\[\d+;\d+R/.test(entry.text)).map(entry => entry.sessionId)).size;
+  }), { timeout: 20_000 }).toBe(40);
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('HeapProfiler.collectGarbage');
+  const heap = await cdp.send('Runtime.getHeapUsage');
+  console.log('40 live terminals', heap);
+  expect(heap.usedSize + heap.backingStorageSize).toBeLessThan(48 * 1024 * 1024);
+  await cdp.detach();
+});
+
 test('late output from many unmounted sessions has a bounded retained heap', async ({ page }) => {
   await openWorkbench(page);
   const cdp = await page.context().newCDPSession(page);

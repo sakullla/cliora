@@ -182,10 +182,17 @@
 - 握手：`loadSession: true`、`sessionCapabilities` 含 list/close/delete/fork、`authMethods` = `aws-builder-id` / `aws-iam-identity-center`、`_meta.kiro` 声明 `executionTargets` 等扩展。首帧约 1.5 秒。
 - 限制：注册表 3.6.2 只列 macOS/Linux 包，本机 Windows 3.5.0 握手可用但未列入注册表；真实对话与 AWS 登录在多账号下的表现未验证。
 
+## 2026-11-28 工作台验证
+
+- macOS 上用临时 `CODEX_HOME` 和 `service_tier = "default"` 检查同名的两种 Codex 桥。旧的 `@zed-industries/codex-acp@0.12.0` 在初始化前退出。官方桥在同一配置下完成 ACP v1 握手，空账号环境的 `session/new` 返回认证请求。另用绑定到 127.0.0.1 的 OpenSSH 服务和临时密钥验证了官方桥的 SSH stdio 握手。两次检查均未发送提示词。
+- `AcpDependency.installer` 声明 npm 或 pipx 安装入口。工作台在所选主机探测入口，用户确认后执行适配器声明的安装。npm 桥使用该主机用户目录下的 `.cliora/acp` 前缀。仅有手工分发渠道的入口沿用安装说明。
+- POSIX SSH 目标使用 OpenSSH stdio 建立 ACP 协议连接，运行目录和 CLI 认证均属于远端。远端会话不提供本机文件或子终端服务，也不创建本机 secret broker 会话。工作台保留显式 PTY 回退。
+- 适配器可用 `acp_user_question` 标识借用权限协议传递的交互问题，用 `acp_terminal_login_args` 声明进入本工具交互登录流程的固定参数。Pi 的选择和确认由用户回答。Kimi 2.x 的设备登录执行 `kimi acp --login`。
+
 ## 适配器契约与共享服务
 
 - `CliAdapter::acp()` 返回 `AcpCapability { state, evidence, reason, entry }`；`entry` 携带入口程序、参数、来源、依赖、环境策略、版本线与能力标记。`CliAdapter::acp_for_version()` 用适配器自己的 `version_range` 判断；未解析到版本时版本型入口不可用，不做猜测。
-- `CliAdapter::acp_command(home, installation, version)` 解析出 `AcpCommand { program, args, environment, remove_environment, origin }`：先按适配器安装目录（含 `native_installations` 的父目录与 `extra_binary_candidates`）再按 PATH 搜索；桥接的 `dependency.program` 必须同时在场；`bind_installation` 需要已选定的 `installation`，否则报 `identity-unresolved`；`remove_environment` 是入口自身移除项与账号适配器 `remove_environment()` 的并集，所以 ACP 的账号环境隔离与终端启动一致。
+- `CliAdapter::acp_command(home, installation, version)` 解析出 `AcpCommand { program, args, environment, remove_environment, origin }`：先按适配器安装目录（含 `native_installations` 的父目录与 `extra_binary_candidates`）再按 PATH 搜索；桥接的 `dependency.program` 必须同时在场；`bind_installation` 需要已选定的 `installation`，否则报 `identity-unresolved`；`remove_environment` 指定入口禁止的变量。宿主在绑定账号时清理继承环境，再写入选定账号的目录和凭据。使用原生登录时沿用终端环境。
 - 失败原因用闭环 code：`unsupported` / `not-installed` / `dependency-missing` / `version-unsupported` / `system-program` / `identity-unresolved`，每条都带可读原因。帮助链接只出现在依赖项与 identity 类（`AcpFailure::help` 取入口 `dependency.help_url`）；`unsupported` 与 `version-unsupported` 只有原因文本，`help` 为空。UI 据此显示具体缺口并保留终端回退。
 - 注册表描述符新增 `acp` 字段，19 个适配器共用同一形状；共享设置与会话界面按字段渲染，不新增产品 ID 分支。
 - **接线状态（T4 已接线）**：前端读取描述符的 `acp` 字段（`src/types/native.ts:129` 的 `AcpCapability`），不再按产品 ID 判断：

@@ -487,6 +487,9 @@ impl CliAdapter for KimiCode {
             crate::native::profile::valid_env_name(name)
         })
     }
+    fn acp_terminal_login_args(&self) -> Option<Vec<String>> {
+        Some(vec!["acp".into(), "--login".into()])
+    }
     fn launch_args(&self, session: Option<&str>, mode: LaunchMode) -> Result<Vec<String>, String> {
         let mut args = Vec::new();
         if let Some(id) = session {

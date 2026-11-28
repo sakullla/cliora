@@ -169,7 +169,7 @@ export function AcpToolCard({
         <strong className={styles.toolTitle}>{renderRuns(title, searchQuery, searchCase)}</strong>
         {!open && summary && <span className={styles.toolSummary}>{renderRuns(summary, searchQuery, searchCase)}</span>}
       </button>
-      <span className={styles.toolStatus}><Icon name={toolStatusIcon(call.status)} size={12} />{t(toolStatusKey(call.status))}</span>
+      <span className={styles.toolStatus}><Icon name={toolStatusIcon(call.status)} size={12} />{t(request?.userQuestion && answerable ? 'sessions.taskNeedsAnswer' : toolStatusKey(call.status))}</span>
     </div>
     {open && <div id={bodyId} className={styles.toolBody}>
       {call.rawInput && <FoldedText text={call.rawInput} truncated={false} label={t('sessions.acpToolInput')} searchQuery={searchQuery} searchCase={searchCase} forceExpand={forceOpen} />}

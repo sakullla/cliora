@@ -197,7 +197,7 @@ test('every ACP command exists in the host, its registration, the IPC wrapper, t
   // The wrapper sends exactly the arguments the command takes (Tauri camel-cases them).
   for (const name of rustCommands) {
     const signature = commandsRs.match(new RegExp(`pub (?:async )?fn ${name}\\(([^)]*)\\)`))[1];
-    const params = sorted([...signature.matchAll(/(?:^|,)\s*(\w+):/g)].map((match) => camel(match[1])).filter((param) => param !== 'app' && param !== 'state'));
+    const params = sorted([...signature.matchAll(/(?:^|,)\s*(\w+):/g)].map((match) => camel(match[1])).filter((param) => !['app', 'state', 'window', 'operation'].includes(param)));
     const call = nativeTs.match(new RegExp(`command<[^>]*>\\('${name}'(?:, \\{ ([^}]*) \\})?\\)`));
     assert.ok(call, `native.ts does not call ${name}`);
     const sent = sorted((call[1] ?? '').split(',').map((part) => part.split(':')[0].trim()).filter(Boolean));

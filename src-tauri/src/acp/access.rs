@@ -395,7 +395,9 @@ impl Session {
     /// agent could persist it as a rule that a later, ordinary session would
     /// then skip. A request without an allow-once option is left for the user.
     pub(super) fn yolo_option(options: &[super::AcpPermissionOption]) -> Option<&super::AcpPermissionOption> {
-        options.iter().find(|option| option.kind == "allow_once")
+        let mut once = options.iter().filter(|option| option.kind == "allow_once");
+        let only = once.next()?;
+        once.next().is_none().then_some(only)
     }
 
     /// The error frame a refused client request receives.

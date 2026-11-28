@@ -47,6 +47,20 @@ fn remote_project_plan_uses_strict_ssh_and_remote_working_directory() {
         session_options: None,
         interaction: None,
     };
+    let mut chat = request.clone();
+    chat.interaction = Some(InteractionMode::Acp);
+    let acp = plan(&db, &Registry::builtins(), directory.path(), chat).unwrap();
+    let ssh = acp.acp.as_ref().unwrap();
+    assert_eq!(acp.interaction, InteractionMode::Acp);
+    assert!(acp.remote_session_id.is_none());
+    assert!(acp.account_context.is_none() && acp.credential.is_none());
+    assert_eq!(acp.initial_prompt.as_deref(), Some("hello remote"));
+    assert_eq!(ssh.args[0], "-T");
+    assert!(ssh.args.contains(&"root@example.test".into()));
+    let payload = ssh.args.last().unwrap();
+    assert!(payload.contains("cd '/srv/project'"));
+    assert!(payload.contains("codex-acp") && payload.contains("CODEX_PATH"));
+    assert!(!payload.contains("hello remote"));
     let remote_plan = plan(&db, &Registry::builtins(), directory.path(), request).unwrap();
     assert_eq!(remote_plan.directory, PathBuf::from("/srv/project"));
     assert_eq!(remote_plan.executable, PathBuf::from("ssh"));

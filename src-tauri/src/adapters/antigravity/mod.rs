@@ -235,6 +235,8 @@ impl CliAdapter for Antigravity {
                 dependency: Some(super::AcpDependency {
                     name: "agy_acp_server（Antigravity ACP 组件）",
                     program: None,
+                    installer: None,
+                    obsolete_package: None,
                     install_hint: "从官方 ACP 注册表按平台下载 agy_acp_server（Linux 需要 --uid=，macOS/Linux 为 .par），agy CLI 本身不含该入口",
                     help_url: "https://antigravity.google/docs/ide/extensions",
                 }),

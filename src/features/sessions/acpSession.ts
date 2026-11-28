@@ -26,6 +26,7 @@ export function acpRow(snapshot: AcpSessionSnapshot): WorkbenchSession {
     directory: snapshot.directory,
     mode: snapshot.mode,
     running: acpIsLive(snapshot),
+    ...(snapshot.projectId?.startsWith('remote:') ? { connectionState: acpIsLive(snapshot) ? 'connected' as const : 'remote_ended' as const } : {}),
     exitCode: null,
   };
 }
