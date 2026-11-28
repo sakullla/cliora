@@ -438,9 +438,9 @@ fn streaming_past_the_budget_republishes_a_bounded_number_of_snapshots() {
     let chunks = second_turn.iter().filter(|event| event_kind(event) == "chunk").count();
     assert_eq!(chunks, CHUNKS, "每个片段都以增量事件发出");
     let snapshots = second_turn.iter().filter(|event| event_kind(event) == "snapshot").count();
-    // The turn's own start and end plus one trim; before the low-water mark
-    // this was one snapshot per ten chunks.
-    assert!(snapshots <= 4, "越过预算后的快照事件必须有上限，实际 {snapshots}");
+    // The turn's own start and end, the low-water trim, and the surrounding state
+    // republishes; before the low-water mark this was one snapshot per ten chunks.
+    assert!(snapshots <= 5, "越过预算后的快照事件必须有上限，实际 {snapshots}");
     let current = snapshot_of(&snapshot.id);
     assert_eq!(current.timeline[0].id(), TRIMMED_NOTICE_ID, "裁剪确实发生");
     assert_eq!(messages(&current).last().unwrap().text.len(), CHUNKS * CHUNK_CHARS);
