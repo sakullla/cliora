@@ -1048,6 +1048,10 @@ fn agent_terminal_output_keeps_the_bounded_tail_and_released_records_are_pruned(
         current.terminals.iter().all(|terminal| !matches!(terminal.terminal_id.as_str(), "big" | "done-0" | "done-1")),
         "最早的记录先被清理"
     );
+    // The cards still name the dropped records: the snapshot says their output was omitted.
+    assert_eq!(current.omitted_terminal_ids, ["big", "done-0", "done-1", "done-2"], "被清理的记录进入省略列表");
+    assert!(current.omitted_terminal_ids.iter().all(|id| current.terminals.iter().all(|terminal| terminal.terminal_id != *id)));
+    assert!(tools(&current).iter().any(|call| call.call_id == "big"), "工具卡仍在时间线中");
     // The big record is gone from the snapshot; its events still show the bound.
     let mut held: Vec<u16> = Vec::new();
     let mut truncated = false;
@@ -1072,3 +1076,66 @@ fn agent_terminal_output_keeps_the_bounded_tail_and_released_records_are_pruned(
     worker.join().unwrap();
 }
 
+#[test]
+fn omitted_terminal_ids_are_bounded_and_follow_the_timeline() {
+    use super::terminal::{omitted_for_tests, MAX_OMITTED, MAX_RELEASED};
+    // Every id a card still names stays, oldest dropped first past the ceiling.
+    let (omitted, _) = omitted_for_tests("t-", MAX_RELEASED + MAX_OMITTED + 5, |_| true);
+    assert_eq!(omitted.len(), MAX_OMITTED);
+    assert_eq!(omitted.first().map(String::as_str), Some("t-5"));
+    assert_eq!(omitted.last().map(String::as_str), Some(format!("t-{}", MAX_OMITTED + 4).as_str()));
+    // Once the timeline no longer names an id, it leaves the list.
+    let (omitted, _) = omitted_for_tests("t-", MAX_RELEASED + 4, |id| id != "t-1");
+    assert_eq!(omitted, ["t-0", "t-2", "t-3"]);
+    // A host id never takes the id of a dropped record.
+    let (omitted, next) = omitted_for_tests("term-", MAX_RELEASED + 2, |_| true);
+    assert_eq!(omitted, ["term-0", "term-1"]);
+    assert!(!omitted.contains(&next) && next != "term-1", "{next}");
+}
+
+#[test]
+fn an_agent_terminal_whose_tool_call_ends_without_an_exit_is_released() {
+    let directory = temp_dir();
+    let (io, agent) = pair();
+    let (done_tx, done_rx) = channel();
+    let worker = std::thread::spawn(move || {
+        let mut agent = agent;
+        agent.handshake(false);
+        // Info only, then the call completes with no terminal_exit.
+        agent_bash_call(&agent, "quiet", "true");
+        session_update(&agent, json!({ "sessionUpdate": "tool_call_update", "toolCallId": "quiet", "status": "completed" }));
+        // Some output, then the call fails with no terminal_exit.
+        agent_bash_call(&agent, "partial", "make");
+        agent_bash_output(&agent, "partial", "building
+");
+        session_update(&agent, json!({ "sessionUpdate": "tool_call_update", "toolCallId": "partial", "status": "failed" }));
+        // Still running: nothing ends it.
+        agent_bash_call(&agent, "running", "sleep 60");
+        session_update(&agent, json!({ "sessionUpdate": "tool_call_update", "toolCallId": "running", "status": "in_progress" }));
+        // An exit that comes after the call ended still lands.
+        agent_bash_call(&agent, "late", "echo");
+        session_update(&agent, json!({ "sessionUpdate": "tool_call_update", "toolCallId": "late", "status": "completed" }));
+        agent_bash_exit(&agent, "late", 3);
+        let _ = done_tx.send(());
+        agent.stay_connected();
+    });
+    let snapshot = open(spec(directory.path()), io).unwrap();
+    done_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+    let quiet = wait_for(|| terminal_of(&snapshot.id, "quiet").filter(|terminal| terminal.released), "完成的调用释放终端");
+    assert!(quiet.agent_owned && quiet.exit_status.is_none() && quiet.output.is_empty());
+    let partial = wait_for(|| terminal_of(&snapshot.id, "partial").filter(|terminal| terminal.released), "失败的调用释放终端");
+    assert!(partial.exit_status.is_none());
+    assert_eq!(partial.output, "building
+", "已有输出保留");
+    let late = wait_for(|| terminal_of(&snapshot.id, "late").filter(|terminal| terminal.exit_status.is_some()), "迟到的退出");
+    assert_eq!(late.exit_status.and_then(|exit| exit.exit_code), Some(3));
+    let running = terminal_of(&snapshot.id, "running").unwrap();
+    assert!(!running.released && running.exit_status.is_none(), "进行中的调用不结束终端");
+    // Views learn the release from the events alone.
+    assert!(events_of(&snapshot.id).iter().any(|event| matches!(
+        &event.update,
+        AcpUpdate::TerminalOutput { terminal_id, released: true, exit_status: None, .. } if terminal_id == "quiet"
+    )));
+    close(&snapshot.id).unwrap();
+    worker.join().unwrap();
+}

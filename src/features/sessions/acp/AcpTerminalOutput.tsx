@@ -39,15 +39,19 @@ function renderRuns(text: string, query: string, caseSensitive: boolean) {
  * how it ended. While it runs, "Stop" ends its whole process tree through the
  * host; the output stays readable after it ends or is released. A terminal the
  * agent ran itself (`agentOwned`) is read-only: the host shows it but cannot
- * stop it. Before any record arrives the card only says whether output is
- * still expected (`active`: the tool call is pending or in progress).
+ * stop it, and it stops counting as running once the tool call that embeds it
+ * has ended. Without a record the card says whether output is still expected
+ * (`active`: the tool call is pending or in progress), or that the host dropped
+ * the record past its retention bound (`omitted`) — never "no output" then.
  */
-export function AcpTerminalOutput({ terminalId, terminal, live, active = false, onKill, searchQuery = '', searchCase = false }: {
+export function AcpTerminalOutput({ terminalId, terminal, live, active = false, omitted = false, onKill, searchQuery = '', searchCase = false }: {
   terminalId: string;
   terminal: AcpTerminal | null;
   live: boolean;
   /** The tool call that embeds the terminal is still pending or in progress. */
   active?: boolean;
+  /** The host dropped this terminal's record; its output was omitted, not empty. */
+  omitted?: boolean;
   onKill: (terminalId: string) => Promise<void>;
   searchQuery?: string;
   searchCase?: boolean;
@@ -65,14 +69,18 @@ export function AcpTerminalOutput({ terminalId, terminal, live, active = false, 
   }, [text]);
 
   if (!terminal) {
+    const state = omitted ? 'omitted' : live && active ? 'waiting' : 'empty';
     return <div className={styles.terminal} data-content="terminal" data-terminal-id={terminalId}>
-      <p className={styles.note} data-terminal-state={live && active ? 'waiting' : 'empty'}>{live && active ? t('sessions.acpTerminalWaiting') : t('sessions.acpTerminalNoOutput')}</p>
+      <p className={styles.note} data-terminal-state={state}>{t(state === 'omitted' ? 'sessions.acpTerminalOmitted' : state === 'waiting' ? 'sessions.acpTerminalWaiting' : 'sessions.acpTerminalNoOutput')}</p>
     </div>;
   }
   const exit = terminal.exitStatus;
-  const running = !exit && !terminal.released;
+  // Nothing more arrives for an agent's own command once its tool call ended.
+  const ended = !!exit || terminal.released || (terminal.agentOwned && !active);
+  const running = !ended;
   const status = exit
     ? exit.signal ? t('sessions.acpTerminalSignal', { signal: exit.signal }) : t('sessions.acpTerminalExit', { code: exit.exitCode ?? '?' })
+    : terminal.agentOwned && ended ? t('sessions.acpTerminalEnded')
     : terminal.released ? t('sessions.acpTerminalReleased') : t('sessions.acpTerminalRunning');
   const failed = !!exit && (exit.signal != null || (exit.exitCode != null && exit.exitCode !== 0));
   return <div className={styles.terminal} data-content="terminal" data-terminal-id={terminalId} data-running={running || undefined} data-agent-owned={terminal.agentOwned || undefined}>

@@ -285,6 +285,7 @@ async function install(page, initialTheme, empty = false, remoteState = null, pr
       pending: acpMode === 'permission' ? ['r1'] : acpMode === 'form' ? ['q1'] : acpMode === 'access' ? ['access-r1-request'] : [],
       grants: acpMode === 'access' ? ['write'] : [],
       terminals: acpTerminals,
+      omittedTerminalIds: [],
       plan: acpMode === 'empty' || acpMode === 'starting' || acpMode === 'long' || acpMode === 'yolo' ? [] : acpMode === 'tools' ? [
         { content: '读取工具栏样式与令牌', priority: 'high', status: 'completed' },
         { content: '把固定像素换成令牌相加', priority: 'high', status: 'completed' },

@@ -281,6 +281,61 @@ test('a command the agent ran itself streams into its card read-only; a terminal
   expect(await page.evaluate(() => (window as any).__acpTest.kills)).toEqual([]);
 });
 
+test('an agent command whose call ended without an exit stops waiting; a dropped terminal record says its output was omitted', async ({ page }) => {
+  await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', state: 'running', directory: 'C:/work', timeline: [agentMessage('m0', '开始')] })] });
+  await openWorkbench(page);
+  const panel = panelOf(page);
+  await expect(panel.locator('[data-item-id="m0"]')).toBeVisible();
+  let seq = 2;
+  const bash = (callId: string, status: string) => toolCall(callId, { title: `run ${callId}`, toolKind: 'execute', status, content: [{ type: 'terminal', terminalId: callId }] });
+  const tool = (callId: string, status: string) => send(page, { sessionId: 'a1', seq: seq++, kind: 'tool', call: bash(callId, status) });
+  const record = (terminalId: string, output = '') => ({ terminalId, command: `run ${terminalId}`, cwd: 'C:/work', output, truncated: false, exitStatus: null, released: false, subagent: null, agentOwned: true });
+  const open = async (callId: string) => {
+    const toggle = panel.locator(`[data-item-id="tool:${callId}"]`).getByRole('button', { name: new RegExp(`run ${callId}`) }).first();
+    if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  };
+
+  // The agent never reports an exit: once the call completes the card stops waiting,
+  // even before the host's release reaches the view.
+  await send(page, { sessionId: 'a1', seq: seq++, kind: 'terminal', terminal: record('quiet') });
+  await tool('quiet', 'in_progress');
+  const quiet = panel.locator('[data-item-id="tool:quiet"] [data-content="terminal"]');
+  await expect(quiet.locator('[data-terminal-state]')).toHaveText('等待输出');
+  await expect(quiet).toContainText('运行中');
+  await tool('quiet', 'completed');
+  await open('quiet');
+  await expect(quiet.locator('[data-terminal-state]')).toHaveText('没有输出');
+  await expect(quiet).toContainText('已结束');
+  await expect(quiet).not.toContainText('运行中');
+  await expect(quiet).not.toContainText('等待输出');
+  // The host's release without an exit status says the same.
+  await send(page, { sessionId: 'a1', seq: seq++, kind: 'terminalOutput', terminalId: 'quiet', text: '', dropped: 0, truncated: false, exitStatus: null, released: true });
+  await expect(quiet.locator('[data-terminal-state]')).toHaveText('没有输出');
+  await expect(quiet).toContainText('已结束');
+
+  // The host dropped two finished records past its retention bound: their cards stay,
+  // the snapshot names them as omitted, and neither claims the command printed nothing.
+  const timeline = [agentMessage('m0', '开始'), ...['old-1', 'old-2', 'kept', 'never'].map((id) => ({ kind: 'tool' as const, ...bash(id, 'completed') }))];
+  const kept = { ...record('kept', 'still here\n'), exitStatus: { exitCode: 0, signal: null }, released: true };
+  await page.evaluate(({ timeline, kept, seq }) => (window as any).__acpSessionState('a1', {
+    timeline, terminals: [kept], omittedTerminalIds: ['old-1', 'old-2'], seq,
+  }), { timeline, kept, seq: seq++ });
+  for (const id of ['old-1', 'old-2']) {
+    await open(id);
+    const card = panel.locator(`[data-item-id="tool:${id}"] [data-content="terminal"]`);
+    await expect(card.locator('[data-terminal-state]')).toHaveAttribute('data-terminal-state', 'omitted');
+    await expect(card).toContainText('较早的输出已省略');
+    await expect(card).not.toContainText('没有输出');
+    await expect(card).not.toContainText(id);
+  }
+  await open('kept');
+  await expect(panel.locator('[data-item-id="tool:kept"] pre')).toHaveText('still here\n');
+  // A card whose record never existed and was never dropped still says no output.
+  await open('never');
+  await expect(panel.locator('[data-item-id="tool:never"] [data-terminal-state]')).toHaveText('没有输出');
+});
+
 test('the plan follows its updates and disappears when empty; the title and usage follow the agent', async ({ page }) => {
   await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', state: 'running', timeline: [agentMessage('m1', '开始')] })] });
   await openWorkbench(page);

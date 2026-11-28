@@ -384,6 +384,9 @@ export type AcpSessionSnapshot = {
   grants: AcpAccessKind[];
   /** Terminals the agent created. */
   terminals: AcpTerminal[];
+  /** Ids of terminal records the host dropped past its retention bound while a
+   *  tool call still names them: their output was omitted, not empty. */
+  omittedTerminalIds: string[];
   plan: AcpPlanEntry[];
   commands: AcpAvailableCommand[];
   config: AcpSessionConfig;

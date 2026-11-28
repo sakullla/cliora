@@ -255,7 +255,7 @@ export async function installAcpMock(page: Page, config: Config = {}) {
               id, toolId: String(request.toolId), projectId: (request.projectId as string | null) ?? null, directory: 'C:/work',
               mode: request.mode === 'yolo' ? 'yolo' : 'normal', interaction: 'acp', state: 'running', nativeSessionId: (request.resumeNativeId as string | null) ?? 'native-1', resume: request.resumeNativeId ? 'resumed' : 'none', authError: null,
               timeline: [{ kind: 'message', id: 'turn-0-user', role: 'user', text: 'first prompt', truncated: false, turnId: 'turn-0', subagent: null }],
-              pending: [], grants: [], terminals: [], plan: [], commands: [], config: { modes: null, options: [], models: null },
+              pending: [], grants: [], terminals: [], omittedTerminalIds: [], plan: [], commands: [], config: { modes: null, options: [], models: null },
               info: { title: null, updatedAt: null, usage: null },
               agent: { protocolVersion: 1, agentInfo: null, promptCapabilities: { image: false, audio: false, embeddedContext: false }, sessionCapabilities: { list: false, resume: false, delete: false, close: false }, loadSession: false, authMethods: [] },
               diagnostics: [], lastTurnReason: '', seq: 1,
@@ -275,7 +275,7 @@ export async function installAcpMock(page: Page, config: Config = {}) {
 export function snapshot(overrides: Partial<Snapshot> & { id: string }): Snapshot {
   return {
     toolId: 'codex', projectId: null, directory: 'C:/work', mode: 'normal', interaction: 'acp', state: 'ready',
-    nativeSessionId: 'native-1', resume: 'none', authError: null, timeline: [], pending: [], grants: [], terminals: [], plan: [], commands: [],
+    nativeSessionId: 'native-1', resume: 'none', authError: null, timeline: [], pending: [], grants: [], terminals: [], omittedTerminalIds: [], plan: [], commands: [],
     config: { modes: null, options: [], models: null }, info: { title: null, updatedAt: null, usage: null },
     agent: { protocolVersion: 1, agentInfo: null, promptCapabilities: { image: false, audio: false, embeddedContext: false }, sessionCapabilities: { list: false, resume: false, delete: false, close: false }, loadSession: false, authMethods: [] },
     diagnostics: [], lastTurnReason: '', seq: 1,
