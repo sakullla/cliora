@@ -251,7 +251,9 @@ test('a command the agent ran itself streams into its card read-only; a terminal
   await expect(terminal.locator('pre')).toHaveText('line one\nline two\n');
   await expect(terminal.getByRole('button', { name: '终止' })).toHaveCount(0);
   await output('call-1', '', { exitCode: 0, signal: null }, true);
+  await expect(terminal).toContainText('退出码 0');
   await tool('call-1', 'ls -la', 'completed');
+  await expect(panel.locator('[data-item-id="tool:call-1"]')).toHaveAttribute('data-status', 'completed');
   await open('call-1', 'ls -la');
   await expect(terminal).toContainText('退出码 0');
   await expect(terminal.locator('pre')).toHaveText('line one\nline two\n');
@@ -263,7 +265,9 @@ test('a command the agent ran itself streams into its card read-only; a terminal
   const quiet = panel.locator('[data-item-id="tool:call-2"] [data-content="terminal"]');
   await expect(quiet.locator('[data-terminal-state]')).toHaveText('等待输出');
   await output('call-2', '', { exitCode: 0, signal: null }, true);
+  await expect(quiet).toContainText('退出码 0');
   await tool('call-2', 'true', 'completed');
+  await expect(panel.locator('[data-item-id="tool:call-2"]')).toHaveAttribute('data-status', 'completed');
   await open('call-2', 'true');
   await expect(quiet).toContainText('退出码 0');
   await expect(quiet.locator('[data-terminal-state]')).toHaveText('没有输出');
@@ -274,6 +278,7 @@ test('a command the agent ran itself streams into its card read-only; a terminal
   await expect(missing.locator('[data-terminal-state]')).toHaveText('等待输出');
   await expect(missing).not.toContainText('call-9');
   await tool('call-9', 'make', 'completed');
+  await expect(panel.locator('[data-item-id="tool:call-9"]')).toHaveAttribute('data-status', 'completed');
   await open('call-9', 'make');
   await expect(missing.locator('[data-terminal-state]')).toHaveText('没有输出');
   await expect(missing).not.toContainText('call-9');
@@ -292,9 +297,12 @@ test('an agent command whose call ended without an exit stops waiting; a dropped
   const record = (terminalId: string, output = '') => ({ terminalId, command: `run ${terminalId}`, cwd: 'C:/work', output, truncated: false, exitStatus: null, released: false, subagent: null, agentOwned: true });
   const open = async (callId: string) => {
     const toggle = panel.locator(`[data-item-id="tool:${callId}"]`).getByRole('button', { name: new RegExp(`run ${callId}`) }).first();
-    if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await toggle.click();
     await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   };
+  // Events reach the view on the next frame; an update with no visible change waits for two.
+  const frames = () => page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 
   // The agent never reports an exit: once the call completes the card stops waiting,
   // even before the host's release reaches the view.
@@ -304,6 +312,7 @@ test('an agent command whose call ended without an exit stops waiting; a dropped
   await expect(quiet.locator('[data-terminal-state]')).toHaveText('等待输出');
   await expect(quiet).toContainText('运行中');
   await tool('quiet', 'completed');
+  await expect(panel.locator('[data-item-id="tool:quiet"]')).toHaveAttribute('data-status', 'completed');
   await open('quiet');
   await expect(quiet.locator('[data-terminal-state]')).toHaveText('没有输出');
   await expect(quiet).toContainText('已结束');
@@ -311,6 +320,7 @@ test('an agent command whose call ended without an exit stops waiting; a dropped
   await expect(quiet).not.toContainText('等待输出');
   // The host's release without an exit status says the same.
   await send(page, { sessionId: 'a1', seq: seq++, kind: 'terminalOutput', terminalId: 'quiet', text: '', dropped: 0, truncated: false, exitStatus: null, released: true });
+  await frames();
   await expect(quiet.locator('[data-terminal-state]')).toHaveText('没有输出');
   await expect(quiet).toContainText('已结束');
 
@@ -321,6 +331,10 @@ test('an agent command whose call ended without an exit stops waiting; a dropped
   await page.evaluate(({ timeline, kept, seq }) => (window as any).__acpSessionState('a1', {
     timeline, terminals: [kept], omittedTerminalIds: ['old-1', 'old-2'], seq,
   }), { timeline, kept, seq: seq++ });
+  // The snapshot replaces the timeline at once: the new cards are there, completed and folded.
+  for (const id of ['old-1', 'old-2', 'kept', 'never']) {
+    await expect(panel.locator(`[data-item-id="tool:${id}"]`)).toHaveAttribute('data-status', 'completed');
+  }
   for (const id of ['old-1', 'old-2']) {
     await open(id);
     const card = panel.locator(`[data-item-id="tool:${id}"] [data-content="terminal"]`);
