@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { type Locator, type Page } from '@playwright/test';
+import { expect, freshPage, test } from './sharedPage';
 import { installPromptFixtureBridge, installRichPromptFixtures } from '../../scripts/capture-prompt-fixtures.mjs';
 
 // A synthetic canary: it must never reach the window, the prompt body or a call.
@@ -291,7 +292,7 @@ test('an external CLI can approve multiple references for this read only', async
   await expect(dialog).toHaveCount(0);
 });
 
-test('parallel callers keep separate decisions and an expired request releases the dialog', async ({ page }) => {
+test('parallel callers keep separate decisions and an expired request releases the dialog', freshPage('page.clock'), async ({ page }) => {
   await install(page);
   await page.clock.install();
   await emitApproval(page, 'first', '短请求', 'MCP · A', { sessionAvailable: true, expiresInSeconds: 5 });

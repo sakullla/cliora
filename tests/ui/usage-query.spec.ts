@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, freshPage, test } from './sharedPage';
 import type { AccountCapability, AuthAccount } from '../../src/types/accounts';
 
 async function setup(page: Page, automatic = false) {
@@ -60,7 +61,7 @@ async function setup(page: Page, automatic = false) {
 }
 const harness = (page: Page, action: string) => page.evaluate(action);
 
-test('quota polling joins slow reads, skips unchanged histories and stops when hidden', async ({ page }) => {
+test('quota polling joins slow reads, skips unchanged histories and stops when hidden', freshPage('page.clock'), async ({ page }) => {
   await setup(page);
   await expect(page.getByText('125% 已用')).toBeVisible();
   await page.clock.install();

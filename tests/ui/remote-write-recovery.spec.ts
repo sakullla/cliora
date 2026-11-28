@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 
 async function install(page: Page, revision = 1, mode = 'unknown', session = false) {
   await page.addInitScript(({ revision, mode, session }) => {
@@ -100,6 +101,8 @@ test('a failed fault-triggered journal discovery survives closing and restart th
   await page.getByRole('dialog').getByRole('button', { name: '关闭', exact: true }).click();
   await page.reload();
   await expect(entry).toBeVisible();
+  // Let the restarted app's own discovery fail first; letting it succeed instead opens the dialog by itself.
+  await expect.poll(() => page.evaluate(() => (window as any).__recoveryState.commands.filter((name: string) => name === 'list_remote_write_receipts').length)).toBe(1);
   await page.evaluate(() => { (window as any).__recoveryState.listFails = false; });
   await entry.click();
   await expect(page.getByRole('dialog').getByText('提交中或结果未知')).toBeVisible();

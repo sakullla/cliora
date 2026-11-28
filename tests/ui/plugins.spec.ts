@@ -1,6 +1,7 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, freshPage, test } from './sharedPage';
 
-test('plugin views defer unrelated editors and stop account and quota polling', async ({ page }) => {
+test('plugin views defer unrelated editors and stop account and quota polling', freshPage('page.clock'), async ({ page }) => {
   const modules: string[] = [];
   page.on('request', request => { if (request.url().endsWith('.js')) modules.push(request.url()); });
   await setup(page);

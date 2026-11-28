@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 
 /** OMP plugin workspace: scope ownership, residual doctor entry, rescan result. */
 async function setup(page: Page) {

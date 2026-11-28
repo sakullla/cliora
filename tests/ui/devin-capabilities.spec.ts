@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 
 // Regression proof for the devin capability flip, expressed with a synthetic
 // descriptor and fixture ids only (never a real CLI name): agents/plugins tabs

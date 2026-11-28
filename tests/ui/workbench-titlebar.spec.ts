@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, freshPage, test } from './sharedPage';
 
 const host = {
   id: 'host-1', name: '标题栏测试主机', host: '203.0.113.10', port: 22, user: 'root', authMethod: 'key', identityFile: '',
@@ -116,7 +117,7 @@ test('the title bar names the CLI by its icon and keeps the running time at ever
   }
 });
 
-test('the running time stops when the session ends, and an already-ended session shows none', async ({ page }) => {
+test('the running time stops when the session ends, and an already-ended session shows none', freshPage('page.clock'), async ({ page }) => {
   await installDesktop(page, 'local');
   await page.clock.install();
   const stage = await openWorkbench(page);

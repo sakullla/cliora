@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 
 type Manifest = { name: string | null; description: string; license: string | null; compatibility: string | null; metadata: Array<{ key: string; value: string }>; allowedTools: string[]; extra: Array<{ key: string; value: string }>; bodyLine: number; issues: Array<{ code: string; limit: number | null; actual: number | null }> };
 

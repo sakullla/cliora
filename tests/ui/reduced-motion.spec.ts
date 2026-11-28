@@ -1,4 +1,5 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { type Locator, type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 import { setupConfigurationWorkspace } from './configuration-workspace-fixture';
 
 // R1: with reduced motion requested, dialogs and page switches no longer animate (02 ADR-7).

@@ -1,5 +1,6 @@
 import { installPromptFixtureBridge } from '../../scripts/capture-prompt-fixtures.mjs';
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, freshPage, test } from './sharedPage';
 
 test.beforeEach(async ({ page }) => { await page.addInitScript(() => { (window as any).__promptLegacyWorkspaces = true; }); await page.addInitScript(installPromptFixtureBridge); });
 
@@ -79,7 +80,7 @@ test('library category is edited and filtered as tags', async ({ page }) => {
   await expect(page.getByRole('button', { name: '发布检查' })).toHaveCount(0);
 });
 
-test('library search debounces native queries, clears instantly and narrows rows', async ({ page }) => {
+test('library search debounces native queries, clears instantly and narrows rows', freshPage('page.clock'), async ({ page }) => {
   await page.addInitScript(() => {
     const library = [
       { id: 'prompt-a', kind: 'prompt', title: 'release note', body: 'body', category: '', projectId: null, version: 1, updatedAt: 1 },

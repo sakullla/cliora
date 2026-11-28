@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, freshPage, test } from './sharedPage';
 
 const BASE = '4f3c2b1a0f9e8d7c6b5a4938271605f4e3d2c1b0';
 const NEXT = '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d';
@@ -278,7 +279,7 @@ async function openGitMenu(page: Page, label: RegExp) {
   return page.getByRole('menu', { name: '在工作树中新开会话' });
 }
 
-test('worktrees are read only for the open menu, including after idle polling and focus', async ({ page }) => {
+test('worktrees are read only for the open menu, including after idle polling and focus', freshPage('page.clock'), async ({ page }) => {
   await installDesktop(page);
   await page.clock.install();
   await openWorkbench(page);
@@ -357,7 +358,7 @@ test('a local session can start a review and sees the receipt', async ({ page })
   await expect(group.getByRole('menuitem', { name: '在 Twiglane 中审查' })).toBeVisible();
 });
 
-test('an unanswered review becomes unknown after ten seconds and a retry uses a new reviewId', async ({ page }) => {
+test('an unanswered review becomes unknown after ten seconds and a retry uses a new reviewId', freshPage('page.clock'), async ({ page }) => {
   await page.clock.install();
   await installDesktop(page);
   await openWorkbench(page);

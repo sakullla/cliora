@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 
 /** Rules library with hundreds of projects: the project filter is a shared FilterSelect. */
 async function install(page: Page, count: number) {

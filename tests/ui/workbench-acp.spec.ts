@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 import { agentMessage, installAcpMock, openWorkbench, snapshot, toolCall } from './acpMock';
 
 test('the settings row picks ACP independently of the terminal and keeps the stored value on failure', async ({ page }) => {

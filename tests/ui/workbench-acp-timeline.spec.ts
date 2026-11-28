@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 import { agentMessage, installAcpMock, openWorkbench, snapshot, toolCall, toolItem } from './acpMock';
 
 /**

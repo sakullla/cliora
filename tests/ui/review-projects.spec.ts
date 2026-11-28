@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 import { installReviewDesktop, REVIEW_SESSION_A, REVIEW_SESSION_B } from '../../scripts/capture-review-fixtures.mjs';
 
 async function startReview(page: Page, sessionId: string) {

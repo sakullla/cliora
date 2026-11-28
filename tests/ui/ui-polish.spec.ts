@@ -1,5 +1,6 @@
 import { installPromptFixtureBridge } from '../../scripts/capture-prompt-fixtures.mjs';
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { type Locator, type Page } from '@playwright/test';
+import { expect, freshPage, test } from './sharedPage';
 import { cliSwitcher } from './cli-switcher';
 
 test.beforeEach(async ({ page }) => { await page.addInitScript(installPromptFixtureBridge); });
@@ -397,7 +398,7 @@ async function noticeShape(locator: Locator) {
   });
 }
 
-test('shell and shared feedback keep readable ink, three layers, flat controls and one notice shape', async ({ page, browser }) => {
+test('shell and shared feedback keep readable ink, three layers, flat controls and one notice shape', freshPage('opens a second context'), async ({ page, browser }) => {
   test.setTimeout(120_000);
   await install(page);
   await page.setViewportSize({ width: 1360, height: 900 });

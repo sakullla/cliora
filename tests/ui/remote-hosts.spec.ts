@@ -1,4 +1,5 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { type Locator, type Page } from '@playwright/test';
+import { expect, freshPage, test } from './sharedPage';
 
 async function install(page: Page) {
   await page.addInitScript(() => {
@@ -148,7 +149,7 @@ test('the picker browses folders with breadcrumbs, filter, keyboard and a typed 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
 
-test('the picker context menus open, choose, copy and favorite folders, and history walks back and forward', async ({ page, context }) => {
+test('the picker context menus open, choose, copy and favorite folders, and history walks back and forward', freshPage('grantPermissions clipboard'), async ({ page, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   await install(page); await page.goto('/');
   const dialog = await directory(page);

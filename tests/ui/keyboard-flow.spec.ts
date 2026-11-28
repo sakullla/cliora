@@ -1,4 +1,5 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { type Locator, type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 import { cliSwitcher } from './cli-switcher';
 import { setupConfigurationWorkspace } from './configuration-workspace-fixture';
 

@@ -1,4 +1,5 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { type Locator, type Page } from '@playwright/test';
+import { expect, freshPage, test } from './sharedPage';
 
 const addCopy = '独立账号使用各自的 Codex 登录与配置目录，凭据由原生 CLI 维护。';
 const hintCopy = '删除已停用：登录进行中，请先取消当前操作。';
@@ -70,7 +71,7 @@ async function reading(locator: Locator) {
   });
 }
 
-test('account polling waits for a slow response before scheduling another read', async ({ page }) => {
+test('account polling waits for a slow response before scheduling another read', freshPage('page.clock'), async ({ page }) => {
   await setup(page);
   await expect(page.getByText('工作账号', { exact: true }).first()).toBeVisible();
   await page.clock.install();

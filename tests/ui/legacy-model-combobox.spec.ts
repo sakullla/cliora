@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from './sharedPage';
 import { setupConfigurationWorkspace } from './configuration-workspace-fixture';
 
 test('legacy model combobox fetches catalog inside the dropdown', async ({ page }) => {

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './sharedPage';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './sharedPage';
 
 const tools = [['codex', 'Codex', true], ['kimi_code', 'Kimi Code', true], ['mimo_code', 'MiMo Code', false], ['cline', 'Cline', false], ['devin', 'Devin', true]] as const;
 

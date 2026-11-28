@@ -1,4 +1,5 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { type Locator, type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 import { installConfigurationProtocol, installConfigurationWorkspace, setupConfigurationWorkspace } from './configuration-workspace-fixture';
 
 test('new configuration dialog has one save action', async ({ page }) => {

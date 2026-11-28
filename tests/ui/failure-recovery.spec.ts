@@ -1,4 +1,5 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { type Locator, type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 import { openCli } from './cli-switcher';
 
 // R3: when a capability read fails, the error and its recovery control stay on the page instead of

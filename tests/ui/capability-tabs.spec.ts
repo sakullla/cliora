@@ -1,4 +1,5 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { type Locator, type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 import { openCli } from './cli-switcher';
 
 // R2: the capability tabs come from each CLI's registry descriptor (`management`), so two CLIs with

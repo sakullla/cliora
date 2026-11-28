@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './sharedPage';
 
 /** A session launched elsewhere is focused once; later visits keep the user's own choice. */
 test('returning to the workbench keeps the session the user selected', async ({ page }) => {

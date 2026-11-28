@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 
 async function setup(page: Page, supported = true, currentVersion = '3000.11.2', latestVersion = '3000.11.3', majorUpgrade: { label: string; command: string | null; guidance: string | null } | null = null, bunScenario: 'installed' | 'missing' | null = null) {
   await page.addInitScript(({ supported, currentVersion, latestVersion, majorUpgrade, bunScenario }) => {

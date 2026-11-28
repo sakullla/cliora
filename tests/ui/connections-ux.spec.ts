@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 import { installConfigurationProtocol, setupConfigurationWorkspace } from './configuration-workspace-fixture';
 
 /** Synthetic IPC only: covers the connection workspace interaction affordances. */

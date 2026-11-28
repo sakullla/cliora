@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 
 /** Hundreds of standalone directories on the home page. */
 async function install(page: Page, count = 300) {

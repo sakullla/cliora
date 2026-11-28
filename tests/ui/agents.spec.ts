@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 
 test('Agent search and status filters preserve access to read-only definitions', async ({ page }) => {
   await setup(page);

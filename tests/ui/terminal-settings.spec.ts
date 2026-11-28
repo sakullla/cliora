@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 
 // The launch terminal picker is a FilterSelect: a button trigger opens a listbox of options.
 function launchTrigger(page: Page, label: string) {

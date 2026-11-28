@@ -1,5 +1,5 @@
 import { installPromptFixtureBridge } from '../../scripts/capture-prompt-fixtures.mjs';
-import { expect, test } from '@playwright/test';
+import { expect, test } from './sharedPage';
 
 test.beforeEach(async ({ page }) => { await page.addInitScript(installPromptFixtureBridge); });
 

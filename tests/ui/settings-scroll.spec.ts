@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './sharedPage';
 import { installConfigurationWorkspace } from './configuration-workspace-fixture';
 
 test('settings modal keeps wheel inside the active category, searches across categories, and peels Escape in layers', async ({ page }) => {

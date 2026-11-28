@@ -1,5 +1,6 @@
 import { installPromptFixtureBridge } from '../../scripts/capture-prompt-fixtures.mjs';
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, freshPage, test } from './sharedPage';
 import { openCli } from './cli-switcher';
 
 test.beforeEach(async ({ page }) => { await page.addInitScript(installPromptFixtureBridge); });
@@ -785,7 +786,7 @@ for (const status of ['failed', 'unsupported'] as const) {
   });
 }
 
-test('MCP removal notice expires after four seconds', async ({ page }) => {
+test('MCP removal notice expires after four seconds', freshPage('page.clock'), async ({ page }) => {
   await mockResources(page);
   await page.clock.install();
   await page.goto('/');
@@ -1137,7 +1138,7 @@ test('Skill failed project stays visible and disabled while healthy global insta
 });
 
 
-test('library success notices expire after four seconds', async ({ page }) => {
+test('library success notices expire after four seconds', freshPage('page.clock'), async ({ page }) => {
   await mockResources(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();

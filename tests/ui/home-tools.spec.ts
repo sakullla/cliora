@@ -1,5 +1,6 @@
 import { installPromptFixtureBridge } from '../../scripts/capture-prompt-fixtures.mjs';
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { type Locator, type Page } from '@playwright/test';
+import { expect, freshPage, test } from './sharedPage';
 import { cliSwitcher, openCli } from './cli-switcher';
 
 test.beforeEach(async ({ page }) => { await page.addInitScript(installPromptFixtureBridge); });
@@ -783,7 +784,7 @@ test('a short profile menu is one line, switches with arrow keys and keeps the m
 });
 
 
-test('a transient version failure automatically rechecks and enables launch', async ({ page }) => {
+test('a transient version failure automatically rechecks and enables launch', freshPage('page.clock'), async ({ page }) => {
   await installHome(page);
   await page.clock.install();
   await page.addInitScript(() => { (window as unknown as { __probeMode: string }).__probeMode = 'failed'; });
@@ -800,7 +801,7 @@ test('a transient version failure automatically rechecks and enables launch', as
   expect(calls.map(({ fresh, summary }) => ({ fresh, summary }))).toEqual([{ fresh: false, summary: true }, { fresh: true, summary: true }]);
 });
 
-test('missing installations do not loop and a manual recheck discovers a new install', async ({ page }) => {
+test('missing installations do not loop and a manual recheck discovers a new install', freshPage('page.clock'), async ({ page }) => {
   await installHome(page);
   await page.clock.install();
   await page.addInitScript(() => { (window as unknown as { __probeMode: string }).__probeMode = 'absent'; });

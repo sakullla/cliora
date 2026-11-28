@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 
 const body = Array.from({ length: 30 }, (_, index) => index % 3 === 0
   ? '自然语言命中以下意图时直接进入本 skill：'

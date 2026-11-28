@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 
 /* 修改当前 CLI 规则 (NativeRuleEditor): the library rule section carries the
  * entry, its visibility follows the descriptors, catalog mode follows the

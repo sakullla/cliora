@@ -1,5 +1,6 @@
 import { loadApp } from './loadApp';
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 
 type SyncSeed = {
   configured?: boolean;

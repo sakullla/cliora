@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './sharedPage';
 import { installConfigurationWorkspace } from './configuration-workspace-fixture';
 
 async function openAntigravitySettings(page: import('@playwright/test').Page) {

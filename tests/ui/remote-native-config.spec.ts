@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, test } from './sharedPage';
 import { readFileSync } from 'node:fs';
 import type { RemoteCliProbe } from '../../src/types/remote';
 

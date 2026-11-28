@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, freshPage, test } from './sharedPage';
 import { build } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
@@ -155,7 +155,7 @@ test('large OMP model lists mount fields on first expansion and preserve invalid
   expect(await models.locator('input, select, textarea').count()).toBeLessThanOrEqual(firstCount * 2);
 });
 
-test('OMP large-list performance benchmark', async ({ page }) => {
+test('OMP large-list performance benchmark', freshPage('CDP heap measurement'), async ({ page }) => {
   test.skip(process.env.CLIORA_OMP_BENCH !== '1', 'Explicit synthetic browser memory measurement');
   const cdp = await page.context().newCDPSession(page);
   for (let pass = 0; pass < 3; pass++) {

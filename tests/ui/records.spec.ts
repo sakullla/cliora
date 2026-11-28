@@ -1,5 +1,5 @@
 import { qoderHistoryFixtures } from '../../scripts/capture-workflow-fixtures.mjs';
-import { expect, test } from '@playwright/test';
+import { expect, test } from './sharedPage';
 
 type Totals = { requests: number; usageRecords: number; unknownRequestRecords: number; sessions: number; input: number; cacheRead: number; cacheWrite: number; output: number; total: number; cost: number | null; unpricedTokens: number };
 const totals = (input: number, cacheRead: number, cacheWrite: number, output: number, extra: Partial<Totals> = {}): Totals => ({

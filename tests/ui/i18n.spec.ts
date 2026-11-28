@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, freshPage, test } from './sharedPage';
 
 async function installDesktop(page: Page) {
   await page.addInitScript(() => {
@@ -71,7 +72,7 @@ test('旧版浏览器语言偏好迁移到本机设置后保留已加载页面',
   expect(errors).toEqual([]);
 });
 
-test.describe('英文系统环境', () => {
+test.describe('英文系统环境', freshPage('test.use locale'), () => {
   test.use({ locale: 'en-US' });
 
   test('未存储偏好时默认英文', async ({ page }) => {

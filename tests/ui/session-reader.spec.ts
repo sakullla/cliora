@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, freshPage, test } from './sharedPage';
 
 test('large session lists render progressively and keyboard End reaches the final record', { tag: '@integration' }, async ({ page }) => {
   await page.evaluate(() => {
@@ -149,7 +149,7 @@ test('refresh updates the open conversation, folds injected context and keeps it
   await expect(reader.getByRole('button', { name: '查找本会话' })).toBeFocused();
 });
 
-test('custom dates apply atomically, normalize reversed dates and support keyboard selection', async ({ page }) => {
+test('custom dates apply atomically, normalize reversed dates and support keyboard selection', freshPage('page.clock'), async ({ page }) => {
   await page.clock.setFixedTime(new Date('2026-10-02T12:00:00'));
   const range = page.getByRole('group', { name: '会话筛选' }).getByRole('button', { name: '时间范围', exact: true });
   const pickCustom = async () => { await range.click(); await page.getByRole('listbox', { name: '时间范围' }).getByRole('option', { name: '自定义', exact: true }).click(); };
@@ -182,7 +182,7 @@ test('custom dates apply atomically, normalize reversed dates and support keyboa
   await expect(range).toBeFocused();
 });
 
-test('the session filter bar applies favorite, time and model filters and shows clearable chips', async ({ page }) => {
+test('the session filter bar applies favorite, time and model filters and shows clearable chips', freshPage('page.clock'), async ({ page }) => {
   await page.clock.setFixedTime(new Date('2026-10-02T12:00:00'));
   const lastFilter = () => page.evaluate(() => (window as unknown as { __reader: { filters: Array<{ favoriteOnly: boolean; fromMs: number | null; toMs: number | null; model: string | null }> } }).__reader.filters.at(-1));
   const bar = page.getByRole('group', { name: '会话筛选' });
