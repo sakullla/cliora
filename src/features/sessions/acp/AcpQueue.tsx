@@ -2,13 +2,20 @@ import { useCallback, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../../components/Icon';
 import { AcpCopyButton } from './AcpCopyButton';
-import { queueCopyText, queuePreview, readAcpQueue, subscribeAcpQueue, takeAcpEntry, type AcpQueueState, type QueuedPrompt } from './acpQueue.ts';
+import { acpQueueSending, queueCopyText, queuePreview, readAcpQueue, subscribeAcpQueue, takeAcpEntry, type AcpQueueState, type QueuedPrompt } from './acpQueue.ts';
 import styles from './acpComposer.module.css';
 
 /** The queue of one session, re-rendered only when that queue changes. */
 export function useAcpQueue(sessionId: string): AcpQueueState {
   const subscribe = useCallback((listener: () => void) => subscribeAcpQueue(sessionId, listener), [sessionId]);
   const read = useCallback(() => readAcpQueue(sessionId), [sessionId]);
+  return useSyncExternalStore(subscribe, read);
+}
+
+/** Whether a send of this session waits for the host, whichever view started it. */
+export function useAcpQueueSending(sessionId: string): boolean {
+  const subscribe = useCallback((listener: () => void) => subscribeAcpQueue(sessionId, listener), [sessionId]);
+  const read = useCallback(() => acpQueueSending(sessionId), [sessionId]);
   return useSyncExternalStore(subscribe, read);
 }
 
