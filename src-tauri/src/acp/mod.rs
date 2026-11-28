@@ -1247,6 +1247,9 @@ impl Session {
             self.diagnostic("工具更新缺少调用编号，已忽略");
             return;
         };
+        // A command the agent ran itself, reported through `_meta`: its terminal
+        // record goes out before the card that embeds it.
+        self.observe_agent_terminal(update, &call.title, subagent);
         self.emit_update(AcpUpdate::Tool { call });
         self.trim_timeline();
     }

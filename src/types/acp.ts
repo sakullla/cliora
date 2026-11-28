@@ -234,6 +234,8 @@ export type AcpTerminal = {
   /** Released by the agent or ended with the session; output stays visible. */
   released: boolean;
   subagent: string | null;
+  /** The agent ran the command itself and reported it on its tool call; read-only, cannot be stopped. */
+  agentOwned: boolean;
 };
 
 export type AcpPlanEntry = {

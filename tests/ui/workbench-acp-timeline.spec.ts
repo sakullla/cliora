@@ -146,7 +146,7 @@ test('every tool kind has its glyph and words, completed calls fold, diffs, term
     conversations: [snapshot({
       id: 'a1', state: 'running', directory: 'C:/work',
       timeline: [...calls, bare as any],
-      terminals: [{ terminalId: 'term-1', command: 'npm test', cwd: 'C:/work', output: '\u001b[32mok\u001b[0m 3 passed\n', truncated: false, exitStatus: null, released: false, subagent: null }],
+      terminals: [{ terminalId: 'term-1', command: 'npm test', cwd: 'C:/work', output: '\u001b[32mok\u001b[0m 3 passed\n', truncated: false, exitStatus: null, released: false, subagent: null, agentOwned: false }],
     })],
   });
   await openWorkbench(page);
@@ -217,6 +217,68 @@ test('every tool kind has its glyph and words, completed calls fold, diffs, term
   await expect(terminal).toContainText('退出码 1');
   await expect(terminal).toContainText('stopped');
   await expect(terminal.getByRole('button', { name: '终止' })).toHaveCount(0);
+});
+
+test('a command the agent ran itself streams into its card read-only; a terminal without output says whether output is expected', async ({ page }) => {
+  await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', state: 'running', directory: 'C:/work', timeline: [agentMessage('m0', '开始')] })] });
+  await openWorkbench(page);
+  const panel = panelOf(page);
+  await expect(panel.locator('[data-item-id="m0"]')).toBeVisible();
+  let seq = 2;
+  const tool = (callId: string, title: string, status: string) => send(page, { sessionId: 'a1', seq: seq++, kind: 'tool',
+    call: toolCall(callId, { title, toolKind: 'execute', status, content: [{ type: 'terminal', terminalId: callId }] }) });
+  const output = (terminalId: string, text: string, exitStatus: unknown = null, released = false) =>
+    send(page, { sessionId: 'a1', seq: seq++, kind: 'terminalOutput', terminalId, text, dropped: 0, truncated: false, exitStatus, released });
+  const agentTerminal = (terminalId: string, command: string) => send(page, { sessionId: 'a1', seq: seq++, kind: 'terminal',
+    terminal: { terminalId, command, cwd: 'C:/work', output: '', truncated: false, exitStatus: null, released: false, subagent: null, agentOwned: true } });
+  const open = async (callId: string, title: string) => {
+    const toggle = panel.locator(`[data-item-id="tool:${callId}"]`).getByRole('button', { name: new RegExp(title) }).first();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  };
+
+  // What the host makes of a pi-acp bash call: the record first, then the card, then output deltas and the exit.
+  await agentTerminal('call-1', 'ls -la');
+  await tool('call-1', 'ls -la', 'in_progress');
+  const terminal = panel.locator('[data-item-id="tool:call-1"] [data-content="terminal"]');
+  await expect(terminal).toHaveAttribute('data-agent-owned', 'true');
+  await expect(terminal.locator('[data-terminal-state]')).toHaveText('等待输出');
+  await expect(terminal).toContainText('运行中');
+  await expect(terminal.getByRole('button', { name: '终止' })).toHaveCount(0);
+  await output('call-1', 'line one\n');
+  await output('call-1', 'line two\n');
+  await expect(terminal.locator('pre')).toHaveText('line one\nline two\n');
+  await expect(terminal.getByRole('button', { name: '终止' })).toHaveCount(0);
+  await output('call-1', '', { exitCode: 0, signal: null }, true);
+  await tool('call-1', 'ls -la', 'completed');
+  await open('call-1', 'ls -la');
+  await expect(terminal).toContainText('退出码 0');
+  await expect(terminal.locator('pre')).toHaveText('line one\nline two\n');
+  await expect(terminal.getByRole('button', { name: '终止' })).toHaveCount(0);
+
+  // A finished command that printed nothing.
+  await agentTerminal('call-2', 'true');
+  await tool('call-2', 'true', 'in_progress');
+  const quiet = panel.locator('[data-item-id="tool:call-2"] [data-content="terminal"]');
+  await expect(quiet.locator('[data-terminal-state]')).toHaveText('等待输出');
+  await output('call-2', '', { exitCode: 0, signal: null }, true);
+  await tool('call-2', 'true', 'completed');
+  await open('call-2', 'true');
+  await expect(quiet).toContainText('退出码 0');
+  await expect(quiet.locator('[data-terminal-state]')).toHaveText('没有输出');
+
+  // A card whose terminal never arrived: waiting while it runs, nothing once it ended; never its id.
+  await tool('call-9', 'make', 'in_progress');
+  const missing = panel.locator('[data-item-id="tool:call-9"] [data-content="terminal"]');
+  await expect(missing.locator('[data-terminal-state]')).toHaveText('等待输出');
+  await expect(missing).not.toContainText('call-9');
+  await tool('call-9', 'make', 'completed');
+  await open('call-9', 'make');
+  await expect(missing.locator('[data-terminal-state]')).toHaveText('没有输出');
+  await expect(missing).not.toContainText('call-9');
+  await expect(panel).not.toContainText('输出暂不可用');
+  expect(await page.evaluate(() => (window as any).__acpTest.kills)).toEqual([]);
 });
 
 test('the plan follows its updates and disappears when empty; the title and usage follow the agent', async ({ page }) => {

@@ -139,6 +139,7 @@ export function AcpToolCard({
           terminalId={content.terminalId}
           terminal={acpTerminal(snapshot, content.terminalId)}
           live={live}
+          active={call.status === 'pending' || call.status === 'in_progress'}
           onKill={onKillTerminal}
           searchQuery={searchQuery}
           searchCase={searchCase}

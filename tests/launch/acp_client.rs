@@ -871,3 +871,204 @@ fn a_shell_line_outside_the_directory_still_needs_an_execute_approval() {
     close(&snapshot.id).unwrap();
     worker.join().unwrap();
 }
+
+/// One session/update from the scripted agent.
+fn session_update(agent: &Agent, update: Value) {
+    agent.send(json!({ "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "session-1", "update": update } }));
+}
+
+/// A bash call in the form pi-acp reports a command it ran itself: the terminal
+/// id is the tool call id, `terminal_info` comes with the call, output deltas
+/// and the exit with its updates.
+fn agent_bash_call(agent: &Agent, call: &str, title: &str) {
+    session_update(agent, json!({
+        "sessionUpdate": "tool_call", "toolCallId": call, "title": title, "kind": "execute", "status": "in_progress",
+        "content": [{ "type": "terminal", "terminalId": call }],
+        "_meta": { "terminal_info": { "terminal_id": call, "cwd": "/work/project" } },
+    }));
+}
+
+fn agent_bash_output(agent: &Agent, call: &str, data: &str) {
+    session_update(agent, json!({
+        "sessionUpdate": "tool_call_update", "toolCallId": call, "status": "in_progress",
+        "_meta": { "terminal_output": { "terminal_id": call, "data": data } },
+    }));
+}
+
+fn agent_bash_exit(agent: &Agent, call: &str, code: i64) {
+    session_update(agent, json!({
+        "sessionUpdate": "tool_call_update", "toolCallId": call, "status": if code == 0 { "completed" } else { "failed" },
+        "_meta": { "terminal_exit": { "terminal_id": call, "exit_code": code, "signal": null } },
+    }));
+}
+
+fn terminal_of(id: &str, terminal: &str) -> Option<AcpTerminal> {
+    snapshot_of(id).terminals.into_iter().find(|item| item.terminal_id == terminal)
+}
+
+#[test]
+fn a_command_the_agent_ran_itself_is_a_read_only_terminal_record() {
+    let directory = temp_dir();
+    let (io, mut agent) = pair();
+    let (done_tx, done_rx) = channel();
+    let (command, args) = short_command();
+    let worker = std::thread::spawn(move || {
+        agent.handshake(false);
+        agent_bash_call(&agent, "call-1", "ls -la");
+        agent_bash_output(&agent, "call-1", "line one\n");
+        agent_bash_output(&agent, "call-1", "line two\n");
+        agent_bash_exit(&agent, "call-1", 0);
+        // Output with no info first opens the record by itself.
+        agent_bash_output(&agent, "call-2", "lonely\n");
+        // Records the agent keeps itself never take a live slot.
+        for index in 0..=super::terminal::MAX_TERMINALS {
+            agent_bash_call(&agent, &format!("busy-{index}"), "sleep 60");
+        }
+        // The host answers no terminal request for them.
+        let read = call(&mut agent, 300, "terminal/output", json!({ "sessionId": "session-1", "terminalId": "call-2" }));
+        assert!(read["error"]["message"].as_str().unwrap().contains("agent"), "{read}");
+        let killed = call(&mut agent, 301, "terminal/kill", json!({ "sessionId": "session-1", "terminalId": "busy-0" }));
+        assert!(killed.get("error").is_some(), "{killed}");
+        let waited = call(&mut agent, 302, "terminal/wait_for_exit", json!({ "sessionId": "session-1", "terminalId": "busy-0" }));
+        assert!(waited.get("error").is_some(), "{waited}");
+        let released = call(&mut agent, 303, "terminal/release", json!({ "sessionId": "session-1", "terminalId": "busy-0" }));
+        assert!(released.get("error").is_some(), "{released}");
+        let created = call(&mut agent, 304, "terminal/create", json!({ "sessionId": "session-1", "command": command, "args": args }));
+        let own = created["result"]["terminalId"].as_str().unwrap_or_else(|| panic!("agent 自管的终端不占 live 名额：{created}")).to_owned();
+        let _ = done_tx.send(own);
+        agent.stay_connected();
+    });
+    let snapshot = open(spec(directory.path()), io).unwrap();
+    let own = done_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+    let first = wait_for(|| terminal_of(&snapshot.id, "call-1").filter(|terminal| terminal.released), "agent 终端结束");
+    assert!(first.agent_owned);
+    assert_eq!(first.command, "ls -la");
+    assert_eq!(first.cwd, "/work/project");
+    assert_eq!(first.output, "line one\nline two\n", "输出按到达顺序拼接");
+    assert!(!first.truncated);
+    assert_eq!(first.exit_status, Some(AcpTerminalExit { exit_code: Some(0), signal: None }));
+    assert_eq!(replay_output(&snapshot.id, "call-1"), first.output, "事件重建出同样的输出");
+    // The record is announced before the card that embeds it and before its output.
+    let order: Vec<&str> = events_of(&snapshot.id)
+        .iter()
+        .filter_map(|event| match &event.update {
+            AcpUpdate::Terminal { terminal } if terminal.terminal_id == "call-1" => Some("terminal"),
+            AcpUpdate::TerminalOutput { terminal_id, .. } if terminal_id == "call-1" => Some("output"),
+            AcpUpdate::Tool { call } if call.call_id == "call-1" => Some("tool"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(order, ["terminal", "tool", "output", "tool", "output", "tool", "output", "tool"]);
+    let lonely = terminal_of(&snapshot.id, "call-2").expect("只有输出时隐式建立记录");
+    assert!(lonely.agent_owned);
+    assert_eq!(lonely.output, "lonely\n");
+    assert!(lonely.exit_status.is_none() && !lonely.released);
+    // The user cannot stop it either.
+    let refused = kill_terminal(&snapshot.id, "busy-0").unwrap_err();
+    assert!(refused.contains("agent"), "{refused}");
+    let own = terminal_of(&snapshot.id, &own).expect("宿主自己的终端");
+    assert!(!own.agent_owned);
+    close(&snapshot.id).unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
+fn terminal_meta_naming_a_host_terminal_is_ignored_and_host_ids_skip_agent_ones() {
+    let directory = temp_dir();
+    let (io, mut agent) = pair();
+    let (done_tx, done_rx) = channel();
+    let (command, args) = short_command();
+    let worker = std::thread::spawn(move || {
+        agent.handshake(false);
+        let created = call(&mut agent, 310, "terminal/create", json!({ "sessionId": "session-1", "command": command, "args": args }));
+        let own = created["result"]["terminalId"].as_str().unwrap().to_owned();
+        call(&mut agent, 311, "terminal/wait_for_exit", json!({ "sessionId": "session-1", "terminalId": own }));
+        // The tool call claims the host's terminal: its _meta changes nothing.
+        session_update(&agent, json!({
+            "sessionUpdate": "tool_call", "toolCallId": "spoof", "title": "spoof", "kind": "execute", "status": "completed",
+            "_meta": {
+                "terminal_info": { "terminal_id": own, "cwd": "/elsewhere" },
+                "terminal_output": { "terminal_id": own, "data": "injected\n" },
+                "terminal_exit": { "terminal_id": own, "exit_code": 7, "signal": null },
+            },
+        }));
+        // An agent record that takes the host's next id: the host picks another.
+        agent_bash_call(&agent, "term-2", "echo agent");
+        let next = call(&mut agent, 312, "terminal/create", json!({ "sessionId": "session-1", "command": command, "args": args }));
+        let next = next["result"]["terminalId"].as_str().unwrap().to_owned();
+        let _ = done_tx.send((own, next));
+        agent.stay_connected();
+    });
+    let snapshot = open(spec(directory.path()), io).unwrap();
+    let (own, next) = done_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+    assert_eq!(own, "term-1");
+    wait_for(|| tools(&snapshot_of(&snapshot.id)).into_iter().find(|call| call.call_id == "spoof"), "伪造的工具调用");
+    let state = terminal_of(&snapshot.id, &own).unwrap();
+    assert!(!state.agent_owned);
+    assert!(!state.output.contains("injected"), "{:?}", state.output);
+    assert_eq!(state.exit_status.as_ref().and_then(|exit| exit.exit_code), Some(0));
+    assert_ne!(state.cwd, "/elsewhere");
+    assert!(snapshot_of(&snapshot.id).diagnostics.iter().any(|line| line.contains("同名")), "冲突留下诊断");
+    assert_ne!(next, "term-2", "宿主的新终端不与 agent 记录同名");
+    assert!(terminal_of(&snapshot.id, "term-2").unwrap().agent_owned);
+    assert!(!terminal_of(&snapshot.id, &next).unwrap().agent_owned);
+    close(&snapshot.id).unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
+fn agent_terminal_output_keeps_the_bounded_tail_and_released_records_are_pruned() {
+    use super::terminal::{MAX_OUTPUT_BYTES, MAX_RELEASED};
+    let directory = temp_dir();
+    let (io, mut agent) = pair();
+    let (done_tx, done_rx) = channel();
+    let head = "h".repeat(MAX_OUTPUT_BYTES - 4);
+    let worker = std::thread::spawn(move || {
+        agent.handshake(false);
+        agent_bash_call(&agent, "big", "cat big.log");
+        agent_bash_output(&agent, "big", &head);
+        agent_bash_output(&agent, "big", "0123456789中文");
+        agent_bash_exit(&agent, "big", 1);
+        for index in 0..MAX_RELEASED + 3 {
+            let id = format!("done-{index}");
+            agent_bash_call(&agent, &id, "true");
+            agent_bash_exit(&agent, &id, 0);
+        }
+        let _ = done_tx.send(());
+        agent.stay_connected();
+    });
+    let snapshot = open(spec(directory.path()), io).unwrap();
+    done_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+    let last = format!("done-{}", MAX_RELEASED + 2);
+    wait_for(|| terminal_of(&snapshot.id, &last).filter(|terminal| terminal.released), "最后一个记录结束");
+    let current = snapshot_of(&snapshot.id);
+    assert_eq!(current.terminals.len(), MAX_RELEASED, "保留数不超过上限");
+    assert!(current.terminals.iter().all(|terminal| terminal.agent_owned && terminal.released));
+    assert!(
+        current.terminals.iter().all(|terminal| !matches!(terminal.terminal_id.as_str(), "big" | "done-0" | "done-1")),
+        "最早的记录先被清理"
+    );
+    // The big record is gone from the snapshot; its events still show the bound.
+    let mut held: Vec<u16> = Vec::new();
+    let mut truncated = false;
+    let mut exit_code = None;
+    for event in events_of(&snapshot.id) {
+        if let AcpUpdate::TerminalOutput { terminal_id, text, dropped, truncated: cut, exit_status, .. } = &event.update {
+            if terminal_id == "big" {
+                held.extend(text.encode_utf16());
+                held.drain(..(*dropped).min(held.len()));
+                truncated = *cut;
+                exit_code = exit_status.as_ref().and_then(|exit| exit.exit_code);
+            }
+        }
+    }
+    let held = String::from_utf16(&held).unwrap();
+    assert!(truncated, "超出上限时标记截断");
+    assert!(held.len() <= MAX_OUTPUT_BYTES, "{}", held.len());
+    assert!(held.len() > MAX_OUTPUT_BYTES - 16, "只丢弃最早的文字：{}", held.len());
+    assert!(held.ends_with("0123456789中文"), "保留尾部");
+    assert_eq!(exit_code, Some(1));
+    close(&snapshot.id).unwrap();
+    worker.join().unwrap();
+}
+
