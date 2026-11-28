@@ -26,7 +26,7 @@
 .input,
 .input:focus {
   display: block; width: 100%; min-height: 0; resize: none;
-  padding: var(--space-2_5) var(--space-3) var(--space-1_5);
+  padding: var(--space-2) var(--space-3) var(--space-1);
   border: 0; border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   background: transparent; color: var(--term-fg); caret-color: var(--term-accent);
   font: inherit; font-size: var(--fs-control); line-height: 1.55;
@@ -35,16 +35,19 @@
 .input::placeholder { color: var(--term-text-3); }
 .input:disabled { color: var(--term-text-3); opacity: 1; }
 
+/* One row of actions under the input: icon tools and selectors on the left, usage,
+   grants and the main button on the right. Only an error wraps to a line of its own. */
 .actions {
   position: relative;
   display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
-  gap: var(--space-1_5) var(--space-2); min-width: 0;
-  padding: var(--space-1_5) var(--space-2) var(--space-2);
-  border-top: 1px solid color-mix(in srgb, var(--term-line) 75%, transparent);
+  gap: var(--space-1) var(--space-2); min-width: 0;
+  padding: var(--space-1) var(--space-1_5) var(--space-1_5);
 }
-.tools { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: center; gap: var(--space-1); min-width: 0; }
-.actionsRight { display: inline-flex; flex: 0 1 auto; align-items: center; gap: var(--space-2); margin-left: auto; min-width: 0; }
-.hint { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--term-text-3); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
+.tools { display: flex; flex: 1 1 auto; align-items: center; gap: var(--space-0_5); min-width: 0; }
+.actionsRight { display: inline-flex; flex: 0 1 auto; align-items: center; gap: var(--space-1_5); margin-left: auto; min-width: 0; }
+.primary { display: inline-flex; flex: none; align-items: center; gap: var(--space-1); }
+.primary .button { min-height: 28px; padding: 0 var(--space-2_5); }
+.actionsError { order: 9; flex-basis: 100%; margin: 0; color: var(--term-danger); font-size: var(--fs-micro); overflow-wrap: anywhere; }
 
 .busyFeedback {
   display: flex; align-items: center; gap: var(--space-1_5); margin: 0;
@@ -78,7 +81,7 @@
 
 .toolButton {
   display: inline-flex; flex: none; align-items: center; justify-content: center; gap: var(--space-1);
-  min-height: 26px; padding: 0 var(--space-2);
+  width: 26px; height: 26px; min-height: 0; padding: 0;
   border: 1px solid transparent; border-radius: var(--radius-sm);
   background: transparent; color: var(--term-text-2);
   font: inherit; font-size: var(--fs-micro); font-weight: var(--fw-medium); line-height: 1.2; white-space: nowrap; cursor: pointer;
@@ -88,7 +91,8 @@
 .toolButton:hover:not(:disabled) { border-color: var(--term-line); background: var(--term-hover); color: var(--term-fg); box-shadow: none; }
 .toolButton:active:not(:disabled) { transform: none; background: var(--term-press); box-shadow: none; }
 .toolButton:disabled { cursor: not-allowed; opacity: .42; }
-.toolLabel { min-width: 0; }
+/* Icon-only tools: the name is the accessible label and the hover text. */
+.toolLabel { display: none; }
 
 .iconButton {
   display: inline-grid; flex: none; place-items: center;
@@ -101,8 +105,50 @@
 .iconButton[aria-expanded='true'] { border-color: var(--term-frame); background: var(--term-hover); color: var(--term-fg); }
 
 .button:focus-visible, .iconButton:focus-visible, .toolButton:focus-visible, .settingsTrigger:focus-visible,
-.trayRemove:focus-visible, .settingSelect:focus-visible, .settingSwitch:focus-visible,
+.trayRemove:focus-visible, .settingSelect:focus-visible, .settingSwitch:focus-visible, .grant:focus-visible, .usage:focus-visible,
 .fieldInput:focus-visible, .form input:focus-visible { outline: 2px solid var(--term-accent); outline-offset: 1px; }
+/* A click never draws a ring; only the keyboard does (the app's select rule would). A
+   browser counts a clicked select as keyboard-focused, so a select gets a thin line only. */
+.settingSelect:focus:not(:focus-visible), .usage:focus:not(:focus-visible) { outline: none; box-shadow: none; }
+.settingSelect:focus-visible { outline: 1px solid var(--term-accent); outline-offset: -1px; box-shadow: none; }
+
+/* Context usage: a small ring and K/M/B figures; warning color near the limit. */
+.usage {
+  position: relative; display: inline-flex; flex: none; align-items: center; gap: var(--space-1);
+  min-height: 22px; padding: 0 var(--space-1); border-radius: var(--radius-xs);
+  color: var(--term-text-3); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; white-space: nowrap; cursor: default;
+}
+.usageRing { flex: none; }
+.usageTrack { fill: none; stroke: var(--term-line); stroke-width: 2; }
+.usageFill { fill: none; stroke: var(--term-accent-2); stroke-width: 2; stroke-linecap: round; }
+.usage[data-level='high'] { color: var(--term-warning); }
+.usage[data-level='high'] .usageFill { stroke: var(--term-warning); }
+.usageText { min-width: 0; }
+.usageTip {
+  position: absolute; right: 0; bottom: calc(100% + var(--space-1)); z-index: 4;
+  width: max-content; max-width: min(320px, 70vw); padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--term-float-line); border-radius: var(--radius-sm);
+  background: var(--term-float); color: var(--term-fg); box-shadow: 0 8px 22px -12px var(--term-shadow);
+  font-size: var(--fs-micro); line-height: 1.45; white-space: normal; overflow-wrap: anywhere;
+  visibility: hidden; opacity: 0; pointer-events: none; transition: opacity var(--fast) var(--ease);
+}
+.usage:hover .usageTip, .usage:focus-visible .usageTip { visibility: visible; opacity: 1; }
+
+/* Session grants: one small shield per kind, each revoking itself. */
+.grants { display: inline-flex; flex: none; align-items: center; gap: var(--space-0_5); }
+.grant {
+  appearance: none; box-shadow: none;
+  display: inline-flex; flex: none; align-items: center; gap: var(--space-0_5);
+  min-height: 22px; padding: 0 var(--space-1); border: 1px solid transparent; border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--term-accent-2) 10%, transparent); color: var(--term-accent-2);
+  font: inherit; font-size: var(--fs-micro); font-weight: var(--fw-medium); line-height: 1.2; white-space: nowrap; cursor: pointer;
+  transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.grant > svg { flex: none; }
+.grant:hover:not(:disabled) { border-color: color-mix(in srgb, var(--term-accent-2) 45%, var(--term-line)); background: color-mix(in srgb, var(--term-accent-2) 18%, transparent); box-shadow: none; }
+.grant:active:not(:disabled) { transform: none; box-shadow: none; }
+.grant:disabled { cursor: progress; opacity: .6; }
+.grantKind { min-width: 0; }
 
 /* `/` and `@` menus: a listbox above the input card, driven from the input's keys. */
 .menu {
@@ -142,10 +188,17 @@
 .notice > svg { flex: none; margin-top: var(--space-0_5); color: var(--term-warning); }
 .notice > span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 
-/* Selectors: crisp desktop controls with compact summary trigger in narrow panes. */
-.settings { position: relative; display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; gap: var(--space-1); min-width: 0; }
+/* Selectors: value-only pills in the action row, a summary trigger in narrow panes. */
+.settings { position: relative; display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; gap: var(--space-1); min-width: 0; margin-left: var(--space-1); }
 .settings[data-acp-settings='menu'] { position: static; }
-.settingsInline { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); min-width: 0; }
+.settingsInline { display: flex; flex-wrap: nowrap; align-items: center; gap: var(--space-0_5); min-width: 0; }
+.settingsInline .setting { flex: 0 1 auto; }
+.settingsInline .selectWrap { color: var(--term-text-3); }
+.settingsInline .settingSelect {
+  max-width: 14em; height: 24px; padding: 0 var(--space-4) 0 var(--space-1_5);
+  border-color: transparent; background: transparent; color: var(--term-text-2);
+}
+.settingsInline .settingSelect:hover:not(:disabled) { border-color: transparent; background: var(--term-hover); color: var(--term-fg); }
 .settingsTrigger {
   display: inline-flex; flex: none; align-items: center; gap: var(--space-1);
   max-width: 100%; min-height: 26px; padding: 0 var(--space-2);
@@ -290,14 +343,24 @@
 }
 
 @container acp-body (max-width: 560px) {
-  .toolLabel { display: none; }
-  .toolButton { padding: 0 var(--space-1_5); }
-  .hint { display: none; }
+  .grantKind { display: none; }
   .settingsSummary { max-width: 10ch; }
   .endedActions { margin-left: 0; }
 }
 
+/* Diagnostics dialog (an app dialog: app tokens). */
+.diagnostics { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.diagnosticsHead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); min-width: 0; }
+.diagnosticsAgent { display: inline-flex; align-items: center; gap: var(--space-1); min-width: 0; color: var(--text-2); font-size: var(--fs-caption); overflow-wrap: anywhere; }
+.diagnosticsAgent > svg { flex: none; }
+.diagnosticsText {
+  max-height: min(420px, 55vh); margin: 0; padding: var(--space-2) var(--space-2_5); overflow: auto;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2);
+  color: var(--text); font-family: var(--font-mono); font-size: var(--fs-micro); line-height: 1.55;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .composerCard, .button, .toolButton, .iconButton, .settingsTrigger, .settingSelect { transition: none; }
+  .composerCard, .button, .toolButton, .iconButton, .settingsTrigger, .settingSelect, .grant, .usageTip { transition: none; }
   .trayReading::after { animation: none; }
 }

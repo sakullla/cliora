@@ -11,6 +11,8 @@ import {
   searchAcpTimeline,
   splitMatchRuns,
 } from '../../src/features/sessions/acp/acpSearch.ts';
+import { acpSettings, composerPlaceholder, settingLabel } from '../../src/features/sessions/acp/composerModel.ts';
+import { formatTokens, usageLevel } from '../../src/features/sessions/acp/acpView.ts';
 
 function toolItem(id, overrides = {}) {
   return {
@@ -444,4 +446,74 @@ test('searchAcpTimeline ignores hidden schema fields, non-answerable permission 
   // Once the session closes, stale pending permissions are no longer answerable/visible.
   const closedPermSnapshot = makeSnapshot([stalePermTool], { pending: ['req-old'], state: 'closed' });
   assert.deepEqual(searchAcpTimeline(closedPermSnapshot, 'HiddenNeedleOption', false), []);
+});
+
+const settingLabels = { mode: '模式', model: '模型', thought: '思考强度' };
+const choice = (value, name = value) => ({ value, name, description: null, group: null });
+
+test('acpSettings uses only configOptions when the agent declares them, named by category', () => {
+  // The pi adapter: modes that are really thinking levels, the legacy model list and
+  // the config options for the same two choices.
+  const config = {
+    modes: { currentModeId: 'high', availableModes: [{ id: 'low', name: 'Thinking: low', description: null }, { id: 'high', name: 'Thinking: high', description: null }] },
+    models: { currentModelId: 'sonnet', availableModels: [{ modelId: 'sonnet', name: 'Sonnet', description: null }, { modelId: 'opus', name: 'Opus', description: null }] },
+    options: [
+      { id: 'thinking', name: 'Thinking', description: null, category: 'thought_level', type: 'select', currentValue: 'high', options: [choice('low', 'Low'), choice('high', 'High')] },
+      { id: 'model', name: 'Model', description: 'The model', category: 'model', type: 'select', currentValue: 'sonnet', options: [choice('sonnet', 'Sonnet'), choice('opus', 'Opus')] },
+    ],
+  };
+  const settings = acpSettings(config, '_model', settingLabels);
+  assert.deepEqual(settings.map((setting) => setting.name), ['模型', '思考强度']);
+  assert.deepEqual(settings.map((setting) => setting.target), [{ kind: 'config', configId: 'model' }, { kind: 'config', configId: 'thinking' }]);
+  assert.equal(settingLabel(settings[0], settings[0].value), 'Sonnet');
+  assert.equal(settingLabel(settings[1], settings[1].value), 'High');
+
+  // Another category keeps the agent's own name; an option without choices is no selector.
+  const other = acpSettings({ modes: null, models: null, options: [
+    { id: 'tone', name: 'Tone', description: null, category: null, type: 'select', currentValue: 'calm', options: [choice('calm')] },
+    { id: 'empty', name: 'Empty', description: null, category: 'model', type: 'select', currentValue: '', options: [] },
+  ] }, '_model', settingLabels);
+  assert.deepEqual(other.map((setting) => setting.name), ['Tone']);
+});
+
+test('acpSettings falls back to modes and the legacy models without config options', () => {
+  const modesOnly = acpSettings({ modes: { currentModeId: 'ask', availableModes: [{ id: 'ask', name: '提问', description: null }] }, models: null, options: [] }, '_model', settingLabels);
+  assert.equal(modesOnly.length, 1);
+  assert.equal(modesOnly[0].name, '模式');
+  assert.deepEqual(modesOnly[0].target, { kind: 'mode' });
+
+  const legacy = acpSettings({
+    modes: { currentModeId: 'ask', availableModes: [{ id: 'ask', name: '提问', description: null }] },
+    models: { currentModelId: 'm1', availableModels: [{ modelId: 'm1', name: 'M1', description: null }] },
+    // An option with nothing to choose does not count as declaring options.
+    options: [{ id: 'empty', name: 'Empty', description: null, category: 'model', type: 'select', currentValue: '', options: [] }],
+  }, '_model', settingLabels);
+  assert.deepEqual(legacy.map((setting) => setting.name), ['模式', '模型']);
+  assert.deepEqual(legacy[1].target, { kind: 'config', configId: '_model' });
+  assert.deepEqual(acpSettings(null, '_model', settingLabels), []);
+});
+
+test('composerPlaceholder names only what the agent and the session offer', () => {
+  const labels = { base: '输入消息', command: '/ 使用命令', file: '@ 引用文件', image: '可粘贴图片', lead: '；', separator: '，' };
+  assert.equal(composerPlaceholder({ commands: false, files: false, image: false }, labels), '输入消息');
+  const plain = composerPlaceholder({ commands: false, files: true, image: false }, labels);
+  assert.equal(plain, '输入消息；@ 引用文件');
+  assert.ok(!plain.includes('/'));
+  assert.ok(!plain.includes('图片'));
+  assert.equal(composerPlaceholder({ commands: true, files: true, image: true }, labels), '输入消息；/ 使用命令，@ 引用文件，可粘贴图片');
+  assert.equal(composerPlaceholder({ commands: true, files: false, image: false }, labels), '输入消息；/ 使用命令');
+});
+
+test('formatTokens uses K/M/B in every language and usageLevel marks 80% and above', () => {
+  assert.equal(formatTokens(132000), '132K');
+  assert.equal(formatTokens(500000), '500K');
+  assert.equal(formatTokens(1200000), '1.2M');
+  assert.equal(formatTokens(2000000), '2M');
+  assert.equal(formatTokens(2e9), '2B');
+  assert.equal(formatTokens(950), '950');
+  assert.deepEqual(usageLevel(132000, 500000), { ratio: 0.264, high: false });
+  assert.equal(usageLevel(399999, 500000).high, false);
+  assert.equal(usageLevel(400000, 500000).high, true);
+  assert.equal(usageLevel(425000, 500000).high, true);
+  assert.deepEqual(usageLevel(12000, 0), { ratio: null, high: false });
 });

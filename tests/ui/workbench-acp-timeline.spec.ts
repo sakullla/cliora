@@ -375,10 +375,12 @@ test('the plan follows its updates and disappears when empty; the title and usag
   await send(page, { sessionId: 'a1', seq: 4, kind: 'plan', entries: [] });
   await expect(panel.locator('[data-acp-plan]')).toHaveCount(0);
 
-  // A reported title names the stage bar and the rail without repeating in the single-pane ACP bar; usage shows only once reported.
+  // A reported title names the stage bar and the rail without repeating in the pane; usage shows
+  // only once reported, in the input card and in K/M/B.
   await send(page, { sessionId: 'a1', seq: 5, kind: 'info', info: { title: '重构工具栏间距', updatedAt: null, usage: { used: 12000, size: 200000, cost: null } } });
-  await expect(panel.locator('[data-acp-title]')).toHaveCount(0);
-  await expect(panel.locator('[data-acp-usage]')).toContainText('20万');
+  await expect(panel.locator('[data-acp-actions] [data-acp-usage]')).toHaveText(/^12K \/ 200K/);
+  await expect(panel.locator('[data-acp-usage]')).toHaveCount(1);
+  await expect(panel.locator('[data-acp-body]')).not.toContainText('重构工具栏间距');
   await expect(page.locator('[data-session-id="a1"]').first()).toContainText('重构工具栏间距');
   await expect(page.getByRole('heading', { name: /重构工具栏间距/ }).first()).toBeVisible();
 });
@@ -424,9 +426,10 @@ test('cards wait near their tool, the pending bar locates them, grants revoke an
   await expect(panel.locator('[data-item-id="access-1"]')).toContainText('已允许（本会话）');
   await expect(bar).toContainText('1 项等你处理');
 
-  // The session grant is a badge that revokes itself.
-  const grant = panel.getByRole('button', { name: '撤销本会话的写入放行' });
-  await expect(grant).toContainText('本会话已放行写入');
+  // The session grant is a shield in the input card that revokes itself.
+  const grant = panel.locator('[data-acp-actions]').getByRole('button', { name: '撤销本会话的写入放行' });
+  await expect(grant).toHaveAttribute('title', /本会话已放行写入/);
+  await expect(grant).toContainText('写入');
   await grant.click();
   await expect.poll(() => page.evaluate(() => (window as any).__acpTest.revokes)).toEqual([['a1', ['write']]]);
   await page.evaluate(() => (window as any).__acpSessionState('a1', { grants: [], pending: ['r1'], seq: 4 }));
@@ -444,20 +447,20 @@ test('a YOLO conversation shows its badge without single-pane duplication and re
     interaction: 'acp',
     conversations: [
       snapshot({
-        id: 'a1', mode: 'yolo', state: 'running',
+        id: 'a1', mode: 'yolo', state: 'running', info: { title: 'YOLO 对话', updatedAt: null, usage: null },
         timeline: [
           { kind: 'access', id: 'access-1', accessKind: 'write', path: 'D:/outside/out.txt', detail: null, decision: 'yolo', requestId: null, diff: null, turnId: 'turn-1', subagent: null } as any,
           { kind: 'notice', id: 'n1', level: 'info', code: 'yolo_allowed', text: '已自动允许：运行 npm test（允许一次）', turnId: 'turn-1' },
           { kind: 'access', id: 'access-2', accessKind: 'write', path: 'C:/work/src/a.ts', detail: null, decision: 'inside', requestId: null, diff: { path: 'src/a.ts', oldText: 'a\n', newText: 'b\n', truncated: false, previousOmitted: false }, turnId: 'turn-1', subagent: null } as any,
         ],
       }),
-      snapshot({ id: 'a2', mode: 'normal', timeline: [agentMessage('m2', '普通对话')] }),
+      snapshot({ id: 'a2', mode: 'normal', info: { title: '普通对话', updatedAt: null, usage: null }, timeline: [agentMessage('m2', '普通的回答')] }),
     ],
   });
   await page.setViewportSize({ width: 1360, height: 820 });
   await openWorkbench(page);
   const panel = panelOf(page);
-  // Single pane: stage bar holds the YOLO chip; AcpSessionBar does not duplicate it.
+  // Single pane: stage bar holds the YOLO chip; the pane does not repeat it.
   await expect(page.getByRole('region', { name: '当前会话' }).locator('header [data-mode="yolo"]')).toBeVisible();
   await expect(panel.locator('[data-badge="yolo"]')).toHaveCount(0);
   await expect(panel.locator('[data-item-id="access-1"]')).toContainText('已自动允许（YOLO）');
@@ -468,9 +471,17 @@ test('a YOLO conversation shows its badge without single-pane duplication and re
   await expect(wrote).toContainText('Codex 通过 Cliora 写入 src/a.ts');
   await expect(wrote.locator('[data-op="insert"]')).toHaveCount(1);
   await expect(panel.locator('[data-acp-pending]')).toHaveCount(0);
-  // Split view: pane-level YOLO badge appears on the ACP bar so side-by-side panes stay distinct.
+  // Split view: each pane's shared head names its own conversation, so the panes stay distinct
+  // without a strip inside either; the YOLO state stays on the shared stage bar for the pane in front.
   await page.getByRole('button', { name: '分屏', exact: true }).first().click();
-  await expect(panel.locator('[data-badge="yolo"]')).toContainText('YOLO');
+  const other = panelOf(page, 'a2');
+  await expect(other).toBeVisible();
+  await expect(panel.locator('[class*="paneHead"]')).toContainText('YOLO 对话');
+  await expect(other.locator('[class*="paneHead"]')).toContainText('普通对话');
+  await expect(other.locator('[class*="paneHead"]')).not.toContainText('YOLO 对话');
+  await expect(panel.locator('[data-badge="yolo"]')).toHaveCount(0);
+  await expect(other.locator('[data-badge="yolo"]')).toHaveCount(0);
+  await expect(page.getByRole('region', { name: '当前会话' }).locator('header [data-mode="yolo"]')).toBeVisible();
 });
 
 for (const theme of ['light', 'dark'] as const) {

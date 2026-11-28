@@ -2,13 +2,15 @@ import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, use
 import { useTranslation } from 'react-i18next';
 import { highlightRuns } from '../../../components/CommandPalette';
 import { Icon } from '../../../components/Icon';
-import type { AcpAttachment, AcpFileList, AcpImageFile, AcpSessionSnapshot } from '../../../types/acp';
+import type { AcpAccessKind, AcpAttachment, AcpFileList, AcpImageFile, AcpSessionSnapshot } from '../../../types/acp';
 import type { PromptContext } from '../../../types/prompts';
 import type { BusinessWorkspace } from '../../../types/workspaces';
 import { PromptPicker, type PromptPickerHandle } from '../PromptPicker';
+import { AcpGrantBadges } from './AcpGrantBadges';
 import { AcpSettings } from './AcpSettings';
+import { AcpUsageMeter } from './AcpUsageMeter';
 import {
-  ACP_IMAGE_BYTES, ACP_IMAGE_LIMIT, ACP_IMAGE_TYPES, attachmentPayload, baseName, insertMention, isImagePath, matchCommands, mentionQuery,
+  ACP_IMAGE_BYTES, ACP_IMAGE_LIMIT, ACP_IMAGE_TYPES, attachmentPayload, baseName, composerPlaceholder, insertMention, isImagePath, matchCommands, mentionQuery,
   promptHistory, readBase64, slashQuery, type ComposerAttachment,
 } from './composerModel';
 import styles from './acpComposer.module.css';
@@ -44,6 +46,8 @@ let attachmentSeq = 0;
 const nextAttachmentId = () => `attachment-${Date.now().toString(36)}-${(attachmentSeq += 1)}`;
 
 type FileState = { query: string; files: string[]; truncated: boolean; loading: boolean; error: string };
+/** Why the last send was held back, said once until the person types or it clears. */
+type Blocked = 'busy' | 'starting' | 'reading' | null;
 /** A dropped image the host is still reading. */
 type ReadingImage = { id: string; name: string; path: string };
 
@@ -51,10 +55,16 @@ type ReadingImage = { id: string; name: string; path: string };
  * The conversation's input. Enter sends and Shift+Enter adds a line; while an input
  * method is composing, Enter belongs to the composition. `/` at the start opens the
  * agent's declared commands, `@` looks up files in the session directory and attaches
- * the chosen one. Images are attached by paste or drop only when the agent declared
+ * the chosen one (a `/` query that matches nothing says so instead of vanishing).
+ * Images are attached by paste or drop only when the agent declared
  * it accepts them; a desktop drop delivers paths, so the host reads the picture
  * (with the session directory's approval rules) and it joins the tray like a pasted
- * one, shown as reading until then. Up and down on an empty input bring back earlier prompts. While a
+ * one, shown as reading until then. Up and down on an empty input bring back earlier prompts.
+ * The card is the input and one row of actions: icon tools and the selectors on the
+ * left; context usage, session grants and the main button on the right. Idle, the row
+ * holds no explanatory text (the keys are in the send button's hover text); a send that
+ * is held back (a turn running, the session connecting, a picture still being read)
+ * says why once. While a
  * turn runs the draft stays editable and the main button stops the turn; a send that
  * fails keeps the draft and its attachments, and so does a turn the agent answers with
  * an error (its end reads `failed`): the prompt and its attachments come back into an
@@ -80,6 +90,8 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   onWithdrawAccess: (requestId: string) => Promise<void>;
   onSetMode: (modeId: string) => Promise<void>;
   onSetConfig: (configId: string, value: string | boolean) => Promise<void>;
+  /** Revokes session grants; the next access of each kind asks again. */
+  onRevokeGrants: (kinds: AcpAccessKind[]) => Promise<void>;
   /** Whether this conversation pane is currently visible/active. */
   active?: boolean;
   /** Scope context for the integrated prompt library picker. */
@@ -104,6 +116,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   onWithdrawAccess,
   onSetMode,
   onSetConfig,
+  onRevokeGrants,
   active = true,
   promptContext = null,
   workspaces = [],
@@ -139,7 +152,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
   const withdrawnRef = useRef(new Set<string>());
   const [notices, setNotices] = useState<string[]>([]);
   const [error, setError] = useState('');
-  const [busyEnterHint, setBusyEnterHint] = useState(false);
+  const [blocked, setBlocked] = useState<Blocked>(null);
   const [sending, setSending] = useState(false);
   const sendingRef = useRef(false);
   const [menuIndex, setMenuIndex] = useState(0);
@@ -165,7 +178,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     const node = inputRef.current;
     if (!node) return;
     node.style.height = 'auto';
-    const height = Math.min(200, Math.max(48, node.scrollHeight + 2));
+    const height = Math.min(200, Math.max(38, node.scrollHeight + 2));
     node.style.height = `${height}px`;
     node.style.overflowY = node.scrollHeight + 2 > height ? 'auto' : 'hidden';
   }, [draft]);
@@ -180,16 +193,22 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     return () => observer.disconnect();
   }, []);
 
+  // A reason clears once it no longer holds.
+  const starting = snapshot.state === 'starting';
   useEffect(() => {
-    if (!turnBusy || !live) setBusyEnterHint(false);
-  }, [turnBusy, live]);
+    setBlocked((current) => {
+      if (current === 'busy' || current === 'starting') return turnBusy && live ? current : null;
+      if (current === 'reading') return reading.length ? current : null;
+      return current;
+    });
+  }, [turnBusy, live, reading.length]);
 
   const slash = commands.length ? slashQuery(draft, caret) : null;
   const slashMatches = useMemo(() => (slash == null ? [] : matchCommands(commands, slash)), [commands, slash]);
   const mention = localFiles && slash == null && live ? mentionQuery(draft, caret) : null;
   const slashKey = slash != null ? `slash:${slash}` : null;
   const mentionKey = mention ? `mention:${mention.start}` : null;
-  const slashOpen = slash != null && slashMatches.length > 0 && dismissed !== slashKey;
+  const slashOpen = slash != null && dismissed !== slashKey;
   const mentionOpen = !!mention && dismissed !== mentionKey;
   const menuItems = slashOpen ? slashMatches.length : mentionOpen && fileState.query === mention?.query ? fileState.files.length : 0;
   const menuOpen = slashOpen || mentionOpen;
@@ -437,7 +456,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     if (!live || hidden) return;
     setDismissed(null);
     setError('');
-    setBusyEnterHint(false);
+    setBlocked(null);
     setText(text, text.length);
   }
 
@@ -455,7 +474,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     const nextCaret = before.length + prefix.length + body.length;
     setDismissed(null);
     setError('');
-    setBusyEnterHint(false);
+    setBlocked(null);
     setText(next, nextCaret);
   }
 
@@ -464,7 +483,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     const current = draftRef.current;
     setDismissed(null);
     setError('');
-    setBusyEnterHint(false);
+    setBlocked(null);
     if (prefix === '/') {
       if (current.startsWith('/')) {
         setText(current, Math.max(1, Math.min(current.length, caretRef.current || 1)));
@@ -488,6 +507,10 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
 
   function submit() {
     if (!canSend || turnBusy) return;
+    if (readingRef.current.length) {
+      setBlocked('reading');
+      return;
+    }
     void send(draft.trim(), true).catch(() => {});
   }
 
@@ -557,7 +580,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     if (event.key === 'Enter' && !event.shiftKey && !event.altKey) {
       event.preventDefault();
       if (turnBusy && live) {
-        setBusyEnterHint(true);
+        setBlocked(starting ? 'starting' : 'busy');
         return;
       }
       submit();
@@ -582,7 +605,10 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
     }
   }
 
-  const starting = snapshot.state === 'starting';
+  const placeholder = composerPlaceholder({ commands: commands.length > 0, files: localFiles, image: imageAllowed }, {
+    base: t('sessions.acpPlaceholderBase'), command: t('sessions.acpPlaceholderCommand'), file: t('sessions.acpPlaceholderFile'), image: t('sessions.acpPlaceholderImage'),
+    lead: t('sessions.acpPlaceholderLead'), separator: t('sessions.acpPlaceholderSeparator'),
+  });
   const sendable = canSend && !turnBusy && !sending && !reading.length && (!!draft.trim() || attachments.length > 0);
   const activeId = menuItems ? `${listId}-option-${activeIndex}` : undefined;
 
@@ -600,6 +626,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
           {command.description && <span className={styles.menuDetail}>{command.description}</span>}
           {command.hint && <span className={styles.menuHint}>{command.hint}</span>}
         </div>)}
+        {!slashMatches.length && <p className={styles.menuEmpty} role="status" data-acp-commands-empty="">{t('sessions.acpCommandsEmpty')}</p>}
       </div> : <div ref={menuListRef} id={listId} role="listbox" aria-label={t('sessions.acpFilesLabel')} aria-busy={fileState.loading || undefined} className={styles.menuList}>
         {fileState.query === mention?.query && fileState.files.map((path, index) => <div key={path} id={`${listId}-option-${index}`} role="option" aria-selected={index === activeIndex} className={styles.menuOption}
           onMouseDown={(event) => event.preventDefault()} onMouseMove={() => setMenuIndex(index)} onClick={() => choose(index)}>
@@ -616,9 +643,9 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
       <button type="button" className={styles.trayRemove} aria-label={t('sessions.acpNoticeDismiss')} title={t('sessions.acpNoticeDismiss')} onClick={() => setNotices([])}><Icon name="close" size={10} /></button>
     </div>}
     {error && <p className={styles.error} role="alert">{error}</p>}
-    {busyEnterHint && turnBusy && live && <p className={styles.busyFeedback} role="status" data-acp-busy-hint="">
+    {blocked && live && <p className={styles.busyFeedback} role="status" data-acp-busy-hint={blocked}>
       <Icon name="info" size={12} />
-      <span>{starting ? t('sessions.acpStartingEnterHint') : t('sessions.acpBusyEnterHint')}</span>
+      <span>{blocked === 'starting' ? t('sessions.acpStartingEnterHint') : blocked === 'reading' ? t('sessions.acpImageReadingBusy') : t('sessions.acpBusyEnterHint')}</span>
     </p>}
     <div className={styles.composerCard} data-acp-composer-card="">
       {(attachments.length > 0 || reading.length > 0) && <ul className={styles.tray} aria-label={t('sessions.acpAttachments')} aria-busy={reading.length > 0 || undefined}>
@@ -646,16 +673,16 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
         aria-autocomplete={commands.length ? 'list' : undefined}
         aria-controls={menuOpen ? listId : undefined}
         aria-activedescendant={activeId}
-        placeholder={live ? t('sessions.acpPlaceholder') : t('sessions.acpEndedPlaceholder')}
+        placeholder={!live ? t('sessions.acpEndedPlaceholder') : starting ? t('sessions.acpStartingComposerHint') : placeholder}
         value={draft}
-        rows={2}
+        rows={1}
         disabled={!live}
         onChange={(event) => {
           setDraft(event.target.value);
           setCaret(event.target.selectionStart ?? event.target.value.length);
           setDismissed(null);
           setError('');
-          if (busyEnterHint) setBusyEnterHint(false);
+          if (blocked) setBlocked(null);
         }}
         onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
         onCompositionStart={() => { composingRef.current = true; }}
@@ -675,7 +702,7 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
         }}
         onKeyDown={onKeyDown}
       />
-      <div className={styles.actions}>
+      <div className={styles.actions} data-acp-actions="">
         <div className={styles.tools}>
           <PromptPicker
             ref={promptPickerRef}
@@ -731,11 +758,15 @@ export const AcpComposer = forwardRef<AcpComposerHandle, {
           <AcpSettings config={snapshot.config} compact={compact} disabled={!live || snapshot.state === 'starting'} onSetMode={onSetMode} onSetConfig={onSetConfig} />
         </div>
         <div className={styles.actionsRight}>
-          <span className={styles.hint}>{!live ? t('sessions.acpEnded') : starting ? t('sessions.acpStartingComposerHint') : turnBusy ? t('sessions.acpBusyHint') : reading.length ? t('sessions.acpImageReadingBusy') : t('sessions.acpSendHint')}</span>
+          <AcpUsageMeter usage={snapshot.info.usage} compact={compact} />
+          <AcpGrantBadges grants={live ? snapshot.grants ?? [] : []} onRevoke={onRevokeGrants} />
           {!live && <button type="button" className={styles.button} data-variant="quiet" disabled={busy} onClick={onClose}>{t('sessions.acpClose')}</button>}
-          {turnBusy && live
-            ? <button type="button" className={styles.button} data-variant="stop" disabled={busy || snapshot.state === 'stopping'} onClick={() => { setBusyEnterHint(false); onStop(); }}><Icon name="square" size={12} />{snapshot.state === 'stopping' ? t('sessions.acpStopping') : t('sessions.acpStop')}</button>
-            : <button type="button" className={styles.button} data-variant="primary" disabled={!sendable} onClick={submit}><Icon name="arrowUp" size={13} />{sending ? t('sessions.acpSending') : t('sessions.acpSend')}</button>}
+          {/* The main control: one button now; a queued send adds its own next to Stop. */}
+          <span className={styles.primary} data-acp-primary="">
+            {turnBusy && live
+              ? <button type="button" className={styles.button} data-variant="stop" disabled={busy || snapshot.state === 'stopping'} onClick={() => { setBlocked(null); onStop(); }}><Icon name="square" size={12} />{snapshot.state === 'stopping' ? t('sessions.acpStopping') : t('sessions.acpStop')}</button>
+              : <button type="button" className={styles.button} data-variant="primary" disabled={!sendable} title={t('sessions.acpSendHint')} onClick={submit}><Icon name="arrowUp" size={13} />{sending ? t('sessions.acpSending') : t('sessions.acpSend')}</button>}
+          </span>
         </div>
       </div>
     </div>

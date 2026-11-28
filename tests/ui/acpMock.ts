@@ -83,6 +83,8 @@ export async function installAcpMock(page: Page, config: Config = {}) {
       answers: [] as Array<[string, string, string | null]>,
       accessAnswers: [] as Array<[string, string, string]>,
       revokes: [] as Array<[string, string[]]>,
+      /** acp_revoke_grants rejects with this reason while set. */
+      failRevoke: null as string | null,
       kills: [] as Array<[string, string]>,
       opens: [] as Array<[string, string]>,
       closes: [] as string[],
@@ -222,7 +224,11 @@ export async function installAcpMock(page: Page, config: Config = {}) {
           if (command === 'acp_cancel') { state.cancels.push(args.sessionId); return null; }
           if (command === 'acp_respond_permission') { state.answers.push([args.sessionId, args.requestId, args.optionId ?? null]); return null; }
           if (command === 'acp_respond_access') { state.accessAnswers.push([args.sessionId, args.accessId, args.decision]); return null; }
-          if (command === 'acp_revoke_grants') { state.revokes.push([args.sessionId, args.kinds]); return null; }
+          if (command === 'acp_revoke_grants') {
+            state.revokes.push([args.sessionId, args.kinds]);
+            if (state.failRevoke) throw { message: state.failRevoke };
+            return null;
+          }
           if (command === 'acp_kill_terminal') { state.kills.push([args.sessionId, args.terminalId]); return null; }
           if (command === 'open_workbench_path') { state.opens.push([args.sessionId, args.path]); return null; }
           if (command === 'acp_set_mode') {
@@ -291,6 +297,12 @@ export function agentMessage(id: string, text: string, extra: Record<string, unk
 /** One tool call as the host publishes it, merged in place by its id. */
 export function toolCall(callId: string, extra: Record<string, unknown> = {}) {
   return { id: `tool:${callId}`, callId, title: callId, toolKind: 'other', status: 'pending', content: [], locations: [], rawInput: null, turnId: 'turn-1', subagent: null, permission: null, ...extra };
+}
+
+/** Opens an entry of the selected session's "⋯" menu in the stage bar. */
+export async function openPaneMenuItem(page: Page, name: string) {
+  await page.getByRole('region', { name: '当前会话' }).getByRole('button', { name: '更多终端操作', exact: true }).click();
+  await page.getByRole('menuitem', { name, exact: true }).click();
 }
 
 export async function openWorkbench(page: Page) {

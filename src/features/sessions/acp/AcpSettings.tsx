@@ -11,10 +11,13 @@ function errorText(value: unknown): string {
 
 /**
  * The mode, model and configuration selectors the agent declared, and nothing it
- * did not. A change shows the new value at once and sends the request; when the
- * agent refuses, the selector returns to the value it had and says why. The host's
- * own config update is the final word, so any later config replaces what is shown.
- * In a narrow pane the selectors fold into a "⋯" menu.
+ * did not (see acpSettings for which declaration wins). In the input card each one is
+ * a compact pill that shows only its value; its name is the accessible label, the
+ * hover text and the heading of its open list. A change shows the new value at once
+ * and sends the request; when the agent refuses, the selector returns to the value it
+ * had and says why. The host's own config update is the final word, so any later
+ * config replaces what is shown. In a narrow pane the selectors fold into a menu,
+ * one row per setting with its name.
  */
 export function AcpSettings({ config, compact, disabled, onSetMode, onSetConfig }: {
   config: AcpSessionConfig;
@@ -24,7 +27,7 @@ export function AcpSettings({ config, compact, disabled, onSetMode, onSetConfig 
   onSetConfig: (configId: string, value: string | boolean) => Promise<void>;
 }) {
   const { t } = useTranslation();
-  const settings = acpSettings(config, ACP_LEGACY_MODEL_CONFIG, { mode: t('sessions.acpModeLabel'), model: t('sessions.acpModelLabel') });
+  const settings = acpSettings(config, ACP_LEGACY_MODEL_CONFIG, { mode: t('sessions.acpModeLabel'), model: t('sessions.acpModelLabel'), thought: t('sessions.acpThoughtLabel') });
   const [shown, setShown] = useState<Record<string, string | boolean>>({});
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -87,12 +90,17 @@ export function AcpSettings({ config, compact, disabled, onSetMode, onSetConfig 
     const groups = new Map<string | null, AcpSetting['options']>();
     for (const option of setting.options) groups.set(option.group, [...(groups.get(option.group) ?? []), option]);
     const optionView = (option: AcpSetting['options'][number]) => <option key={option.value} value={option.value} title={option.description ?? undefined}>{option.name}</option>;
+    // The open list is headed by the setting's name: options without a group sit under
+    // it, a declared group is named after it.
+    const hover = [t('sessions.acpSettingValue', { name: setting.name, value: settingLabel(setting, value) }), setting.description].filter(Boolean).join('\n');
+    const select = <select className={styles.settingSelect} value={String(value)} disabled={off} aria-label={setting.name} title={hover} aria-busy={busy === setting.key || undefined} onChange={(event) => void change(setting, event.currentTarget.value)}>
+      {!known && <option value={String(value)}>{String(value)}</option>}
+      {[...groups.entries()].map(([group, options]) => <optgroup key={group ?? ''} label={group ? `${setting.name} · ${group}` : setting.name}>{options.map(optionView)}</optgroup>)}
+    </select>;
+    if (!compact) return <span key={setting.key} className={styles.setting} data-setting={setting.key}><span className={styles.selectWrap}>{select}</span></span>;
     return <label key={setting.key} className={styles.setting} data-setting={setting.key} title={setting.description ?? undefined}>
       <span className={styles.settingName}>{setting.name}</span>
-      <span className={styles.selectWrap}><select className={styles.settingSelect} value={String(value)} disabled={off} aria-busy={busy === setting.key || undefined} onChange={(event) => void change(setting, event.currentTarget.value)}>
-        {!known && <option value={String(value)}>{String(value)}</option>}
-        {[...groups.entries()].map(([group, options]) => group ? <optgroup key={group} label={group}>{options.map(optionView)}</optgroup> : options.map(optionView))}
-      </select></span>
+      <span className={styles.selectWrap}>{select}</span>
     </label>;
   });
 

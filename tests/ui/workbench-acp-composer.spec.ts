@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { installPromptFixtureBridge, installRichPromptFixtures } from '../../scripts/capture-prompt-fixtures.mjs';
-import { agentMessage, installAcpMock, openWorkbench, snapshot } from './acpMock';
+import { agentMessage, installAcpMock, openPaneMenuItem, openWorkbench, snapshot } from './acpMock';
 
 /**
  * The conversation's input and session-level controls (T5): Enter and input-method
@@ -151,7 +151,8 @@ test('/ opens the declared commands with keyboard completion, plain / stays text
   const input = inputOf(panel);
   await expect(input).toBeVisible();
 
-  // No declared commands: `/` is an ordinary character.
+  // No declared commands: `/` is an ordinary character, and the placeholder does not offer it.
+  await expect(input).toHaveAttribute('placeholder', '输入消息；@ 引用文件');
   await input.pressSequentially('/tmp');
   await expect(panel.getByRole('listbox')).toHaveCount(0);
   await expect(input).toHaveValue('/tmp');
@@ -161,6 +162,7 @@ test('/ opens the declared commands with keyboard completion, plain / stays text
     { name: 'review', description: '审查当前改动', hint: null },
     { name: 'init', description: '生成 AGENTS.md', hint: '目录' },
   ] }));
+  await expect(input).toHaveAttribute('placeholder', '输入消息；/ 使用命令，@ 引用文件');
   await input.pressSequentially('/');
   const commands = panel.getByRole('listbox', { name: '命令', exact: true });
   await expect(commands).toBeVisible();
@@ -182,6 +184,31 @@ test('/ opens the declared commands with keyboard completion, plain / stays text
   await expect(input).toHaveValue('/rev');
   await input.fill('');
 
+  // A query that matches nothing says so instead of vanishing; Escape closes it and it
+  // stays closed for the same query; Enter then sends the text as it is.
+  await input.pressSequentially('/xyz');
+  await expect(commands).toBeVisible();
+  await expect(commands.getByRole('option')).toHaveCount(0);
+  await expect(commands).toContainText('没有匹配的命令');
+  await input.press('Escape');
+  await expect(commands).toHaveCount(0);
+  await expect(input).toHaveValue('/xyz');
+  await input.press('ArrowLeft');
+  await input.press('ArrowRight');
+  await expect(commands).toHaveCount(0);
+  await input.fill('');
+  await input.pressSequentially('/xyz');
+  await expect(commands).toContainText('没有匹配的命令');
+  await input.press('Enter');
+  await expect.poll(async () => (await testState(page)).prompts).toEqual([['a1', '/xyz']]);
+  await expect(input).toHaveValue('');
+  // A prefix of a declared command is chosen and completed by keyboard.
+  await input.pressSequentially('/in');
+  await expect(commands.getByRole('option')).toHaveCount(1);
+  await input.press('Tab');
+  await expect(input).toHaveValue('/init ');
+  await input.fill('');
+
   // `@` looks up files through acp_list_files; the chosen one becomes a file attachment.
   await input.pressSequentially('看看 @nat');
   const files = panel.getByRole('listbox', { name: '会话目录内的文件', exact: true });
@@ -194,8 +221,8 @@ test('/ opens the declared commands with keyboard completion, plain / stays text
   await expect(panel.getByRole('list', { name: '附件' }).getByRole('listitem')).toHaveText('src/lib/native.ts');
   await input.pressSequentially('的导出');
   await input.press('Enter');
-  await expect.poll(async () => (await testState(page)).prompts).toEqual([['a1', '看看 @src/lib/native.ts 的导出']]);
-  expect((await testState(page)).attachments).toEqual([['a1', [{ type: 'file', path: 'src/lib/native.ts' }]]]);
+  await expect.poll(async () => (await testState(page)).prompts).toEqual([['a1', '/xyz'], ['a1', '看看 @src/lib/native.ts 的导出']]);
+  expect((await testState(page)).attachments).toEqual([['a1', []], ['a1', [{ type: 'file', path: 'src/lib/native.ts' }]]]);
   await expect(panel.getByRole('list', { name: '附件' })).toHaveCount(0);
 });
 
@@ -219,6 +246,8 @@ test('images follow the agent: refused with a reason for a text-only agent, prev
 
   // The agent declares images: previews appear, one can be removed, the rest are sent.
   await page.evaluate((agent) => (window as any).__acpSessionState('a1', { agent, seq: 3 }), imageAgent);
+  // The declaration applies at the next frame: wait for the image tool it brings.
+  await expect(panel.locator('[data-acp-attach-image]')).toBeVisible();
   await pasteImages(input, ['a.png']);
   await dropImage(input, 'b.png');
   await expect(panel.locator('[data-attachment="image"]')).toHaveCount(2);
@@ -240,35 +269,59 @@ test('images follow the agent: refused with a reason for a text-only agent, prev
   await expect(panel.locator('[data-attachment="image"]')).toHaveCount(7);
 });
 
-test('declared modes and options get selectors that send, show the new value and roll back on refusal; undeclared ones are absent; narrow panes fold them', async ({ page }) => {
+test('config options alone get value-only selectors named by category that send, show the new value and roll back on refusal; modes alone get one; undeclared ones are absent; narrow panes fold them', async ({ page }) => {
+  const choice = (value: string, name: string) => ({ value, name, description: null, group: null });
   const config = {
-    modes: { currentModeId: 'ask', availableModes: [{ id: 'ask', name: '提问', description: null }, { id: 'code', name: '写代码', description: '可以改文件' }] },
-    options: [{ id: 'effort', name: '思考强度', description: null, category: 'thought_level', type: 'select' as const, currentValue: 'low', options: [{ value: 'low', name: '低', description: null, group: null }, { value: 'high', name: '高', description: null, group: null }] }],
-    models: null,
+    // Declared next to the options for older clients: neither gets a selector of its own.
+    modes: { currentModeId: 'high', availableModes: [{ id: 'low', name: 'Thinking: low', description: null }, { id: 'high', name: 'Thinking: high', description: null }] },
+    models: { currentModelId: 'm1', availableModels: [{ modelId: 'm1', name: 'Model One', description: null }] },
+    options: [
+      { id: 'effort', name: 'Thinking', description: null, category: 'thought_level', type: 'select' as const, currentValue: 'low', options: [choice('low', '低'), choice('high', '高')] },
+      { id: 'model', name: 'Model', description: null, category: 'model', type: 'select' as const, currentValue: 'm1', options: [choice('m1', 'Model One'), choice('m2', 'Model Two')] },
+    ],
   };
-  await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', config }), snapshot({ id: 'a2', timeline: [agentMessage('m2', '没有设置项')] })] });
+  const modesOnly = { modes: { currentModeId: 'ask', availableModes: [{ id: 'ask', name: '提问', description: null }, { id: 'code', name: '写代码', description: '可以改文件' }] }, options: [], models: null };
+  await installAcpMock(page, { interaction: 'acp', conversations: [
+    snapshot({ id: 'a1', config, timeline: [agentMessage('m1', '有设置项')] }),
+    snapshot({ id: 'a2', timeline: [agentMessage('m2', '没有设置项')] }),
+    snapshot({ id: 'a3', config: modesOnly, timeline: [agentMessage('m3', '只有模式')] }),
+  ] });
+  await page.setViewportSize({ width: 1360, height: 820 });
   await openWorkbench(page);
   const panel = panelOf(page);
-  await expect(panel).toBeVisible();
-  const mode = panel.getByRole('combobox', { name: '模式', exact: true });
-  const effort = panel.getByRole('combobox', { name: '思考强度', exact: true });
-  await expect(mode).toHaveValue('ask');
+  await expect(panel.locator('[data-item-id="m1"]')).toBeVisible();
+  const composer = panel.locator('[data-acp-composer]');
+  await expect(composer.getByRole('combobox')).toHaveCount(2);
+  const model = composer.getByRole('combobox', { name: '模型', exact: true });
+  const effort = composer.getByRole('combobox', { name: '思考强度', exact: true });
+  // The model comes first, then the thought level; each shows only its value.
+  expect(await composer.getByRole('combobox').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('aria-label')))).toEqual(['模型', '思考强度']);
+  await expect(model).toHaveValue('m1');
   await expect(effort).toHaveValue('low');
+  await expect(panel.locator('[data-acp-settings]')).not.toContainText('Thinking');
+  await expect(panel.locator('[data-acp-settings]')).not.toContainText('模式');
+  // The names are not shown as text, only as labels and hover text.
+  expect(await panel.locator('[data-acp-settings]').evaluate((node) => [...node.querySelectorAll('span')].map((span) => span.childNodes.length ? [...span.childNodes].filter((child) => child.nodeType === Node.TEXT_NODE).map((child) => child.textContent).join('') : '').join(''))).toBe('');
+  await expect(model).toHaveAttribute('title', '模型：Model One');
+  // The open list is headed by the setting's name.
+  await expect(effort.locator('optgroup')).toHaveAttribute('label', '思考强度');
 
-  await mode.selectOption('code');
-  await expect.poll(async () => (await testState(page)).modes).toEqual([['a1', 'code']]);
-  await expect(mode).toHaveValue('code');
+  await model.selectOption('m2');
+  await expect.poll(async () => (await testState(page)).configs).toEqual([['a1', 'model', 'm2']]);
+  await expect(model).toHaveValue('m2');
+  expect((await testState(page)).modes).toEqual([]);
 
   // A refusal returns to the value it had and names the reason.
   await page.evaluate(() => { (window as any).__acpTest.failSetting = 'agent 拒绝切换思考强度'; });
   await effort.selectOption('high');
-  await expect.poll(async () => (await testState(page)).configs).toEqual([['a1', 'effort', 'high']]);
+  await expect.poll(async () => (await testState(page)).configs).toEqual([['a1', 'model', 'm2'], ['a1', 'effort', 'high']]);
   await expect(effort).toHaveValue('low');
   await expect(panel.getByRole('alert').filter({ hasText: '思考强度 没有切换，已恢复原值：agent 拒绝切换思考强度' })).toBeVisible();
+  await page.evaluate(() => { (window as any).__acpTest.failSetting = null; });
 
   // The host's own config update is what stays.
-  await page.evaluate((config) => (window as any).__acpEvent({ sessionId: 'a1', seq: 4, kind: 'config', config: { ...config, modes: { ...config.modes, currentModeId: 'ask' } } }), config);
-  await expect(mode).toHaveValue('ask');
+  await page.evaluate((config) => (window as any).__acpEvent({ sessionId: 'a1', seq: 4, kind: 'config', config: { ...config, options: [config.options[0], { ...config.options[1], currentValue: 'm1' }] } }), config);
+  await expect(model).toHaveValue('m1');
 
   // A conversation that declared nothing shows no selector.
   await page.locator('[data-session-id="a2"]').first().click();
@@ -276,18 +329,33 @@ test('declared modes and options get selectors that send, show the new value and
   await expect(panelOf(page, 'a2').locator('[data-acp-settings]')).toHaveCount(0);
   await expect(panelOf(page, 'a2').getByRole('combobox')).toHaveCount(0);
 
-  // A narrow pane folds the selectors into the "⋯" menu.
+  // Modes alone: one selector named 模式, which switches the mode.
+  await page.locator('[data-session-id="a3"]').first().click();
+  const third = panelOf(page, 'a3');
+  await expect(third.locator('[data-item-id="m3"]')).toBeVisible();
+  await expect(third.locator('[data-acp-composer]').getByRole('combobox')).toHaveCount(1);
+  const mode = third.getByRole('combobox', { name: '模式', exact: true });
+  await expect(mode).toHaveValue('ask');
+  await mode.selectOption('code');
+  await expect.poll(async () => (await testState(page)).modes).toEqual([['a3', 'code']]);
+
+  // A narrow pane folds the selectors into a menu, one named row per setting.
   await page.locator('[data-session-id="a1"]').first().click();
+  await expect(panel.locator('[data-item-id="m1"]')).toBeVisible();
   await page.setViewportSize({ width: 720, height: 720 });
   const settings = panel.locator('[data-acp-settings]');
   await expect(settings).toHaveAttribute('data-acp-settings', 'menu');
-  await expect(mode).toHaveCount(0);
+  await expect(model).toHaveCount(0);
   const more = panel.getByRole('button', { name: '会话设置', exact: true });
   await more.click();
   await expect(more).toHaveAttribute('aria-expanded', 'true');
-  await expect(mode).toBeVisible();
-  await mode.selectOption('code');
-  await expect.poll(async () => (await testState(page)).modes.at(-1)).toEqual(['a1', 'code']);
+  await expect(model).toBeVisible();
+  const menu = panel.getByRole('group', { name: '会话设置', exact: true });
+  await expect(menu).toContainText('模型');
+  await expect(menu).toContainText('思考强度');
+  await expect(menu.getByRole('combobox')).toHaveCount(2);
+  await model.selectOption('m2');
+  await expect.poll(async () => (await testState(page)).configs.at(-1)).toEqual(['a1', 'model', 'm2']);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(1);
 });
@@ -398,7 +466,10 @@ test('the history dialog lists, pages, resumes in a new pane and deletes only af
   await installAcpMock(page, { interaction: 'acp', nativeSessions: [sessions, [{ nativeId: 'n4', title: null, updatedAt: null, cwd: null, current: false }]], conversations: [snapshot({ id: 'c1', agent, timeline: [agentMessage('m1', '已有对话')] })] });
   await openWorkbench(page);
   const panel = panelOf(page, 'c1');
-  await panel.getByRole('button', { name: '历史会话…', exact: true }).click();
+  await expect(panel.locator('[data-item-id="m1"]')).toBeVisible();
+  // History opens from the pane menu only; the pane itself has no entry for it.
+  await expect(panel.getByRole('button', { name: '历史会话…', exact: true })).toHaveCount(0);
+  await openPaneMenuItem(page, '历史会话…');
   const dialog = page.getByRole('dialog', { name: 'Codex 的历史会话' });
   await expect(dialog).toBeVisible();
   const rows = dialog.locator('[data-native-id]');
@@ -435,7 +506,8 @@ test('the history dialog lists, pages, resumes in a new pane and deletes only af
 test('an agent without session listing explains why instead of listing', async ({ page }) => {
   await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'a1', agent: textAgent })] });
   await openWorkbench(page);
-  await panelOf(page).getByRole('button', { name: '历史会话…', exact: true }).click();
+  await expect(panelOf(page).locator('[data-acp-composer]')).toBeVisible();
+  await openPaneMenuItem(page, '历史会话…');
   const dialog = page.getByRole('dialog', { name: 'Codex 的历史会话' });
   await expect(dialog.locator('[data-acp-history-unsupported]')).toContainText('Codex 没有声明会话列表能力');
   expect((await testState(page)).historyQueries).toEqual([]);
@@ -521,7 +593,7 @@ test('allow always is secondary to allow once, the pane shows one state, and a f
   await expect(card.getByRole('button', { name: '拒绝', exact: true })).toHaveAttribute('data-variant', 'quiet');
 
   // The conversation row keeps its state for assistive tech only; the stage bar shows it.
-  const state = panel.locator('[data-acp-bar] [data-acp-state]');
+  const state = panel.locator('[data-acp-state]');
   await expect(state).toHaveText('等你处理');
   expect(await state.evaluate((node) => node.getBoundingClientRect().width)).toBeLessThanOrEqual(1);
 
@@ -576,6 +648,8 @@ test('a desktop drop of an image path is read by the host, previewed, removable 
 
   // Images declared: the host reads the file; meanwhile the tray says so and nothing is sent.
   await page.evaluate((agent) => (window as any).__acpSessionState('a1', { agent, seq: 3 }), imageAgent);
+  // The declaration applies at the next frame: wait for the image tool it brings.
+  await expect(panel.locator('[data-acp-attach-image]')).toBeVisible();
   await page.evaluate(() => { (window as any).__acpTest.holdImage = true; });
   await dropPaths(page, panel, ['C:/work/shot.png', 'C:/work/notes.md']);
   const reading = panel.locator('[data-attachment="reading"]');
@@ -640,7 +714,8 @@ test('Enter while the @ lookup is still running waits for it instead of sending 
 test('without session listing the history dialog offers a new conversation in the same directory', async ({ page }) => {
   await installAcpMock(page, { interaction: 'acp', conversations: [snapshot({ id: 'c1', agent: textAgent, directory: 'C:/work/app', timeline: [agentMessage('m1', '已有对话')] })] });
   await openWorkbench(page);
-  await panelOf(page, 'c1').getByRole('button', { name: '历史会话…', exact: true }).click();
+  await expect(panelOf(page, 'c1').locator('[data-item-id="m1"]')).toBeVisible();
+  await openPaneMenuItem(page, '历史会话…');
   const dialog = page.getByRole('dialog', { name: 'Codex 的历史会话' });
   await expect(dialog.locator('[data-acp-history-unsupported]')).toContainText('Codex 没有声明会话列表能力');
   await dialog.getByRole('button', { name: '新开一个对话', exact: true }).click();
@@ -801,7 +876,7 @@ test('a turn the agent answers with an error ends as failed, keeps the session r
   await openWorkbench(page);
   const panel = panelOf(page);
   const input = inputOf(panel);
-  const state = panel.locator('[data-acp-bar] [data-acp-state]');
+  const state = panel.locator('[data-acp-state]');
   await input.fill('帮我看看 README');
   await input.press('Enter');
   await expect.poll(async () => (await testState(page)).prompts).toEqual([['a1', '帮我看看 README']]);
@@ -894,10 +969,13 @@ test('starting and ready empty states, ended recovery banner and copyable diagno
   await expect(railRow).toContainText('正在连接');
   await expect(railRow).not.toContainText('等待输入');
   await expect(panel.getByRole('button', { name: '发送', exact: true })).toHaveCount(0);
-  await expect(panel.locator('[data-acp-composer]')).toContainText('正在连接，就绪后即可发送；可先编辑草稿');
+  // Connecting is said by the empty card and the input's placeholder; the action row holds no text.
+  await expect(inputOf(panel)).toHaveAttribute('placeholder', '正在连接，就绪后即可发送；可先编辑草稿');
+  await expect(panel.locator('[data-acp-composer]')).not.toContainText('正在连接');
   await inputOf(panel).fill('试着发送');
   await inputOf(panel).press('Enter');
   await expect(panel.locator('[data-acp-busy-hint]')).toContainText('会话正在连接初始化，就绪后再发送。');
+  await expect(panel.locator('[data-acp-busy-hint]')).toHaveAttribute('data-acp-busy-hint', 'starting');
   expect((await testState(page)).prompts).toEqual([]);
   await inputOf(panel).fill('');
 

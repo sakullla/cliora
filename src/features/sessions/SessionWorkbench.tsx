@@ -4685,6 +4685,20 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
       // A conversation has no terminal text and no CLI restart command: its own entries
       // replace the terminal-only ones, and the terminal fallback stays explicit.
       const conversation = conversationOf(session.id);
+      // Read when the menu opens: diagnostics are not part of the frame's summaries.
+      const diagnosticsCount = conversation ? acpStore.get(session.id)?.snapshot.diagnostics.length ?? 0 : 0;
+      /** Opens one of the conversation's dialogs. The dialog hands the keyboard back to
+       *  whatever held it when it opened, so the menu's own button takes it first. */
+      const openConversationDialog = (open: (handle: AcpConversationHandle) => void) => {
+        if (menu.trigger?.isConnected) menu.trigger.focus({ preventScroll: true });
+        selectSession(session.id, false);
+        const handle = acpHandles.current.get(session.id);
+        if (handle) open(handle);
+      };
+      const conversationItems = conversation && <>
+        {acpIsLive(conversation) && <button role="menuitem" data-acp-menu-history="" onClick={() => openConversationDialog((handle) => handle.openHistory())}><Icon name="clock" size={14} /><span>{t('sessions.acpHistoryOpen')}</span></button>}
+        {diagnosticsCount > 0 && <button role="menuitem" data-acp-menu-diagnostics="" onClick={() => openConversationDialog((handle) => handle.openDiagnostics())}><Icon name="info" size={14} /><span>{t('sessions.acpDiagnostics', { count: diagnosticsCount })}</span></button>}
+      </>;
       return createPortal(<div ref={menuRef} className={`${rowMenuStyles.rowMenuList} ${styles.contextMenu}`} role="menu" aria-label={menu.kind === 'session' ? t('sessions.sessionMenu', { name }) : t('sessions.terminalMenu')} style={menuBox ?? { top: 0, left: -10000 }} onKeyDown={menuNavigate} onContextMenu={(event) => event.preventDefault()} onClick={() => setMenu(null)}>
         {menu.kind === 'terminal' && menu.surface ? <>
           {/* Right-click on the terminal: only what acts on its text. Session actions stay on the
@@ -4712,7 +4726,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
             ? <button role="menuitem" disabled={!!busy} onClick={() => void launchInDirectory(session, 'acp')}><Icon name="refresh" size={14} /><span>{t('sessions.acpNewConversation')}</span></button>
             : <button role="menuitem" disabled={!!busy} title={!session.running ? t('sessions.restartHint') : undefined} onClick={() => void restartOrCloneSession(session, !session.running)}><Icon name={session.running ? 'plus' : 'refresh'} size={14} /><span>{session.running ? t('sessions.cloneSession') : t('sessions.restartSession')}</span></button>}
           {conversation && <button role="menuitem" disabled={!!busy} onClick={() => void launchInDirectory(session, 'terminal')}><Icon name="terminal" size={14} /><span>{t('sessions.acpFallbackTerminal')}</span></button>}
-          {conversation && acpIsLive(conversation) && <button role="menuitem" onClick={() => { selectSession(session.id, false); acpHandles.current.get(session.id)?.openHistory(); }}><Icon name="clock" size={14} /><span>{t('sessions.acpHistoryOpen')}</span></button>}
+          {conversationItems}
           {!session.projectId?.startsWith('remote:') && <button role="menuitem" onClick={() => openWorktreeSetup(setupDirectoryOf(session))}><Icon name="gitWorktree" size={14} /><span>{t('sessions.worktreeSetupOpen')}</span>{ledger.length > 0 && <span className={styles.menuCount}>{ledger.length}</span>}</button>}
           <span className={styles.menuDivider} role="separator" />
           <button role="menuitem" data-danger="true" disabled={!!busy} onClick={() => void endSession(session)}><Icon name="close" size={14} /><span>{session.running ? t('sessions.end') : t('sessions.closeTab')}</span></button>
@@ -4727,6 +4741,7 @@ export function SessionWorkbench({ active, tools, remoteSshEnabled = false, remo
             ? <button role="menuitem" disabled={!!busy} onClick={() => void launchInDirectory(session, 'acp')}><Icon name="refresh" size={14} /><span>{t('sessions.acpNewConversation')}</span></button>
             : <button role="menuitem" disabled={!!busy} onClick={() => void restartOrCloneSession(session, !session.running)}><Icon name={session.running ? 'plus' : 'refresh'} size={14} /><span>{session.running ? t('sessions.cloneSession') : t('sessions.restartSession')}</span></button>}
           {conversation && <button role="menuitem" disabled={!!busy} onClick={() => void launchInDirectory(session, 'terminal')}><Icon name="terminal" size={14} /><span>{t('sessions.acpFallbackTerminal')}</span></button>}
+          {conversationItems}
           {session.directory && <button role="menuitem" onClick={() => void copySessionPath(session)}><Icon name="folder" size={14} /><span>{t('sessions.copyPath')}</span></button>}
           {session.projectId && !session.projectId.startsWith('remote:') && <button role="menuitem" onClick={() => void native.openProjectDirectory(session.projectId!).catch(() => {})}><Icon name="arrowUpRight" size={14} /><span>{t('sessions.openFolder')}</span></button>}
           {/* The short row menu only surfaces worktree settings when there is something to clean up. */}
